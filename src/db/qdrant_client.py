@@ -1,0 +1,32 @@
+import os
+
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, SparseIndexParams, SparseVectorParams, VectorParams
+
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
+
+COLLECTION_MAIN = "axis_main"
+COLLECTION_HISTORY = "axis_history"
+DENSE_DIM = 1024  # BGE-M3 dense dimension
+
+
+def get_qdrant_client() -> QdrantClient:
+    return QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+
+
+def ensure_collections(client: QdrantClient) -> None:
+    """axis_main, axis_history 컬렉션이 없으면 생성"""
+    existing = {c.name for c in client.get_collections().collections}
+
+    for name in [COLLECTION_MAIN, COLLECTION_HISTORY]:
+        if name not in existing:
+            client.create_collection(
+                collection_name=name,
+                vectors_config={
+                    "dense": VectorParams(size=DENSE_DIM, distance=Distance.COSINE),
+                },
+                sparse_vectors_config={
+                    "sparse": SparseVectorParams(index=SparseIndexParams()),
+                },
+            )
