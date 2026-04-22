@@ -68,7 +68,7 @@ def validation_node(state: IngestionState) -> IngestionState:
     return {**state, "validation_results": []}
 
 
-def build_ingestion_graph() -> StateGraph:  # type: ignore[return]
+def build_ingestion_graph() -> StateGraph:
     graph = StateGraph(IngestionState)
     graph.add_node("crawl", crawl_node)
     graph.add_node("credibility", credibility_node)
@@ -87,7 +87,7 @@ def build_ingestion_graph() -> StateGraph:  # type: ignore[return]
     graph.add_edge("implication", "validation")
     graph.add_edge("validation", END)
 
-    return graph.compile()
+    return graph.compile()  # type: ignore[return-value]
 
 
 ingestion_graph = build_ingestion_graph()
