@@ -1,4 +1,5 @@
 """크롤러 베이스 클래스"""
+
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass

@@ -1,8 +1,16 @@
 """Qdrant RRF 하이브리드 검색 — Dense + Sparse 융합"""
+
 import logging
 from typing import Optional
 
-from qdrant_client.models import Fusion, FusionQuery, NamedSparseVector, NamedVector, Prefetch, SparseVector
+from qdrant_client.models import (
+    Fusion,
+    FusionQuery,
+    NamedSparseVector,
+    NamedVector,
+    Prefetch,
+    SparseVector,
+)
 
 from src.db.qdrant_client import COLLECTION_MAIN, get_qdrant_client
 

@@ -1,4 +1,5 @@
 """약한 신호 감지 에이전트 — 채용공고 패턴 분석"""
+
 import logging
 
 log = logging.getLogger(__name__)

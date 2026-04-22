@@ -1,6 +1,7 @@
 """전달 파이프라인 — 매일 오전 8:30 실행
 ADR 0004: 수집 파이프라인과 전달 파이프라인 분리 원칙
 """
+
 import logging
 from typing import TypedDict
 

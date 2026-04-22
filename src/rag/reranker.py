@@ -1,4 +1,5 @@
 """BGE-reranker-v2-m3 재랭킹"""
+
 import logging
 
 log = logging.getLogger(__name__)

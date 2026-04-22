@@ -1,4 +1,5 @@
 """SC 검증 에이전트 — 환각 방지"""
+
 import logging
 
 log = logging.getLogger(__name__)
