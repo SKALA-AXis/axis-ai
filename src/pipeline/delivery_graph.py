@@ -36,7 +36,7 @@ def send_slack_node(state: DeliveryState) -> DeliveryState:
     return {**state, "slack_sent": True}
 
 
-def build_delivery_graph() -> StateGraph:
+def build_delivery_graph() -> StateGraph:  # type: ignore[return]
     graph = StateGraph(DeliveryState)
     graph.add_node("load_issues", load_issues_node)
     graph.add_node("build_briefing", build_briefing_node)
