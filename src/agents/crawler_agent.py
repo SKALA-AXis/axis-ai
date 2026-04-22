@@ -1,4 +1,5 @@
 """크롤러 에이전트 — 뉴스·공시·채용공고 수집"""
+
 import logging
 from dataclasses import dataclass
 from datetime import datetime

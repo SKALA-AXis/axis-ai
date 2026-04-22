@@ -1,8 +1,16 @@
 """Qdrant RRF 하이브리드 검색 — Dense + Sparse 융합"""
+
 import logging
 from typing import Optional
 
-from qdrant_client.models import Fusion, FusionQuery, NamedSparseVector, NamedVector, Prefetch, SparseVector
+from qdrant_client.models import (
+    Fusion,
+    FusionQuery,
+    NamedSparseVector,
+    NamedVector,
+    Prefetch,
+    SparseVector,
+)
 
 from src.db.qdrant_client import COLLECTION_MAIN, get_qdrant_client
 
@@ -48,19 +56,19 @@ def hybrid_search(
             conditions.append(FieldCondition(key="peer_id", match=MatchValue(value=peer_id)))
         if event_type:
             conditions.append(FieldCondition(key="event_type", match=MatchValue(value=event_type)))
-        filter_conditions = Filter(must=conditions)
+        filter_conditions = Filter(must=conditions)  # type: ignore[arg-type]
 
     try:
         results = client.query_points(
             collection_name=COLLECTION_MAIN,
             prefetch=[
                 Prefetch(
-                    query=NamedVector(name="dense", vector=vectors["dense"]),
+                    query=NamedVector(name="dense", vector=vectors["dense"]),  # type: ignore[arg-type]
                     limit=TOP_K_PREFETCH,
                     filter=filter_conditions,
                 ),
                 Prefetch(
-                    query=NamedSparseVector(
+                    query=NamedSparseVector(  # type: ignore[arg-type]
                         name="sparse",
                         vector=SparseVector(
                             indices=vectors["sparse"]["indices"],
@@ -74,7 +82,7 @@ def hybrid_search(
             query=FusionQuery(fusion=Fusion.RRF),
             limit=top_k,
         )
-        return [p.payload for p in results.points]
+        return [p.payload for p in results.points if p.payload is not None]
     except Exception as e:
         log.error("Qdrant 검색 실패: %s", e)
         return []

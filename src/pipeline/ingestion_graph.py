@@ -1,6 +1,7 @@
 """수집 파이프라인 — 1시간마다 실행
 ADR 0004: 수집 파이프라인과 전달 파이프라인 분리 원칙
 """
+
 import logging
 import operator
 from typing import Annotated, TypedDict
@@ -86,7 +87,7 @@ def build_ingestion_graph() -> StateGraph:
     graph.add_edge("implication", "validation")
     graph.add_edge("validation", END)
 
-    return graph.compile()
+    return graph.compile()  # type: ignore[return-value]
 
 
 ingestion_graph = build_ingestion_graph()

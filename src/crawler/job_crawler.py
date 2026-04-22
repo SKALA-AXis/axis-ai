@@ -1,4 +1,5 @@
 """채용공고 크롤러"""
+
 import logging
 
 from src.crawler.base_crawler import BaseCrawler, RawArticle

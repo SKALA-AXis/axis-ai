@@ -1,4 +1,5 @@
 """BGE-M3 임베딩 — Dense + Sparse 원샷 생성"""
+
 import logging
 
 log = logging.getLogger(__name__)

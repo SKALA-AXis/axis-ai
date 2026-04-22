@@ -1,4 +1,5 @@
 """이슈 카드 생성 에이전트 — GPT-4o 호출"""
+
 import logging
 
 log = logging.getLogger(__name__)

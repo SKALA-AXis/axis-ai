@@ -1,4 +1,5 @@
 """네이버 뉴스 API 크롤러"""
+
 import logging
 import os
 from datetime import datetime
@@ -51,9 +52,7 @@ class NaverNewsCrawler(BaseCrawler):
                     url=item["link"],
                     title=item["title"].replace("<b>", "").replace("</b>", ""),
                     content=item.get("description", ""),
-                    published_at=datetime.strptime(
-                        item["pubDate"], "%a, %d %b %Y %H:%M:%S +0900"
-                    ),
+                    published_at=datetime.strptime(item["pubDate"], "%a, %d %b %Y %H:%M:%S +0900"),
                     source_name="naver_news",
                     peer_id=self.peer_id,
                 )

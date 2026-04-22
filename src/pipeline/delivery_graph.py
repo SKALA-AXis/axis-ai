@@ -1,6 +1,7 @@
 """전달 파이프라인 — 매일 오전 8:30 실행
 ADR 0004: 수집 파이프라인과 전달 파이프라인 분리 원칙
 """
+
 import logging
 from typing import TypedDict
 
@@ -46,7 +47,7 @@ def build_delivery_graph() -> StateGraph:
     graph.add_edge("build_briefing", "send_slack")
     graph.add_edge("send_slack", END)
 
-    return graph.compile()
+    return graph.compile()  # type: ignore[return-value]
 
 
 delivery_graph = build_delivery_graph()

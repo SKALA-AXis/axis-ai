@@ -2,6 +2,7 @@
 수동 수정 금지. datamodel-codegen으로 재생성:
   datamodel-codegen --input ../axis-infra/api/ai-internal-api.yaml --output src/schemas.py
 """
+
 from __future__ import annotations
 
 from typing import Any, Optional
