@@ -66,9 +66,11 @@ class BatchProcessor:
 
     async def run_track_b(self, keywords: dict[str, list[str]]) -> list[RawArticle]:
         """Track B — DART, KIPRIS, 공식 뉴스룸, 채용공고 (매일 새벽 2시)."""
+        from src.crawler.sources.consensus import HankyungConsensusCrawler
         from src.crawler.sources.dart import DartCrawler
         from src.crawler.sources.jobs import JobsCrawler
         from src.crawler.sources.kipris import KiprisCrawler
+        from src.crawler.sources.naver_research import NaverResearchCrawler
         from src.crawler.sources.official import OfficialNewsroomCrawler
 
         articles: list[RawArticle] = []
@@ -88,11 +90,16 @@ class BatchProcessor:
                         e,
                     )
 
-        # KiprisCrawler는 내부에서 두 peer_id 모두 처리하므로 1회만 호출
-        try:
-            articles.extend(await KiprisCrawler(self.limit_guard).crawl())
-        except Exception as e:
-            log.error("Track B 크롤 오류 | crawler=KiprisCrawler error=%s", e)
+        # 아래 크롤러들은 내부에서 두 peer_id 모두 처리하므로 1회만 호출
+        for name, crawler in [
+            ("KiprisCrawler", KiprisCrawler(self.limit_guard)),
+            ("HankyungConsensusCrawler", HankyungConsensusCrawler(self.limit_guard)),
+            ("NaverResearchCrawler", NaverResearchCrawler(self.limit_guard)),
+        ]:
+            try:
+                articles.extend(await crawler.crawl())
+            except Exception as e:
+                log.error("Track B 크롤 오류 | crawler=%s error=%s", name, e)
 
         filtered, _ = self.fast_filter.filter(articles)
         new_articles = self.dedup.filter_new(filtered)

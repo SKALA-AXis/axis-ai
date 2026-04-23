@@ -27,15 +27,24 @@ class IngestionState(TypedDict):
 
 
 def crawl_node(state: IngestionState) -> IngestionState:
-    log.info("크롤링 시작 | peer_ids=%s", state["peer_ids"])
-    # TODO: crawler_agent.py 연결
-    return {**state, "raw_article_ids": []}
+    """처리 대기 중인 RAW 기사 ID를 DB에서 조회한다.
+
+    실제 수집은 APScheduler → BatchProcessor 경로로 먼저 완료되어 있어야 합니다.
+    """
+    from src.agents.crawler_agent import CrawlerAgent
+
+    raw_ids = CrawlerAgent().load_raw_ids(state["peer_ids"])
+    log.info("RAW 기사 로드 완료 | peer_ids=%s count=%d", state["peer_ids"], len(raw_ids))
+    return {**state, "raw_article_ids": raw_ids}
 
 
 def credibility_node(state: IngestionState) -> IngestionState:
-    log.info("신뢰도 분류 | articles=%d", len(state["raw_article_ids"]))
-    # TODO: credibility_agent.py 연결
-    return {**state, "credible_ids": state["raw_article_ids"]}
+    """Gate 2: credibility_score 기준 신뢰도 필터."""
+    from src.agents.credibility_agent import CredibilityAgent
+
+    credible_ids, skipped = CredibilityAgent().filter(state["raw_article_ids"])
+    log.info("Gate 2 완료 | credible=%d skipped=%d", len(credible_ids), len(skipped))
+    return {**state, "credible_ids": credible_ids}
 
 
 def dedup_node(state: IngestionState) -> IngestionState:
