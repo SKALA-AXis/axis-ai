@@ -2,6 +2,7 @@
 
 import json
 import logging
+import threading
 from datetime import datetime
 from typing import Any, Optional
 
@@ -103,7 +104,7 @@ def update_cluster(
     is_representative: bool,
 ) -> None:
     """cluster_id, is_representative, processing_status를 업데이트한다."""
-    status = "RAW" if is_representative else "CLUSTERED_DUPE"
+    status = "CLUSTERED_REP" if is_representative else "CLUSTERED_DUPE"
     with SessionLocal() as db:
         db.execute(
             text("""
@@ -208,16 +209,26 @@ def save_issue_card(card: dict[str, Any]) -> Optional[str]:
     return None
 
 
+_card_id_state: dict[str, int] = {}  # {date_str: last_seq}
+_card_id_lock = threading.Lock()
+
+
 def _generate_card_id(peer_id: str) -> str:
-    """IC-YYYYMMDD-NNN 형식의 이슈카드 ID를 생성한다."""
+    """IC-YYYYMMDD-NNN 형식의 이슈카드 ID를 생성한다.
+
+    DB 저장 전에 병렬 호출되므로 Lock으로 중복 방지.
+    """
     date_str = datetime.now().strftime("%Y%m%d")
-    with SessionLocal() as db:
-        row = db.execute(
-            text("SELECT COUNT(*) FROM issue_cards WHERE id LIKE :prefix"),
-            {"prefix": f"IC-{date_str}-%"},
-        ).fetchone()
-        seq = (row[0] if row else 0) + 1
-    return f"IC-{date_str}-{seq:03d}"
+    with _card_id_lock:
+        if date_str not in _card_id_state:
+            with SessionLocal() as db:
+                row = db.execute(
+                    text("SELECT COUNT(*) FROM issue_cards WHERE id LIKE :prefix"),
+                    {"prefix": f"IC-{date_str}-%"},
+                ).fetchone()
+                _card_id_state[date_str] = row[0] if row else 0
+        _card_id_state[date_str] += 1
+        return f"IC-{date_str}-{_card_id_state[date_str]:03d}"
 
 
 # ──────────────────────────────────────────────────────────────

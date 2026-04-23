@@ -14,7 +14,8 @@ _llm = ChatOpenAI(model="gpt-4o", temperature=0.3, max_tokens=1024)
 
 _ISSUE_CARD_PROMPT = """\
 당신은 SK AX 전략기획팀의 AI 어시스턴트입니다.
-아래 기사를 바탕으로 이슈 카드를 작성해주세요.
+아래 기사들을 종합하여 이슈 카드를 작성해주세요.
+여러 기사가 있을 경우 교차 검증하여 가장 신뢰도 높은 사실만 포함하세요.
 
 ## 기사 정보
 {articles_text}
@@ -35,9 +36,11 @@ _ISSUE_CARD_PROMPT = """\
   ]
 }}"""
 
+_MAX_CLUSTER_ARTICLES = 3  # 클러스터 내 참고 기사 최대 수
+
 
 class IssueCardAgent:
-    """클러스터 대표 기사로 이슈 카드를 생성하고 DB에 저장한다."""
+    """클러스터 상위 기사들로 이슈 카드를 생성한다."""
 
     def generate(
         self,
@@ -45,19 +48,23 @@ class IssueCardAgent:
         representative_id: int,
         peer_id: str,
         classification: dict[str, Any],
+        cluster_article_ids: list[int] | None = None,
     ) -> dict[str, Any]:
         """이슈 카드를 생성한다.
 
         Args:
             cluster_id: 클러스터 ID.
-            representative_id: 대표 기사 ID.
+            representative_id: 대표 기사 ID (가장 신뢰도 높은 기사).
             peer_id: 'samsung_sds' | 'lg_cns'.
             classification: ClassificationAgent 결과.
+            cluster_article_ids: 클러스터 내 전체 기사 ID 목록 (없으면 대표 기사만 사용).
 
         Returns:
             IssueCard dict (저장 전 validation 없는 상태).
         """
-        articles = get_articles_by_ids([representative_id])
+        # 대표 기사 포함 최대 3건 조회 (credibility_score DESC 정렬)
+        ids_to_fetch = _build_fetch_ids(representative_id, cluster_article_ids)
+        articles = get_articles_by_ids(ids_to_fetch)
         if not articles:
             return {}
 
@@ -81,8 +88,8 @@ class IssueCardAgent:
             }
 
             log.info(
-                "이슈카드 생성 완료 | id=%s importance=%s event=%s",
-                card["id"], card["importance"], card["event_type"],
+                "이슈카드 생성 완료 | id=%s importance=%s event=%s sources=%d",
+                card["id"], card["importance"], card["event_type"], len(articles),
             )
             return card
 
@@ -91,13 +98,23 @@ class IssueCardAgent:
             return {}
 
 
+def _build_fetch_ids(representative_id: int, cluster_article_ids: list[int] | None) -> list[int]:
+    """대표 기사를 앞에 두고 최대 3건의 ID 목록을 만든다."""
+    if not cluster_article_ids:
+        return [representative_id]
+    # 대표 기사 먼저, 나머지 중 대표 제외 후 합치기
+    others = [aid for aid in cluster_article_ids if aid != representative_id]
+    return [representative_id, *others][: _MAX_CLUSTER_ARTICLES]
+
+
 def _format_articles(articles: list[dict[str, Any]]) -> str:
     lines = []
     for i, a in enumerate(articles, 1):
         lines.append(
             f"[{i}] 제목: {a['title']}\n"
-            f"    출처: {a['source_name']} | URL: {a['url']}\n"
-            f"    내용: {(a.get('content') or '')[:800]}"
+            f"    출처: {a['source_name']} (신뢰도: {a.get('credibility_score', 0):.2f})"
+            f" | URL: {a['url']}\n"
+            f"    내용: {(a.get('content') or '')[:600]}"
         )
     return "\n\n".join(lines)
 
