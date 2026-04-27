@@ -47,16 +47,17 @@ class JobsCrawler(BaseCrawler):
             return []
         if not self.limit_guard.allow("jobs"):
             return []
-        company_name = _COMPANY_NAMES.get(self.peer_id, "")
+        peer_id = self.peer_id or ""
+        company_name = _COMPANY_NAMES.get(peer_id, "")
         if not company_name:
             return []
         try:
-            return await self._fetch(company_name)
+            return await self._fetch(company_name, peer_id)
         except Exception as e:
-            log.error("Saramin 크롤링 실패 | peer_id=%s error=%s", self.peer_id, e)
+            log.error("Saramin 크롤링 실패 | peer_id=%s error=%s", peer_id, e)
             return []
 
-    async def _fetch(self, company_name: str) -> list[RawArticle]:
+    async def _fetch(self, company_name: str, peer_id: str) -> list[RawArticle]:
         async with httpx.AsyncClient(timeout=RETRY_POLICY["timeout"]) as client:
             resp = await client.get(
                 SARAMIN_API_URL,
@@ -74,7 +75,7 @@ class JobsCrawler(BaseCrawler):
             resp.raise_for_status()
             data = resp.json()
             jobs = data.get("jobs", {}).get("job", [])
-            return [_to_article(job, self.peer_id) for job in jobs if isinstance(job, dict)]
+            return [_to_article(job, peer_id) for job in jobs if isinstance(job, dict)]
 
 
 def _to_article(job: dict[str, Any], peer_id: str) -> RawArticle:

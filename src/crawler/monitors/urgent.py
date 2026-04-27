@@ -79,7 +79,7 @@ class UrgentVerifier:
     """FastFilter urgent 판정 기사를 GPT-4o로 2차 검증."""
 
     def __init__(self) -> None:
-        self._llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=300)
+        self._llm = ChatOpenAI(model="gpt-4o", temperature=0, max_completion_tokens=300)
 
     async def verify(self, article: RawArticle) -> VerifyResult:
         """LLM에 검증 요청. 타임아웃·오류 시 confirmed=True로 폴백 (놓치지 않는 방향)."""
@@ -94,7 +94,10 @@ class UrgentVerifier:
                 self._llm.ainvoke(prompt),
                 timeout=LLM_VERIFY_TIMEOUT,
             )
-            return _parse_verify_response(response.content)
+            content = (
+                response.content if isinstance(response.content, str) else str(response.content)
+            )
+            return _parse_verify_response(content)
         except asyncio.TimeoutError:
             log.warning("LLM 검증 타임아웃 — confirmed=True 폴백 | title=%s", article.title)
             return VerifyResult(confirmed=True, reason="LLM 타임아웃 (폴백)", sk_ax_impact="")

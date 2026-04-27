@@ -1,6 +1,7 @@
 """Track A/B 크롤 오케스트레이터 — FastFilter + DedupStore 적용."""
 
 import logging
+from typing import Protocol
 
 from src.crawler.base import DailyLimitGuard, RawArticle
 from src.crawler.fast_filter import FastFilter
@@ -8,6 +9,11 @@ from src.crawler.parsers.dedup import DedupStore
 from src.db.article_store import save_articles
 
 log = logging.getLogger(__name__)
+
+
+class _Crawlable(Protocol):
+    async def crawl(self) -> list[RawArticle]: ...
+
 
 # DART 법인코드 (금융감독원 전자공시시스템 기준)
 CORP_CODES: dict[str, str] = {
@@ -85,13 +91,14 @@ class BatchProcessor:
                     )
 
         # 아래 크롤러들은 내부에서 두 peer_id 모두 처리하므로 1회만 호출
-        for name, crawler in [
+        shared_crawlers: list[tuple[str, _Crawlable]] = [
             ("KiprisCrawler", KiprisCrawler(self.limit_guard)),
             ("HankyungConsensusCrawler", HankyungConsensusCrawler(self.limit_guard)),
             ("NaverResearchCrawler", NaverResearchCrawler(self.limit_guard)),
-        ]:
+        ]
+        for name, shared in shared_crawlers:
             try:
-                articles.extend(await crawler.crawl())
+                articles.extend(await shared.crawl())
             except Exception as e:
                 log.error("Track B 크롤 오류 | crawler=%s error=%s", name, e)
 

@@ -115,7 +115,7 @@ class IRParserAgent:
         revenue_total: float | None = None
         op_profit: float | None = None
 
-        for i, page in enumerate(doc):
+        for i, page in enumerate(doc):  # type: ignore[arg-type, var-annotated]
             if i >= max_pages:
                 break
             try:

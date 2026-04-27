@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 # 이벤트 타입 taxonomy (DB 컬럼 호환을 위해 유지, v3에서는 부차적 메타데이터)
 EVENT_TYPES = ["partnership", "ma", "personnel", "tech", "regulation", "new_biz"]
 
-_llm = ChatOpenAI(model="gpt-4o", temperature=0.1, max_tokens=400)
+_llm = ChatOpenAI(model="gpt-4o", temperature=0.1, max_completion_tokens=400)
 
 _CLASSIFY_PROMPT = """\
 당신은 SK AX 전략기획팀의 AI 어시스턴트입니다.
@@ -247,7 +247,10 @@ class ClassificationAgent:
         )
         try:
             response = _llm.invoke(prompt)
-            data = _parse_json(response.content)
+            content = (
+                response.content if isinstance(response.content, str) else str(response.content)
+            )
+            data = _parse_json(content)
             event_type = data.get("event_type", "tech")
             if event_type not in EVENT_TYPES:
                 event_type = "tech"

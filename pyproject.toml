@@ -48,6 +48,9 @@ select = ["E", "F", "I", "N", "W"]
 python_version = "3.11"
 strict_optional = true
 ignore_missing_imports = true
+exclude = [
+    "src/agents/_deprecated/",  # v3에서 보관 처리된 v1 에이전트 — 운영 경로 아님
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

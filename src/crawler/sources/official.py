@@ -86,6 +86,15 @@ _LGCNS_HEADERS = {
 }
 
 
+def _attr_str(value: object) -> str:
+    """BeautifulSoup get()이 돌려주는 Union 값을 안전하게 str로 환원."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return value[0] if value else ""
+    return ""
+
+
 class OfficialNewsroomCrawler(BaseCrawler):
     """삼성SDS(Playwright) + LG CNS(REST API) 공식 뉴스룸 크롤링."""
 
@@ -122,7 +131,7 @@ class OfficialNewsroomCrawler(BaseCrawler):
         # href별로 title 우선순위: "자세히 보기" 제외 + 5자 이상 텍스트
         href_title: dict[str, str] = {}
         for a_tag in soup.select("a[href*='/news/']"):
-            href = a_tag.get("href", "")
+            href = _attr_str(a_tag.get("href", ""))
             if not _SDS_ARTICLE_RE.match(href):
                 continue
             text = a_tag.get_text(strip=True).replace("자세히 보기", "").strip()
@@ -252,7 +261,7 @@ class OfficialNewsroomCrawler(BaseCrawler):
         candidates: list[tuple[str, str]] = []
         for sel in selectors:
             for a in soup.select(sel):
-                href = (a.get("href") or "").strip()
+                href = _attr_str(a.get("href")).strip()
                 title = a.get_text(strip=True)
                 if not href or len(title) < 5 or href in seen:
                     continue

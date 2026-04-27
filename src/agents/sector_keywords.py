@@ -4,10 +4,16 @@ ClassificationAgent가 LLM 보조 + 키워드 매칭으로 섹터를 태깅한�
 "기타(other)"는 4개 섹터 중 어디에도 안 맞을 때 부여.
 """
 
-from typing import Final
+from typing import Final, TypedDict
+
+
+class SectorInfo(TypedDict):
+    name_ko: str
+    keywords: list[str]
+
 
 # (섹터 ID → 섹터명, 키워드)
-SECTOR_KEYWORDS: Final[dict[str, dict[str, list[str]]]] = {
+SECTOR_KEYWORDS: Final[dict[str, SectorInfo]] = {
     "security": {
         "name_ko": "보안",
         "keywords": [
@@ -152,4 +158,5 @@ def sector_name_ko(sector_id: str) -> str:
     """섹터 ID → 한국어 이름. other → '기타'."""
     if sector_id == "other":
         return "기타"
-    return SECTOR_KEYWORDS.get(sector_id, {}).get("name_ko", sector_id)
+    info = SECTOR_KEYWORDS.get(sector_id)
+    return info["name_ko"] if info else sector_id

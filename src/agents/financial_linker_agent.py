@@ -70,8 +70,8 @@ def _match_segment(text: str, segments: dict[str, dict[str, Any]]) -> str | None
     return best_id if best_hits > 0 else None
 
 
-def _delta_pct(curr: float, prev: float) -> float | None:
-    if prev is None or prev == 0:
+def _delta_pct(curr: float | None, prev: float | None) -> float | None:
+    if curr is None or prev is None or prev == 0:
         return None
     return round((curr - prev) / prev * 100, 1)
 

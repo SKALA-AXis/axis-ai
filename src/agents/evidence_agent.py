@@ -57,8 +57,9 @@ class EvidenceAgent:
             if s.get("url")
         ]
 
-        provenance = {
-            "raw_article_ids": list(cluster_article_ids or []),
+        raw_article_ids = list(cluster_article_ids or [])
+        provenance: dict[str, Any] = {
+            "raw_article_ids": raw_article_ids,
             "cluster_id": card.get("cluster_id"),
             "llm_model": LLM_MODEL,
             "prompt_version": PROMPT_VERSION,
@@ -116,7 +117,7 @@ class EvidenceAgent:
                 "검증 체인 첨부 완료 | card_id=%s sources=%d cluster=%d",
                 card.get("id"),
                 len(source_links),
-                len(provenance["raw_article_ids"]),
+                len(raw_article_ids),
             )
 
         return {"pass": passed, "reason": reason, "missing": missing}

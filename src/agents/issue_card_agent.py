@@ -10,7 +10,7 @@ from src.db.article_store import _generate_card_id, get_articles_by_ids
 
 log = logging.getLogger(__name__)
 
-_llm = ChatOpenAI(model="gpt-4o", temperature=0.3, max_tokens=1024)
+_llm = ChatOpenAI(model="gpt-4o", temperature=0.3, max_completion_tokens=1024)
 
 _ISSUE_CARD_PROMPT = """\
 당신은 SK AX 전략기획팀의 AI 어시스턴트입니다.
@@ -83,7 +83,10 @@ class IssueCardAgent:
 
         try:
             response = _llm.invoke(prompt)
-            card_data = _parse_json(response.content)
+            content = (
+                response.content if isinstance(response.content, str) else str(response.content)
+            )
+            card_data = _parse_json(content)
 
             card = {
                 "id": _generate_card_id(peer_id),
