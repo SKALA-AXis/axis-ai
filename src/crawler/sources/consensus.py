@@ -9,7 +9,14 @@ from src.crawler.playwright_client import PlaywrightClient
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://consensus.hankyung.com/analysis/list"
-_PEERS = ["삼성SDS", "LG CNS"]
+_PEERS = ["삼성SDS", "LG CNS", "현대오토에버", "포스코DX"]
+_PEER_KEY_HINTS: list[tuple[str, str]] = [
+    ("삼성", "samsung_sds"),
+    ("LG CNS", "lg_cns"),
+    ("엘지", "lg_cns"),
+    ("오토에버", "hyundai_autoever"),
+    ("포스코", "posco_dx"),
+]
 
 
 class HankyungConsensusCrawler:
@@ -33,11 +40,55 @@ class HankyungConsensusCrawler:
     async def _fetch_peer(self, peer_name: str) -> list[RawArticle]:
         async with self.pw.new_page() as page:
             await page.goto(BASE_URL, wait_until="networkidle", timeout=15_000)
-            await page.fill("input[placeholder*='검색']", peer_name)
-            await page.keyboard.press("Enter")
-            await page.wait_for_selector(".analysis-list-item", timeout=8_000)
 
-            items = await page.query_selector_all(".analysis-list-item")
+            # 검색 입력 필드 — 셀렉터 여러 개 시도 후 실패 시 로그만 남김
+            search_input = None
+            for sel in (
+                "input[placeholder*='검색']",
+                "input[type='search']",
+                "input.search-input",
+                "input[name*='keyword']",
+                "input[id*='search']",
+            ):
+                try:
+                    await page.wait_for_selector(sel, timeout=2_000)
+                    search_input = sel
+                    break
+                except Exception:
+                    continue
+
+            if not search_input:
+                log.warning(
+                    "한경 컨센서스 검색 입력 필드 탐지 실패 | peer=%s — 목록 전체를 조회합니다",
+                    peer_name,
+                )
+            else:
+                try:
+                    await page.fill(search_input, peer_name)
+                    await page.keyboard.press("Enter")
+                except Exception as e:
+                    log.warning("한경 컨센서스 검색 입력 실패 | peer=%s error=%s", peer_name, e)
+
+            # 결과 리스트 — 셀렉터 여러 개 시도
+            list_selector = None
+            for sel in (
+                ".analysis-list-item",
+                "table tbody tr",
+                "ul.list-item li",
+                ".list-item",
+            ):
+                try:
+                    await page.wait_for_selector(sel, timeout=4_000)
+                    list_selector = sel
+                    break
+                except Exception:
+                    continue
+
+            if not list_selector:
+                log.warning("한경 컨센서스 결과 리스트 탐지 실패 | peer=%s", peer_name)
+                return []
+
+            items = await page.query_selector_all(list_selector)
             articles = []
 
             for item in items[:20]:
@@ -81,8 +132,16 @@ class HankyungConsensusCrawler:
                 except Exception as e:
                     log.warning("컨센서스 항목 파싱 실패 | error=%s", e)
 
+            log.info(
+                "한경 컨센서스 수집 | peer=%s list_sel=%s items=%d extracted=%d",
+                peer_name, list_selector, len(items), len(articles),
+            )
+
         return articles
 
 
-def _resolve_peer(name: str) -> str:
-    return "samsung_sds" if "삼성" in name else "lg_cns"
+def _resolve_peer(name: str) -> Optional[str]:
+    for hint, peer_id in _PEER_KEY_HINTS:
+        if hint in name:
+            return peer_id
+    return None

@@ -25,6 +25,7 @@ dependencies = [
     "websockets>=12.0",
     # Sprint 2: "scikit-learn>=1.4", "telethon>=1.36"
     "transformers>=4.44,<5.0",
+    "pymupdf>=1.27.2.3",
 ]
 
 [dependency-groups]

@@ -84,16 +84,26 @@ class ImplicationAgent:
             result = _parse_json(response.content)
             result.setdefault("confidence", 0.5)
             result.setdefault("sources_used", [1])
+            result["evidence_label"] = _evidence_label(result["confidence"])
 
             log.info(
-                "시사점 생성 완료 | card_id=%s confidence=%.2f",
-                issue_card.get("id"), result["confidence"],
+                "시사점 생성 완료 | card_id=%s confidence=%.2f label=%s",
+                issue_card.get("id"), result["confidence"], result["evidence_label"],
             )
             return result
 
         except Exception as e:
             log.error("시사점 생성 실패 | card_id=%s error=%s", issue_card.get("id"), e)
             return _empty_result()
+
+
+def _evidence_label(confidence: float) -> str:
+    """confidence 임계값 → 근거 레이블 매핑 (CLAUDE.md 스펙)."""
+    if confidence < 0.6:
+        return "insufficient"
+    if confidence < 0.8:
+        return "moderate"
+    return "sufficient"
 
 
 def _format_sources(sources: list[dict[str, Any]]) -> str:
@@ -120,4 +130,5 @@ def _empty_result() -> dict[str, Any]:
         "suggested_actions": [],
         "confidence": 0.0,
         "sources_used": [],
+        "evidence_label": "insufficient",
     }

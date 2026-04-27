@@ -27,6 +27,8 @@ AI_IPC_CODES = ["G06N", "G06F", "G06V", "G06T", "H04L"]
 _APPLICANTS: dict[str, str] = {
     "samsung_sds": "삼성에스디에스",
     "lg_cns": "엘지씨엔에스",
+    "hyundai_autoever": "현대오토에버",
+    "posco_dx": "포스코디엑스",
 }
 
 

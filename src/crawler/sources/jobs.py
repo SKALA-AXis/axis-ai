@@ -23,6 +23,8 @@ SARAMIN_API_URL = "https://oapi.saramin.co.kr/job-search"
 _COMPANY_NAMES: dict[str, str] = {
     "samsung_sds": "삼성SDS",
     "lg_cns": "LG CNS",
+    "hyundai_autoever": "현대오토에버",
+    "posco_dx": "포스코DX",
 }
 
 

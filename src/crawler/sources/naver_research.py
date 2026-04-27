@@ -9,13 +9,21 @@ from src.crawler.playwright_client import PlaywrightClient
 
 log = logging.getLogger(__name__)
 
+# 종목코드 (Naver Finance itemCode)
+# - samsung_sds 018260, lg_cns 064400 (이전 코드의 034730 = SK Inc. 오류였음)
+# - hyundai_autoever 307950, posco_dx 022100
+_COMPANY_ITEM_CODES: dict[str, str] = {
+    "samsung_sds": "018260",
+    "lg_cns": "064400",
+    "hyundai_autoever": "307950",
+    "posco_dx": "022100",
+}
+_COMPANY_URL_TPL = (
+    "https://finance.naver.com/research/company_list.naver?searchType=itemCode&itemCode={code}"
+)
 _COMPANY_URLS: dict[str, str] = {
-    "samsung_sds": (
-        "https://finance.naver.com/research/company_list.naver?searchType=itemCode&itemCode=018260"
-    ),
-    "lg_cns": (
-        "https://finance.naver.com/research/company_list.naver?searchType=itemCode&itemCode=034730"
-    ),
+    peer_id: _COMPANY_URL_TPL.format(code=code)
+    for peer_id, code in _COMPANY_ITEM_CODES.items()
 }
 
 # IT서비스 섹터 리포트
@@ -34,31 +42,30 @@ class NaverResearchCrawler:
     async def crawl(self) -> list[RawArticle]:
         if not self.limit_guard.allow("naver_research"):
             return []
-        results = await asyncio.gather(
-            self._fetch_company("samsung_sds"),
-            self._fetch_company("lg_cns"),
-            self._fetch_industry(),
-            return_exceptions=True,
-        )
+        peer_ids = list(_COMPANY_URLS.keys())
+        coros = [self._fetch_company(pid) for pid in peer_ids] + [self._fetch_industry()]
+        results = await asyncio.gather(*coros, return_exceptions=True)
         articles: list[RawArticle] = []
-        for r in results:
+        labels = peer_ids + ["industry"]
+        for label, r in zip(labels, results):
             if isinstance(r, list):
+                log.info("네이버 리서치 수집 | target=%s articles=%d", label, len(r))
                 articles.extend(r)
             elif isinstance(r, Exception):
-                log.error("네이버 리서치 크롤링 오류 | error=%s", r)
+                log.error("네이버 리서치 크롤링 오류 | target=%s error=%s", label, r)
         return articles
 
     async def _fetch_company(self, peer_id: str) -> list[RawArticle]:
         url = _COMPANY_URLS[peer_id]
         async with self.pw.new_page() as page:
-            await page.goto(url, wait_until="networkidle", timeout=15_000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
             await page.wait_for_selector("table.type_1", timeout=8_000)
             rows = await page.query_selector_all("table.type_1 tr")
             return await self._parse_rows(rows, peer_id, "company_report")
 
     async def _fetch_industry(self) -> list[RawArticle]:
         async with self.pw.new_page() as page:
-            await page.goto(_INDUSTRY_URL, wait_until="networkidle", timeout=15_000)
+            await page.goto(_INDUSTRY_URL, wait_until="domcontentloaded", timeout=20_000)
             await page.wait_for_selector("table.type_1", timeout=8_000)
             rows = await page.query_selector_all("table.type_1 tr")
             return await self._parse_rows(rows, None, "industry_report")

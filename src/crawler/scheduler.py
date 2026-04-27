@@ -14,6 +14,8 @@ log = logging.getLogger(__name__)
 PEER_KEYWORDS: dict[str, list[str]] = {
     "samsung_sds": ["삼성SDS", "Samsung SDS", "삼성에스디에스"],
     "lg_cns": ["LG CNS", "엘지씨엔에스", "LGCNS"],
+    "hyundai_autoever": ["현대오토에버", "Hyundai AutoEver", "현대오토에버시스템"],
+    "posco_dx": ["포스코DX", "포스코디엑스", "POSCO DX"],
 }
 
 

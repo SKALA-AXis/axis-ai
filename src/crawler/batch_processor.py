@@ -11,8 +11,10 @@ log = logging.getLogger(__name__)
 
 # DART 법인코드 (금융감독원 전자공시시스템 기준)
 CORP_CODES: dict[str, str] = {
-    "samsung_sds": "00126186",  # 삼성에스디에스
-    "lg_cns": "00139834",  # LG씨엔에스 (주식코드 064400)
+    "samsung_sds": "00126186",       # 삼성에스디에스 (주식코드 018260)
+    "lg_cns": "00139834",            # LG씨엔에스 (주식코드 064400)
+    "hyundai_autoever": "00362441",  # 현대오토에버 (주식코드 307950)
+    "posco_dx": "00155212",          # 포스코DX (주식코드 022100)
 }
 
 
@@ -23,19 +25,11 @@ class BatchProcessor:
         self.dedup = DedupStore()
 
     async def run_track_a(self, keywords: dict[str, list[str]]) -> list[RawArticle]:
-        """Track A — Naver, RSS, BigKinds, Google News (1시간 간격)."""
-        from src.crawler.sources.bigkinds import BigKindsCrawler
+        """Track A — Naver, RSS, Google News (1시간 간격)."""
         from src.crawler.sources.naver import NaverNewsCrawler
         from src.crawler.sources.rss import GoogleNewsRssCrawler, RssCrawler
 
         articles: list[RawArticle] = []
-        # BigKindsCrawler는 내부에서 두 peer_id 모두 처리하므로 1회만 호출
-        try:
-            all_kws = [kw for kws in keywords.values() for kw in kws]
-            articles.extend(await BigKindsCrawler(self.limit_guard).crawl(all_kws))
-        except Exception as e:
-            log.error("Track A 크롤 오류 | crawler=BigKindsCrawler error=%s", e)
-
         for peer_id, kws in keywords.items():
             for crawler in [
                 NaverNewsCrawler(peer_id, kws, self.limit_guard),

@@ -15,10 +15,11 @@ SOURCE_CREDIBILITY: dict[str, float] = {
     "kipris": 0.95,
     "samsung_sds_newsroom": 0.90,
     "lg_cns_newsroom": 0.90,
+    "hyundai_autoever_newsroom": 0.90,
+    "posco_dx_newsroom": 0.90,
     "hankyung_consensus": 0.80,
     "naver_research": 0.75,
     "naver_news": 0.75,
-    "bigkinds": 0.70,
     "etnews": 0.70,
     "zdnet": 0.68,
     "itchosun": 0.65,
@@ -66,7 +67,6 @@ class DailyLimitGuard:
     GLOBAL_LIMIT = 5_000  # 건/일 (설계서 §11)
     SOURCE_LIMITS: dict[str, int] = {
         "naver_news": 200,
-        "bigkinds": 500,
         "dart": 100,
         "kipris": 100,
         "rss": 300,

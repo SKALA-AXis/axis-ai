@@ -1,5 +1,11 @@
-"""수집 파이프라인 — 1시간마다 실행.
+"""수집 파이프라인 v3 — 1시간마다 실행.
+
 ADR 0004: 수집 파이프라인과 전달 파이프라인 분리 원칙.
+
+v3 변경:
+- ImplicationAgent 보류 → implication_node 제거
+- ValidationAgent (SC 검증) 보류 → EvidenceAgent (근거 첨부)로 전환
+- ClassificationAgent v3: sector + 결정적 노출도
 """
 
 import logging
@@ -11,7 +17,7 @@ from langgraph.graph import END, StateGraph
 
 log = logging.getLogger(__name__)
 
-# GPT-4o rate limit 고려: 분류·카드·시사점·SC 병렬 호출 수
+# GPT-4o rate limit 고려: 분류·카드 병렬 호출 수
 _GPT_WORKERS = 5
 
 
@@ -22,10 +28,9 @@ class IngestionState(TypedDict):
     credible_ids: list[int]
     cluster_map: dict          # {cluster_id: [article_ids]}
     representative_ids: list[int]
-    classified_clusters: list[dict]  # [{cluster_id, rep_id, peer_id, importance, ...}]
+    classified_clusters: list[dict]
     issue_cards: list[dict]
-    implications: list[dict]
-    validation_results: list[dict]
+    evidence_results: list[dict]   # v3: EvidenceAgent 첨부 결과
     errors: Annotated[list[str], operator.add]
     human_review_flags: list[int]
 
@@ -57,12 +62,13 @@ def dedup_node(state: IngestionState) -> IngestionState:
 
 
 def classify_node(state: IngestionState) -> IngestionState:
-    """중요도 분류 — 클러스터별 GPT-4o 병렬 호출."""
+    """v3 분류 — 클러스터별 sector + 결정적 노출도 + event_type."""
     from src.agents.classification_agent import ClassificationAgent
     from src.db.article_store import get_articles_by_ids
 
     agent = ClassificationAgent()
     rep_articles = {a["id"]: a for a in get_articles_by_ids(state["representative_ids"])}
+    cluster_map = state["cluster_map"]
 
     def _classify_one(cluster_id: int, article_ids: list[int]) -> dict | None:
         rep_id = next(
@@ -71,13 +77,19 @@ def classify_node(state: IngestionState) -> IngestionState:
         )
         if rep_id is None:
             return None
-        result = agent.classify(cluster_id, rep_id)
+        peer_id = rep_articles.get(rep_id, {}).get(
+            "peer_id", state["peer_ids"][0] if state["peer_ids"] else ""
+        )
+        result = agent.classify(
+            cluster_id=cluster_id,
+            representative_id=rep_id,
+            cluster_article_ids=article_ids,
+            peer_id=peer_id,
+        )
         return {
             "cluster_id": cluster_id,
             "representative_id": rep_id,
-            "peer_id": rep_articles.get(rep_id, {}).get(
-                "peer_id", state["peer_ids"][0] if state["peer_ids"] else ""
-            ),
+            "peer_id": peer_id,
             **result,
         }
 
@@ -85,14 +97,14 @@ def classify_node(state: IngestionState) -> IngestionState:
     with ThreadPoolExecutor(max_workers=_GPT_WORKERS) as ex:
         futures = {
             ex.submit(_classify_one, cid, aids): cid
-            for cid, aids in state["cluster_map"].items()
+            for cid, aids in cluster_map.items()
         }
         for future in as_completed(futures):
             result = future.result()
             if result:
                 classified.append(result)
 
-    log.info("중요도 분류 완료 | clusters=%d", len(classified))
+    log.info("v3 분류 완료 | clusters=%d", len(classified))
     return {**state, "classified_clusters": classified}
 
 
@@ -125,79 +137,46 @@ def issue_card_node(state: IngestionState) -> IngestionState:
     return {**state, "issue_cards": cards}
 
 
-def implication_node(state: IngestionState) -> IngestionState:
-    """시사점 생성 — notable 이상 등급만 GPT-4o 병렬 호출."""
-    from src.agents.implication_agent import ImplicationAgent
+def evidence_node(state: IngestionState) -> IngestionState:
+    """v3 검증 체인 첨부 + 카드 DB 저장.
 
-    agent = ImplicationAgent()
-    notable_cards = [c for c in state["issue_cards"] if c.get("importance") != "reference"]
-    reference_cards = [c for c in state["issue_cards"] if c.get("importance") == "reference"]
-
-    implications: list[dict] = [{"card_id": c["id"], "skipped": True} for c in reference_cards]
-
-    def _generate_one(card: dict) -> dict:
-        result = agent.generate(card)
-        result["card_id"] = card["id"]
-        return result
-
-    with ThreadPoolExecutor(max_workers=_GPT_WORKERS) as ex:
-        futures = {ex.submit(_generate_one, card): card for card in notable_cards}
-        for future in as_completed(futures):
-            card = futures[future]
-            result = future.result()
-            implications.append(result)
-            card["implication"] = result  # 카드에 시사점 붙이기
-
-    log.info(
-        "시사점 생성 완료 | total=%d skipped=%d",
-        len(implications),
-        len(reference_cards),
-    )
-    return {**state, "implications": implications}
-
-
-def validation_node(state: IngestionState) -> IngestionState:
-    """SC 검증 + 이슈카드 DB 저장 — notable 카드 병렬 검증."""
-    from src.agents.validation_agent import ValidationAgent
+    EvidenceAgent가 4종 검증 정보 첨부 → 누락 시 human_review 플래그.
+    """
+    from src.agents.evidence_agent import EvidenceAgent
     from src.db.article_store import save_issue_card
 
-    agent = ValidationAgent()
-    implication_map = {i["card_id"]: i for i in state["implications"] if not i.get("skipped")}
+    agent = EvidenceAgent()
+    cluster_map = state["cluster_map"]
 
-    def _validate_one(card: dict) -> dict:
-        card_id = card["id"]
-        implication = implication_map.get(card_id, {})
-        if implication:
-            validation = agent.validate(card, implication)
-        else:
-            validation = {"pass": True, "sc_score": 1.0, "reason": "reference 등급 스킵"}
-        card["validation"] = validation
+    def _attach_one(card: dict) -> dict:
+        cluster_id = card.get("cluster_id")
+        result = agent.attach(card, cluster_article_ids=cluster_map.get(cluster_id, []))
         save_issue_card(card)
-        return {"card_id": card_id, **validation}
+        return {"card_id": card.get("id"), **result}
 
     results: list[dict] = []
     human_review_flags: list[int] = []
 
     with ThreadPoolExecutor(max_workers=_GPT_WORKERS) as ex:
-        futures = {ex.submit(_validate_one, card): card for card in state["issue_cards"]}
+        futures = {ex.submit(_attach_one, card): card for card in state["issue_cards"]}
         for future in as_completed(futures):
             result = future.result()
             results.append(result)
             if not result["pass"]:
                 card = futures[future]
                 human_review_flags.append(card.get("cluster_id", 0))
-                log.warning(
-                    "SC 검증 실패 — human review 필요 | card_id=%s reason=%s",
-                    result["card_id"], result.get("reason"),
-                )
 
+    pass_count = sum(1 for r in results if r["pass"])
+    fail_count = len(results) - pass_count
     log.info(
-        "SC 검증 + 저장 완료 | total=%d pass=%d fail=%d",
-        len(results),
-        sum(1 for r in results if r["pass"]),
-        sum(1 for r in results if not r["pass"]),
+        "검증 체인 첨부 + 저장 완료 | total=%d pass=%d fail=%d",
+        len(results), pass_count, fail_count,
     )
-    return {**state, "validation_results": results, "human_review_flags": human_review_flags}
+    return {
+        **state,
+        "evidence_results": results,
+        "human_review_flags": human_review_flags,
+    }
 
 
 # ── 그래프 조립 ────────────────────────────────────────────────
@@ -210,17 +189,15 @@ def build_ingestion_graph() -> StateGraph:
     graph.add_node("dedup", dedup_node)
     graph.add_node("classify", classify_node)
     graph.add_node("issue_card", issue_card_node)
-    graph.add_node("implication", implication_node)
-    graph.add_node("validation", validation_node)
+    graph.add_node("evidence", evidence_node)
 
     graph.set_entry_point("crawl")
     graph.add_edge("crawl", "credibility")
     graph.add_edge("credibility", "dedup")
     graph.add_edge("dedup", "classify")
     graph.add_edge("classify", "issue_card")
-    graph.add_edge("issue_card", "implication")
-    graph.add_edge("implication", "validation")
-    graph.add_edge("validation", END)
+    graph.add_edge("issue_card", "evidence")
+    graph.add_edge("evidence", END)
 
     return graph.compile()  # type: ignore[return-value]
 

@@ -177,10 +177,23 @@ _INSERT_ISSUE_CARD = text("""
 def save_issue_card(card: dict[str, Any]) -> Optional[str]:
     """이슈 카드를 issue_cards 테이블에 저장한다.
 
+    v3: implication JSONB 컬럼은 evidence_chain + sector 메타데이터의 저장소로 재사용.
+    Backend에서 evidence_chain·sector 전용 컬럼 분리 후 마이그레이션 예정.
+
     Returns:
         저장된 issue card ID, 실패 시 None
     """
     try:
+        # implication JSONB에 v3 메타데이터(섹터·노출도·검증체인) 통합 저장
+        v3_payload = {
+            "sector": card.get("sector", "other"),
+            "sectors": card.get("sectors", ["other"]),
+            "exposure_score": card.get("exposure_score", 0.0),
+            "exposure_band": card.get("exposure_band", "low"),
+            "signals": card.get("signals", {}),
+            "evidence_chain": card.get("evidence_chain", {}),
+        }
+
         with SessionLocal() as db:
             result = db.execute(
                 _INSERT_ISSUE_CARD,
@@ -191,9 +204,9 @@ def save_issue_card(card: dict[str, Any]) -> Optional[str]:
                     "title": card["title"][:500],
                     "summary_lines": card.get("summary_lines", []),
                     "event_type": card.get("event_type", "tech"),
-                    "importance": card.get("importance", "reference"),
+                    "importance": card.get("importance", "low"),
                     "importance_score": card.get("importance_score", 0.0),
-                    "implication": json.dumps(card.get("implication", {}), ensure_ascii=False),
+                    "implication": json.dumps(v3_payload, ensure_ascii=False),
                     "sources": json.dumps(card.get("sources", []), ensure_ascii=False),
                     "validation_pass": card.get("validation", {}).get("pass", False),
                     "validation_sc_score": card.get("validation", {}).get("sc_score", 0.0),
