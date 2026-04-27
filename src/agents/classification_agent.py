@@ -70,7 +70,7 @@ JSON으로만 응답:
 _HIGH_THRESHOLD = 0.65
 _MEDIUM_THRESHOLD = 0.40
 
-_CLUSTER_SIZE_SATURATION = 5   # 5건 이상이면 cluster_size_score = 1.0
+_CLUSTER_SIZE_SATURATION = 5  # 5건 이상이면 cluster_size_score = 1.0
 
 
 def compute_exposure(
@@ -84,24 +84,19 @@ def compute_exposure(
     cluster_size = len(cluster_articles)
     cluster_size_score = min(cluster_size / _CLUSTER_SIZE_SATURATION, 1.0)
 
-    credibility_max = max(
-        (a.get("credibility_score") or 0.0) for a in cluster_articles
-    )
+    credibility_max = max((a.get("credibility_score") or 0.0) for a in cluster_articles)
 
     # peer 이름 직접 언급 카운트
     peer_aliases = _peer_aliases(peer_id)
     peer_mention_count = sum(
         1
         for a in cluster_articles
-        if any(alias in (a.get("title") or "") + (a.get("content") or "")
-               for alias in peer_aliases)
+        if any(alias in (a.get("title") or "") + (a.get("content") or "") for alias in peer_aliases)
     )
     peer_mention_score = min(peer_mention_count / max(cluster_size, 1), 1.0)
 
     # 출처 tier 다양성 (Tier 1 출처가 1개 이상이면 0.5, 2개 이상 0.8, 3개 이상 1.0)
-    tier1_count = sum(
-        1 for a in cluster_articles if (a.get("source_tier") or 5) == 1
-    )
+    tier1_count = sum(1 for a in cluster_articles if (a.get("source_tier") or 5) == 1)
     if tier1_count >= 3:
         diversity_score = 1.0
     elif tier1_count == 2:
@@ -157,6 +152,7 @@ def _zero_exposure() -> dict[str, Any]:
 
 
 # ── 분류 에이전트 ─────────────────────────────────────────────────
+
 
 class ClassificationAgent:
     """클러스터를 4개 섹터로 태깅하고 노출도를 결정적으로 계산한다."""
@@ -226,8 +222,12 @@ class ClassificationAgent:
         elapsed = int((time.time() - start) * 1000)
         log.info(
             "분류 완료 | cluster=%d sector=%s band=%s score=%.2f event=%s elapsed=%dms",
-            cluster_id, sector, exposure["exposure_band"], exposure["exposure_score"],
-            event_type, elapsed,
+            cluster_id,
+            sector,
+            exposure["exposure_band"],
+            exposure["exposure_score"],
+            event_type,
+            elapsed,
         )
         return result
 
@@ -241,8 +241,7 @@ class ClassificationAgent:
             f"{exposure['peer_mention_count']}건 (cluster_size={exposure['cluster_size']})"
         )
         prompt = (
-            _CLASSIFY_PROMPT
-            .replace("ARTICLES_TEXT_PLACEHOLDER", articles_text)
+            _CLASSIFY_PROMPT.replace("ARTICLES_TEXT_PLACEHOLDER", articles_text)
             .replace("CLUSTER_SIZE_PLACEHOLDER", str(exposure["cluster_size"]))
             .replace("PEER_MENTION_PLACEHOLDER", peer_mention_text)
         )
@@ -259,6 +258,7 @@ class ClassificationAgent:
 
 
 # ── helpers ───────────────────────────────────────────────────────
+
 
 def _format_articles(articles: list[dict[str, Any]]) -> str:
     lines = []

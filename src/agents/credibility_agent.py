@@ -66,9 +66,7 @@ class CredibilityAgent:
                     credible_ids.append(row.id)
                 else:
                     skipped_ids.append(row.id)
-                    log.debug(
-                        "Gate 2 탈락 | id=%d score=%.2f grade=%s", row.id, score, grade
-                    )
+                    log.debug("Gate 2 탈락 | id=%d score=%.2f grade=%s", row.id, score, grade)
 
             db.commit()
 

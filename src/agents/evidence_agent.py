@@ -108,12 +108,15 @@ class EvidenceAgent:
         if not passed:
             log.warning(
                 "검증 정보 누락 — human review 플래그 | card_id=%s missing=%s",
-                card.get("id"), missing,
+                card.get("id"),
+                missing,
             )
         else:
             log.info(
                 "검증 체인 첨부 완료 | card_id=%s sources=%d cluster=%d",
-                card.get("id"), len(source_links), len(provenance["raw_article_ids"]),
+                card.get("id"),
+                len(source_links),
+                len(provenance["raw_article_ids"]),
             )
 
         return {"pass": passed, "reason": reason, "missing": missing}

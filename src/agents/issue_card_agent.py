@@ -106,8 +106,11 @@ class IssueCardAgent:
 
             log.info(
                 "이슈카드 생성 완료 | id=%s sector=%s band=%s event=%s sources=%d",
-                card["id"], card["sector"], card["exposure_band"],
-                card["event_type"], len(articles),
+                card["id"],
+                card["sector"],
+                card["exposure_band"],
+                card["event_type"],
+                len(articles),
             )
             return card
 
@@ -122,7 +125,7 @@ def _build_fetch_ids(representative_id: int, cluster_article_ids: list[int] | No
         return [representative_id]
     # 대표 기사 먼저, 나머지 중 대표 제외 후 합치기
     others = [aid for aid in cluster_article_ids if aid != representative_id]
-    return [representative_id, *others][: _MAX_CLUSTER_ARTICLES]
+    return [representative_id, *others][:_MAX_CLUSTER_ARTICLES]
 
 
 def _format_articles(articles: list[dict[str, Any]]) -> str:

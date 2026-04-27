@@ -22,8 +22,7 @@ _COMPANY_URL_TPL = (
     "https://finance.naver.com/research/company_list.naver?searchType=itemCode&itemCode={code}"
 )
 _COMPANY_URLS: dict[str, str] = {
-    peer_id: _COMPANY_URL_TPL.format(code=code)
-    for peer_id, code in _COMPANY_ITEM_CODES.items()
+    peer_id: _COMPANY_URL_TPL.format(code=code) for peer_id, code in _COMPANY_ITEM_CODES.items()
 }
 
 # IT서비스 섹터 리포트

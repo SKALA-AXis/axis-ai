@@ -110,8 +110,11 @@ def _compute_vs_sk_ax(
     if not sk_match:
         sk_match = sk_quarterly[-1]
     sk_prev_y = (
-        next((q for q in sk_quarterly if q.get("period") == (peer_prev_y or {}).get("period")), None)
-        if peer_prev_y else None
+        next(
+            (q for q in sk_quarterly if q.get("period") == (peer_prev_y or {}).get("period")), None
+        )
+        if peer_prev_y
+        else None
     )
     if not sk_prev_y and len(sk_quarterly) >= 5:
         idx = sk_quarterly.index(sk_match)
@@ -125,54 +128,64 @@ def _compute_vs_sk_ax(
     if peer_rev and sk_rev:
         ratio = round(peer_rev / sk_rev, 2)
         gap = peer_rev - sk_rev
-        metrics.append({
-            "key": "revenue_total",
-            "metric_ko": "전체 매출",
-            "period": target_period,
-            "sk_ax_value_krwbn": sk_rev,
-            "peer_value_krwbn": peer_rev,
-            "ratio_peer_over_skax": ratio,
-            "gap_krwbn": gap,
-            "narrative": (
-                f"{target_period} 매출: SK AX {_format_krwbn(sk_rev)} vs "
-                f"{peer_name} {_format_krwbn(peer_rev)} "
-                f"(Peer {ratio}x · 격차 {_format_krwbn(abs(gap))})"
-            ),
-        })
+        metrics.append(
+            {
+                "key": "revenue_total",
+                "metric_ko": "전체 매출",
+                "period": target_period,
+                "sk_ax_value_krwbn": sk_rev,
+                "peer_value_krwbn": peer_rev,
+                "ratio_peer_over_skax": ratio,
+                "gap_krwbn": gap,
+                "narrative": (
+                    f"{target_period} 매출: SK AX {_format_krwbn(sk_rev)} vs "
+                    f"{peer_name} {_format_krwbn(peer_rev)} "
+                    f"(Peer {ratio}x · 격차 {_format_krwbn(abs(gap))})"
+                ),
+            }
+        )
 
     # ── 2) 매출 YoY 격차 (성장 속도) ─────────────────────────
-    peer_yoy = _delta_pct(peer_rev, (peer_prev_y or {}).get("revenue_total_krwbn")) if peer_prev_y else None
+    peer_yoy = (
+        _delta_pct(peer_rev, (peer_prev_y or {}).get("revenue_total_krwbn"))
+        if peer_prev_y
+        else None
+    )
     sk_yoy = _delta_pct(sk_rev, (sk_prev_y or {}).get("revenue_total_krwbn")) if sk_prev_y else None
     if peer_yoy is not None and sk_yoy is not None:
         gap_pp = round(peer_yoy - sk_yoy, 1)
-        metrics.append({
-            "key": "revenue_yoy_pct",
-            "metric_ko": "매출 YoY 성장률",
-            "sk_ax_pct": sk_yoy,
-            "peer_pct": peer_yoy,
-            "gap_pp": gap_pp,
-            "narrative": (
-                f"매출 YoY: SK AX {sk_yoy:+.1f}% vs {peer_name} {peer_yoy:+.1f}% "
-                f"({'Peer 우위' if gap_pp > 0 else 'SK AX 우위'} {abs(gap_pp):+.1f}%p)"
-            ),
-        })
+        metrics.append(
+            {
+                "key": "revenue_yoy_pct",
+                "metric_ko": "매출 YoY 성장률",
+                "sk_ax_pct": sk_yoy,
+                "peer_pct": peer_yoy,
+                "gap_pp": gap_pp,
+                "narrative": (
+                    f"매출 YoY: SK AX {sk_yoy:+.1f}% vs {peer_name} {peer_yoy:+.1f}% "
+                    f"({'Peer 우위' if gap_pp > 0 else 'SK AX 우위'} {abs(gap_pp):+.1f}%p)"
+                ),
+            }
+        )
 
     # ── 3) AI 매출 비중 격차 ─────────────────────────────────
     peer_ai = peer_latest.get("ai_revenue_share_pct")
     sk_ai = sk_match.get("ai_revenue_share_pct")
     if peer_ai is not None and sk_ai is not None:
         gap_pp = round(peer_ai - sk_ai, 1)
-        metrics.append({
-            "key": "ai_share_pct",
-            "metric_ko": "AI 매출 비중",
-            "sk_ax_pct": sk_ai,
-            "peer_pct": peer_ai,
-            "gap_pp": gap_pp,
-            "narrative": (
-                f"AI 매출 비중: SK AX {sk_ai:.1f}% vs {peer_name} {peer_ai:.1f}% "
-                f"({'Peer 우위' if gap_pp > 0 else 'SK AX 우위'} {abs(gap_pp):+.1f}%p)"
-            ),
-        })
+        metrics.append(
+            {
+                "key": "ai_share_pct",
+                "metric_ko": "AI 매출 비중",
+                "sk_ax_pct": sk_ai,
+                "peer_pct": peer_ai,
+                "gap_pp": gap_pp,
+                "narrative": (
+                    f"AI 매출 비중: SK AX {sk_ai:.1f}% vs {peer_name} {peer_ai:.1f}% "
+                    f"({'Peer 우위' if gap_pp > 0 else 'SK AX 우위'} {abs(gap_pp):+.1f}%p)"
+                ),
+            }
+        )
 
     # ── 4) AI 엔지니어 격차 ──────────────────────────────────
     sk_hc = sk.get("headcount") or []
@@ -181,18 +194,20 @@ def _compute_vs_sk_ax(
         sk_ai_eng = (sk_hc[-1] or {}).get("ai_engineers_est")
         if peer_ai_eng and sk_ai_eng:
             ratio = round(peer_ai_eng / sk_ai_eng, 2)
-            metrics.append({
-                "key": "ai_engineers",
-                "metric_ko": "AI 엔지니어",
-                "sk_ax_count": sk_ai_eng,
-                "peer_count": peer_ai_eng,
-                "ratio_peer_over_skax": ratio,
-                "gap_count": peer_ai_eng - sk_ai_eng,
-                "narrative": (
-                    f"AI 엔지니어: SK AX {sk_ai_eng}명 vs {peer_name} {peer_ai_eng}명 "
-                    f"(Peer {ratio}x · 격차 {peer_ai_eng - sk_ai_eng:+}명)"
-                ),
-            })
+            metrics.append(
+                {
+                    "key": "ai_engineers",
+                    "metric_ko": "AI 엔지니어",
+                    "sk_ax_count": sk_ai_eng,
+                    "peer_count": peer_ai_eng,
+                    "ratio_peer_over_skax": ratio,
+                    "gap_count": peer_ai_eng - sk_ai_eng,
+                    "narrative": (
+                        f"AI 엔지니어: SK AX {sk_ai_eng}명 vs {peer_name} {peer_ai_eng}명 "
+                        f"(Peer {ratio}x · 격차 {peer_ai_eng - sk_ai_eng:+}명)"
+                    ),
+                }
+            )
 
     if not metrics:
         return None
@@ -269,21 +284,23 @@ class FinancialLinkerAgent:
         rev_yoy = prev_y.get("revenue_total_krwbn") if prev_y else None
         qoq = _delta_pct(rev_curr, rev_prev)
         yoy = _delta_pct(rev_curr, rev_yoy) if rev_yoy else None
-        refs.append({
-            "period": latest["period"],
-            "metric": "revenue_total_krwbn",
-            "metric_ko": "전체 매출",
-            "value_krwbn": rev_curr,
-            "delta_pct_qoq": qoq,
-            "delta_pct_yoy": yoy,
-            "dart_rcept_no": latest.get("dart_rcept_no"),
-            "ir_page": latest.get("ir_page"),
-            "narrative": (
-                f"{latest['period']} 매출 {_format_krwbn(rev_curr)}"
-                + (f" (QoQ {qoq:+.1f}%)" if qoq is not None else "")
-                + (f" / YoY {yoy:+.1f}%" if yoy is not None else "")
-            ),
-        })
+        refs.append(
+            {
+                "period": latest["period"],
+                "metric": "revenue_total_krwbn",
+                "metric_ko": "전체 매출",
+                "value_krwbn": rev_curr,
+                "delta_pct_qoq": qoq,
+                "delta_pct_yoy": yoy,
+                "dart_rcept_no": latest.get("dart_rcept_no"),
+                "ir_page": latest.get("ir_page"),
+                "narrative": (
+                    f"{latest['period']} 매출 {_format_krwbn(rev_curr)}"
+                    + (f" (QoQ {qoq:+.1f}%)" if qoq is not None else "")
+                    + (f" / YoY {yoy:+.1f}%" if yoy is not None else "")
+                ),
+            }
+        )
         if yoy is not None and abs(yoy) >= 5.0:
             highlights.append(f"매출 YoY {yoy:+.1f}%")
 
@@ -300,25 +317,29 @@ class FinancialLinkerAgent:
             }
             seg_curr = (latest.get("segment_revenue_krwbn") or {}).get(segment_id)
             seg_prev = (prev_q.get("segment_revenue_krwbn") or {}).get(segment_id)
-            seg_yoy_v = (prev_y.get("segment_revenue_krwbn") or {}).get(segment_id) if prev_y else None
+            seg_yoy_v = (
+                (prev_y.get("segment_revenue_krwbn") or {}).get(segment_id) if prev_y else None
+            )
             if seg_curr is not None:
                 seg_qoq = _delta_pct(seg_curr, seg_prev) if seg_prev else None
                 seg_yoy = _delta_pct(seg_curr, seg_yoy_v) if seg_yoy_v else None
-                refs.append({
-                    "period": latest["period"],
-                    "metric": f"segment_revenue.{segment_id}",
-                    "metric_ko": f"{seg_obj['name_ko']} 매출",
-                    "value_krwbn": seg_curr,
-                    "delta_pct_qoq": seg_qoq,
-                    "delta_pct_yoy": seg_yoy,
-                    "dart_rcept_no": latest.get("dart_rcept_no"),
-                    "ir_page": latest.get("ir_page"),
-                    "narrative": (
-                        f"{seg_obj['name_ko']} 매출 {_format_krwbn(seg_curr)}"
-                        + (f" (QoQ {seg_qoq:+.1f}%)" if seg_qoq is not None else "")
-                        + (f" / YoY {seg_yoy:+.1f}%" if seg_yoy is not None else "")
-                    ),
-                })
+                refs.append(
+                    {
+                        "period": latest["period"],
+                        "metric": f"segment_revenue.{segment_id}",
+                        "metric_ko": f"{seg_obj['name_ko']} 매출",
+                        "value_krwbn": seg_curr,
+                        "delta_pct_qoq": seg_qoq,
+                        "delta_pct_yoy": seg_yoy,
+                        "dart_rcept_no": latest.get("dart_rcept_no"),
+                        "ir_page": latest.get("ir_page"),
+                        "narrative": (
+                            f"{seg_obj['name_ko']} 매출 {_format_krwbn(seg_curr)}"
+                            + (f" (QoQ {seg_qoq:+.1f}%)" if seg_qoq is not None else "")
+                            + (f" / YoY {seg_yoy:+.1f}%" if seg_yoy is not None else "")
+                        ),
+                    }
+                )
                 if seg_yoy is not None and abs(seg_yoy) >= 10.0:
                     highlights.append(f"{seg_obj['name_ko']} YoY {seg_yoy:+.1f}%")
 
@@ -327,20 +348,22 @@ class FinancialLinkerAgent:
         ai_curr = latest.get("ai_revenue_share_pct")
         ai_yoy = prev_y.get("ai_revenue_share_pct") if prev_y else None
         if ai_curr is not None and (sector == "ai_tech" or segment_id in {"ai", "ai_dx"}):
-            refs.append({
-                "period": latest["period"],
-                "metric": "ai_revenue_share_pct",
-                "metric_ko": "AI 매출 비중",
-                "value_krwbn": None,
-                "value_pct": ai_curr,
-                "delta_pct_yoy": round(ai_curr - ai_yoy, 1) if ai_yoy else None,
-                "dart_rcept_no": latest.get("dart_rcept_no"),
-                "ir_page": latest.get("ir_page"),
-                "narrative": (
-                    f"AI 매출 비중 {ai_curr:.1f}%"
-                    + (f" (1년 전 {ai_yoy:.1f}% → +{ai_curr - ai_yoy:.1f}%p)" if ai_yoy else "")
-                ),
-            })
+            refs.append(
+                {
+                    "period": latest["period"],
+                    "metric": "ai_revenue_share_pct",
+                    "metric_ko": "AI 매출 비중",
+                    "value_krwbn": None,
+                    "value_pct": ai_curr,
+                    "delta_pct_yoy": round(ai_curr - ai_yoy, 1) if ai_yoy else None,
+                    "dart_rcept_no": latest.get("dart_rcept_no"),
+                    "ir_page": latest.get("ir_page"),
+                    "narrative": (
+                        f"AI 매출 비중 {ai_curr:.1f}%"
+                        + (f" (1년 전 {ai_yoy:.1f}% → +{ai_curr - ai_yoy:.1f}%p)" if ai_yoy else "")
+                    ),
+                }
+            )
             if ai_yoy is not None:
                 highlights.append(f"AI 비중 {ai_yoy:.1f}%→{ai_curr:.1f}%")
 
@@ -359,8 +382,9 @@ class FinancialLinkerAgent:
                 ),
             }
             if head_delta["ai_engineers_delta"] >= 100:
+                ai_delta = head_delta["ai_engineers_delta"]
                 highlights.append(
-                    f"AI 인력 +{head_delta['ai_engineers_delta']}명 ({hc_base['period']}→{hc_curr['period']})"
+                    f"AI 인력 +{ai_delta}명 ({hc_base['period']}→{hc_curr['period']})"
                 )
 
         # ── 5) vs SK AX 비교 (결정적 4지표) ─────────────────────
@@ -385,7 +409,10 @@ class FinancialLinkerAgent:
 
         log.info(
             "재무 연결 완료 | peer=%s segment=%s refs=%d highlights=%d vs_sk_ax=%s",
-            peer_id, segment_id, len(refs), len(highlights),
+            peer_id,
+            segment_id,
+            len(refs),
+            len(highlights),
             "yes" if vs_sk_ax else "no",
         )
 

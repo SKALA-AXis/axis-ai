@@ -60,8 +60,11 @@ class ValidationAgent:
 
         # confidence < 0.6 → 즉시 Fail
         if implication.get("confidence", 0) < 0.6:
-            log.info("SC 검증 Fail — confidence 부족 | card_id=%s confidence=%.2f",
-                     card_id, implication.get("confidence", 0))
+            log.info(
+                "SC 검증 Fail — confidence 부족 | card_id=%s confidence=%.2f",
+                card_id,
+                implication.get("confidence", 0),
+            )
             return {"pass": False, "sc_score": 0.0, "reason": "근거 불충분 (confidence < 0.6)"}
 
         # 출처에 없는 수치 포함 시 자동 Fail
@@ -82,7 +85,9 @@ class ValidationAgent:
 
         log.info(
             "SC 검증 완료 | card_id=%s pass=%s sc_score=%.2f",
-            card_id, passed, sc_score,
+            card_id,
+            passed,
+            sc_score,
         )
         return {"pass": passed, "sc_score": sc_score, "reason": reason}
 
@@ -92,12 +97,11 @@ def _generate_sc_runs(issue_card: dict[str, Any]) -> list[str]:
     title = issue_card.get("title", "")
     summary = "\n".join(issue_card.get("summary_lines", []))
     sources_text = "\n".join(
-        f"[{s.get('index', i+1)}] {s.get('title', '')} ({s.get('source_name', '')})"
+        f"[{s.get('index', i + 1)}] {s.get('title', '')} ({s.get('source_name', '')})"
         for i, s in enumerate(issue_card.get("sources", []))
     )
     prompt = (
-        _SC_PROMPT
-        .replace("{title}", title)
+        _SC_PROMPT.replace("{title}", title)
         .replace("{summary}", summary)
         .replace("{sources_text}", sources_text)
     )
@@ -116,8 +120,7 @@ def _judge_consistency(summaries: list[str]) -> tuple[float, str]:
     """GPT-4o로 일치율을 판정한다."""
     padded = (summaries + [""] * SC_RUNS)[:SC_RUNS]
     prompt = (
-        _JUDGE_PROMPT
-        .replace("{s1}", padded[0])
+        _JUDGE_PROMPT.replace("{s1}", padded[0])
         .replace("{s2}", padded[1])
         .replace("{s3}", padded[2])
     )

@@ -115,7 +115,10 @@ class RssCrawler(BaseCrawler):
                     )
                 log.info(
                     "RSS 수집 | source=%s peer=%s entries=%d matched=%d",
-                    source_name, self.peer_id, total, matched,
+                    source_name,
+                    self.peer_id,
+                    total,
+                    matched,
                 )
             except Exception as e:
                 log.error("RSS 크롤링 실패 | source=%s error=%s", source_name, e)
@@ -160,7 +163,9 @@ class GoogleNewsRssCrawler(BaseCrawler):
                     )
                 log.info(
                     "Google News RSS 수집 | keyword=%s peer=%s entries=%d",
-                    keyword, self.peer_id, len(articles) - before,
+                    keyword,
+                    self.peer_id,
+                    len(articles) - before,
                 )
             except Exception as e:
                 log.error("Google News RSS 실패 | keyword=%s error=%s", keyword, e)

@@ -39,8 +39,12 @@ _GENERIC_SOURCES: dict[str, dict[str, str | list[str]]] = {
         "base": "https://www.hyundai-autoever.com",
         "source_name": "hyundai_autoever_newsroom",
         "list_selectors": [
-            ".news-list a", ".board-list a", "ul.list li a", "table tbody tr a",
-            "a[href*='/news/']", "a[href*='/notice']",
+            ".news-list a",
+            ".board-list a",
+            "ul.list li a",
+            "table tbody tr a",
+            "a[href*='/news/']",
+            "a[href*='/notice']",
         ],
     },
     "posco_dx": {
@@ -48,8 +52,12 @@ _GENERIC_SOURCES: dict[str, dict[str, str | list[str]]] = {
         "base": "https://www.poscodx.com",
         "source_name": "posco_dx_newsroom",
         "list_selectors": [
-            ".news-list a", ".board-list a", "ul.list li a", "table tbody tr a",
-            "a[href*='news.do']", "a[href*='/news/']",
+            ".news-list a",
+            ".board-list a",
+            "ul.list li a",
+            "table tbody tr a",
+            "a[href*='news.do']",
+            "a[href*='/news/']",
         ],
     },
 }
@@ -105,9 +113,7 @@ class OfficialNewsroomCrawler(BaseCrawler):
             return []
 
     async def _fetch_sds(self) -> list[RawArticle]:
-        html = await self.pw.fetch_html(
-            _SDS_URL, wait_selector="a[href*='/news/']"
-        )
+        html = await self.pw.fetch_html(_SDS_URL, wait_selector="a[href*='/news/']")
         if not html:
             log.warning("Samsung SDS 뉴스룸 HTML 비어있음 | url=%s", _SDS_URL)
             return []
@@ -151,7 +157,9 @@ class OfficialNewsroomCrawler(BaseCrawler):
 
         log.info(
             "Samsung SDS 뉴스룸 | html_len=%d raw=%d with_body=%d",
-            len(html), before, len(articles),
+            len(html),
+            before,
+            len(articles),
         )
         return articles
 
@@ -215,7 +223,6 @@ class OfficialNewsroomCrawler(BaseCrawler):
                 )
             return articles
 
-
     async def _fetch_generic(self, conf: dict[str, str | list[str]]) -> list[RawArticle]:
         """현대오토에버·포스코DX 코퍼레이트 뉴스룸 — Playwright + 다중 셀렉터 시도.
 
@@ -235,7 +242,8 @@ class OfficialNewsroomCrawler(BaseCrawler):
         if not html:
             log.warning(
                 "Generic 뉴스룸 HTML 비어있음 | peer=%s url=%s",
-                self.peer_id, list_url,
+                self.peer_id,
+                list_url,
             )
             return []
 
@@ -278,7 +286,10 @@ class OfficialNewsroomCrawler(BaseCrawler):
         articles = [a for a in articles if len(a.content or "") >= 200]
         log.info(
             "Generic 뉴스룸 | peer=%s html_len=%d candidates=%d with_body=%d",
-            self.peer_id, len(html), before, len(articles),
+            self.peer_id,
+            len(html),
+            before,
+            len(articles),
         )
         return articles
 
@@ -298,9 +309,7 @@ async def _enrich_sds_bodies(articles: list[RawArticle]) -> None:
         ),
         "Accept-Language": "ko-KR,ko;q=0.9",
     }
-    async with httpx.AsyncClient(
-        timeout=6.0, headers=headers, follow_redirects=True
-    ) as client:
+    async with httpx.AsyncClient(timeout=6.0, headers=headers, follow_redirects=True) as client:
 
         async def fetch_one(art: RawArticle) -> None:
             async with sem:
@@ -321,9 +330,9 @@ async def _enrich_sds_bodies(articles: list[RawArticle]) -> None:
                         from readability import Document
 
                         doc = Document(r.text)
-                        text = BeautifulSoup(
-                            doc.summary(), "html.parser"
-                        ).get_text(separator="\n", strip=True)
+                        text = BeautifulSoup(doc.summary(), "html.parser").get_text(
+                            separator="\n", strip=True
+                        )
                         if len(text) >= 200:
                             art.content = text[:5000]
                     except Exception:

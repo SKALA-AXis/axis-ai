@@ -71,8 +71,7 @@ class ImplicationAgent:
         summary = "\n".join(issue_card.get("summary_lines", []))
 
         prompt = (
-            _IMPLICATION_PROMPT
-            .replace("{title}", issue_card.get("title", ""))
+            _IMPLICATION_PROMPT.replace("{title}", issue_card.get("title", ""))
             .replace("{summary}", summary)
             .replace("{event_type}", issue_card.get("event_type", "tech"))
             .replace("{importance}", issue_card.get("importance", "reference"))
@@ -88,7 +87,9 @@ class ImplicationAgent:
 
             log.info(
                 "시사점 생성 완료 | card_id=%s confidence=%.2f label=%s",
-                issue_card.get("id"), result["confidence"], result["evidence_label"],
+                issue_card.get("id"),
+                result["confidence"],
+                result["evidence_label"],
             )
             return result
 
@@ -108,7 +109,7 @@ def _evidence_label(confidence: float) -> str:
 
 def _format_sources(sources: list[dict[str, Any]]) -> str:
     return "\n".join(
-        f"[{s.get('index', i+1)}] {s.get('title', '')} ({s.get('source_name', '')})"
+        f"[{s.get('index', i + 1)}] {s.get('title', '')} ({s.get('source_name', '')})"
         for i, s in enumerate(sources)
     )
 

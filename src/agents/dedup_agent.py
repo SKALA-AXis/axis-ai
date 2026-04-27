@@ -42,12 +42,16 @@ class DeduplicationAgent:
         skipped = len(credible_ids) - len(representative_ids)
         log.info(
             "Gate 3 클러스터링 완료 | total=%d clusters=%d reps=%d dupes=%d",
-            len(credible_ids), len(cluster_map), len(representative_ids), skipped,
+            len(credible_ids),
+            len(cluster_map),
+            len(representative_ids),
+            skipped,
         )
         return cluster_map, representative_ids
 
 
 # ── 임베딩 ────────────────────────────────────────────────────
+
 
 def _embed(articles: list[dict[str, Any]]) -> np.ndarray:
     """BGE-M3 dense 벡터 배치 임베딩. 실패 시 OpenAI fallback.
@@ -56,8 +60,7 @@ def _embed(articles: list[dict[str, Any]]) -> np.ndarray:
     제목 가중치를 높인다 (제목 3회 반복 + 본문 256자) — v3 §2.5 ②.
     """
     texts = [
-        f"{a['title']}. {a['title']}. {a['title']}. {(a['content'] or '')[:256]}"
-        for a in articles
+        f"{a['title']}. {a['title']}. {a['title']}. {(a['content'] or '')[:256]}" for a in articles
     ]
     try:
         return _embed_bge(texts)
@@ -68,6 +71,7 @@ def _embed(articles: list[dict[str, Any]]) -> np.ndarray:
 
 def _embed_bge(texts: list[str]) -> np.ndarray:
     from src.rag.embedder import get_embedder
+
     model = get_embedder()
     all_vecs = []
     for i in range(0, len(texts), EMBED_BATCH_SIZE):
@@ -84,6 +88,7 @@ def _embed_openai(texts: list[str]) -> np.ndarray:
     import os
 
     from openai import OpenAI
+
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
     all_vecs = []
     for i in range(0, len(texts), 100):
@@ -96,6 +101,7 @@ def _embed_openai(texts: list[str]) -> np.ndarray:
 
 
 # ── 클러스터링 ─────────────────────────────────────────────────
+
 
 def _cluster(
     articles: list[dict[str, Any]],

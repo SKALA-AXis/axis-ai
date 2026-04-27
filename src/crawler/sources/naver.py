@@ -29,12 +29,12 @@ _BODY_MIN_LEN = 200  # 이 미만이면 description으로 폴백
 
 # 매체별 본문 셀렉터 (n.news.naver.com + 주요 언론사)
 _BODY_SELECTORS: list[str] = [
-    "#dic_area",                        # n.news.naver.com
+    "#dic_area",  # n.news.naver.com
     "article#dic_area",
-    "div#articeBody",                   # 일부 네이버 구판
+    "div#articeBody",  # 일부 네이버 구판
     "div#articleBodyContents",
-    "div.newsct_article",               # 네이버 섹션
-    "div#article-view-content-div",     # 디지털데일리·바이라인 등
+    "div.newsct_article",  # 네이버 섹션
+    "div#article-view-content-div",  # 디지털데일리·바이라인 등
     "div.article_body",
     "div#article_body",
     "div.article-body",
@@ -85,7 +85,8 @@ class NaverNewsCrawler(BaseCrawler):
         enriched = await _enrich_with_bodies(articles)
         log.info(
             "네이버 뉴스 수집 | peer=%s raw=%d enriched_count=%d",
-            self.peer_id, len(articles),
+            self.peer_id,
+            len(articles),
             sum(1 for a in enriched if len(a.content or "") >= _BODY_MIN_LEN),
         )
         return enriched
@@ -121,6 +122,7 @@ class NaverNewsCrawler(BaseCrawler):
 
 
 # ── 본문 수집 ────────────────────────────────────────────────────
+
 
 async def _enrich_with_bodies(articles: list[RawArticle]) -> list[RawArticle]:
     """각 기사의 link에서 본문을 가져와 content를 대체한다.
@@ -174,9 +176,7 @@ def _extract_body(html: str, url: str) -> str:
         from readability import Document
 
         doc = Document(html)
-        text = BeautifulSoup(doc.summary(), "html.parser").get_text(
-            separator="\n", strip=True
-        )
+        text = BeautifulSoup(doc.summary(), "html.parser").get_text(separator="\n", strip=True)
         if len(text) >= _BODY_MIN_LEN:
             return text[:5000]
     except Exception:

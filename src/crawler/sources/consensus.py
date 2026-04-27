@@ -134,7 +134,10 @@ class HankyungConsensusCrawler:
 
             log.info(
                 "한경 컨센서스 수집 | peer=%s list_sel=%s items=%d extracted=%d",
-                peer_name, list_selector, len(items), len(articles),
+                peer_name,
+                list_selector,
+                len(items),
+                len(articles),
             )
 
         return articles

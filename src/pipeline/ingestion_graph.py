@@ -26,20 +26,22 @@ class IngestionState(TypedDict):
     trigger_type: str
     raw_article_ids: list[int]
     credible_ids: list[int]
-    cluster_map: dict          # {cluster_id: [article_ids]}
+    cluster_map: dict  # {cluster_id: [article_ids]}
     representative_ids: list[int]
     classified_clusters: list[dict]
     issue_cards: list[dict]
-    evidence_results: list[dict]   # v3: EvidenceAgent 첨부 결과
+    evidence_results: list[dict]  # v3: EvidenceAgent 첨부 결과
     errors: Annotated[list[str], operator.add]
     human_review_flags: list[int]
 
 
 # ── 노드 구현 ──────────────────────────────────────────────────
 
+
 def crawl_node(state: IngestionState) -> IngestionState:
     """처리 대기 중인 RAW 기사 ID를 DB에서 조회한다."""
     from src.agents.crawler_agent import CrawlerAgent
+
     raw_ids = CrawlerAgent().load_raw_ids(state["peer_ids"])
     log.info("RAW 기사 로드 | peer_ids=%s count=%d", state["peer_ids"], len(raw_ids))
     return {**state, "raw_article_ids": raw_ids}
@@ -48,6 +50,7 @@ def crawl_node(state: IngestionState) -> IngestionState:
 def credibility_node(state: IngestionState) -> IngestionState:
     """Gate 2: credibility_score 기준 신뢰도 필터."""
     from src.agents.credibility_agent import CredibilityAgent
+
     credible_ids, skipped = CredibilityAgent().filter(state["raw_article_ids"])
     log.info("Gate 2 완료 | credible=%d skipped=%d", len(credible_ids), len(skipped))
     return {**state, "credible_ids": credible_ids}
@@ -56,6 +59,7 @@ def credibility_node(state: IngestionState) -> IngestionState:
 def dedup_node(state: IngestionState) -> IngestionState:
     """Gate 3: BGE-M3 코사인 유사도 클러스터링."""
     from src.agents.dedup_agent import DeduplicationAgent
+
     cluster_map, rep_ids = DeduplicationAgent().deduplicate(state["credible_ids"])
     log.info("Gate 3 완료 | clusters=%d reps=%d", len(cluster_map), len(rep_ids))
     return {**state, "cluster_map": cluster_map, "representative_ids": rep_ids}
@@ -95,10 +99,7 @@ def classify_node(state: IngestionState) -> IngestionState:
 
     classified: list[dict] = []
     with ThreadPoolExecutor(max_workers=_GPT_WORKERS) as ex:
-        futures = {
-            ex.submit(_classify_one, cid, aids): cid
-            for cid, aids in cluster_map.items()
-        }
+        futures = {ex.submit(_classify_one, cid, aids): cid for cid, aids in cluster_map.items()}
         for future in as_completed(futures):
             result = future.result()
             if result:
@@ -170,7 +171,9 @@ def evidence_node(state: IngestionState) -> IngestionState:
     fail_count = len(results) - pass_count
     log.info(
         "검증 체인 첨부 + 저장 완료 | total=%d pass=%d fail=%d",
-        len(results), pass_count, fail_count,
+        len(results),
+        pass_count,
+        fail_count,
     )
     return {
         **state,
@@ -180,6 +183,7 @@ def evidence_node(state: IngestionState) -> IngestionState:
 
 
 # ── 그래프 조립 ────────────────────────────────────────────────
+
 
 def build_ingestion_graph() -> StateGraph:
     graph = StateGraph(IngestionState)

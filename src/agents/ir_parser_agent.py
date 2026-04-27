@@ -30,7 +30,9 @@ _REVENUE_PATTERNS = [
     re.compile(r"([\d,]+(?:\.\d+)?)\s*(억원|조원)\s*(?:매출|sales)", re.IGNORECASE),
 ]
 _OPERATING_PROFIT_PATTERNS = [
-    re.compile(r"(?:영업이익|Operating\s*Profit|OP)\s*[:：]?\s*([\d,]+(?:\.\d+)?)\s*(억원|조원|억|조)"),
+    re.compile(
+        r"(?:영업이익|Operating\s*Profit|OP)\s*[:：]?\s*([\d,]+(?:\.\d+)?)\s*(억원|조원|억|조)"
+    ),
 ]
 _PERIOD_PATTERNS = [
     re.compile(r"(20\d{2})\s*년?\s*([1-4])\s*분기"),
@@ -119,7 +121,7 @@ class IRParserAgent:
             try:
                 text = page.get_text("text") or ""
             except Exception as e:
-                warnings.append(f"page {i+1} text 추출 실패: {e}")
+                warnings.append(f"page {i + 1} text 추출 실패: {e}")
                 continue
             raw_pages.append(text)
 
@@ -145,7 +147,11 @@ class IRParserAgent:
 
         log.info(
             "IR PDF 파싱 완료 | path=%s pages=%d period=%s rev=%s op=%s",
-            path.name, page_count, period, revenue_total, op_profit,
+            path.name,
+            page_count,
+            period,
+            revenue_total,
+            op_profit,
         )
 
         return {

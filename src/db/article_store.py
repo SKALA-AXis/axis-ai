@@ -76,6 +76,7 @@ def save_articles(articles: list[RawArticle]) -> int:
 # 조회
 # ──────────────────────────────────────────────────────────────
 
+
 def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
     """raw_articles 테이블에서 ID 목록으로 기사를 조회한다."""
     if not ids:
@@ -97,6 +98,7 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
 # ──────────────────────────────────────────────────────────────
 # 업데이트 — 파이프라인 각 단계에서 호출
 # ──────────────────────────────────────────────────────────────
+
 
 def update_cluster(
     article_id: int,
@@ -245,6 +247,7 @@ def _generate_card_id(peer_id: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────
+
 
 def _is_valid(article: RawArticle) -> bool:
     """Gate 1: 최소 품질 필터."""
