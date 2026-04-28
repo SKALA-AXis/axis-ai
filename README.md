@@ -1,6 +1,8 @@
 # axis-ai
 
-AXIS 서비스의 Python AI 서버입니다. 현재는 로컬에서 뉴스·공시·채용공고 크롤링 결과를 확인하고 JSON 파일로 저장하는 흐름을 중심으로 둡니다.
+AXIS 서비스의 Python AI 서버입니다. 뉴스·공시·채용공고 크롤링, LangGraph 기반 AI 파이프라인, BGE-M3 하이브리드 검색, GPT-4o 이슈 카드 생성을 담당합니다.
+
+> 전체 프로젝트 개요는 [axis-infra](https://github.com/skala-ai-13/axis-infra)를 참조하세요.
 
 ---
 
@@ -12,6 +14,11 @@ AXIS 서비스의 Python AI 서버입니다. 현재는 로컬에서 뉴스·공�
 | 패키지 관리 | uv |
 | 웹 프레임워크 | FastAPI 0.115.x |
 | AI 파이프라인 | LangGraph 0.1.x |
+| LLM | GPT-4o (langchain-openai) |
+| 임베딩 | BGE-M3 (FlagEmbedding) — Dense + Sparse 원샷 |
+| Reranker | BGE-reranker-v2-m3 (FlagEmbedding) |
+| Vector DB | Qdrant 1.9.x |
+| Raw DB | PostgreSQL 16.x (SQLAlchemy 2.x) |
 | 린트·포맷 | ruff |
 | 타입 체크 | mypy |
 | 테스트 | pytest + pytest-asyncio |
@@ -38,13 +45,20 @@ src/
 ├── pipeline/
 │   ├── ingestion_graph.py  수집 파이프라인 (1시간마다)
 │   └── delivery_graph.py   전달 파이프라인 (오전 8:30)
+├── rag/
+│   ├── embedder.py         BGE-M3 Dense+Sparse 임베딩
+│   ├── hybrid_search.py    Qdrant RRF 하이브리드 검색
+│   └── reranker.py         BGE-reranker-v2-m3 재랭킹
 ├── crawler/
 │   ├── base_crawler.py     크롤러 베이스 클래스
 │   ├── naver_crawler.py    네이버 뉴스 API
 │   ├── dart_crawler.py     DART 공시 API
 │   ├── rss_crawler.py      전자신문·ZDNet·IT조선 RSS
 │   └── job_crawler.py      채용공고 (LinkedIn·잡플래닛)
-└── schemas.py              Pydantic 모델
+├── db/
+│   ├── postgres.py         SQLAlchemy 엔진·세션
+│   └── qdrant_client.py    Qdrant 클라이언트
+└── schemas.py              Pydantic 모델 (ai-internal-api.yaml 기반)
 ```
 
 ---
@@ -57,8 +71,8 @@ git clone https://github.com/skala-ai-13/axis-ai.git
 cd axis-ai
 
 # 2. 환경변수 설정
-# .env 파일에 NAVER_CLIENT_ID, NAVER_CLIENT_SECRET 입력
-# DART까지 확인하려면 DART_API_KEY 입력
+cp .env.example .env
+# .env에서 OPENAI_API_KEY, DATABASE_URL, NAVER_CLIENT_ID 등 입력
 
 # 3. 의존성 설치
 uv sync
@@ -66,8 +80,8 @@ uv sync
 # 4. pre-commit 훅 설치
 uv run pre-commit install
 
-# 5. 크롤링 원천 결과 확인
-uv run python -m src.crawler.preview
+# 5. DB·Qdrant Docker 실행 (axis-infra 레포 필요)
+cd ../axis-infra && docker compose up -d postgres qdrant && cd ../axis-ai
 
 # 6. AI 서버 실행
 uv run uvicorn src.api.main:app --reload --port 8001
@@ -75,9 +89,6 @@ uv run uvicorn src.api.main:app --reload --port 8001
 # 7. 헬스체크 확인
 curl http://localhost:8001/health
 ```
-
-크롤링 결과는 `crawl_results/` 폴더에 저장됩니다.
-기본 실행은 크롤러가 긁어온 원천 결과를 저장하고, agent 선별 결과를 보고 싶으면 `--mode agent`를 사용합니다.
 
 ---
 
@@ -87,10 +98,11 @@ SpringBoot에서만 호출합니다. 8001 포트는 외부 직접 노출 금지.
 
 | Method | Path | 설명 |
 |---|---|---|
-| `GET` | `/health` | 로컬 API 헬스체크 |
-| `POST` | `/crawl/preview` | 현재 크롤러 실행 결과를 `crawl_results/`에 JSON 저장 |
+| `GET` | `/health` | 헬스체크 (DB·Qdrant 연결 확인) |
 | `POST` | `/pipeline/run` | 수집 파이프라인 실행 (비동기) |
 | `POST` | `/pipeline/delivery` | 전달 파이프라인 실행 (브리핑 생성) |
+| `POST` | `/search` | BGE-M3 하이브리드 검색 |
+| `POST` | `/gen-search` | Generative Search (RAG + GPT-4o) |
 | `POST` | `/weak-signal/run` | 약한 신호 감지기 실행 |
 
 ---
@@ -100,7 +112,7 @@ SpringBoot에서만 호출합니다. 8001 포트는 외부 직접 노출 금지.
 ```
 수집 파이프라인 (ingestion_graph.py)  — 매시간 실행
 SupervisorAgent
-  ├── CrawlerAgent        → 원문 수집
+  ├── CrawlerAgent        → 원문 수집 → PostgreSQL 전량 저장
   ├── CredibilityAgent    → Gate 2: 신뢰도 분류
   ├── DeduplicationAgent  → Gate 3: 중복 제거·클러스터링
   ├── ClassificationAgent → 중요도 점수 산출
@@ -109,15 +121,40 @@ SupervisorAgent
   └── ValidationAgent     → SC 검증 (3회 생성 후 2/3 일치 확인)
 
 전달 파이프라인 (delivery_graph.py)  — 평일 오전 8:30 실행
-  ├── BriefingAgent       → 이슈 카드 조회
+  ├── BriefingAgent       → PostgreSQL에서 이슈 카드 조회
   └── NotificationAgent   → Slack Webhook 발송
 ```
+
+두 파이프라인은 PostgreSQL을 통해서만 데이터를 교환합니다. 직접 호출 금지.
+
+---
+
+## RAG 하이브리드 검색 흐름
+
+```
+쿼리 → BGE-M3 임베딩 (Dense + Sparse 원샷)
+     → Qdrant Dense Prefetch (Top-50) + Sparse Prefetch (Top-50)
+     → RRF Fusion → Top-20
+     → BGE-reranker-v2-m3 재랭킹 → Top-10 반환
+```
+
+폴백: 임베딩 타임아웃(3초) → BM25 폴백 / 결과 0건 → 기간 2배 확장 재시도
 
 ---
 
 ## 환경 변수
 
 ```bash
+# LLM
+OPENAI_API_KEY=sk-...
+
+# DB
+DATABASE_URL=postgresql://axuser:axpass@localhost:5432/axis
+
+# Qdrant
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+
 # 크롤러
 NAVER_CLIENT_ID=...
 NAVER_CLIENT_SECRET=...
@@ -136,9 +173,6 @@ uv run ruff format .          # 포맷
 uv run ruff check .           # 린트
 uv run mypy src/              # 타입 체크
 uv run pytest tests/ -v       # 테스트
-uv run python -m src.crawler.preview
-uv run python -m src.crawler.preview --mode agent
-uv run python -m src.crawler.preview --peer-id samsung_sds --mode both
 uv add 패키지명               # 의존성 추가 (pip install 금지)
 ```
 
@@ -155,10 +189,15 @@ uv run mypy src/
 uv run pytest tests/
 ```
 
+> CI 상세 설명 및 실패 대응 방법: [axis-infra/docs/CI.md](https://github.com/SKALA-AXis/axis-infra/blob/develop/docs/CI.md)
+
+---
+
 ## 주의사항
 
 - `pip install` 사용 금지 — `uv add` 사용
 - `uv.lock` 커밋 건너뛰기 금지 (환경 재현 보장)
+- Qdrant 페이로드에 원문 전체 텍스트 저장 금지 (메타데이터만)
 - 수집·전달 파이프라인 같은 LangGraph 그래프에 묶기 금지
 - SC 검증(환각 방지) 생략 금지
 - `.env` 파일 커밋 금지

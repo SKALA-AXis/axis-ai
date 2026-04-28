@@ -18,9 +18,9 @@ class DeliveryState(TypedDict):
 
 
 def load_issues_node(state: DeliveryState) -> DeliveryState:
-    """오늘의 이슈 카드 조회"""
+    """PostgreSQL에서 오늘의 이슈 카드 조회"""
     log.info("이슈 카드 조회")
-    # TODO: 오늘 생성된 issue_cards 조회
+    # TODO: PostgreSQL에서 오늘 생성된 issue_cards 조회
     return {**state, "issue_card_ids": []}
 
 
