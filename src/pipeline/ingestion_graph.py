@@ -28,7 +28,7 @@ class IngestionState(TypedDict):
 
 def crawl_node(state: IngestionState) -> IngestionState:
     log.info("크롤링 시작 | peer_ids=%s", state["peer_ids"])
-    # TODO: crawler_agent.py 연결
+    # SupervisorAgent가 실제 수집/분류 agent들을 오케스트레이션한다.
     return {**state, "raw_article_ids": []}
 
 

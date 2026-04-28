@@ -5,13 +5,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.schemas import (
-    GenSearchRequest,
-    GenSearchResult,
+    CrawlPreviewRequest,
+    CrawlPreviewResponse,
     HealthResponse,
     PipelineRunRequest,
     PipelineRunResponse,
-    SearchRequest,
-    SearchResponse,
 )
 
 log = logging.getLogger(__name__)
@@ -41,14 +39,35 @@ app.add_middleware(
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
-    """헬스체크 — docker-compose healthcheck 대상"""
-    db_ok = _check_db()
-    qdrant_ok = _check_qdrant()
+    """로컬 API 헬스체크."""
     return HealthResponse(
-        status="ok" if (db_ok and qdrant_ok) else "degraded",
+        status="ok",
         models_loaded={"bge_m3": False, "bge_reranker": False},  # 실제 로드 시 True
-        db_connected=db_ok,
-        qdrant_connected=qdrant_ok,
+    )
+
+
+@app.post("/crawl/preview", response_model=CrawlPreviewResponse)
+async def crawl_preview(request: CrawlPreviewRequest):
+    """현재 크롤러 실행 결과를 crawl_results 폴더에 JSON으로 저장한다."""
+    from src.crawler.preview import run_all_crawl_previews, run_crawl_preview
+
+    if request.peer_id:
+        output_paths = await run_crawl_preview(
+            peer_id=request.peer_id,
+            topics=request.topics,
+            corp_code=request.corp_code,
+            recent_days=request.recent_days,
+            mode=request.mode,
+        )
+    else:
+        output_paths = await run_all_crawl_previews(
+            recent_days=request.recent_days,
+            mode=request.mode,
+        )
+
+    return CrawlPreviewResponse(
+        status="saved",
+        output_paths=[str(output_path) for output_path in output_paths],
     )
 
 
@@ -75,56 +94,9 @@ async def run_delivery():
     return {"status": "accepted", "message": "전달 파이프라인 큐 등록 완료"}
 
 
-@app.post("/search", response_model=SearchResponse)
-async def search(request: SearchRequest):
-    """BGE-M3 하이브리드 검색 (Dense + Sparse RRF)"""
-    log.info("검색 요청 | query=%s peer_id=%s", request.query, request.peer_id)
-    # TODO: hybrid_search.py 실행
-    return SearchResponse(hits=[], total=0)
-
-
-@app.post("/gen-search", response_model=GenSearchResult)
-async def gen_search(request: GenSearchRequest):
-    """Generative Search — RAG + GPT-4o + SC 검증"""
-    log.info("Generative Search | query=%s", request.query)
-    # TODO: RAG + LLM 실행
-    return GenSearchResult(
-        answer="(AI 서버 초기화 중)",
-        sources=[],
-        sc_passed=False,
-        sc_score=0.0,
-    )
-
-
 @app.post("/weak-signal/run")
 async def run_weak_signal():
     """약한 신호 감지기 실행 (주 1회)"""
     log.info("약한 신호 감지기 실행")
     # TODO: weak_signal_agent.py 실행
     return {"status": "accepted"}
-
-
-def _check_db() -> bool:
-    try:
-        from sqlalchemy import text
-
-        from src.db.postgres import engine
-
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return True
-    except Exception as e:
-        log.warning("DB 연결 확인 실패: %s", e)
-        return False
-
-
-def _check_qdrant() -> bool:
-    try:
-        from src.db.qdrant_client import get_qdrant_client
-
-        client = get_qdrant_client()
-        client.get_collections()
-        return True
-    except Exception as e:
-        log.warning("Qdrant 연결 확인 실패: %s", e)
-        return False
