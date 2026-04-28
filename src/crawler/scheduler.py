@@ -7,6 +7,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from src.crawler.batch_processor import BatchProcessor
+from src.crawler.monitors.keepalive import keepalive
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,17 @@ def build_scheduler() -> AsyncIOScheduler:
         kwargs={"keywords": PEER_KEYWORDS},
         id="track_b_crawl",
         name="Track B — 배치 크롤 (DART/KIPRIS/뉴스룸/채용)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+
+    # Keepalive — Supabase·Qdrant Cloud 무료 티어 자동 일시정지 방지 (24시간 간격)
+    scheduler.add_job(
+        keepalive,
+        trigger=IntervalTrigger(hours=24),
+        id="cloud_keepalive",
+        name="Supabase·Qdrant Cloud keepalive ping",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,

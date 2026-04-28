@@ -33,6 +33,7 @@ def main() -> None:
         "classified_clusters": [],
         "issue_cards": [],
         "evidence_results": [],
+        "indexed_vector_ids": [],
         "errors": [],
         "human_review_flags": [],
     }

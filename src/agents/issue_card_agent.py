@@ -92,6 +92,7 @@ class IssueCardAgent:
                 "id": _generate_card_id(peer_id),
                 "peer_id": peer_id,
                 "cluster_id": cluster_id,
+                "representative_id": representative_id,
                 "title": card_data.get("title", articles[0]["title"][:100]),
                 "summary_lines": card_data.get("summary_lines", []),
                 "event_type": card_data.get("event_type", classification.get("event_type", "tech")),

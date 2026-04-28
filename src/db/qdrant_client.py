@@ -5,6 +5,7 @@ from qdrant_client.models import Distance, SparseIndexParams, SparseVectorParams
 
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
 
 COLLECTION_MAIN = "axis_main"
 COLLECTION_HISTORY = "axis_history"
@@ -12,7 +13,10 @@ DENSE_DIM = 1024  # BGE-M3 dense dimension
 
 
 def get_qdrant_client() -> QdrantClient:
-    return QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+    # Qdrant Cloud는 url=https://....cloud.qdrant.io + API key. 로컬은 host/port.
+    if QDRANT_HOST.startswith("http://") or QDRANT_HOST.startswith("https://"):
+        return QdrantClient(url=QDRANT_HOST, api_key=QDRANT_API_KEY)
+    return QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, api_key=QDRANT_API_KEY)
 
 
 def ensure_collections(client: QdrantClient) -> None:
