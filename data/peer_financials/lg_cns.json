@@ -1,0 +1,144 @@
+{
+  "peer_id": "lg_cns",
+  "company_name_ko": "LG씨엔에스",
+  "_note": "DART OpenAPI 실수치 (총매출·영업이익) + segment/AI비중 stub. W5에서 PDF 파싱으로 부문별 채움.",
+  "_source": "dart_v1_total_only",
+  "_dart_corp_code": "00139834",
+  "_fetched_at": "2026-04-27",
+  "policy": {
+    "exclude_segments": [],
+    "include_segments": [
+      "si",
+      "cloud_msp",
+      "ai_dx",
+      "smart_logistics"
+    ]
+  },
+  "segments": {
+    "si": {
+      "name_ko": "SI/금융",
+      "keywords": [
+        "SI",
+        "금융",
+        "차세대",
+        "은행"
+      ]
+    },
+    "cloud_msp": {
+      "name_ko": "클라우드/MSP",
+      "keywords": [
+        "클라우드",
+        "MSP",
+        "AWS",
+        "Azure"
+      ]
+    },
+    "ai_dx": {
+      "name_ko": "AI/DX",
+      "keywords": [
+        "AI",
+        "DX",
+        "팔란티어",
+        "에이전트웍스",
+        "LLM"
+      ]
+    },
+    "smart_logistics": {
+      "name_ko": "스마트물류",
+      "keywords": [
+        "스마트팩토리",
+        "물류",
+        "공급망"
+      ]
+    }
+  },
+  "quarterly": [
+    {
+      "period": "2024Q4",
+      "report_date": "2025-03-11",
+      "dart_rcept_no": "20250311001270",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20250311001270",
+      "_dart_fs_div": "CFS",
+      "_derivation": "annual - (Q1+Q2+Q3)",
+      "revenue_total_krwbn": 20242,
+      "operating_profit_krwbn": 2001,
+      "segment_revenue_krwbn": null,
+      "_segment_note": "DART 정형 데이터에 부문별 매출 없음. 사업보고서 PDF 파싱 W5 작업.",
+      "ai_revenue_share_pct": null,
+      "_ai_share_note": "공식 공시 미존재 — IR 자료 또는 추정치 입력 필요."
+    },
+    {
+      "period": "2025Q1",
+      "report_date": "2025-05-15",
+      "dart_rcept_no": "20250515000192",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20250515000192",
+      "_dart_fs_div": "CFS",
+      "_derivation": "thstrm_amount (single quarter)",
+      "revenue_total_krwbn": 12114,
+      "operating_profit_krwbn": 789,
+      "segment_revenue_krwbn": null,
+      "_segment_note": "DART 정형 데이터에 부문별 매출 없음. 사업보고서 PDF 파싱 W5 작업.",
+      "ai_revenue_share_pct": null,
+      "_ai_share_note": "공식 공시 미존재 — IR 자료 또는 추정치 입력 필요."
+    },
+    {
+      "period": "2025Q2",
+      "report_date": "2025-08-14",
+      "dart_rcept_no": "20250814001930",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20250814001930",
+      "_dart_fs_div": "CFS",
+      "_derivation": "thstrm_amount (single quarter)",
+      "revenue_total_krwbn": 14602,
+      "operating_profit_krwbn": 1408,
+      "segment_revenue_krwbn": null,
+      "_segment_note": "DART 정형 데이터에 부문별 매출 없음. 사업보고서 PDF 파싱 W5 작업.",
+      "ai_revenue_share_pct": null,
+      "_ai_share_note": "공식 공시 미존재 — IR 자료 또는 추정치 입력 필요."
+    },
+    {
+      "period": "2025Q3",
+      "report_date": "2025-11-14",
+      "dart_rcept_no": "20251114001161",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20251114001161",
+      "_dart_fs_div": "CFS",
+      "_derivation": "thstrm_amount (single quarter)",
+      "revenue_total_krwbn": 15223,
+      "operating_profit_krwbn": 1202,
+      "segment_revenue_krwbn": null,
+      "_segment_note": "DART 정형 데이터에 부문별 매출 없음. 사업보고서 PDF 파싱 W5 작업.",
+      "ai_revenue_share_pct": null,
+      "_ai_share_note": "공식 공시 미존재 — IR 자료 또는 추정치 입력 필요."
+    },
+    {
+      "period": "2025Q4",
+      "report_date": "2026-03-16",
+      "dart_rcept_no": "20260316000832",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260316000832",
+      "_dart_fs_div": "CFS",
+      "_derivation": "annual - (Q1+Q2+Q3)",
+      "revenue_total_krwbn": 19356,
+      "operating_profit_krwbn": 2119,
+      "segment_revenue_krwbn": null,
+      "_segment_note": "DART 정형 데이터에 부문별 매출 없음. 사업보고서 PDF 파싱 W5 작업.",
+      "ai_revenue_share_pct": null,
+      "_ai_share_note": "공식 공시 미존재 — IR 자료 또는 추정치 입력 필요."
+    }
+  ],
+  "headcount": [
+    {
+      "period": "2024Q4",
+      "total": 6200,
+      "rd": 2810,
+      "ai_engineers_est": 410,
+      "_note": "추정치"
+    },
+    {
+      "period": "2025Q4",
+      "total": 6680,
+      "rd": 3140,
+      "ai_engineers_est": 720,
+      "_note": "추정치"
+    }
+  ],
+  "_headcount_note": "공시 미존재 — IR/잡공고 추정. 약한신호 감지기(W7)에서 잡공고 기반 보완."
+}

@@ -1,0 +1,126 @@
+{
+  "peer_id": "hyundai_autoever",
+  "company_name_ko": "현대오토에버",
+  "_note": "DART OpenAPI 실수치 (총매출·영업이익) + segment/AI비중 stub. W5에서 PDF 파싱으로 부문별 채움.",
+  "_source": "dart_v1_total_only",
+  "_dart_corp_code": "00362441",
+  "_fetched_at": "2026-04-27",
+  "policy": {},
+  "segments": {
+    "smart_mobility": {
+      "name_ko": "스마트모빌리티",
+      "keywords": [
+        "커넥티드카",
+        "차량",
+        "내비",
+        "OTA",
+        "자율주행"
+      ]
+    },
+    "si": {
+      "name_ko": "SI",
+      "keywords": [
+        "SI",
+        "차세대",
+        "ERP"
+      ]
+    },
+    "ites": {
+      "name_ko": "ITES/유지운영",
+      "keywords": [
+        "유지보수",
+        "운영",
+        "ITES"
+      ]
+    }
+  },
+  "quarterly": [
+    {
+      "period": "2024Q4",
+      "report_date": "2025-03-17",
+      "dart_rcept_no": "20250317000930",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20250317000930",
+      "_dart_fs_div": "CFS",
+      "_derivation": "annual - (Q1+Q2+Q3)",
+      "revenue_total_krwbn": 11596,
+      "operating_profit_krwbn": 727,
+      "segment_revenue_krwbn": null,
+      "_segment_note": "DART 정형 데이터에 부문별 매출 없음. 사업보고서 PDF 파싱 W5 작업.",
+      "ai_revenue_share_pct": null,
+      "_ai_share_note": "공식 공시 미존재 — IR 자료 또는 추정치 입력 필요."
+    },
+    {
+      "period": "2025Q1",
+      "report_date": "2025-05-15",
+      "dart_rcept_no": "20250515001336",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20250515001336",
+      "_dart_fs_div": "CFS",
+      "_derivation": "thstrm_amount (single quarter)",
+      "revenue_total_krwbn": 8330,
+      "operating_profit_krwbn": 267,
+      "segment_revenue_krwbn": null,
+      "_segment_note": "DART 정형 데이터에 부문별 매출 없음. 사업보고서 PDF 파싱 W5 작업.",
+      "ai_revenue_share_pct": null,
+      "_ai_share_note": "공식 공시 미존재 — IR 자료 또는 추정치 입력 필요."
+    },
+    {
+      "period": "2025Q2",
+      "report_date": "2025-08-14",
+      "dart_rcept_no": "20250814001936",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20250814001936",
+      "_dart_fs_div": "CFS",
+      "_derivation": "thstrm_amount (single quarter)",
+      "revenue_total_krwbn": 10421,
+      "operating_profit_krwbn": 814,
+      "segment_revenue_krwbn": null,
+      "_segment_note": "DART 정형 데이터에 부문별 매출 없음. 사업보고서 PDF 파싱 W5 작업.",
+      "ai_revenue_share_pct": null,
+      "_ai_share_note": "공식 공시 미존재 — IR 자료 또는 추정치 입력 필요."
+    },
+    {
+      "period": "2025Q3",
+      "report_date": "2025-11-14",
+      "dart_rcept_no": "20251114001785",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20251114001785",
+      "_dart_fs_div": "CFS",
+      "_derivation": "thstrm_amount (single quarter)",
+      "revenue_total_krwbn": 10543,
+      "operating_profit_krwbn": 708,
+      "segment_revenue_krwbn": null,
+      "_segment_note": "DART 정형 데이터에 부문별 매출 없음. 사업보고서 PDF 파싱 W5 작업.",
+      "ai_revenue_share_pct": null,
+      "_ai_share_note": "공식 공시 미존재 — IR 자료 또는 추정치 입력 필요."
+    },
+    {
+      "period": "2025Q4",
+      "report_date": "2026-03-18",
+      "dart_rcept_no": "20260318001324",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260318001324",
+      "_dart_fs_div": "CFS",
+      "_derivation": "annual - (Q1+Q2+Q3)",
+      "revenue_total_krwbn": 13227,
+      "operating_profit_krwbn": 764,
+      "segment_revenue_krwbn": null,
+      "_segment_note": "DART 정형 데이터에 부문별 매출 없음. 사업보고서 PDF 파싱 W5 작업.",
+      "ai_revenue_share_pct": null,
+      "_ai_share_note": "공식 공시 미존재 — IR 자료 또는 추정치 입력 필요."
+    }
+  ],
+  "headcount": [
+    {
+      "period": "2024Q4",
+      "total": 3200,
+      "rd": 1450,
+      "ai_engineers_est": 180,
+      "_note": "추정치"
+    },
+    {
+      "period": "2025Q4",
+      "total": 3450,
+      "rd": 1620,
+      "ai_engineers_est": 270,
+      "_note": "추정치"
+    }
+  ],
+  "_headcount_note": "공시 미존재 — IR/잡공고 추정. 약한신호 감지기(W7)에서 잡공고 기반 보완."
+}

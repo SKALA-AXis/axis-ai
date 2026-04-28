@@ -20,6 +20,12 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.0",
     "python-dotenv>=1.0",
+    "playwright>=1.44",
+    "readability-lxml>=0.8",
+    "websockets>=12.0",
+    # Sprint 2: "scikit-learn>=1.4", "telethon>=1.36"
+    "transformers>=4.44,<5.0",
+    "pymupdf>=1.27.2.3",
 ]
 
 [dependency-groups]
@@ -42,6 +48,9 @@ select = ["E", "F", "I", "N", "W"]
 python_version = "3.11"
 strict_optional = true
 ignore_missing_imports = true
+exclude = [
+    "src/agents/_deprecated/",  # v3에서 보관 처리된 v1 에이전트 — 운영 경로 아님
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

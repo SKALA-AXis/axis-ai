@@ -36,12 +36,13 @@ axis-ai/
 │   │   ├── crawler_agent.py
 │   │   ├── credibility_agent.py
 │   │   ├── dedup_agent.py
-│   │   ├── classification_agent.py
+│   │   ├── classification_agent.py     ← sector(5종) + event_type(6종) + 결정적 노출도
 │   │   ├── issue_card_agent.py
-│   │   ├── implication_agent.py
-│   │   ├── validation_agent.py
+│   │   ├── evidence_agent.py           ← v3: 검증 첨부 4종 부착
+│   │   ├── financial_linker_agent.py   ← v3: 카드 ↔ peer_financials segment 매칭
+│   │   ├── ir_parser_agent.py          ← v3: PyMuPDF로 IR PDF 텍스트 추출 (W5)
 │   │   ├── weak_signal_agent.py
-│   │   └── notification_agent.py
+│   │   └── email_agent.py              ← v3: 전달 파이프라인 이메일 발송 (Slack 폐기)
 │   ├── pipeline/
 │   │   ├── ingestion_graph.py   ← 수집 파이프라인 (1시간마다)
 │   │   └── delivery_graph.py    ← 전달 파이프라인 (오전 8:30)
@@ -59,6 +60,10 @@ axis-ai/
 │   │   ├── postgres.py          ← SQLAlchemy 연결
 │   │   └── qdrant_client.py     ← Qdrant 클라이언트
 │   └── schemas.py               ← Pydantic 모델 (ai-internal-api.yaml에서 자동 생성)
+├── data/
+│   └── peer_financials/         ← v3 stub 재무 데이터 (peer_financials 테이블 마이그 후 DB 조회로 전환)
+│       ├── samsung_sds.json
+│       └── lg_cns.json
 └── tests/
     ├── test_crawler.py
     ├── test_search.py
@@ -106,24 +111,26 @@ GET  /health                헬스체크
 
 ## LangGraph 에이전트 구조
 
-### 수집 파이프라인 (ingestion_graph.py)
+### 수집 파이프라인 (ingestion_graph.py — v3 5노드)
 ```
-SupervisorAgent
-    ├── CrawlerAgent          뉴스·공시·채용공고 수집
-    ├── CredibilityAgent      출처 신뢰도 분류 (High/Medium/Low/Unverified)
-    ├── DeduplicationAgent    중복 제거 + 이슈 클러스터링 (BGE-M3 코사인 유사도 0.90)
-    ├── ClassificationAgent   중요도 분류 (긴급/주목/참고) — LLM 호출
-    ├── IssueCardAgent        이슈 카드 생성 — LLM 호출
-    ├── ImplicationAgent      시사점 초안 생성 — LLM 호출
-    └── ValidationAgent       SC 검증 (환각 방지)
+crawl       → 뉴스·공시·채용공고 수집 (PostgreSQL 전량 보관)
+credibility → 출처 신뢰도 분류 (High/Medium/Low/Unverified)
+dedup       → 중복 제거 + 이슈 클러스터링 (BGE-M3 코사인 0.90)
+classify    → 트렌드 섹터(5종) + event_type(6종) + 결정적 노출도 산식 — LLM 호출
+issue_card  → 동향 카드 생성 (3줄 요약·시사점) — LLM 호출
+evidence    → 검증 첨부 4종 자동 부착 (source_links / provenance / financial_refs / mbb_refs)
+              → FinancialLinkerAgent: 카드 sector·event·title 키워드로 segment 매칭 → QoQ/YoY delta
+              → IRParserAgent: PyMuPDF로 IR PDF 텍스트 추출 (W5 활성)
 ```
 
-### 전달 파이프라인 (delivery_graph.py)
+### 전달 파이프라인 (delivery_graph.py — v3 이메일 발송)
 ```
-BriefingAgent     PostgreSQL에서 이슈 카드 조회 + 브리핑 구성
-NotificationAgent Slack Webhook 발송
-AlertAgent        긴급 이슈 실시간 알림
+BriefingAgent     PostgreSQL에서 동향 카드 + evidence_chain 조회 + 이메일 본문 구성
+EmailAgent        SMTP/SendGrid 발송 (오전 8:30)
 ```
+
+> v3 변경: Slack Webhook → 이메일. SC 검증 → evidence chain 첨부 4종으로 환각 방지 강화.
+> SC 검증은 /gen-search(Generative Search)에만 잔존.
 
 ### 두 파이프라인은 반드시 분리
 ```python
@@ -194,10 +201,11 @@ TTL: 365일
 # 페이로드 구조 (메타데이터만, 원문 텍스트 저장 금지)
 payload = {
     "rdb_id": int,              # PostgreSQL FK (원문 조회용)
-    "peer_id": str,             # 'samsung_sds' | 'lg_cns'
+    "peer_id": str,             # samsung_sds | lg_cns | hyundai_autoever | posco_dx
     "event_type": str,          # 6개 taxonomy
-    "importance": str,          # urgent | notable | reference
-    "importance_score": float,
+    "sector": str,              # v3 트렌드 섹터: security | ai_tech | large_deal | sk_ax_biz | other
+    "exposure_score": float,    # v3 결정적 산식 (0~1)
+    "exposure_band": str,       # v3 노출도 밴드: high | medium | low
     "credibility_score": float,
     "published_at": int,        # Unix timestamp
     "cluster_id": int,
@@ -211,13 +219,33 @@ payload = {
 
 ## 크롤러 소스 계층
 
-| Tier | 소스 | 수집 방법 | 주기 |
+모니터링 대상 Peer 4사: `samsung_sds`, `lg_cns`, `hyundai_autoever`, `posco_dx`.
+
+### Track A — 1시간 간격 (실시간 뉴스)
+
+| 소스 | 신뢰도 | 수집 방법 | 비고 |
 |---|---|---|---|
-| 1 | 네이버 뉴스 API, 연합뉴스 API | REST API | 1시간 |
-| 2 | 전자신문, ZDNet Korea, IT조선 | RSS (feedparser) | 1시간 |
-| 3 | DART (금융감독원 공시) | DART OpenAPI | 1일 1회 |
-| 4 | 삼성SDS newsroom, LG CNS 뉴스룸 | HTML 크롤링 | 6시간 |
-| 5 | LinkedIn, 잡플래닛 채용공고 | 공식 API 우선 | 주 1회 |
+| 네이버 뉴스 API | 0.75 | REST API | peer 키워드별 검색 |
+| Google News RSS | 0.65 | RSS | peer 키워드별 검색 |
+| ETnews (IT/산업/경제) | 0.70 | RSS (feedparser) | 3개 섹션 |
+| ZDNet Korea | 0.68 | RSS (feedburner) | |
+| Bloter | 0.68 | RSS (feedburner) | |
+| 연합뉴스 산업 | 0.85 | RSS | |
+
+### Track B — 매일 새벽 2시 (배치)
+
+| 소스 | 신뢰도 | 수집 방법 | 4 peer 처리 |
+|---|---|---|---|
+| DART (금감원 공시) | 1.00 | OpenAPI | corp_code 4개 등록 |
+| KIPRIS (특허) | 0.95 | 공공데이터 REST | 한글 출원인명 4개 |
+| 공식 뉴스룸 (SDS/LG CNS) | 0.90 | Playwright(SDS), 내부 API(LG CNS) | 매체별 전용 로직 |
+| 공식 뉴스룸 (현대오토에버/포스코DX) | 0.90 | Playwright generic | best-effort 셀렉터 |
+| 한경 컨센서스 | 0.80 | Playwright (SPA) | 4 peer 검색 |
+| 네이버 금융 리서치 | 0.75 | Playwright | itemCode 4개 등록 |
+| 사람인 | 0.50 | Saramin API | 약한 신호 감지용 |
+
+> BigKinds, LinkedIn, 잡플래닛은 미구현 — 의도적으로 제외.
+> Saramin이 채용공고 단일 소스. 향후 LinkedIn 공식 API 승인 받으면 추가 검토.
 
 ### 크롤러 예외 처리 원칙
 - HTTP 403/429 → 5분 대기 후 1회 재시도, 실패 시 SKIP + 로그
@@ -250,41 +278,62 @@ Gate 3 (중복):
 
 ---
 
-## 중요도 분류 5개 축 가중치
+## 노출도 산식 (v3 — 1차 미팅 확정 결정적 산식)
 
-| 축 | 가중치 | 판단 기준 |
+LLM 점수가 아닌 결정적 입력값 기반 — 추적 가능·재현 가능.
+
+```
+exposure_score = 0.40·cluster_size_norm
+               + 0.30·credibility_max
+               + 0.20·peer_mention_rate
+               + 0.10·tier1_diversity
+
+high     ≥ 0.70
+medium   0.40 ~ 0.70
+low      < 0.40
+```
+
+| 입력값 | 가중치 | 정의 |
 |---|---|---|
-| 출처 신뢰도 | 30% | credibility_score 직접 반영 |
-| SK AX 사업 연관성 | 25% | 에이전틱AI·제조AX·MSP 키워드 포함 |
-| 신규성 | 20% | 동일 주제 최근 7일 내 보도 여부 역산 |
-| 사업 영향도 | 15% | M&A·대형수주·전략적파트너십 이벤트 타입 |
-| 경쟁사 연관성 | 10% | 삼성SDS·LG CNS 직접 언급 여부 |
+| cluster_size_norm | 40% | 클러스터 기사 수 / 7일 최대값 |
+| credibility_max | 30% | 클러스터 내 최고 신뢰도 |
+| peer_mention_rate | 20% | Peer사 직접 언급 비율 |
+| tier1_diversity | 10% | Tier1 출처 종 수 / 5 |
 
-```
-긴급 (Urgent)   ≥ 80점
-주목 (Notable)  50~79점
-참고 (Reference) < 50점
-```
-
-> ⚠️ 이 가중치는 팀장 인터뷰 전까지 가설입니다.
-> 인터뷰 Q1(방어 vs 기회 방향) 결과에 따라 조정 필요.
+> v1의 LLM 5개 축(긴급/주목/참고)은 폐기. API 스키마는 호환을 위해 importance를 deprecated 표시 유지.
 
 ---
 
-## SC 검증 (환각 방지) 로직
+## 환각 방지 — v3: Evidence Chain + SC
 
-```python
-# Self-Consistency 검증
-1. 동일 이슈로 시사점 3회 독립 생성
-2. 3개 결과의 핵심 주장 비교 (LLM 판정)
-3. 일치율 ≥ 2/3 → Pass, 최빈 버전 선택
-4. 일치율 < 2/3 → Fail → 해당 항목 공란 + Human 검토 플래그
+### 수집 파이프라인 (메인) — Evidence Chain 4종 첨부
+
+모든 동향 카드에 자동 부착. 누락 시 `pass=false` + human_review 플래그.
+
+```
+1. source_links     원문 URL + 출처명 + credibility_score
+2. provenance       raw_article_ids, llm_model, prompt_version, evidence_version, run_at
+3. financial_refs   FinancialLinkerAgent: card sector·event·title 키워드로 segment 매칭
+                    → QoQ/YoY 매출·영업익·AI 비중·인력 delta + DART 공시번호 + IR 페이지
+4. mbb_refs         컨설팅사 보고서 자동 매칭 (W5)
+```
 
 추가 규칙:
 - 출처에 없는 수치(금액·%·날짜) → 자동 Fail
 - '확실하다' '반드시' 등 단정 표현 → 경고 플래그
-- confidence < 0.6 → '근거 불충분' 레이블
+
+### Generative Search (/gen-search) — SC 잔존
+
+```python
+# Self-Consistency: gen-search 응답에만 적용
+1. 동일 쿼리로 답변 3회 독립 생성
+2. 3개 결과의 핵심 주장 비교 (LLM 판정)
+3. 일치율 ≥ 2/3 → Pass, 최빈 버전 선택
+4. 일치율 < 2/3 → Fail → 해당 항목 공란 + Human 검토 플래그
 ```
+
+> v3 변경: 동향 카드 환각 방지의 1차 방어선이 SC → Evidence Chain 4종으로 이동.
+> SC는 응답이 단발성(생성 1회)인 /gen-search에만 적용.
 
 ---
 
@@ -302,28 +351,23 @@ IssueCard = {
         "3. ...",
     ],
     "event_type": "partnership",       # 6개 taxonomy 중 하나
-    "importance": "urgent",
-    "importance_score": 0.87,
+    "sector": "ai_tech",               # v3 트렌드 섹터 5종 중 하나
+    "exposure_score": 0.74,            # v3 결정적 산식 (0~1)
+    "exposure_band": "high",           # v3 노출도 밴드: high | medium | low
     "implication": {
-        "why_important": str,          # 근거 출처 명시 필수
+        "why_important": str,
         "potential_impact": str,
         "follow_up_questions": List[str],
         "suggested_actions": List[str],
-        "confidence": float,           # 0~1
-        "sources_used": List[int],     # 사용한 출처 인덱스
-    },
-    "sources": [
-        {
-            "index": 1,
-            "title": str,
-            "source_name": str,
-            "url": str,
-            "credibility_score": float,
-        }
-    ],
-    "validation": {
-        "pass": bool,
-        "sc_score": float,
+        "evidence_chain": {            # v3 검증 첨부 4종 — 환각 방지의 핵심
+            "source_links": [...],     # url + source_name + credibility_score
+            "provenance": {...},       # raw_article_ids, llm_model, prompt_version, run_at
+            "financial_refs": [...],   # FinancialLinkerAgent: segment QoQ/YoY + DART/IR refs
+            "mbb_refs": [...],         # 컨설팅사 보고서 자동 매칭 (W5)
+            "financial_link": {...},   # {linked, segment, highlights, headcount_delta}
+            "pass": bool,              # 4종 모두 첨부됐는지
+            "missing": List[str],      # pass=false 시 누락 항목
+        },
     },
     "created_at": "ISO8601",
 }

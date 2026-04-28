@@ -1,0 +1,101 @@
+{
+  "company_id": "sk_ax",
+  "company_name_ko": "SK주식회사 (지주) — 잠정 SK AX 비교 기준",
+  "_note": "현재 SK주식회사(corp_code 00181712, 지주사) 전체 매출이 들어있음. SK AX (구 SK C&C, ICT 부문)는 SK Inc 사업보고서의 사업부문별 공시(prose)에 분리 기재. 정확한 비교를 위해선 사업전략팀 내부 IT/AX 부문 매출로 교체 필요.",
+  "_source": "dart_v1_holding_proxy",
+  "_dart_corp_code": "00181712",
+  "_fetched_at": "2026-04-27",
+  "_scope_warning": "SK 그룹 지주 전체 매출 (에너지·통신·소재 포함). SK AX 단독 부문 매출이 아님 — 비교 시 큰 격차는 스코프 차이임을 인지할 것.",
+  "_replace_with_real_data": true,
+  "segments": {
+    "ict": {
+      "name_ko": "ICT/AX",
+      "keywords": [
+        "ITS",
+        "ICT",
+        "AI",
+        "DX",
+        "클라우드",
+        "MSP"
+      ]
+    }
+  },
+  "quarterly": [
+    {
+      "period": "2024Q4",
+      "report_date": "2025-03-18",
+      "dart_rcept_no": "20250318001364",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20250318001364",
+      "_dart_fs_div": "CFS",
+      "_derivation": "annual - (Q1+Q2+Q3)",
+      "revenue_total_krwbn": 298292,
+      "operating_profit_krwbn": -4512,
+      "segment_revenue_krwbn": null,
+      "ai_revenue_share_pct": null
+    },
+    {
+      "period": "2025Q1",
+      "report_date": "2025-05-15",
+      "dart_rcept_no": "20250515001229",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20250515001229",
+      "_dart_fs_div": "CFS",
+      "_derivation": "thstrm_amount (single quarter)",
+      "revenue_total_krwbn": 312299,
+      "operating_profit_krwbn": 3998,
+      "segment_revenue_krwbn": null,
+      "ai_revenue_share_pct": null
+    },
+    {
+      "period": "2025Q2",
+      "report_date": "2025-08-14",
+      "dart_rcept_no": "20250814003843",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20250814003843",
+      "_dart_fs_div": "CFS",
+      "_derivation": "thstrm_amount (single quarter)",
+      "revenue_total_krwbn": 301420,
+      "operating_profit_krwbn": 1996,
+      "segment_revenue_krwbn": null,
+      "ai_revenue_share_pct": null
+    },
+    {
+      "period": "2025Q3",
+      "report_date": "2025-11-14",
+      "dart_rcept_no": "20251114001549",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20251114001549",
+      "_dart_fs_div": "CFS",
+      "_derivation": "thstrm_amount (single quarter)",
+      "revenue_total_krwbn": 310414,
+      "operating_profit_krwbn": 8274,
+      "segment_revenue_krwbn": null,
+      "ai_revenue_share_pct": null
+    },
+    {
+      "period": "2025Q4",
+      "report_date": "2026-03-18",
+      "dart_rcept_no": "20260318001157",
+      "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260318001157",
+      "_dart_fs_div": "CFS",
+      "_derivation": "annual - (Q1+Q2+Q3)",
+      "revenue_total_krwbn": 302900,
+      "operating_profit_krwbn": 3917,
+      "segment_revenue_krwbn": null,
+      "ai_revenue_share_pct": null
+    }
+  ],
+  "headcount": [
+    {
+      "period": "2024Q4",
+      "total": null,
+      "rd": null,
+      "ai_engineers_est": 320,
+      "_note": "AI 엔지니어만 추정. 전체 SK Inc. 임직원 수는 그룹 전체라 비교 부적절."
+    },
+    {
+      "period": "2025Q4",
+      "total": null,
+      "rd": null,
+      "ai_engineers_est": 540,
+      "_note": "추정치"
+    }
+  ]
+}
