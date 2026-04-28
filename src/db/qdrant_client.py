@@ -13,10 +13,10 @@ DENSE_DIM = 1024  # BGE-M3 dense dimension
 
 
 def get_qdrant_client() -> QdrantClient:
-    # Qdrant Cloud는 url=https://....cloud.qdrant.io + API key. 로컬은 host/port.
+    # Qdrant Cloud는 url=https://....cloud.qdrant.io + API key. 로컬은 host/port (API key 미사용).
     if QDRANT_HOST.startswith("http://") or QDRANT_HOST.startswith("https://"):
         return QdrantClient(url=QDRANT_HOST, api_key=QDRANT_API_KEY)
-    return QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, api_key=QDRANT_API_KEY)
+    return QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
 
 def ensure_collections(client: QdrantClient) -> None:

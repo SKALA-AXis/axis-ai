@@ -5,8 +5,8 @@ DB 대상(local 컨테이너 vs Supabase·Qdrant Cloud)을 CLI 플래그로 전�
 
 우선순위:
   1. 인자로 받은 profile (local | cloud) 에 해당하는 `.env.{profile}` 파일 → override 로 로드
-  2. 위 파일이 없으면 기본 `.env` 로드 후 프로세스 env 그대로 사용
-     (Docker compose 가 이미 주입한 경우 포함)
+  2. 위 파일이 없으면 기본 `.env` 로 fallback (axis-infra 패턴: `.env` = cloud 기본값)
+     Docker compose 가 이미 env 주입한 경우 .env 도 없을 수 있는데 그땐 no-op.
 """
 
 import logging
@@ -41,12 +41,7 @@ def load_profile(profile: Optional[str] = None) -> str:
             load_dotenv(env_file, override=True)
             log.info("env 프로파일 로드 | profile=%s file=%s", name, env_file)
             return name
-        log.info(
-            "env 프로파일=%s — `%s` 파일 없음. 프로세스 env 사용 (Docker compose 주입 가정)",
-            name,
-            env_file,
-        )
-        return name
+        log.info("env 프로파일=%s — `%s` 없음, 기본 .env 로 fallback", name, env_file)
 
     load_dotenv()
-    return "default"
+    return name or "default"
