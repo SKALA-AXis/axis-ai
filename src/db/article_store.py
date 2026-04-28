@@ -274,9 +274,7 @@ def save_evidence_chain(
                     "financial_link": json.dumps(
                         chain.get("financial_link", {}), ensure_ascii=False
                     ),
-                    "evidence_version": chain.get("provenance", {}).get(
-                        "evidence_version", "v3.0"
-                    ),
+                    "evidence_version": chain.get("provenance", {}).get("evidence_version", "v3.0"),
                     "passed": passed,
                     "missing": missing,
                 },

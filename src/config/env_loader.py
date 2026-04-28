@@ -5,7 +5,8 @@ DB 대상(local 컨테이너 vs Supabase·Qdrant Cloud)을 CLI 플래그로 전�
 
 우선순위:
   1. 인자로 받은 profile (local | cloud) 에 해당하는 `.env.{profile}` 파일 → override 로 로드
-  2. 위 파일이 없으면 기본 `.env` 로드 후 프로세스 env 그대로 사용 (Docker compose가 이미 주입한 경우 포함)
+  2. 위 파일이 없으면 기본 `.env` 로드 후 프로세스 env 그대로 사용
+     (Docker compose 가 이미 주입한 경우 포함)
 """
 
 import logging

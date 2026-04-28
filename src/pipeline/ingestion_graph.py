@@ -63,9 +63,7 @@ def _logged_step(
             finally:
                 elapsed = int((time.perf_counter() - t0) * 1000)
                 input_count = _count_value(state.get(input_key))
-                output_count = _count_value(
-                    (new_state if err is None else state).get(output_key)
-                )
+                output_count = _count_value((new_state if err is None else state).get(output_key))
                 peers = state.get("peer_ids") or []
                 peer_label = peers[0] if len(peers) == 1 else None
                 save_pipeline_log(
@@ -213,7 +211,7 @@ def evidence_node(state: IngestionState) -> IngestionState:
         result = agent.attach(card, cluster_article_ids=cluster_map.get(cluster_id, []))
         save_issue_card(card)
         save_evidence_chain(
-            issue_card_id=card.get("id"),
+            issue_card_id=card.get("id") or "",
             chain=card.get("evidence_chain", {}),
             passed=bool(result.get("pass")),
             missing=list(result.get("missing", [])),
