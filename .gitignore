@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 .env
 .env.local
+.env.cloud
+!.env.example
 *.log
 .DS_Store
 .mypy_cache/
