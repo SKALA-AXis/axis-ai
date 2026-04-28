@@ -1,10 +1,13 @@
-"""파이프라인 1회 실행 스크립트 — v3 결과를 콘솔에 출력."""
+"""파이프라인 1회 실행 스크립트 — v3 결과를 콘솔에 출력.
 
+사용법:
+  uv run python run_pipeline_once.py                # 프로세스 env 그대로 사용
+  uv run python run_pipeline_once.py --env local    # .env.local 로드 (로컬 컨테이너 DB)
+  uv run python run_pipeline_once.py --env cloud    # .env.cloud 로드 (Supabase + Qdrant Cloud)
+"""
+
+import argparse
 import logging
-
-from dotenv import load_dotenv
-
-load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -12,6 +15,20 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("run_pipeline")
+
+_parser = argparse.ArgumentParser(description="AXIS 수집 파이프라인 1회 실행")
+_parser.add_argument(
+    "--env",
+    choices=["local", "cloud"],
+    default=None,
+    help="DB 프로파일. .env.{profile} 파일이 있으면 로드, 없으면 프로세스 env 사용.",
+)
+_args = _parser.parse_args()
+
+from src.config.env_loader import load_profile  # noqa: E402
+
+_profile = load_profile(_args.env)
+log.info("실행 프로파일: %s", _profile)
 
 from src.agents.sector_keywords import sector_name_ko  # noqa: E402
 from src.pipeline.ingestion_graph import ingestion_graph  # noqa: E402
@@ -33,6 +50,7 @@ def main() -> None:
         "classified_clusters": [],
         "issue_cards": [],
         "evidence_results": [],
+        "indexed_vector_ids": [],
         "errors": [],
         "human_review_flags": [],
     }

@@ -72,6 +72,7 @@ axis-ai/
 ├── Dockerfile
 ├── pyproject.toml                  # uv 의존성 정의
 ├── uv.lock                         # 잠금 파일 — 반드시 커밋
+├── run_crawler_once.py             # 크롤러 1회 실행 (Track A/B 선택)
 ├── run_pipeline_once.py            # 파이프라인 1회 실행 스크립트 (디버깅용)
 ├── .env.example
 │
@@ -450,6 +451,69 @@ curl http://localhost:8001/health
 
 # (선택) 파이프라인 1회 실행 — 콘솔에 결과 출력
 uv run python run_pipeline_once.py
+```
+
+---
+
+## 단독 실행 스크립트 (로컬 디버깅)
+
+크롤 → 파이프라인을 두 단계로 분리해서 수동 실행할 수 있습니다. 운영 환경에서는 APScheduler가 자동으로 돌리지만, **새 변경사항을 한 번에 검증**할 때 유용합니다.
+
+### 흐름
+
+```
+[1] run_crawler_once.py       →  raw_articles 테이블에 RAW 상태로 저장
+                                  ↓
+[2] run_pipeline_once.py      →  RAW 기사 → credibility → dedup → classify
+                                  → issue_card → evidence → issue_cards 저장
+```
+
+### 1. 크롤러 단독 실행
+
+```bash
+uv run python run_crawler_once.py              # Track A만 (기본, 1~2분)
+uv run python run_crawler_once.py --track a    # 명시적 Track A
+uv run python run_crawler_once.py --track b    # Track B (5~10분)
+uv run python run_crawler_once.py --track all  # A + B 순차
+```
+
+| 트랙 | 소스 | 실행 시간 | 필요 환경 |
+| --- | --- | --- | --- |
+| **A** | 네이버·RSS·Google News·연합뉴스 | 1~2분 | NAVER_CLIENT_ID/SECRET |
+| **B** | DART·KIPRIS·공식뉴스룸·사람인 | 5~10분 | DART_API_KEY, Playwright(`uv run playwright install chromium`), 옵션: KIPRIS/SARAMIN |
+
+출력: Peer별 / 소스별 신규 저장 건수 요약.
+
+### 2. 파이프라인 단독 실행
+
+```bash
+uv run python run_pipeline_once.py
+```
+
+`processing_status='RAW'`인 기사를 모두 처리. **GPT-4o 호출이 클러스터 수만큼 발생**하므로 비용 주의 (대략 클러스터 1개당 ~₩30).
+
+출력: 단계별 카운트(RAW→credible→cluster→cards) + 섹터·노출도 분포 + 카드별 상세(요약·검증체인·재무 highlights).
+
+### 자주 만나는 상황
+
+| 증상 | 원인 / 해결 |
+|---|---|
+| `RAW 기사 로드 \| count=0` | 새 기사 없음. `run_crawler_once.py` 먼저 실행 |
+| `NAVER_CLIENT_ID 미설정` | `.env`에 키 입력 (없으면 해당 소스만 SKIP, 다른 소스는 계속 동작) |
+| Playwright 미설치 (Track B) | `uv run playwright install chromium` |
+| `소스별 수집 한도 초과` | DailyLimitGuard에 의한 정상 동작. 한도 조정은 [src/crawler/base.py](axis-ai/src/crawler/base.py) `SOURCE_LIMITS` |
+| 카드 0건인데 RAW는 있음 | dedup 단계에서 모두 기존 클러스터로 흡수됐을 가능성. 같은 RAW를 재처리하려면 DB에서 `processing_status='RAW'`로 리셋 필요 |
+
+### DB 상태 빠른 확인
+
+```bash
+PGPASSWORD=axpass psql -h localhost -U axuser -d axis -c "
+  SELECT processing_status, COUNT(*) FROM raw_articles GROUP BY processing_status;
+"
+
+PGPASSWORD=axpass psql -h localhost -U axuser -d axis -c "
+  SELECT peer_id, COUNT(*) FROM issue_cards GROUP BY peer_id;
+"
 ```
 
 ---

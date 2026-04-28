@@ -224,6 +224,114 @@ def save_issue_card(card: dict[str, Any]) -> Optional[str]:
     return None
 
 
+# ──────────────────────────────────────────────────────────────
+# evidence_chain 저장
+# ──────────────────────────────────────────────────────────────
+
+
+_INSERT_EVIDENCE = text("""
+    INSERT INTO evidence_chain (
+        issue_card_id, source_links, provenance, financial_refs,
+        mbb_refs, financial_link, evidence_version, pass, missing
+    ) VALUES (
+        :issue_card_id, CAST(:source_links AS jsonb), CAST(:provenance AS jsonb),
+        CAST(:financial_refs AS jsonb), CAST(:mbb_refs AS jsonb),
+        CAST(:financial_link AS jsonb), :evidence_version, :passed, :missing
+    )
+    ON CONFLICT (issue_card_id) DO UPDATE SET
+        source_links = EXCLUDED.source_links,
+        provenance = EXCLUDED.provenance,
+        financial_refs = EXCLUDED.financial_refs,
+        mbb_refs = EXCLUDED.mbb_refs,
+        financial_link = EXCLUDED.financial_link,
+        evidence_version = EXCLUDED.evidence_version,
+        pass = EXCLUDED.pass,
+        missing = EXCLUDED.missing
+""")
+
+
+def save_evidence_chain(
+    issue_card_id: str,
+    chain: dict[str, Any],
+    passed: bool,
+    missing: list[str],
+) -> None:
+    """evidence_chain 테이블에 검증 체인 4종을 저장한다."""
+    if not issue_card_id:
+        return
+    try:
+        with SessionLocal() as db:
+            db.execute(
+                _INSERT_EVIDENCE,
+                {
+                    "issue_card_id": issue_card_id,
+                    "source_links": json.dumps(chain.get("source_links", []), ensure_ascii=False),
+                    "provenance": json.dumps(chain.get("provenance", {}), ensure_ascii=False),
+                    "financial_refs": json.dumps(
+                        chain.get("financial_refs", []), ensure_ascii=False
+                    ),
+                    "mbb_refs": json.dumps(chain.get("mbb_refs", []), ensure_ascii=False),
+                    "financial_link": json.dumps(
+                        chain.get("financial_link", {}), ensure_ascii=False
+                    ),
+                    "evidence_version": chain.get("provenance", {}).get("evidence_version", "v3.0"),
+                    "passed": passed,
+                    "missing": missing,
+                },
+            )
+            db.commit()
+    except Exception as e:
+        log.error("evidence_chain 저장 실패 | card_id=%s error=%s", issue_card_id, e)
+
+
+# ──────────────────────────────────────────────────────────────
+# pipeline_logs 저장
+# ──────────────────────────────────────────────────────────────
+
+
+_INSERT_PIPELINE_LOG = text("""
+    INSERT INTO pipeline_logs (
+        pipeline_step, peer_id, input_count, output_count,
+        elapsed_ms, llm_tokens_used, error_msg
+    ) VALUES (
+        :step, :peer_id, :input_count, :output_count,
+        :elapsed_ms, :llm_tokens_used, :error_msg
+    )
+""")
+
+
+def save_pipeline_log(
+    step: str,
+    peer_id: Optional[str],
+    input_count: int,
+    output_count: int,
+    elapsed_ms: int,
+    llm_tokens_used: int = 0,
+    error_msg: Optional[str] = None,
+) -> None:
+    """파이프라인 단계별 실행 통계를 pipeline_logs에 기록."""
+    try:
+        with SessionLocal() as db:
+            db.execute(
+                _INSERT_PIPELINE_LOG,
+                {
+                    "step": step,
+                    "peer_id": peer_id,
+                    "input_count": input_count,
+                    "output_count": output_count,
+                    "elapsed_ms": elapsed_ms,
+                    "llm_tokens_used": llm_tokens_used,
+                    "error_msg": error_msg,
+                },
+            )
+            db.commit()
+    except Exception as e:
+        log.error("pipeline_logs 저장 실패 | step=%s error=%s", step, e)
+
+
+# ──────────────────────────────────────────────────────────────
+
+
 _card_id_state: dict[str, int] = {}  # {date_str: last_seq}
 _card_id_lock = threading.Lock()
 
