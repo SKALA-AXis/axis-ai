@@ -6,6 +6,84 @@ AXIS 서비스의 Python AI 서버. **뉴스·공시·채용공고 크롤링 →
 
 ---
 
+## 🚀 실행 방법 (Cloud / Local 두 가지 모드)
+
+axis-ai는 두 가지 DB 프로파일을 지원합니다. **둘 다 똑같은 코드**가 돌고, `.env` 파일만 다릅니다.
+
+| 모드 | DB | Qdrant | 언제 쓰나 |
+|---|---|---|---|
+| **Cloud** (기본) | Supabase Postgres | Qdrant Cloud | 팀 공용 데이터, 데모, PR 검증 |
+| **Local** | docker postgres | docker qdrant | 오프라인 작업, 스키마 실험, 비용 절감 |
+
+### .env 파일 구성 (절대 커밋 금지)
+
+```
+axis-ai/
+├── .env          ← Cloud 기본값 (= axis-infra/.env 와 동일 값)
+└── .env.local    ← Local 컨테이너 모드 (호스트 → docker postgres/qdrant)
+```
+
+`.env`는 axis-infra/.env 의 Cloud 값과 **동일하게 유지**해야 합니다. (Single Source of Truth는 axis-infra)
+
+### Mode 1 — Cloud 모드로 실행 (기본)
+
+```bash
+# 1. 의존성 설치
+uv sync
+
+# 2. .env 받기 (axis-infra/.env 의 Cloud 값을 그대로 복사)
+#    팀 공용 .env는 노션/1Password 등에서 받으세요.
+
+# 3. AI 서버 실행
+uv run uvicorn src.api.main:app --reload --port 8001
+
+# 4. 또는 단독 스크립트 (옵션 안 주면 .env = Cloud)
+uv run python run_pipeline_once.py
+uv run python run_crawler_once.py --track a
+```
+
+### Mode 2 — Local 컨테이너 모드로 실행
+
+```bash
+# 1. axis-infra 쪽에서 postgres·qdrant 컨테이너부터 띄우기
+cd ../axis-infra
+cp .env.local.example .env.local         # 처음 한 번만
+docker compose --profile local --env-file .env.local up -d postgres qdrant
+cd ../axis-ai
+
+# 2. .env.local 준비 (.env 와 같은 값을 베이스로, DB·QDRANT만 localhost 로 교체)
+#    템플릿은 .env.example 참고
+
+# 3. --env local 플래그로 단독 스크립트 실행
+uv run python run_pipeline_once.py --env local
+uv run python run_crawler_once.py --track a --env local
+```
+
+> `--env local` 은 `.env.local` 을 `override=True` 로 로드합니다. `.env.local` 이 없으면 기본 `.env`(Cloud)로 폴백 — 자세한 동작은 [src/config/env_loader.py](src/config/env_loader.py) 참고.
+
+### Mode 3 — Docker 컨테이너 안에서 ai 서비스로 실행
+
+axis-infra 의 docker compose 가 env 를 컨테이너에 주입하므로 `.env` 파일은 무시됩니다.
+
+```bash
+# Cloud 모드 — Supabase + Qdrant Cloud 에 붙음
+cd ../axis-infra
+docker compose up -d ai
+
+# Local 모드 — 같은 네트워크의 postgres/qdrant 컨테이너에 붙음
+docker compose --profile local --env-file .env.local up -d
+```
+
+### 환경 설정 체크리스트 (팀원 신규 세팅)
+
+- [ ] `uv sync` — Python 의존성 설치
+- [ ] Cloud 용 `.env` 받기 (axis-infra/.env 와 동일 값)
+- [ ] (옵션) Track B 크롤러 쓸 거면: `uv run playwright install chromium`
+- [ ] (옵션) Local 모드 쓸 거면: `axis-infra` 에서 `--profile local` 컨테이너 기동 후 `.env.local` 작성
+- [ ] `uv run pre-commit install` — ruff format/check 자동화
+
+---
+
 ## TL;DR — 이 브랜치(`feat/crawler-v4`)에서 바뀐 것
 
 | 분류 | 변경 | 영향 |
@@ -425,32 +503,36 @@ SpringBoot에서만 호출. 8001 포트 외부 노출 금지.
 
 ## 로컬 개발 세팅
 
+> Cloud / Local 모드 분기는 위 [🚀 실행 방법](#-실행-방법-cloud--local-두-가지-모드) 섹션 참조. 아래는 신규 팀원이 처음부터 환경을 세팅할 때 따라가는 절차입니다.
+
 ```bash
 # 1. 레포 클론
 git clone https://github.com/SKALA-AXis/axis-ai.git
 cd axis-ai
 
-# 2. 환경변수 설정
-cp .env.example .env
-# OPENAI_API_KEY, DATABASE_URL, NAVER_CLIENT_ID/SECRET, DART_API_KEY 입력
-
-# 3. 의존성 설치
+# 2. 의존성 설치
 uv sync
 
-# 4. pre-commit 훅
+# 3. pre-commit 훅
 uv run pre-commit install
 
-# 5. DB·Qdrant 기동 (axis-infra 필요)
-cd ../axis-infra && docker compose up -d postgres qdrant && cd ../axis-ai
+# 4-A. Cloud 모드: 팀 공용 .env 받아서 axis-ai/.env 로 저장
+#      (axis-infra/.env 와 같은 값 — Single Source of Truth는 axis-infra)
 
-# 6. AI 서버 실행
+# 4-B. Local 모드: axis-infra 에서 컨테이너 기동 후 .env.local 작성
+cd ../axis-infra
+cp .env.local.example .env.local
+docker compose --profile local --env-file .env.local up -d postgres qdrant
+cd ../axis-ai
+# axis-ai/.env.local 도 별도 작성 (호스트 → docker postgres/qdrant 용)
+
+# 5. AI 서버 실행
 uv run uvicorn src.api.main:app --reload --port 8001
-
-# 7. 헬스체크
 curl http://localhost:8001/health
 
-# (선택) 파이프라인 1회 실행 — 콘솔에 결과 출력
-uv run python run_pipeline_once.py
+# 6. (선택) 파이프라인 1회 실행
+uv run python run_pipeline_once.py            # Cloud
+uv run python run_pipeline_once.py --env local # Local
 ```
 
 ---
@@ -475,6 +557,10 @@ uv run python run_crawler_once.py              # Track A만 (기본, 1~2분)
 uv run python run_crawler_once.py --track a    # 명시적 Track A
 uv run python run_crawler_once.py --track b    # Track B (5~10분)
 uv run python run_crawler_once.py --track all  # A + B 순차
+
+# DB 프로파일 전환 — 두 스크립트 모두 동일하게 지원
+uv run python run_crawler_once.py --track a              # Cloud (기본 .env)
+uv run python run_crawler_once.py --track a --env local  # .env.local 로드
 ```
 
 | 트랙 | 소스 | 실행 시간 | 필요 환경 |
@@ -487,7 +573,8 @@ uv run python run_crawler_once.py --track all  # A + B 순차
 ### 2. 파이프라인 단독 실행
 
 ```bash
-uv run python run_pipeline_once.py
+uv run python run_pipeline_once.py             # Cloud (기본 .env)
+uv run python run_pipeline_once.py --env local # .env.local 로드 (로컬 컨테이너 DB)
 ```
 
 `processing_status='RAW'`인 기사를 모두 처리. **GPT-4o 호출이 클러스터 수만큼 발생**하므로 비용 주의 (대략 클러스터 1개당 ~₩30).
@@ -520,16 +607,25 @@ PGPASSWORD=axpass psql -h localhost -U axuser -d axis -c "
 
 ## 환경 변수
 
+`.env` (Cloud 기본) 와 `.env.local` (Local 컨테이너) 의 차이는 DB·Qdrant 호스트뿐. 나머지는 동일.
+
 ```bash
 # LLM
 OPENAI_API_KEY=sk-...
 
-# DB
-DATABASE_URL=postgresql://axuser:axpass@localhost:5432/axis
+# DB — Cloud (Supabase Transaction Pooler, sslmode=require)
+DATABASE_URL=postgresql://postgres.<ref>:<pw>@aws-1-ap-northeast-2.pooler.supabase.com:6543/postgres?sslmode=require
+# DB — Local (.env.local 에서 사용)
+# DATABASE_URL=postgresql://axuser:axpass@localhost:5432/axis
 
-# Qdrant
-QDRANT_HOST=localhost
+# Qdrant — Cloud
+QDRANT_HOST=https://<cluster-id>.<region>.aws.cloud.qdrant.io
 QDRANT_PORT=6333
+QDRANT_API_KEY=<qdrant-cloud-jwt>
+# Qdrant — Local (.env.local 에서 사용; api_key 비움)
+# QDRANT_HOST=localhost
+# QDRANT_PORT=6333
+# QDRANT_API_KEY=
 
 # 크롤러
 NAVER_CLIENT_ID=...
