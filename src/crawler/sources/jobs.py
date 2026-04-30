@@ -9,7 +9,6 @@ import httpx
 
 from src.crawler.base import (
     RETRY_POLICY,
-    SOURCE_CREDIBILITY,
     BaseCrawler,
     DailyLimitGuard,
     RawArticle,
@@ -92,8 +91,6 @@ def _to_article(job: dict[str, Any], peer_id: str) -> RawArticle:
         published_at=_parse_ts(job.get("posting-timestamp")),
         source_name="saramin",
         peer_id=peer_id,
-        credibility_score=SOURCE_CREDIBILITY["saramin"],
-        source_tier=5,
         metadata={"company": company, "job_type": job_type, "industry": industry},
     )
 

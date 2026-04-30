@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from src.crawler.base import SOURCE_CREDIBILITY, DailyLimitGuard, RawArticle
+from src.crawler.base import DailyLimitGuard, RawArticle
 from src.crawler.playwright_client import PlaywrightClient
 
 log = logging.getLogger(__name__)
@@ -97,9 +97,7 @@ class NaverResearchCrawler:
                         url=pdf_url or _INDUSTRY_URL,
                         title=f"[{firm_text.strip()}] {title.strip()}",
                         content="",
-                        source_tier=2,
                         source_name="naver_research",
-                        credibility_score=SOURCE_CREDIBILITY["naver_research"],
                         peer_id=peer_id,
                         metadata={
                             "type": report_type,

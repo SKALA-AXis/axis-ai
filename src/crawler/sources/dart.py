@@ -9,7 +9,6 @@ import httpx
 
 from src.crawler.base import (
     RETRY_POLICY,
-    SOURCE_CREDIBILITY,
     BaseCrawler,
     DailyLimitGuard,
     RawArticle,
@@ -89,8 +88,6 @@ class DartCrawler(BaseCrawler):
                         published_at=_parse_dart_date(item.get("rcept_dt", "")),
                         source_name="dart",
                         peer_id=self.peer_id,
-                        credibility_score=SOURCE_CREDIBILITY["dart"],
-                        source_tier=3,
                         metadata={
                             "rcept_no": item.get("rcept_no"),
                             "flr_nm": item.get("flr_nm"),

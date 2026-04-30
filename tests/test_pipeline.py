@@ -1,5 +1,4 @@
 """파이프라인 단위 테스트"""
-import pytest
 
 from src.pipeline.ingestion_graph import IngestionState
 

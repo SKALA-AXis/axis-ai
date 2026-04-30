@@ -9,7 +9,6 @@ import feedparser
 import httpx
 
 from src.crawler.base import (
-    SOURCE_CREDIBILITY,
     BaseCrawler,
     DailyLimitGuard,
     RawArticle,
@@ -27,30 +26,12 @@ _RSS_HEADERS = {
 }
 
 RSS_FEEDS: dict[str, dict[str, str]] = {
-    "etnews_it": {
-        "url": "https://rss.etnews.com/Section901.xml",
-        "credibility_key": "etnews",
-    },
-    "etnews_industry": {
-        "url": "https://rss.etnews.com/Section902.xml",
-        "credibility_key": "etnews",
-    },
-    "etnews_economy": {
-        "url": "https://rss.etnews.com/Section903.xml",
-        "credibility_key": "etnews",
-    },
-    "zdnet": {
-        "url": "https://feeds.feedburner.com/zdkorea",
-        "credibility_key": "zdnet",
-    },
-    "bloter": {
-        "url": "https://feeds.feedburner.com/bloter",
-        "credibility_key": "zdnet",
-    },
-    "yonhap_tech": {
-        "url": "https://www.yna.co.kr/rss/industry.xml",
-        "credibility_key": "yonhap",
-    },
+    "etnews_it": {"url": "https://rss.etnews.com/Section901.xml"},
+    "etnews_industry": {"url": "https://rss.etnews.com/Section902.xml"},
+    "etnews_economy": {"url": "https://rss.etnews.com/Section903.xml"},
+    "zdnet": {"url": "https://feeds.feedburner.com/zdkorea"},
+    "bloter": {"url": "https://feeds.feedburner.com/bloter"},
+    "yonhap_tech": {"url": "https://www.yna.co.kr/rss/industry.xml"},
 }
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
@@ -107,10 +88,6 @@ class RssCrawler(BaseCrawler):
                             published_at=_parse_entry_date(entry),
                             source_name=source_name,
                             peer_id=self.peer_id,
-                            credibility_score=SOURCE_CREDIBILITY.get(
-                                feed_info["credibility_key"], 0.7
-                            ),
-                            source_tier=2,
                         )
                     )
                 log.info(
@@ -157,8 +134,6 @@ class GoogleNewsRssCrawler(BaseCrawler):
                             published_at=_parse_entry_date(entry),
                             source_name="google_news",
                             peer_id=self.peer_id,
-                            credibility_score=SOURCE_CREDIBILITY["google_news"],
-                            source_tier=2,
                         )
                     )
                 log.info(

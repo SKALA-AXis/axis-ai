@@ -1,4 +1,4 @@
-"""크롤러 공통 기반 — RawArticle v4, DailyLimitGuard, RetryPolicy, SOURCE_CREDIBILITY"""
+"""크롤러 공통 기반 — RawArticle v4, DailyLimitGuard, RetryPolicy"""
 
 import hashlib
 import logging
@@ -8,31 +8,6 @@ from datetime import datetime
 from typing import Any, Optional
 
 log = logging.getLogger(__name__)
-
-# credibility_score 기준표 (FR-002 사전조건)
-SOURCE_CREDIBILITY: dict[str, float] = {
-    "dart": 1.00,
-    "kipris": 0.95,
-    "samsung_sds_newsroom": 0.90,
-    "lg_cns_newsroom": 0.90,
-    "hyundai_autoever_newsroom": 0.90,
-    "posco_dx_newsroom": 0.90,
-    "hankyung_consensus": 0.80,
-    "naver_research": 0.75,
-    "naver_news": 0.75,
-    "etnews": 0.70,
-    "zdnet": 0.68,
-    "itchosun": 0.65,
-    "google_news": 0.65,
-    "yonhap": 0.85,
-    "saramin": 0.50,
-    "telegram": 0.30,
-}
-
-# 소스별 티어 (credibility_score 범위)
-# Tier 1: 0.9~1.0  공식 (DART, KIPRIS, 공식 뉴스룸)
-# Tier 2: 0.6~0.9  전문 리서치·언론
-# Tier 3: 0.0~0.5  비공식 (텔레그램, SNS)
 
 RETRY_POLICY: dict[str, Any] = {
     "timeout": 10,  # httpx 기본 타임아웃 (초) — 하위 호환
@@ -48,14 +23,14 @@ class RawArticle:
     url: str
     title: str
     content: str  # 요약 or 본문
-    source_tier: int  # 1·2·3
     source_name: str
-    credibility_score: float = 0.5  # FR-002 사전조건
     peer_id: Optional[str] = None  # samsung_sds · lg_cns · None
     published_at: Optional[datetime] = None
     collected_at: datetime = field(default_factory=datetime.now)
     url_hash: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    source_tier: Optional[int] = None
+    credibility_score: Optional[float] = None
 
     def __post_init__(self) -> None:
         self.url_hash = hashlib.md5(self.url.encode()).hexdigest()

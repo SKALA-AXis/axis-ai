@@ -11,7 +11,6 @@ import httpx
 
 from src.crawler.base import (
     RETRY_POLICY,
-    SOURCE_CREDIBILITY,
     DailyLimitGuard,
     RawArticle,
 )
@@ -101,9 +100,7 @@ def _parse_xml(xml_text: str, peer_id: str) -> list[RawArticle]:
                     title=f"[특허] {title}",
                     content=abstract
                     or (f"출원번호: {app_no}, 출원인: {applicant}, 출원일: {app_date}"),
-                    source_tier=1,
                     source_name="kipris",
-                    credibility_score=SOURCE_CREDIBILITY["kipris"],
                     peer_id=peer_id,
                     published_at=_parse_date(app_date),
                     metadata={

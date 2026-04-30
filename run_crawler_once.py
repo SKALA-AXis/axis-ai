@@ -6,7 +6,7 @@
   uv run python run_crawler_once.py --track b
   uv run python run_crawler_once.py --track all
   uv run python run_crawler_once.py --env local           # .env.local 로드 (로컬 DB)
-  uv run python run_crawler_once.py --env cloud           # .env.cloud 로드 (Supabase + Qdrant Cloud)
+  uv run python run_crawler_once.py --env cloud           # .env.cloud 로드
 """
 
 import argparse
@@ -48,7 +48,7 @@ log.info("실행 프로파일: %s", _profile)
 
 from src.crawler.base import RawArticle  # noqa: E402
 from src.crawler.batch_processor import BatchProcessor  # noqa: E402
-from src.crawler.scheduler import PEER_KEYWORDS  # noqa: E402
+from src.crawler.scheduler import PEER_ALIASES  # noqa: E402
 
 
 def _summarize(label: str, articles: list[RawArticle]) -> None:
@@ -74,13 +74,13 @@ def _summarize(label: str, articles: list[RawArticle]) -> None:
 async def _run(track: str) -> None:
     processor = BatchProcessor()
     if track in ("a", "all"):
-        log.info("Track A 시작 | peers=%s", list(PEER_KEYWORDS))
-        articles = await processor.run_track_a(PEER_KEYWORDS)
+        log.info("Track A 시작 | peers=%s", list(PEER_ALIASES))
+        articles = await processor.run_track_a(PEER_ALIASES)
         _summarize("Track A", articles)
 
     if track in ("b", "all"):
-        log.info("Track B 시작 | peers=%s", list(PEER_KEYWORDS))
-        articles = await processor.run_track_b(PEER_KEYWORDS)
+        log.info("Track B 시작 | peers=%s", list(PEER_ALIASES))
+        articles = await processor.run_track_b(PEER_ALIASES)
         _summarize("Track B", articles)
 
 

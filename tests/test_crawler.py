@@ -1,5 +1,4 @@
 """크롤러 단위 테스트"""
-import pytest
 
 from src.crawler.base_crawler import RawArticle
 

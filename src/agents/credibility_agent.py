@@ -1,4 +1,9 @@
-"""Gate 2 신뢰도 분류 에이전트 — credibility_score 기준 DB 필터링."""
+"""Gate 2 신뢰도 분류 에이전트.
+
+크롤러는 신뢰도를 계산하지 않는다. credibility_score가 아직 비어 있는
+기사들은 이 단계에서 탈락시키지 않고 통과시킨다. 실제 점수 계산 로직은
+후속 CredibilityAgent 구현에서 source_name/url/metadata 기반으로 채운다.
+"""
 
 import logging
 
@@ -8,7 +13,7 @@ from src.db.postgres import SessionLocal
 
 log = logging.getLogger(__name__)
 
-# Gate 2 기준: credibility_score < 0.5 → SKIPPED_CREDIBILITY (텔레그램·SNS 등 제외)
+# Gate 2 기준: 계산된 credibility_score < 0.5 → SKIPPED_CREDIBILITY
 CREDIBILITY_THRESHOLD = 0.5
 
 # credibility_score → grade 매핑 (schema.sql credibility_grade 컬럼)
@@ -45,7 +50,12 @@ class CredibilityAgent:
             ).fetchall()
 
             for row in rows:
-                score: float = row.credibility_score or 0.0
+                if row.credibility_score is None:
+                    credible_ids.append(row.id)
+                    log.debug("Gate 2 보류/통과 | id=%d score=None", row.id)
+                    continue
+
+                score: float = row.credibility_score
                 grade = _to_grade(score)
                 passed = score >= CREDIBILITY_THRESHOLD
 

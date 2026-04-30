@@ -12,7 +12,6 @@ from bs4 import BeautifulSoup
 
 from src.crawler.base import (
     RETRY_POLICY,
-    SOURCE_CREDIBILITY,
     BaseCrawler,
     DailyLimitGuard,
     RawArticle,
@@ -114,8 +113,6 @@ class NaverNewsCrawler(BaseCrawler):
                     published_at=_parse_naver_date(item.get("pubDate", "")),
                     source_name="naver_news",
                     peer_id=self.peer_id,
-                    credibility_score=SOURCE_CREDIBILITY["naver_news"],
-                    source_tier=1,
                 )
                 for item in items
             ]

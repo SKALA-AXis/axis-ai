@@ -3,7 +3,7 @@
 import logging
 from typing import Optional
 
-from src.crawler.base import SOURCE_CREDIBILITY, DailyLimitGuard, RawArticle
+from src.crawler.base import DailyLimitGuard, RawArticle
 from src.crawler.playwright_client import PlaywrightClient
 
 log = logging.getLogger(__name__)
@@ -115,9 +115,7 @@ class HankyungConsensusCrawler:
                             url=href,
                             title=f"[{firm.strip()}] {peer_name} {title.strip()}",
                             content=f"투자의견: {opinion} / 목표주가: {price}",
-                            source_tier=2,
                             source_name="hankyung_consensus",
-                            credibility_score=SOURCE_CREDIBILITY["hankyung_consensus"],
                             peer_id=_resolve_peer(peer_name),
                             metadata={
                                 "type": "analyst_report",

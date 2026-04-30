@@ -1,6 +1,5 @@
 """검색 단위 테스트"""
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 def test_search_returns_empty_on_qdrant_failure():

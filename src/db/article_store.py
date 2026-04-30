@@ -88,7 +88,7 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
                        credibility_score, source_name, published_at, metadata
                 FROM raw_articles
                 WHERE id = ANY(:ids)
-                ORDER BY credibility_score DESC
+                ORDER BY credibility_score DESC NULLS LAST
             """),
             {"ids": ids},
         ).fetchall()
