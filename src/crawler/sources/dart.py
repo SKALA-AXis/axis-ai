@@ -2,21 +2,17 @@
 
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 import httpx
 
-from src.crawler.base import (
-    RETRY_POLICY,
-    BaseCrawler,
-    DailyLimitGuard,
-    RawArticle,
-)
+from src.crawler.base import RETRY_POLICY, BaseCrawler, CrawlWindow, DailyLimitGuard, RawArticle
 
 log = logging.getLogger(__name__)
 
 DART_API_BASE = "https://opendart.fss.or.kr/api"
+DEFAULT_LOOKBACK_DAYS = int(os.getenv("DART_LOOKBACK_DAYS", "1"))
 
 # 주요 공시 유형 (전략 관련성 높은 것만)
 DISCLOSURE_TYPES = ["A", "B", "C", "D"]  # 정기·주요사항·발행·기타공시
@@ -30,8 +26,9 @@ class DartCrawler(BaseCrawler):
         peer_id: str,
         corp_code: str,
         limit_guard: Optional[DailyLimitGuard] = None,
+        crawl_window: Optional[CrawlWindow] = None,
     ) -> None:
-        super().__init__(peer_id, limit_guard)
+        super().__init__(peer_id, limit_guard, crawl_window)
         self.corp_code = corp_code
         self.api_key = os.getenv("DART_API_KEY", "")
 
@@ -51,9 +48,9 @@ class DartCrawler(BaseCrawler):
             return []
 
     async def _fetch_disclosures(self) -> list[RawArticle]:
-        today = datetime.now()
-        bgn_de = (today - timedelta(days=1)).strftime("%Y%m%d")
-        end_de = today.strftime("%Y%m%d")
+        window = self.crawl_window or CrawlWindow.last_days(DEFAULT_LOOKBACK_DAYS)
+        bgn_de = window.start.strftime("%Y%m%d")
+        end_de = (window.end or datetime.now()).strftime("%Y%m%d")
 
         async with httpx.AsyncClient(timeout=RETRY_POLICY["timeout"]) as client:
             resp = await client.get(
@@ -79,16 +76,23 @@ class DartCrawler(BaseCrawler):
 
             articles = []
             for item in data.get("list", []):
+                published_at = _parse_dart_date(item.get("rcept_dt", ""))
+                if not window.contains(published_at):
+                    continue
                 url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={item['rcept_no']}"
                 articles.append(
                     RawArticle(
                         url=url,
                         title=item.get("report_nm", ""),
                         content=f"{item.get('report_nm', '')} — {item.get('flr_nm', '')}",
-                        published_at=_parse_dart_date(item.get("rcept_dt", "")),
+                        published_at=published_at,
                         source_name="dart",
                         peer_id=self.peer_id,
                         metadata={
+                            "source_type": "dart",
+                            "content_type": "api",
+                            "crawl_window_start": bgn_de,
+                            "crawl_window_end": end_de,
                             "rcept_no": item.get("rcept_no"),
                             "flr_nm": item.get("flr_nm"),
                             "pblntf_ty": item.get("pblntf_ty"),

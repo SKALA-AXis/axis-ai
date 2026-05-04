@@ -17,7 +17,6 @@ log = logging.getLogger(__name__)
 
 load_dotenv()
 
-
 WORK24_API_KEY = os.getenv("WORK24_API_KEY")
 RETURN_TYPE = os.getenv("WORK24_RETURN_TYPE", "XML")
 
@@ -57,11 +56,11 @@ PEER_ALIASES = {
 
 
 class Work24APIError(RuntimeError):
-    """Raised when Work24 returns an application-level API error."""
+    """고용24 API 응답 오류"""
 
 
 class JobCrawler(BaseCrawler):
-    """Compatibility wrapper for the existing Work24 job crawler functions."""
+    """고용24 공채속보 기반 Peer사 채용공고 크롤러"""
 
     async def crawl(self) -> list[RawArticle]:
         if not WORK24_API_KEY:
@@ -75,20 +74,35 @@ class JobCrawler(BaseCrawler):
             return []
 
         articles: list[RawArticle] = []
+
         for job in jobs:
             peer_company = job.get("peer_company", "")
+
             if self.peer_id and not _matches_peer_id(self.peer_id, peer_company):
                 continue
+
+            roles = job.get("roles", [])
+            selection_steps = job.get("selection_steps", [])
+
+            role_summaries = _build_role_summaries(roles)
+            content = _build_job_content(job, role_summaries, selection_steps)
+
+            if not _has_required_job_fields(job, role_summaries):
+                log.warning(
+                    "채용공고 필수 필드 누락으로 스킵 | peer_id=%s company=%s title=%s url=%s",
+                    self.peer_id,
+                    job.get("company", ""),
+                    job.get("title", ""),
+                    job.get("url", ""),
+                )
+                continue
+
             articles.append(
                 RawArticle(
                     url=job.get("url", ""),
                     title=job.get("title", ""),
-                    content=(
-                        f"{job.get('company', '')} "
-                        f"{job.get('employment_type', '')} "
-                        f"{job.get('region', '')}"
-                    ),
-                    published_at=None,
+                    content=content,
+                    published_at=_parse_job_date(job.get("start_date", "")),
                     source_name="work24_job",
                     peer_id=self.peer_id,
                     source_type="job",
@@ -96,13 +110,23 @@ class JobCrawler(BaseCrawler):
                     publisher="고용24",
                     company=[job.get("company", "") or self.peer_id],
                     extra={
+                        "emp_seqno": job.get("emp_seqno", ""),
                         "peer_company": peer_company,
+                        "company": job.get("company", ""),
+                        "job_title": job.get("title", ""),
+                        "start_date": job.get("start_date", ""),
+                        "end_date": job.get("end_date", ""),
                         "employment_type": job.get("employment_type", ""),
                         "region": job.get("region", ""),
-                        "roles": job.get("roles", []),
+                        "url": job.get("url", ""),
+                        "roles": roles,
+                        "role_summaries": role_summaries,
+                        "selection_steps": selection_steps,
+                        "raw": job.get("raw", {}),
                     },
                 )
             )
+
         return articles
 
 
@@ -141,6 +165,7 @@ def request_work24_page(
         "startPage": page_no,
         "display": display,
     }
+
     if extra_params:
         params.update(extra_params)
 
@@ -152,6 +177,7 @@ def request_work24_page(
 def parse_xml(xml_text):
     root = ET.fromstring(xml_text)
     error = clean_text(root.findtext("error"))
+
     if error:
         raise Work24APIError(error)
 
@@ -174,6 +200,7 @@ def parse_fallback(root):
 
     for elem in root:
         row = {}
+
         for child in elem:
             row[child.tag] = clean_text(child.text)
 
@@ -186,7 +213,8 @@ def parse_fallback(root):
 def clean_text(value):
     if value is None:
         return ""
-    return unescape(value).replace("\r", "\n").strip()
+
+    return unescape(str(value)).replace("\r", "\n").strip()
 
 
 def normalize_job(raw_job):
@@ -217,6 +245,7 @@ def normalize_recruit_news(raw_job):
         ],
     )
     emp_seqno = pick_value(raw_job, ["empSeqno", "empSeqNo", "recrutPbancSeq"])
+
     if not url and emp_seqno:
         url = (
             f"{WORK24_OPEN_API_HOST}/cm/openApi/call/wk/"
@@ -242,6 +271,7 @@ def normalize_recruit_news(raw_job):
 def parse_recruit_news_detail(xml_text: str) -> dict:
     root = ET.fromstring(xml_text)
     error = clean_text(root.findtext("error"))
+
     if error:
         raise Work24APIError(error)
 
@@ -277,6 +307,7 @@ def pick_value(data, keys):
     for key in keys:
         if key in data and data[key]:
             return data[key]
+
     return ""
 
 
@@ -285,10 +316,10 @@ def is_peer_company(job, peer_companies):
     title = job.get("title", "")
     url = job.get("url", "")
 
-    text = f"{company} {title} {url}".lower()
+    text = f"{company} {title} {url}".lower().replace(" ", "")
 
     for peer in peer_companies:
-        if peer.lower().replace(" ", "") in text.replace(" ", ""):
+        if peer.lower().replace(" ", "") in text:
             return peer
 
     return None
@@ -297,7 +328,111 @@ def is_peer_company(job, peer_companies):
 def _matches_peer_id(peer_id: str, peer_company: str) -> bool:
     peer_text = peer_company.lower().replace(" ", "")
     aliases = PEER_ALIASES.get(peer_id, [peer_id])
+
     return any(alias.lower().replace(" ", "") in peer_text for alias in aliases)
+
+
+def _build_role_summaries(roles: list[dict]) -> list[dict]:
+    summaries = []
+
+    for role in roles:
+        summaries.append(
+            {
+                "name": clean_text(role.get("name", "")),
+                "description": clean_text(role.get("description", "")),
+                "headcount": clean_text(role.get("headcount", "")),
+                "career": clean_text(role.get("career", "")),
+                "education": clean_text(role.get("education", "")),
+                "qualification": clean_text(role.get("qualification", "")),
+                "region": clean_text(role.get("region", "")),
+            }
+        )
+
+    return summaries
+
+
+def _build_job_content(
+    job: dict,
+    role_summaries: list[dict],
+    selection_steps: list[dict],
+) -> str:
+    role_text = "\n".join(
+        [
+            " / ".join(
+                [
+                    f"직무명: {role.get('name', '')}",
+                    f"직무 설명: {role.get('description', '')}",
+                    f"모집 인원: {role.get('headcount', '')}",
+                    f"경력: {role.get('career', '')}",
+                    f"학력: {role.get('education', '')}",
+                    f"자격요건: {role.get('qualification', '')}",
+                    f"근무지역: {role.get('region', '')}",
+                ]
+            )
+            for role in role_summaries
+        ]
+    )
+
+    selection_text = "\n".join(
+        [
+            " / ".join(
+                [
+                    f"전형명: {step.get('name', '')}",
+                    f"일정: {step.get('schedule', '')}",
+                    f"설명: {step.get('description', '')}",
+                    f"메모: {step.get('memo', '')}",
+                ]
+            )
+            for step in selection_steps
+        ]
+    )
+
+    return "\n".join(
+        [
+            f"회사명: {job.get('company', '')}",
+            f"공고명: {job.get('title', '')}",
+            f"채용 시작일: {job.get('start_date', '')}",
+            f"채용 마감일: {job.get('end_date', '')}",
+            f"고용형태: {job.get('employment_type', '')}",
+            f"지역: {job.get('region', '')}",
+            f"URL: {job.get('url', '')}",
+            "",
+            "[직무 정보]",
+            role_text,
+            "",
+            "[전형 정보]",
+            selection_text,
+        ]
+    ).strip()
+
+
+def _has_required_job_fields(job: dict, role_summaries: list[dict]) -> bool:
+    if not job.get("company"):
+        return False
+
+    if not job.get("url"):
+        return False
+
+    if not role_summaries:
+        return False
+
+    has_role_name = any(role.get("name") for role in role_summaries)
+    has_role_description = any(role.get("description") for role in role_summaries)
+    has_headcount = any(role.get("headcount") for role in role_summaries)
+
+    return has_role_name and has_role_description and has_headcount
+
+
+def _parse_job_date(date_text: str) -> datetime | None:
+    text = clean_text(date_text)
+
+    for fmt in ("%Y%m%d", "%Y-%m-%d", "%Y.%m.%d", "%y.%m.%d"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+
+    return None
 
 
 def crawl_peer_jobs(max_pages=5, display=100, sleep_sec=0.3):
@@ -356,11 +491,20 @@ def crawl_peer_recruit_news(max_pages=5, display=100, sleep_sec=0.3):
 
 def fetch_recruit_news_detail(job: dict) -> dict:
     emp_seqno = job.get("emp_seqno", "")
+
     if not emp_seqno:
         return {"roles": [], "selection_steps": []}
 
     try:
-        return parse_recruit_news_detail(request_recruit_news_detail(emp_seqno))
+        detail = parse_recruit_news_detail(request_recruit_news_detail(emp_seqno))
+
+        if not job.get("url"):
+            detail_url = detail.get("detail_url", "")
+            homepage = detail.get("homepage", "")
+            job["url"] = detail_url or homepage
+
+        return detail
+
     except (requests.RequestException, ET.ParseError, Work24APIError) as exc:
         log.warning(
             "고용24 공채속보 상세 조회 실패 | emp_seqno=%s error=%s",

@@ -4,7 +4,7 @@ import hashlib
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 log = logging.getLogger(__name__)
@@ -34,6 +34,29 @@ class RawArticle:
 
     def __post_init__(self) -> None:
         self.url_hash = hashlib.md5(self.url.encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class CrawlWindow:
+    """수집 대상 게시일/공시일 범위.
+
+    start/end는 inclusive로 취급한다. end가 None이면 현재 시각까지 조회한다.
+    """
+
+    start: datetime
+    end: Optional[datetime] = None
+
+    @classmethod
+    def last_days(cls, days: int, now: Optional[datetime] = None) -> "CrawlWindow":
+        anchor = now or datetime.now()
+        return cls(start=anchor - timedelta(days=days), end=anchor)
+
+    def contains(self, value: Optional[datetime]) -> bool:
+        if value is None:
+            return True
+        if value < self.start:
+            return False
+        return self.end is None or value <= self.end
 
 
 class DailyLimitGuard:
@@ -92,10 +115,14 @@ class DailyLimitGuard:
 
 class BaseCrawler(ABC):
     def __init__(
-        self, peer_id: Optional[str] = None, limit_guard: Optional[DailyLimitGuard] = None
+        self,
+        peer_id: Optional[str] = None,
+        limit_guard: Optional[DailyLimitGuard] = None,
+        crawl_window: Optional[CrawlWindow] = None,
     ) -> None:
         self.peer_id = peer_id
         self.limit_guard = limit_guard or DailyLimitGuard()
+        self.crawl_window = crawl_window
 
     @abstractmethod
     async def crawl(self) -> list[RawArticle]:

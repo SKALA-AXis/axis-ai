@@ -3,7 +3,7 @@
 import logging
 from typing import Protocol
 
-from src.crawler.base import DailyLimitGuard, RawArticle
+from src.crawler.base import CrawlWindow, DailyLimitGuard, RawArticle
 from src.crawler.parsers.dedup import DedupStore
 from src.crawler.parsers.link_check import LinkChecker
 from src.db.article_store import save_articles
@@ -31,7 +31,11 @@ class BatchProcessor:
         self.dedup = DedupStore()
         self.link_checker = LinkChecker()
 
-    async def run_track_a(self, keywords: dict[str, list[str]]) -> list[RawArticle]:
+    async def run_track_a(
+        self,
+        keywords: dict[str, list[str]],
+        persist: bool = True,
+    ) -> list[RawArticle]:
         """Track A — Naver, RSS, Google News (1시간 간격)."""
         from src.crawler.sources.naver import NaverNewsCrawler
         from src.crawler.sources.rss import GoogleNewsRssCrawler, RssCrawler
@@ -55,7 +59,7 @@ class BatchProcessor:
 
         accessible, rejected = await self.link_checker.filter_accessible(articles)
         new_articles = self.dedup.filter_new(accessible)
-        inserted = save_articles(new_articles)
+        inserted = save_articles(new_articles) if persist else 0
         log.info(
             "Track A 완료 | raw=%d accessible=%d rejected_links=%d new=%d db_inserted=%d",
             len(articles),
@@ -66,7 +70,12 @@ class BatchProcessor:
         )
         return new_articles
 
-    async def run_track_b(self, keywords: dict[str, list[str]]) -> list[RawArticle]:
+    async def run_track_b(
+        self,
+        keywords: dict[str, list[str]],
+        persist: bool = True,
+        crawl_window: CrawlWindow | None = None,
+    ) -> list[RawArticle]:
         """Track B — DART, KIPRIS, 공식 뉴스룸, 채용공고 (매일 새벽 2시)."""
         from src.crawler.sources.consensus import HankyungConsensusCrawler
         from src.crawler.sources.dart import DartCrawler
@@ -78,9 +87,14 @@ class BatchProcessor:
         articles: list[RawArticle] = []
         for peer_id, kws in keywords.items():
             for crawler in [
-                DartCrawler(peer_id, CORP_CODES.get(peer_id, ""), self.limit_guard),
+                DartCrawler(
+                    peer_id,
+                    CORP_CODES.get(peer_id, ""),
+                    self.limit_guard,
+                    crawl_window=crawl_window,
+                ),
                 OfficialNewsroomCrawler(peer_id, self.limit_guard),
-                JobsCrawler(peer_id, kws, self.limit_guard),
+                JobsCrawler(peer_id, kws, self.limit_guard, crawl_window=crawl_window),
             ]:
                 try:
                     results = await crawler.crawl()
@@ -95,8 +109,14 @@ class BatchProcessor:
         # 아래 크롤러들은 내부에서 두 peer_id 모두 처리하므로 1회만 호출
         shared_crawlers: list[tuple[str, _Crawlable]] = [
             ("KiprisCrawler", KiprisCrawler(self.limit_guard)),
-            ("HankyungConsensusCrawler", HankyungConsensusCrawler(self.limit_guard)),
-            ("NaverResearchCrawler", NaverResearchCrawler(self.limit_guard)),
+            (
+                "HankyungConsensusCrawler",
+                HankyungConsensusCrawler(self.limit_guard, crawl_window=crawl_window),
+            ),
+            (
+                "NaverResearchCrawler",
+                NaverResearchCrawler(self.limit_guard, crawl_window=crawl_window),
+            ),
         ]
         for name, shared in shared_crawlers:
             try:
@@ -106,7 +126,7 @@ class BatchProcessor:
 
         accessible, rejected = await self.link_checker.filter_accessible(articles)
         new_articles = self.dedup.filter_new(accessible)
-        inserted = save_articles(new_articles)
+        inserted = save_articles(new_articles) if persist else 0
         log.info(
             "Track B 완료 | raw=%d accessible=%d rejected_links=%d new=%d db_inserted=%d",
             len(articles),

@@ -16,7 +16,7 @@ PEER_ALIASES: dict[str, list[str]] = {
     "lg_cns": ["LG CNS", "엘지씨엔에스", "LGCNS"],
     "hyundai_autoever": ["현대오토에버", "Hyundai AutoEver", "현대오토에버시스템"],
     "posco_dx": ["포스코DX", "포스코디엑스", "POSCO DX"],
-    "sk_ax": ["SK AX", "SK C&C", "SK주식회사 C&C", "에스케이씨앤씨"],
+    "sk_ax": ["SK AX", "SK C&C", "SK주식회사 C&C", "SK 주식회사 C&C", "에스케이씨앤씨", "에스케이 씨앤씨"],
 }
 
 
