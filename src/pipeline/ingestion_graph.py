@@ -9,6 +9,7 @@ v3 변경:
 - evidence_chain 테이블 persist + vector_index 노드 + pipeline_logs 누적
 """
 
+import json
 import logging
 import operator
 import time
@@ -26,7 +27,7 @@ _GPT_WORKERS = 5
 
 
 class IngestionState(TypedDict):
-    peer_ids: list[str]
+    company: list[str]
     trigger_type: str
     raw_article_ids: list[int]
     credible_ids: list[int]
@@ -64,11 +65,11 @@ def _logged_step(
                 elapsed = int((time.perf_counter() - t0) * 1000)
                 input_count = _count_value(state.get(input_key))
                 output_count = _count_value((new_state if err is None else state).get(output_key))
-                peers = state.get("peer_ids") or []
-                peer_label = peers[0] if len(peers) == 1 else None
+                companies = state.get("company") or []
+                company_label = companies[0] if len(companies) == 1 else None
                 save_pipeline_log(
                     step=step_name,
-                    peer_id=peer_label,
+                    company=company_label,
                     input_count=input_count,
                     output_count=output_count,
                     elapsed_ms=elapsed,
@@ -89,16 +90,33 @@ def _count_value(value) -> int:
     return 1
 
 
+def _first_company(article: dict) -> str:
+    company = article.get("company")
+
+    if isinstance(company, list) and company:
+        return str(company[0])
+
+    if isinstance(company, str):
+        try:
+            parsed = json.loads(company)
+            if isinstance(parsed, list) and parsed:
+                return str(parsed[0])
+        except json.JSONDecodeError:
+            return company
+
+    return ""
+
+
 # ── 노드 구현 ──────────────────────────────────────────────────
 
 
-@_logged_step("crawl", "peer_ids", "raw_article_ids")
+@_logged_step("crawl", "company", "raw_article_ids")
 def crawl_node(state: IngestionState) -> IngestionState:
     """처리 대기 중인 RAW 기사 ID를 DB에서 조회한다."""
     from src.agents.crawler_agent import CrawlerAgent
 
-    raw_ids = CrawlerAgent().load_raw_ids(state["peer_ids"])
-    log.info("RAW 기사 로드 | peer_ids=%s count=%d", state["peer_ids"], len(raw_ids))
+    raw_ids = CrawlerAgent().load_raw_ids(state["company"])
+    log.info("RAW 기사 로드 | company=%s count=%d", state["company"], len(raw_ids))
     return {**state, "raw_article_ids": raw_ids}
 
 
@@ -139,19 +157,19 @@ def classify_node(state: IngestionState) -> IngestionState:
         )
         if rep_id is None:
             return None
-        peer_id = rep_articles.get(rep_id, {}).get(
-            "peer_id", state["peer_ids"][0] if state["peer_ids"] else ""
+        company = _first_company(rep_articles.get(rep_id, {})) or (
+            state["company"][0] if state["company"] else ""
         )
         result = agent.classify(
             cluster_id=cluster_id,
             representative_id=rep_id,
             cluster_article_ids=article_ids,
-            peer_id=peer_id,
+            company=company,
         )
         return {
             "cluster_id": cluster_id,
             "representative_id": rep_id,
-            "peer_id": peer_id,
+            "company": company,
             **result,
         }
 
@@ -180,7 +198,7 @@ def issue_card_node(state: IngestionState) -> IngestionState:
         return agent.generate(
             cluster_id=cluster_id,
             representative_id=cluster["representative_id"],
-            peer_id=cluster["peer_id"],
+            company=cluster["company"],
             classification=cluster,
             cluster_article_ids=cluster_map.get(cluster_id, []),
         )

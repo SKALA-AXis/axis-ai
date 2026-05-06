@@ -75,14 +75,14 @@ from src.config.env_loader import load_profile  # noqa: E402
 _profile = load_profile(_args.env)
 log.info("실행 프로파일: %s", _profile)
 
+from src.config.companies import COMPANY_ALIASES  # noqa: E402
 from src.crawler.base import CrawlWindow, RawArticle  # noqa: E402
 from src.crawler.batch_processor import BatchProcessor  # noqa: E402
-from src.crawler.parsers.quality import attach_quality  # noqa: E402
-from src.crawler.scheduler import PEER_ALIASES  # noqa: E402
+
+COMPANY_KEYWORDS = dict(COMPANY_ALIASES)
 
 
 def _summarize(label: str, articles: list[RawArticle]) -> None:
-    attach_quality(articles, PEER_ALIASES)
     print("\n" + "=" * 78)
     print(f"📡 {label} — 수집 요약")
     print("=" * 78)
@@ -90,27 +90,20 @@ def _summarize(label: str, articles: list[RawArticle]) -> None:
     if not articles:
         return
 
-    by_peer: Counter[str] = Counter(a.peer_id or "unknown" for a in articles)
+    by_company: Counter[str] = Counter((a.company or ["unknown"])[0] for a in articles)
     by_source: Counter[str] = Counter(a.source_name for a in articles)
-    usable_count = sum(1 for a in articles if a.metadata.get("quality", {}).get("is_usable"))
-    issue_counts: Counter[str] = Counter(
-        issue
-        for a in articles
-        for issue in a.metadata.get("quality", {}).get("quality_issues", [])
-    )
+    with_content_count = sum(1 for a in articles if a.content)
 
-    print("\n  ── Peer별 ──")
-    for peer, n in by_peer.most_common():
-        print(f"    {peer:18s} {n}건")
+    print("\n  ── Company별 ──")
+    for company, n in by_company.most_common():
+        print(f"    {company:18s} {n}건")
 
     print("\n  ── 소스별 ──")
     for source, n in by_source.most_common():
         print(f"    {source:24s} {n}건")
 
-    print("\n  ── 품질 KPI ──")
-    print(f"    is_usable              {usable_count}/{len(articles)}건")
-    for issue, n in issue_counts.most_common(5):
-        print(f"    {issue:24s} {n}건")
+    print("\n  ── 기본 상태 ──")
+    print(f"    content 존재           {with_content_count}/{len(articles)}건")
 
 
 def _build_window() -> CrawlWindow | None:
@@ -133,7 +126,6 @@ def _build_window() -> CrawlWindow | None:
 def _save_local(label: str, articles: list[RawArticle]) -> Path | None:
     if not _args.local_output:
         return None
-    attach_quality(articles, PEER_ALIASES)
     output_dir = Path(_args.local_output)
     output_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -151,12 +143,11 @@ def _article_to_dict(article: RawArticle) -> dict:
         "title": article.title,
         "content": article.content,
         "source_name": article.source_name,
-        "peer_id": article.peer_id,
+        "company": article.company,
         "published_at": article.published_at.isoformat() if article.published_at else None,
         "collected_at": article.collected_at.isoformat(),
         "url_hash": article.url_hash,
-        "quality": article.metadata.get("quality", {}),
-        "metadata": article.metadata,
+        "metadata": article.extra,
     }
 
 
@@ -165,15 +156,15 @@ async def _run(track: str) -> None:
     persist = not _args.skip_db
     crawl_window = _build_window()
     if track in ("a", "all"):
-        log.info("Track A 시작 | peers=%s", list(PEER_ALIASES))
-        articles = await processor.run_track_a(PEER_ALIASES, persist=persist)
+        log.info("Track A 시작 | company=%s", list(COMPANY_KEYWORDS))
+        articles = await processor.run_track_a(COMPANY_KEYWORDS, persist=persist)
         _summarize("Track A", articles)
         _save_local("track_a", articles)
 
     if track in ("b", "all"):
-        log.info("Track B 시작 | peers=%s", list(PEER_ALIASES))
+        log.info("Track B 시작 | company=%s", list(COMPANY_KEYWORDS))
         articles = await processor.run_track_b(
-            PEER_ALIASES,
+            COMPANY_KEYWORDS,
             persist=persist,
             crawl_window=crawl_window,
         )

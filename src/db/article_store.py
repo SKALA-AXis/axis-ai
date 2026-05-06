@@ -15,11 +15,13 @@ log = logging.getLogger(__name__)
 
 _INSERT_SQL = text("""
     INSERT INTO raw_articles (
-        peer_id, source_tier, source_name, title, content, url,
-        published_at, collected_at, credibility_score, processing_status, metadata
+        source_type, source_name, publisher, title, content, url, url_hash,
+        published_at, collected_at, company, language, content_type,
+        crawl_status, error_message, processing_status, metadata
     ) VALUES (
-        :peer_id, :source_tier, :source_name, :title, :content, :url,
-        :published_at, :collected_at, :credibility_score, 'RAW', CAST(:metadata AS jsonb)
+        :source_type, :source_name, :publisher, :title, :content, :url, :url_hash,
+        :published_at, :collected_at, CAST(:company AS jsonb), :language, :content_type,
+        :crawl_status, :error_message, 'RAW', CAST(:metadata AS jsonb)
     )
     ON CONFLICT (url) DO NOTHING
     RETURNING id
@@ -44,15 +46,20 @@ def save_articles(articles: list[RawArticle]) -> int:
                 result = db.execute(
                     _INSERT_SQL,
                     {
-                        "peer_id": article.peer_id,
-                        "source_tier": article.source_tier,
+                        "source_type": article.source_type,
                         "source_name": article.source_name,
+                        "publisher": article.publisher,
                         "title": article.title[:500],
                         "content": article.content[:10_000] if article.content else "",
                         "url": article.url,
+                        "url_hash": article.url_hash,
                         "published_at": article.published_at or article.collected_at,
                         "collected_at": article.collected_at,
-                        "credibility_score": article.credibility_score,
+                        "company": json.dumps(article.company, ensure_ascii=False),
+                        "language": article.language,
+                        "content_type": article.content_type,
+                        "crawl_status": article.crawl_status,
+                        "error_message": article.error_message,
                         "metadata": _metadata_json(article),
                     },
                 )
@@ -84,7 +91,7 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
     with SessionLocal() as db:
         rows = db.execute(
             text("""
-                SELECT id, peer_id, title, content, url,
+                SELECT id, company, title, content, url,
                        credibility_score, source_name, published_at, metadata
                 FROM raw_articles
                 WHERE id = ANY(:ids)
@@ -159,11 +166,11 @@ def update_classification(
 
 _INSERT_ISSUE_CARD = text("""
     INSERT INTO issue_cards (
-        id, peer_id, cluster_id, title, summary_lines,
+        id, company, cluster_id, title, summary_lines,
         event_type, importance, importance_score,
         implication, sources, validation_pass, validation_sc_score
     ) VALUES (
-        :id, :peer_id, :cluster_id, :title, :summary_lines,
+        :id, :company, :cluster_id, :title, :summary_lines,
         :event_type, :importance, :importance_score,
         CAST(:implication AS jsonb), CAST(:sources AS jsonb),
         :validation_pass, :validation_sc_score
@@ -201,7 +208,7 @@ def save_issue_card(card: dict[str, Any]) -> Optional[str]:
                 _INSERT_ISSUE_CARD,
                 {
                     "id": card["id"],
-                    "peer_id": card["peer_id"],
+                    "company": card.get("company") or card.get("peer_id"),
                     "cluster_id": card.get("cluster_id"),
                     "title": card["title"][:500],
                     "summary_lines": card.get("summary_lines", []),
@@ -291,10 +298,10 @@ def save_evidence_chain(
 
 _INSERT_PIPELINE_LOG = text("""
     INSERT INTO pipeline_logs (
-        pipeline_step, peer_id, input_count, output_count,
+        pipeline_step, company, input_count, output_count,
         elapsed_ms, llm_tokens_used, error_msg
     ) VALUES (
-        :step, :peer_id, :input_count, :output_count,
+        :step, :company, :input_count, :output_count,
         :elapsed_ms, :llm_tokens_used, :error_msg
     )
 """)
@@ -302,7 +309,7 @@ _INSERT_PIPELINE_LOG = text("""
 
 def save_pipeline_log(
     step: str,
-    peer_id: Optional[str],
+    company: Optional[str],
     input_count: int,
     output_count: int,
     elapsed_ms: int,
@@ -316,7 +323,7 @@ def save_pipeline_log(
                 _INSERT_PIPELINE_LOG,
                 {
                     "step": step,
-                    "peer_id": peer_id,
+                    "company": company,
                     "input_count": input_count,
                     "output_count": output_count,
                     "elapsed_ms": elapsed_ms,
@@ -336,7 +343,7 @@ _card_id_state: dict[str, int] = {}  # {date_str: last_seq}
 _card_id_lock = threading.Lock()
 
 
-def _generate_card_id(peer_id: str) -> str:
+def _generate_card_id(company: str) -> str:
     """IC-YYYYMMDD-NNN 형식의 이슈카드 ID를 생성한다.
 
     DB 저장 전에 병렬 호출되므로 Lock으로 중복 방지.
@@ -361,7 +368,7 @@ def _is_valid(article: RawArticle) -> bool:
     """Gate 1: 최소 품질 필터."""
     if not article.url or not article.title:
         return False
-    if not article.peer_id:
+    if not article.company:
         return False
     if len(article.content or "") < 10 and len(article.title) < 5:
         return False
@@ -371,6 +378,8 @@ def _is_valid(article: RawArticle) -> bool:
 def _metadata_json(article: RawArticle) -> str:
     import json
 
-    meta = dict(article.metadata)
+    meta = dict(article.extra)
     meta["url_hash"] = article.url_hash
+    if article.peer_id and "peer_id" not in meta:
+        meta["peer_id"] = article.peer_id
     return json.dumps(meta, ensure_ascii=False)

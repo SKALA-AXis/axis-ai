@@ -9,6 +9,7 @@ from xml.etree import ElementTree
 
 import httpx
 
+from src.config.companies import KIPRIS_APPLICANTS
 from src.crawler.base import (
     RETRY_POLICY,
     DailyLimitGuard,
@@ -22,13 +23,7 @@ KIPRIS_API_BASE = "http://plus.kipris.or.kr/openapi/rest"
 # AI 관련 IPC 분류 코드 필터 (§7 설계서)
 AI_IPC_CODES = ["G06N", "G06F", "G06V", "G06T", "H04L"]
 
-# 출원인 한글명 (설계서 §7)
-_APPLICANTS: dict[str, str] = {
-    "samsung_sds": "삼성에스디에스",
-    "lg_cns": "엘지씨엔에스",
-    "hyundai_autoever": "현대오토에버",
-    "posco_dx": "포스코디엑스",
-}
+_APPLICANTS: dict[str, str] = dict(KIPRIS_APPLICANTS)
 
 
 class KiprisCrawler:

@@ -1,6 +1,6 @@
 """크롤러 단위 테스트"""
 
-from src.crawler.base_crawler import RawArticle
+from src.crawler.base import RawArticle
 
 
 def test_raw_article_fields():
@@ -10,7 +10,7 @@ def test_raw_article_fields():
         content="본문 내용",
         published_at=None,
         source_name="naver_news",
-        peer_id="samsung_sds",
+        company=["samsung_sds"],
     )
     assert article.url
-    assert article.peer_id == "samsung_sds"
+    assert article.company == ["samsung_sds"]

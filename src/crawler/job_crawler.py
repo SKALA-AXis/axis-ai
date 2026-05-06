@@ -11,7 +11,9 @@ from html import unescape
 import requests
 from dotenv import load_dotenv
 
-from src.crawler.base_crawler import BaseCrawler, RawArticle
+from src.config.companies import COMPANY_ALIASES, all_company_aliases
+from src.crawler.base import RawArticle
+from src.crawler.base_crawler import BaseCrawler
 
 log = logging.getLogger(__name__)
 
@@ -28,31 +30,8 @@ RECRUIT_NEWS_URL = (
     f"{WORK24_OPEN_API_HOST}/cm/openApi/call/wk/callOpenApiSvcInfo210L21.do"
 )
 
-PEER_COMPANIES = [
-    "삼성SDS",
-    "삼성에스디에스",
-    "LG CNS",
-    "엘지씨엔에스",
-    "현대오토에버",
-    "HYUNDAI AUTOEVER",
-    "포스코DX",
-    "포스코 디엑스",
-    "POSCO DX",
-    "포스코ICT",
-    "POSCO ICT",
-    "SK AX",
-    "SK C&C",
-    "SK주식회사 C&C",
-    "에스케이씨앤씨",
-]
-
-PEER_ALIASES = {
-    "samsung_sds": ["삼성SDS", "삼성에스디에스"],
-    "lg_cns": ["LG CNS", "엘지씨엔에스"],
-    "hyundai_autoever": ["현대오토에버", "HYUNDAI AUTOEVER"],
-    "posco_dx": ["포스코DX", "포스코 디엑스", "POSCO DX", "포스코ICT", "POSCO ICT"],
-    "sk_ax": ["SK AX", "SK C&C", "SK주식회사 C&C", "에스케이씨앤씨"],
-}
+PEER_COMPANIES = all_company_aliases()
+PEER_ALIASES = dict(COMPANY_ALIASES)
 
 
 class Work24APIError(RuntimeError):

@@ -3,6 +3,7 @@
 import logging
 from typing import Protocol
 
+from src.config.companies import CORP_CODES
 from src.crawler.base import CrawlWindow, DailyLimitGuard, RawArticle
 from src.crawler.parsers.dedup import DedupStore
 from src.crawler.parsers.link_check import LinkChecker
@@ -13,16 +14,6 @@ log = logging.getLogger(__name__)
 
 class _Crawlable(Protocol):
     async def crawl(self) -> list[RawArticle]: ...
-
-
-# DART 법인코드 (금융감독원 전자공시시스템 기준)
-CORP_CODES: dict[str, str] = {
-    "sk_ax": "00111722",  # SK Inc
-    "samsung_sds": "00126186",  # 삼성에스디에스 (주식코드 018260)
-    "lg_cns": "00139834",  # LG씨엔에스 (주식코드 064400)
-    "hyundai_autoever": "00362441",  # 현대오토에버 (주식코드 307950)
-    "posco_dx": "00155212",  # 포스코DX (주식코드 022100)
-}
 
 
 class BatchProcessor:

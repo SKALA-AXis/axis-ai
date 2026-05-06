@@ -253,9 +253,9 @@ class FinancialLinkerAgent:
               "headcount_delta": {...} | None,
             }
         """
-        peer_id = card.get("peer_id")
+        peer_id = card.get("company") or card.get("peer_id")
         if not peer_id:
-            return self._empty("peer_id 없음")
+            return self._empty("company 없음")
 
         data = _load_financials(peer_id)
         if not data:
@@ -343,11 +343,11 @@ class FinancialLinkerAgent:
                 if seg_yoy is not None and abs(seg_yoy) >= 10.0:
                     highlights.append(f"{seg_obj['name_ko']} YoY {seg_yoy:+.1f}%")
 
-        # ── 3) AI 매출 비중 (sector=ai_tech 또는 키워드 매칭 시) ──
+        # ── 3) AI 매출 비중 (sector=ax 또는 키워드 매칭 시) ──
         sector = card.get("sector", "")
         ai_curr = latest.get("ai_revenue_share_pct")
         ai_yoy = prev_y.get("ai_revenue_share_pct") if prev_y else None
-        if ai_curr is not None and (sector == "ai_tech" or segment_id in {"ai", "ai_dx"}):
+        if ai_curr is not None and (sector == "ax" or segment_id in {"ai", "ai_dx"}):
             refs.append(
                 {
                     "period": latest["period"],

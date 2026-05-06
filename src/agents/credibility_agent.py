@@ -1,8 +1,11 @@
-"""Gate 2 신뢰도 분류 에이전트.
+"""Gate 2 소스 타입 기반 신뢰도 보정 에이전트.
 
-크롤러는 신뢰도를 계산하지 않는다. credibility_score가 아직 비어 있는
-기사들은 이 단계에서 탈락시키지 않고 통과시킨다. 실제 점수 계산 로직은
-후속 CredibilityAgent 구현에서 source_name/url/metadata 기반으로 채운다.
+크롤러는 신뢰도를 계산하지 않는다.
+raw_articles 최초 저장 시 credibility_score, credibility_grade는 비어 있을 수 있다.
+
+이 단계에서는 source_type 기준으로 기본 credibility_score와 credibility_grade를 채운다.
+신뢰도 점수만으로 기사를 탈락시키지는 않는다.
+수집 실패, URL 없음, 제목 없음처럼 명백히 사용할 수 없는 데이터만 제외한다.
 """
 
 import logging
@@ -13,10 +16,22 @@ from src.db.postgres import SessionLocal
 
 log = logging.getLogger(__name__)
 
-# Gate 2 기준: 계산된 credibility_score < 0.5 → SKIPPED_CREDIBILITY
-CREDIBILITY_THRESHOLD = 0.5
+DEFAULT_CREDIBILITY_SCORE = 0.50
 
-# credibility_score → grade 매핑 (schema.sql credibility_grade 컬럼)
+SOURCE_TYPE_CREDIBILITY: dict[str, float] = {
+    "dart": 1.00,
+    "official": 0.90,
+    "ir": 0.90,
+    "securities_report": 0.80,
+    "trend_report": 0.70,
+    "news": 0.70,
+    "job": 0.60,
+    "search_trend": 0.55,
+    "social": 0.40,
+}
+
+_ALLOWED_SOURCE_TYPES = set(SOURCE_TYPE_CREDIBILITY.keys())
+
 _GRADE_MAP: list[tuple[float, str]] = [
     (0.85, "High"),
     (0.60, "Medium"),
@@ -26,10 +41,10 @@ _GRADE_MAP: list[tuple[float, str]] = [
 
 
 class CredibilityAgent:
-    """raw_articles의 credibility_score로 Gate 2 신뢰도 필터 적용."""
+    """raw_articles의 source_type 기준 신뢰도 점수를 보정한다."""
 
     def filter(self, raw_article_ids: list[int]) -> tuple[list[int], list[int]]:
-        """credibility_score < CREDIBILITY_THRESHOLD 기사를 탈락시킨다.
+        """source_type 기준으로 credibility_score를 채우고 유효하지 않은 데이터만 제외한다.
 
         Args:
             raw_article_ids: 처리할 raw_articles ID 목록.
@@ -45,52 +60,105 @@ class CredibilityAgent:
 
         with SessionLocal() as db:
             rows = db.execute(
-                text("SELECT id, credibility_score FROM raw_articles WHERE id = ANY(:ids)"),
+                text("""
+                    SELECT
+                        id,
+                        url,
+                        title,
+                        source_type,
+                        crawl_status,
+                        credibility_score
+                    FROM raw_articles
+                    WHERE id = ANY(:ids)
+                """),
                 {"ids": raw_article_ids},
             ).fetchall()
 
             for row in rows:
-                if row.credibility_score is None:
-                    credible_ids.append(row.id)
-                    log.debug("Gate 2 보류/통과 | id=%d score=None", row.id)
+                valid, reason = _validate_row(row)
+
+                if not valid:
+                    db.execute(
+                        text("""
+                            UPDATE raw_articles
+                            SET processing_status = 'SKIPPED_INVALID_SOURCE',
+                                error_message = :error_message
+                            WHERE id = :id
+                        """),
+                        {
+                            "error_message": reason,
+                            "id": row.id,
+                        },
+                    )
+
+                    skipped_ids.append(row.id)
+                    log.debug("Gate 2 제외 | id=%d reason=%s", row.id, reason)
                     continue
 
-                score: float = row.credibility_score
+                score = row.credibility_score
+
+                if score is None:
+                    score = compute_credibility_score(row.source_type)
+
+                score = float(score)
                 grade = _to_grade(score)
-                passed = score >= CREDIBILITY_THRESHOLD
 
                 db.execute(
                     text("""
                         UPDATE raw_articles
-                        SET credibility_grade = :grade,
-                            processing_status = CASE
-                                WHEN :passed THEN processing_status
-                                ELSE 'SKIPPED_CREDIBILITY'
-                            END
+                        SET credibility_score = :score,
+                            credibility_grade = :grade
                         WHERE id = :id
                     """),
-                    {"grade": grade, "passed": passed, "id": row.id},
+                    {
+                        "score": score,
+                        "grade": grade,
+                        "id": row.id,
+                    },
                 )
 
-                if passed:
-                    credible_ids.append(row.id)
-                else:
-                    skipped_ids.append(row.id)
-                    log.debug("Gate 2 탈락 | id=%d score=%.2f grade=%s", row.id, score, grade)
+                credible_ids.append(row.id)
 
             db.commit()
 
         log.info(
-            "Gate 2 신뢰도 필터 완료 | total=%d credible=%d skipped=%d",
+            "Gate 2 신뢰도 보정 완료 | total=%d credible=%d skipped=%d",
             len(raw_article_ids),
             len(credible_ids),
             len(skipped_ids),
         )
+
         return credible_ids, skipped_ids
+
+
+def compute_credibility_score(source_type: str | None) -> float:
+    """source_type 기준으로 기본 신뢰도 점수를 반환한다."""
+    if not source_type:
+        return DEFAULT_CREDIBILITY_SCORE
+
+    key = source_type.strip().lower()
+    return SOURCE_TYPE_CREDIBILITY.get(key, DEFAULT_CREDIBILITY_SCORE)
+
+
+def _validate_row(row) -> tuple[bool, str | None]:
+    if row.crawl_status == "failed":
+        return False, "crawl_failed"
+
+    if not row.url:
+        return False, "empty_url"
+
+    if not row.title:
+        return False, "empty_title"
+
+    if row.source_type and row.source_type not in _ALLOWED_SOURCE_TYPES:
+        return False, f"invalid_source_type:{row.source_type}"
+
+    return True, None
 
 
 def _to_grade(score: float) -> str:
     for threshold, grade in _GRADE_MAP:
         if score >= threshold:
             return grade
+
     return "Unverified"

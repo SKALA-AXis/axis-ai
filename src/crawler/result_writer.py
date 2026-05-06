@@ -7,49 +7,65 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.crawler.parsers.quality import attach_quality
-
 DEFAULT_RESULTS_DIR = Path(__file__).resolve().parent / "crawler_results"
 
 
 def save_crawler_results(
     articles: list[Any],
     source_name: str,
-    peer_aliases: dict[str, list[str]] | None = None,
     output_dir: Path | str = DEFAULT_RESULTS_DIR,
 ) -> Path:
-    """품질 KPI를 붙인 뒤 JSONL 파일로 저장한다."""
-    attach_quality(articles, peer_aliases or {})
+    """크롤러 결과를 JSONL 파일로 저장한다."""
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+
     filename = f"{source_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
     result_path = output_path / filename
 
     with result_path.open("w", encoding="utf-8") as f:
         for article in articles:
             f.write(json.dumps(_to_dict(article), ensure_ascii=False) + "\n")
+
     return result_path
 
 
 def _to_dict(article: Any) -> dict[str, Any]:
     if hasattr(article, "to_common_dict"):
-        data = article.to_common_dict()
-        quality = data.get("extra", {}).get("quality", {})
-    else:
-        metadata = dict(getattr(article, "metadata", {}))
-        quality = metadata.get("quality", {})
-        data = {
-            "url": article.url,
-            "title": article.title,
-            "content": article.content,
-            "source_name": article.source_name,
-            "peer_id": article.peer_id,
-            "published_at": article.published_at.isoformat()
-            if article.published_at
-            else None,
-            "collected_at": article.collected_at.isoformat(),
-            "metadata": metadata,
-        }
-    data["quality"] = quality
+        return article.to_common_dict()
+
+    extra = dict(getattr(article, "extra", {}))
+    metadata = dict(getattr(article, "metadata", {}))
+
+    if metadata and not extra:
+        extra = metadata
+
+    published_at = getattr(article, "published_at", None)
+    collected_at = getattr(article, "collected_at", None)
+
+    data = {
+        "id": getattr(article, "id", None),
+        "source_type": getattr(article, "source_type", "news"),
+        "source_name": getattr(article, "source_name", None),
+        "publisher": getattr(article, "publisher", None),
+        "title": getattr(article, "title", ""),
+        "content": getattr(article, "content", None),
+        "url": getattr(article, "url", ""),
+        "url_hash": getattr(article, "url_hash", ""),
+        "published_at": published_at.isoformat() if published_at else None,
+        "collected_at": collected_at.isoformat() if collected_at else None,
+        "company": list(getattr(article, "company", []) or []),
+        "language": getattr(article, "language", "ko"),
+        "content_type": getattr(article, "content_type", "html"),
+        "crawl_status": getattr(article, "crawl_status", "success"),
+        "error_message": getattr(article, "error_message", None),
+        "source_tier": getattr(article, "source_tier", None),
+        "credibility_score": getattr(article, "credibility_score", None),
+        "extra": extra,
+    }
+
+    peer_id = getattr(article, "peer_id", None)
+    if peer_id and not data["company"]:
+        data["company"] = [peer_id]
+
     return data

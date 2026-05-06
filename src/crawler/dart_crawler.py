@@ -13,7 +13,8 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 
 from src.crawler.article_filter import strip_html
-from src.crawler.base_crawler import BaseCrawler, RawArticle
+from src.crawler.base import RawArticle
+from src.crawler.base_crawler import BaseCrawler
 
 log = logging.getLogger(__name__)
 

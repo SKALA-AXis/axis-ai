@@ -10,8 +10,10 @@ from urllib.parse import urljoin
 import httpx
 from bs4 import BeautifulSoup
 
+from src.config.companies import NAVER_ITEM_CODES
 from src.crawler.article_filter import strip_html
-from src.crawler.base_crawler import BaseCrawler, RawArticle
+from src.crawler.base import RawArticle
+from src.crawler.base_crawler import BaseCrawler
 
 log = logging.getLogger(__name__)
 
@@ -23,13 +25,7 @@ NAVER_RESEARCH_URL = (
 DEFAULT_LOOKBACK_DAYS = 3
 PDF_MAX_TEXT_CHARS = int(os.getenv("RESEARCH_PDF_MAX_TEXT_CHARS", "200000"))
 
-PEER_ITEM_CODES = {
-    "sk_ax": "034730",
-    "samsung_sds": "018260",
-    "lg_cns": "064400",
-    "hyundai_autoever": "307950",
-    "posco_dx": "022100",
-}
+PEER_ITEM_CODES = dict(NAVER_ITEM_CODES)
 
 
 class NaverResearchCrawler(BaseCrawler):

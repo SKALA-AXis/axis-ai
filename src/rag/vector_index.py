@@ -69,7 +69,7 @@ def index_card(card: dict[str, Any]) -> Optional[str]:
     payload = {
         "rdb_id": rep_id,
         "issue_card_id": card.get("id"),
-        "peer_id": card.get("peer_id"),
+        "company": card.get("company") or card.get("peer_id"),
         "event_type": card.get("event_type"),
         "sector": card.get("sector"),
         "exposure_score": card.get("exposure_score", 0.0),

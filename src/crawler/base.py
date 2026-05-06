@@ -1,96 +1,150 @@
-"""크롤러 공통 기반 — RawArticle v4, DailyLimitGuard, RetryPolicy"""
+"""크롤러 공통 기반 — RawArticle, DailyLimitGuard, RetryPolicy."""
 
 import hashlib
 import logging
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Any, Optional
+from datetime import date, datetime
+from typing import Any, Literal, Optional
+from uuid import uuid4
 
 log = logging.getLogger(__name__)
 
 RETRY_POLICY: dict[str, Any] = {
-    "timeout": 10,  # httpx 기본 타임아웃 (초) — 하위 호환
+    "timeout": 10,
     "source_timeout": {"max_retries": 3, "backoff": [10, 60, 300]},
     "db_failure": {"max_retries": 3, "backoff": [5, 30, 120]},
     "playwright_timeout": {"max_retries": 2, "backoff": [15, 60]},
-    "playwright_blocked": {"max_retries": 1, "backoff": [300]},  # 차단 시 5분 대기
+    "playwright_blocked": {"max_retries": 1, "backoff": [300]},
 }
+
+SourceType = Literal[
+    "news",
+    "ir",
+    "securities_report",
+    "dart",
+    "job",
+    "trend_report",
+    "search_trend",
+    "social",
+    "official",
+]
+
+ContentType = Literal[
+    "html",
+    "pdf",
+    "api",
+    "rss",
+    "text",
+    "unknown",
+]
+
+CrawlStatus = Literal[
+    "success",
+    "failed",
+    "skipped",
+]
 
 
 @dataclass
 class RawArticle:
-    url: str
-    title: str
-    content: str  # 요약 or 본문
-    source_name: str
-    peer_id: Optional[str] = None  # samsung_sds · lg_cns · None
-    published_at: Optional[datetime] = None
-    collected_at: datetime = field(default_factory=datetime.now)
-    url_hash: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
-    source_tier: Optional[int] = None
-    credibility_score: Optional[float] = None
+    """크롤러가 수집한 원천 기사 및 자료 레코드.
 
-    def __post_init__(self) -> None:
-        self.url_hash = hashlib.md5(self.url.encode()).hexdigest()
-
-
-@dataclass(frozen=True)
-class CrawlWindow:
-    """수집 대상 게시일/공시일 범위.
-
-    start/end는 inclusive로 취급한다. end가 None이면 현재 시각까지 조회한다.
+    최초 raw_articles INSERT에 필요한 원천 데이터만 담는다.
+    신뢰도, 분류, 인사이트 결과는 이후 Agent가 DB row를 업데이트한다.
     """
 
-    start: datetime
-    end: Optional[datetime] = None
+    url: str
+    title: str
+    content: Optional[str]
+    source_name: str
 
-    @classmethod
-    def last_days(cls, days: int, now: Optional[datetime] = None) -> "CrawlWindow":
-        anchor = now or datetime.now()
-        return cls(start=anchor - timedelta(days=days), end=anchor)
+    published_at: Optional[datetime] = None
+    collected_at: datetime = field(default_factory=lambda: datetime.now().astimezone())
 
-    def contains(self, value: Optional[datetime]) -> bool:
-        if value is None:
-            return True
-        if value < self.start:
-            return False
-        return self.end is None or value <= self.end
+    id: str = field(default_factory=lambda: str(uuid4()))
+
+    source_type: SourceType = "news"
+    content_type: ContentType = "html"
+    publisher: Optional[str] = None
+
+    company: list[str] = field(default_factory=list)
+    language: str = "ko"
+
+    crawl_status: CrawlStatus = "success"
+    error_message: Optional[str] = None
+
+    url_hash: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    # 기존 peer_id 기반 크롤러 호환용 필드.
+    # 신규 코드는 company를 사용한다.
+    peer_id: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.url_hash:
+            self.url_hash = hashlib.md5(self.url.encode()).hexdigest()
+
+        if self.peer_id and not self.company:
+            self.company = [self.peer_id]
+
+        self.company = _dedupe_keep_order(self.company)
+
+    def to_common_dict(self) -> dict[str, Any]:
+        """공통 JSON 스키마 형태로 변환한다."""
+        return {
+            "id": self.id,
+            "source_type": self.source_type,
+            "source_name": self.source_name,
+            "publisher": self.publisher,
+            "title": self.title,
+            "content": self.content,
+            "url": self.url,
+            "url_hash": self.url_hash,
+            "published_at": self.published_at.isoformat() if self.published_at else None,
+            "collected_at": self.collected_at.isoformat(),
+            "company": self.company,
+            "language": self.language,
+            "content_type": self.content_type,
+            "crawl_status": self.crawl_status,
+            "error_message": self.error_message,
+            "extra": self.extra,
+        }
 
 
 class DailyLimitGuard:
-    """전역 일일 수집 건수 한도 + 소스별 개별 한도 관리."""
+    """전역 일일 수집 건수 한도와 소스별 개별 한도를 관리한다."""
 
-    GLOBAL_LIMIT = 5_000  # 건/일 (설계서 §11)
-    SOURCE_LIMITS: dict[str, int] = {
-        "naver_news": 200,
+    GLOBAL_LIMIT = 5_000
+
+    SOURCE_TYPE_LIMITS: dict[SourceType, int] = {
+        "news": 300,
+        "official": 100,
+        "ir": 100,
         "dart": 100,
-        "kipris": 100,
-        "rss": 300,
-        "google_news": 200,
-        "yonhap": 200,
-        "official": 50,
-        "jobs": 100,
-        "consensus": 100,
-        "naver_research": 100,
+        "securities_report": 100,
+        "job": 100,
+        "trend_report": 100,
+        "search_trend": 100,
+        "social": 200,
     }
 
     def __init__(self) -> None:
         self._global_count = 0
         self._source_counts: dict[str, int] = {}
-        self._reset_date: Optional[datetime] = None
+        self._reset_date: Optional[date] = None
 
     def _maybe_reset(self) -> None:
         today = datetime.now().date()
+
         if self._reset_date is None or self._reset_date != today:
             self._global_count = 0
             self._source_counts = {}
-            self._reset_date = today  # type: ignore[assignment]
+            self._reset_date = today
 
     def check(self, new_count: int) -> bool:
-        """전역 한도 체크 (설계서 §11 DailyLimitGuard.check)."""
+        """전역 수집 한도를 확인하고 사용량을 반영한다."""
         self._maybe_reset()
+
         if self._global_count + new_count > self.GLOBAL_LIMIT:
             log.warning(
                 "일일 전역 수집 한도 초과 | count=%d limit=%d",
@@ -98,36 +152,36 @@ class DailyLimitGuard:
                 self.GLOBAL_LIMIT,
             )
             return False
+
         self._global_count += new_count
         return True
 
     def allow(self, source: str) -> bool:
-        """소스별 한도 체크."""
+        """소스별 수집 한도를 확인하고 사용량을 반영한다."""
         self._maybe_reset()
+
         limit = self.SOURCE_LIMITS.get(source, 500)
         current = self._source_counts.get(source, 0)
+
         if current >= limit:
             log.warning("소스별 수집 한도 초과 | source=%s limit=%d", source, limit)
             return False
+
         self._source_counts[source] = current + 1
         return self.check(1)
 
 
-class BaseCrawler(ABC):
-    def __init__(
-        self,
-        peer_id: Optional[str] = None,
-        limit_guard: Optional[DailyLimitGuard] = None,
-        crawl_window: Optional[CrawlWindow] = None,
-    ) -> None:
-        self.peer_id = peer_id
-        self.limit_guard = limit_guard or DailyLimitGuard()
-        self.crawl_window = crawl_window
+def _dedupe_keep_order(values: list[str]) -> list[str]:
+    """리스트 순서를 유지하면서 중복 값을 제거한다."""
+    seen: set[str] = set()
+    result: list[str] = []
 
-    @abstractmethod
-    async def crawl(self) -> list[RawArticle]:
-        """소스에서 기사를 수집한다."""
-        ...
+    for value in values:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            continue
 
-    def _is_blocked(self, status_code: int) -> bool:
-        return status_code in (403, 429)
+        seen.add(normalized)
+        result.append(normalized)
+
+    return result

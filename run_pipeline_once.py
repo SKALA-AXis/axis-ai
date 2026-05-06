@@ -30,18 +30,18 @@ from src.config.env_loader import load_profile  # noqa: E402
 _profile = load_profile(_args.env)
 log.info("실행 프로파일: %s", _profile)
 
-from src.agents.sector_keywords import sector_name_ko  # noqa: E402
+from src.config.sectors import sector_name_ko  # noqa: E402
 from src.pipeline.ingestion_graph import ingestion_graph  # noqa: E402
 
 _BAND_MARK = {"high": "■■■", "medium": "■■ ", "low": "■  "}
 
 
 def main() -> None:
-    peer_ids = ["samsung_sds", "lg_cns"]
-    log.info("파이프라인 시작 | peer_ids=%s", peer_ids)
+    company = ["samsung_sds", "lg_cns"]
+    log.info("파이프라인 시작 | company=%s", company)
 
     initial_state = {
-        "peer_ids": peer_ids,
+        "company": company,
         "trigger_type": "manual",
         "raw_article_ids": [],
         "credible_ids": [],
@@ -106,13 +106,13 @@ def main() -> None:
 
         evidence_mark = "✅" if val.get("pass") else "⚠️"
 
-        print(f"\n[{i}] {_BAND_MARK[band]} {sector_name_ko(sector)} | {card.get('peer_id', '?')}")
+        print(f"\n[{i}] {_BAND_MARK[band]} {sector_name_ko(sector)} | {card.get('company', '?')}")
         print(f"     ID: {card.get('id', '?')}  |  Event: {card.get('event_type', '?')}")
         print(f"     제목: {card.get('title', '')}")
         print(
             f"     노출도: {card.get('exposure_score', 0):.2f} ({band})"
             f"  |  cluster={signals.get('cluster_size', 0)}"
-            f"  peer={signals.get('peer_mention_count', 0)}"
+            f"  company={signals.get('company_mention_count', 0)}"
             f"  cred={signals.get('credibility_max', 0):.2f}"
             f"  tier1={signals.get('tier1_count', 0)}"
         )

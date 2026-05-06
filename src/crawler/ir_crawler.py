@@ -16,54 +16,16 @@ import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
+from src.config.companies import IR_CONFIG
 from src.crawler.article_filter import strip_html
-from src.crawler.base_crawler import BaseCrawler, RawArticle
+from src.crawler.base import RawArticle
+from src.crawler.base_crawler import BaseCrawler
 from src.crawler.playwright_client import PlaywrightClient
 
 log = logging.getLogger(__name__)
 
 DEFAULT_LOOKBACK_DAYS = 365
 PDF_MAX_TEXT_CHARS = int(os.getenv("IR_PDF_MAX_TEXT_CHARS", "200000"))
-
-IR_CONFIG = {
-    "samsung_sds": {
-        "pages": [
-            "https://www.samsungsds.com/kr/investor/ir_events/earnings-release.html",
-        ],
-        "fetch_strategy": "playwright_then_httpx",
-        "click_fallback": True,
-    },
-    "lg_cns": {
-        "pages": [
-            "https://www.lgcns.com/kr/company/ir/ir-info#실적발표",
-        ],
-        "fetch_strategy": "playwright_then_httpx",
-        "click_fallback": True,
-    },
-    "posco_dx": {
-        "pages": [
-            "https://www.poscodx.com/kor/ir/irData.do",
-        ],
-        "fetch_strategy": "playwright_then_httpx",
-        "click_fallback": True,
-    },
-    "hyundai_autoever": {
-        "pages": [
-            "https://www.hyundai-autoever.com/kor/ir/ir-information/business-performance/list.do",
-        ],
-        "fetch_strategy": "playwright_then_httpx",
-        "click_fallback": True,
-    },
-    "sk_ax": {
-        "pages": [
-            "https://sk-inc.com/kr/ir/irArchive.aspx",
-            "https://www.sk-inc.com/en/ir/irArchive.aspx",
-        ],
-        "fetch_strategy": "playwright_then_httpx",
-        "click_fallback": True,
-    },
-}
-
 
 class IRCrawler(BaseCrawler):
     """회사 IR 페이지에서 PDF 링크를 찾고 본문 텍스트를 저장한다."""
@@ -1272,7 +1234,7 @@ def _extract_pdf_payload(pdf_bytes: bytes) -> dict:
             "table_parse_strategy": "not_parsed",
             "chart_parse_strategy": "not_parsed",
         }
-    
+
 def _clean_pdf_text(text: str) -> str:
     text = text.replace("\\n", "\n")
     text = re.sub(r"[ \t]+", " ", text)

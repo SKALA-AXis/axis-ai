@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import httpx
 
+from src.config.companies import SARAMIN_COMPANY_NAMES
 from src.crawler.base import RETRY_POLICY, BaseCrawler, CrawlWindow, DailyLimitGuard, RawArticle
 
 log = logging.getLogger(__name__)
@@ -14,13 +15,7 @@ log = logging.getLogger(__name__)
 SARAMIN_API_URL = "https://oapi.saramin.co.kr/job-search"
 DEFAULT_LOOKBACK_DAYS = int(os.getenv("JOBS_LOOKBACK_DAYS", "14"))
 
-# Saramin 회사명 매핑
-_COMPANY_NAMES: dict[str, str] = {
-    "samsung_sds": "삼성SDS",
-    "lg_cns": "LG CNS",
-    "hyundai_autoever": "현대오토에버",
-    "posco_dx": "포스코DX",
-}
+_COMPANY_NAMES: dict[str, str] = dict(SARAMIN_COMPANY_NAMES)
 
 
 class JobsCrawler(BaseCrawler):

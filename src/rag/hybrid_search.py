@@ -23,15 +23,16 @@ TOP_K_PREFETCH = 50
 def hybrid_search(
     query: str,
     top_k: int = 10,
-    peer_id: Optional[str] = None,
+    company: Optional[str] = None,
     event_type: Optional[str] = None,
+    peer_id: Optional[str] = None,
 ) -> list[dict]:
     """BGE-M3 Dense+Sparse RRF 하이브리드 검색.
 
     Args:
         query: 검색 쿼리.
         top_k: 반환할 결과 수.
-        peer_id: Peer사 필터 (없으면 전체).
+        company: 회사 필터 (없으면 전체).
         event_type: 이벤트 타입 필터.
 
     Returns:
@@ -48,12 +49,14 @@ def hybrid_search(
     client = get_qdrant_client()
 
     filter_conditions = None
-    if peer_id or event_type:
+    company_filter = company or peer_id
+
+    if company_filter or event_type:
         from qdrant_client.models import FieldCondition, Filter, MatchValue
 
         conditions = []
-        if peer_id:
-            conditions.append(FieldCondition(key="peer_id", match=MatchValue(value=peer_id)))
+        if company_filter:
+            conditions.append(FieldCondition(key="company", match=MatchValue(value=company_filter)))
         if event_type:
             conditions.append(FieldCondition(key="event_type", match=MatchValue(value=event_type)))
         filter_conditions = Filter(must=conditions)  # type: ignore[arg-type]

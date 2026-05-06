@@ -9,6 +9,7 @@ from urllib.parse import urljoin
 
 import httpx
 
+from src.config.companies import NAVER_ITEM_CODES
 from src.crawler.base import CrawlWindow, DailyLimitGuard, RawArticle
 from src.crawler.playwright_client import PlaywrightClient
 
@@ -17,12 +18,7 @@ log = logging.getLogger(__name__)
 # 종목코드 (Naver Finance itemCode)
 # - samsung_sds 018260, lg_cns 064400 (이전 코드의 034730 = SK Inc. 오류였음)
 # - hyundai_autoever 307950, posco_dx 022100
-_COMPANY_ITEM_CODES: dict[str, str] = {
-    "samsung_sds": "018260",
-    "lg_cns": "064400",
-    "hyundai_autoever": "307950",
-    "posco_dx": "022100",
-}
+_COMPANY_ITEM_CODES: dict[str, str] = dict(NAVER_ITEM_CODES)
 _COMPANY_URL_TPL = (
     "https://finance.naver.com/research/company_list.naver?searchType=itemCode&itemCode={code}"
 )

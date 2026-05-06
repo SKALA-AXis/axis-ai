@@ -6,18 +6,13 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from src.config.companies import COMPANY_ALIASES
 from src.crawler.batch_processor import BatchProcessor
 from src.crawler.monitors.keepalive import keepalive
 
 log = logging.getLogger(__name__)
 
-PEER_ALIASES: dict[str, list[str]] = {
-    "samsung_sds": ["삼성SDS", "Samsung SDS", "삼성에스디에스"],
-    "lg_cns": ["LG CNS", "엘지씨엔에스", "LGCNS"],
-    "hyundai_autoever": ["현대오토에버", "Hyundai AutoEver", "현대오토에버시스템"],
-    "posco_dx": ["포스코DX", "포스코디엑스", "POSCO DX"],
-    "sk_ax": ["SK AX", "SK C&C", "SK주식회사 C&C", "SK 주식회사 C&C", "에스케이씨앤씨", "에스케이 씨앤씨"],
-}
+PEER_ALIASES: dict[str, list[str]] = dict(COMPANY_ALIASES)
 
 
 def build_scheduler() -> AsyncIOScheduler:
