@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.config.company_tiers import company_tiers
+
 DEFAULT_RESULTS_DIR = Path(__file__).resolve().parent / "crawler_results"
 
 
@@ -69,5 +71,7 @@ def _to_dict(article: Any) -> dict[str, Any]:
     peer_id = getattr(article, "peer_id", None)
     if peer_id and not data["company"]:
         data["company"] = [peer_id]
+
+    data["company_tier"] = company_tiers(data["company"])
 
     return data

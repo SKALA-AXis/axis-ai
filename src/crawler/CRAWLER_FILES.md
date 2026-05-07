@@ -83,6 +83,7 @@
   "published_at": "ISO datetime or null",
   "collected_at": "ISO datetime",
   "company": ["company id or company text"],
+  "company_tier": {"company id or company text": "self|domestic|overseas"},
   "language": "ko",
   "content_type": "html|pdf|api|rss|text|unknown",
   "crawl_status": "success|failed|skipped",

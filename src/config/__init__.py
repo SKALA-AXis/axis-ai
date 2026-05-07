@@ -12,6 +12,12 @@ from src.config.companies import (
     company_aliases,
     company_name_ko,
 )
+from src.config.company_tiers import (
+    CompanyTier,
+    company_tier,
+    company_tiers,
+    resolve_company_id,
+)
 from src.config.sectors import (
     SECTOR_IDS,
     SECTOR_KEYWORDS,
@@ -32,10 +38,14 @@ __all__ = [
     "SARAMIN_COMPANY_NAMES",
     "SECTOR_IDS",
     "SECTOR_KEYWORDS",
+    "CompanyTier",
     "all_company_aliases",
     "company_aliases",
     "company_name_ko",
+    "company_tier",
+    "company_tiers",
     "match_sectors",
     "primary_sector",
+    "resolve_company_id",
     "sector_name_ko",
 ]

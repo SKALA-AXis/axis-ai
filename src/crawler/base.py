@@ -7,6 +7,8 @@ from datetime import date, datetime, timedelta
 from typing import Any, Literal, Optional
 from uuid import uuid4
 
+from src.config.company_tiers import company_tiers
+
 log = logging.getLogger(__name__)
 
 RETRY_POLICY: dict[str, Any] = {
@@ -104,6 +106,7 @@ class RawArticle:
             "published_at": self.published_at.isoformat() if self.published_at else None,
             "collected_at": self.collected_at.isoformat(),
             "company": self.company,
+            "company_tier": company_tiers(self.company),
             "language": self.language,
             "content_type": self.content_type,
             "crawl_status": self.crawl_status,
