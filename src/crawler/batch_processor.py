@@ -1,6 +1,7 @@
 """Track A/B 크롤 오케스트레이터 — 원천 수집 + URL 중복 제거 + 저장."""
 
 import logging
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from src.config.companies import CORP_CODES
@@ -26,17 +27,22 @@ class BatchProcessor:
         self,
         keywords: dict[str, list[str]],
         persist: bool = True,
+        recent_hours: int = 1,
     ) -> list[RawArticle]:
-        """Track A — Naver, RSS, Google News (1시간 간격)."""
+        """Track A — Naver News / Google News RSS (1시간 간격)."""
         from src.crawler.sources.naver import NaverNewsCrawler
-        from src.crawler.sources.rss import GoogleNewsRssCrawler, RssCrawler
+        from src.crawler.sources.rss import RssCrawler
 
+        cutoff_datetime = _hours_cutoff(recent_hours)
         articles: list[RawArticle] = []
         for peer_id, kws in keywords.items():
             for crawler in [
-                NaverNewsCrawler(peer_id, kws, self.limit_guard),
-                RssCrawler(peer_id, kws, self.limit_guard),
-                GoogleNewsRssCrawler(peer_id, kws, self.limit_guard),
+                NaverNewsCrawler(
+                    peer_id=peer_id,
+                    aliases=kws,
+                    cutoff_datetime=cutoff_datetime,
+                ),
+                RssCrawler(peer_id=peer_id, aliases=kws, recent_hours=recent_hours),
             ]:
                 try:
                     results = await crawler.crawl()
@@ -60,32 +66,31 @@ class BatchProcessor:
             inserted,
         )
         return new_articles
-
     async def run_track_b(
         self,
         keywords: dict[str, list[str]],
         persist: bool = True,
         crawl_window: CrawlWindow | None = None,
     ) -> list[RawArticle]:
-        """Track B — DART, KIPRIS, 공식 뉴스룸, 채용공고 (매일 새벽 2시)."""
-        from src.crawler.sources.consensus import HankyungConsensusCrawler
+        """Track B — DART, IR, 리서치, 공식 뉴스룸, 채용공고, 검색 트렌드."""
+        from src.crawler.sources.company_news import CompanyNewsCrawler
         from src.crawler.sources.dart import DartCrawler
-        from src.crawler.sources.jobs import JobsCrawler
-        from src.crawler.sources.kipris import KiprisCrawler
+        from src.crawler.sources.ir import IRCrawler
+        from src.crawler.sources.jobs import JobCrawler
+        from src.crawler.sources.keyword import KeywordCrawler
         from src.crawler.sources.naver_research import NaverResearchCrawler
-        from src.crawler.sources.official import OfficialNewsroomCrawler
 
         articles: list[RawArticle] = []
         for peer_id, kws in keywords.items():
             for crawler in [
                 DartCrawler(
-                    peer_id,
-                    CORP_CODES.get(peer_id, ""),
-                    self.limit_guard,
-                    crawl_window=crawl_window,
+                    peer_id=peer_id,
+                    corp_code=CORP_CODES.get(peer_id, ""),
+                    corp_names=kws,
                 ),
-                OfficialNewsroomCrawler(peer_id, self.limit_guard),
-                JobsCrawler(peer_id, kws, self.limit_guard, crawl_window=crawl_window),
+                IRCrawler(peer_id=peer_id),
+                NaverResearchCrawler(peer_id=peer_id),
+                JobCrawler(peer_id=peer_id),
             ]:
                 try:
                     results = await crawler.crawl()
@@ -97,17 +102,10 @@ class BatchProcessor:
                         e,
                     )
 
-        # 아래 크롤러들은 내부에서 두 peer_id 모두 처리하므로 1회만 호출
+        # 아래 크롤러들은 내부에서 전체 company/industry를 처리하므로 1회만 호출
         shared_crawlers: list[tuple[str, _Crawlable]] = [
-            ("KiprisCrawler", KiprisCrawler(self.limit_guard)),
-            (
-                "HankyungConsensusCrawler",
-                HankyungConsensusCrawler(self.limit_guard, crawl_window=crawl_window),
-            ),
-            (
-                "NaverResearchCrawler",
-                NaverResearchCrawler(self.limit_guard, crawl_window=crawl_window),
-            ),
+            ("CompanyNewsCrawler", CompanyNewsCrawler()),
+            ("KeywordCrawler", KeywordCrawler()),
         ]
         for name, shared in shared_crawlers:
             try:
@@ -127,3 +125,9 @@ class BatchProcessor:
             inserted,
         )
         return new_articles
+
+
+def _hours_cutoff(hours: int) -> datetime | None:
+    if hours <= 0:
+        return None
+    return datetime.now().astimezone() - timedelta(hours=hours)

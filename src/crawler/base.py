@@ -3,7 +3,7 @@
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Literal, Optional
 from uuid import uuid4
 
@@ -27,6 +27,7 @@ SourceType = Literal[
     "search_trend",
     "social",
     "official",
+    "market_data",
 ]
 
 ContentType = Literal[
@@ -111,13 +112,38 @@ class RawArticle:
         }
 
 
+@dataclass(frozen=True)
+class CrawlWindow:
+    """크롤링 대상 기간."""
+
+    start: datetime
+    end: Optional[datetime] = None
+
+    @classmethod
+    def last_days(cls, days: int) -> "CrawlWindow":
+        end = datetime.now().astimezone()
+        start = end - timedelta(days=max(days, 0))
+        return cls(start=start, end=end)
+
+    def contains(self, value: Optional[datetime]) -> bool:
+        if value is None:
+            return True
+
+        start = _align_tz(self.start, value)
+        end = _align_tz(self.end, value) if self.end else None
+
+        if value < start:
+            return False
+        return end is None or value <= end
+
+
 class DailyLimitGuard:
     """전역 일일 수집 건수 한도와 소스별 개별 한도를 관리한다."""
 
-    GLOBAL_LIMIT = 5_000
+    GLOBAL_LIMIT = 20_000
 
     SOURCE_TYPE_LIMITS: dict[SourceType, int] = {
-        "news": 500,
+        "news": 10000,
         "official": 100,
         "ir": 100,
         "dart": 100,
@@ -126,6 +152,7 @@ class DailyLimitGuard:
         "trend_report": 100,
         "search_trend": 100,
         "social": 200,
+        "market_data": 100,
     }
 
     def __init__(self) -> None:
@@ -189,3 +216,13 @@ def _dedupe_keep_order(values: list[str]) -> list[str]:
         result.append(normalized)
 
     return result
+
+
+def _align_tz(boundary: Optional[datetime], value: datetime) -> Optional[datetime]:
+    if boundary is None:
+        return None
+    if value.tzinfo is None and boundary.tzinfo is not None:
+        return boundary.replace(tzinfo=None)
+    if value.tzinfo is not None and boundary.tzinfo is None:
+        return boundary.replace(tzinfo=value.tzinfo)
+    return boundary

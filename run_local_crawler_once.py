@@ -30,6 +30,7 @@ from src.crawler.research_crawler import NaverResearchCrawler
 from src.crawler.result_writer import DEFAULT_RESULTS_DIR, save_crawler_results
 from src.crawler.rss_crawler import RssCrawler
 from src.crawler.spri_crawler import SpriCrawler
+from src.crawler.stock_crawler import StockCrawler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("run_local_crawler")
@@ -43,6 +44,7 @@ COMPANY_SOURCES = [
     "jobs",
     "ir",
     "naver_research",
+    "stock",
 ]
 INDUSTRY_SOURCES = [
     "naver_datalab",
@@ -60,6 +62,7 @@ MERGED_OUTPUT_SOURCES = {
     "rss",
     "naver_datalab",
     "naver_research",
+    "stock",
 }
 RETRY_ON_EMPTY_SOURCES = {"dart", "ir", "naver_datalab", "naver_research"}
 MAX_CRAWL_ATTEMPTS = 2
@@ -131,6 +134,12 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--rss-delay",
+        type=float,
+        default=1.0,
+        help="Google News RSS/feed/body 요청 사이 대기 초. 기본 1.0.",
+    )
+    parser.add_argument(
         "--hours",
         type=int,
         default=24,
@@ -143,9 +152,26 @@ def _parse_args() -> argparse.Namespace:
         help="회사 공식 뉴스 회사별 최신 수집 개수. 기본 5.",
     )
     parser.add_argument(
+        "--stock-days",
+        type=int,
+        default=30,
+        help="주가 OHLCV 최근 N일 수집 범위. 기본 30.",
+    )
+    parser.add_argument(
+        "--no-stock-realtime",
+        action="store_true",
+        help="주가 크롤링에서 실시간 quote polling을 끈다.",
+    )
+    parser.add_argument(
         "--no-body",
         action="store_true",
         help="naver/rss 상세 본문 추가 수집을 끈다",
+    )
+    parser.add_argument(
+        "--link-check-concurrency",
+        type=int,
+        default=6,
+        help="저장 전 URL 접근성 검사 동시성. 429가 뜨면 낮춘다. 기본 6.",
     )
     return parser.parse_args()
 
@@ -195,6 +221,7 @@ def _build_crawler(source: str, company: str | None, args: argparse.Namespace) -
             max_entries_per_source=args.max_rss_entries,
             fetch_body=not args.no_body,
             recent_hours=args.hours,
+            request_delay=args.rss_delay,
         )
 
     if source == "dart":
@@ -221,6 +248,15 @@ def _build_crawler(source: str, company: str | None, args: argparse.Namespace) -
             raise ValueError("naver_research 크롤러는 company가 필요합니다.")
         return NaverResearchCrawler(peer_id=company)
 
+    if source == "stock":
+        if company is None:
+            raise ValueError("stock 크롤러는 company가 필요합니다.")
+        return StockCrawler(
+            peer_id=company,
+            lookback_days=args.stock_days,
+            include_realtime=not args.no_stock_realtime,
+        )
+
     raise ValueError(f"지원하지 않는 source입니다: {source}")
 
 
@@ -246,7 +282,9 @@ async def _run_one(
     articles = await crawler.crawl()
     articles = _filter_peer_news_articles(source, company, articles)
     articles, limited_count = _apply_daily_limit(articles, limit_guard)
-    articles, rejected = await LinkChecker().filter_accessible(articles)
+    articles, rejected = await LinkChecker(
+        concurrency=max(1, args.link_check_concurrency),
+    ).filter_accessible(articles)
 
     log.info(
         "수집 완료 | source=%s company=%s valid=%d rejected=%d limited=%d",
@@ -395,8 +433,8 @@ def _build_run_plan(source: str | None, company: str | None) -> list[tuple[str, 
 
         return run_plan
 
-    for company_id in COMPANY_SEARCH_ALIASES:
-        for company_source in COMPANY_SOURCES:
+    for company_source in COMPANY_SOURCES:
+        for company_id in COMPANY_SEARCH_ALIASES:
             run_plan.append((company_source, company_id))
 
     for industry_source in INDUSTRY_SOURCES:

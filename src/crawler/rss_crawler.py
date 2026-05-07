@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import json
 import logging
+import random
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -64,6 +65,8 @@ class RssCrawler(BaseCrawler):
         max_entries_per_source: int = 50,
         fetch_body: bool = True,
         recent_hours: int = 24,
+        request_delay: float = 1.0,
+        max_feed_retries: int = 2,
     ):
         super().__init__(peer_id)
         self.aliases = aliases
@@ -71,6 +74,8 @@ class RssCrawler(BaseCrawler):
         self.max_entries_per_source = max_entries_per_source
         self.fetch_body = fetch_body
         self.recent_hours = recent_hours
+        self.request_delay = max(request_delay, 0.0)
+        self.max_feed_retries = max(max_feed_retries, 0)
 
     async def crawl(self) -> list[RawArticle]:
         articles: list[RawArticle] = []
@@ -80,7 +85,10 @@ class RssCrawler(BaseCrawler):
             headers=RSS_HEADERS,
             follow_redirects=True,
         ) as client:
-            for source_name, source in self._source_urls().items():
+            for index, (source_name, source) in enumerate(self._source_urls().items()):
+                if index > 0 and self.request_delay:
+                    await asyncio.sleep(self.request_delay + random.uniform(0, 0.25))
+
                 try:
                     feed_text = await self._fetch_feed_text(client, source["url"])
 
@@ -113,6 +121,7 @@ class RssCrawler(BaseCrawler):
                 await enrich_with_body_text_and_images(
                     client,
                     self._body_fetch_candidates(articles),
+                    request_delay=min(self.request_delay, 0.5),
                 )
 
         return articles
@@ -121,27 +130,43 @@ class RssCrawler(BaseCrawler):
         return articles
 
     async def _fetch_feed_text(self, client: httpx.AsyncClient, url: str) -> str:
-        resp = await client.get(url)
+        for attempt in range(self.max_feed_retries + 1):
+            resp = await client.get(url)
 
-        if self._is_blocked(resp.status_code):
-            log.warning(
-                "RSS 접근 차단 | peer=%s url=%s status=%d",
-                self.peer_id,
-                url,
-                resp.status_code,
-            )
-            return ""
+            if resp.status_code == 429 and attempt < self.max_feed_retries:
+                retry_after = _retry_after_seconds(resp.headers.get("retry-after"))
+                delay = retry_after or (self.request_delay * (attempt + 2))
+                log.warning(
+                    "RSS 429 재시도 대기 | peer=%s url=%s attempt=%d delay=%.1fs",
+                    self.peer_id,
+                    url,
+                    attempt + 1,
+                    delay,
+                )
+                await asyncio.sleep(delay + random.uniform(0, 0.5))
+                continue
 
-        if resp.status_code != 200:
-            log.warning(
-                "RSS fetch 실패 | peer=%s url=%s status=%d",
-                self.peer_id,
-                url,
-                resp.status_code,
-            )
-            return ""
+            if self._is_blocked(resp.status_code):
+                log.warning(
+                    "RSS 접근 차단 | peer=%s url=%s status=%d",
+                    self.peer_id,
+                    url,
+                    resp.status_code,
+                )
+                return ""
 
-        return resp.text
+            if resp.status_code != 200:
+                log.warning(
+                    "RSS fetch 실패 | peer=%s url=%s status=%d",
+                    self.peer_id,
+                    url,
+                    resp.status_code,
+                )
+                return ""
+
+            return resp.text
+
+        return ""
 
     def _entry_to_article(
         self,
@@ -357,6 +382,7 @@ async def _resolve_fetch_url_for_rss(client: httpx.AsyncClient, url: str) -> str
 async def enrich_with_body_text_and_images(
     client: httpx.AsyncClient,
     articles: list[RawArticle],
+    request_delay: float = 0.0,
 ) -> None:
     """
     RSS 기사 본문/부제/이미지 URL을 원문 페이지 기준으로 채운다.
@@ -365,7 +391,10 @@ async def enrich_with_body_text_and_images(
     - 본문 텍스트는 extract_body_text로 추출
     - 본문 안 이미지 URL만 extract_image_urls로 추출
     """
-    for article in articles:
+    for index, article in enumerate(articles):
+        if index > 0 and request_delay:
+            await asyncio.sleep(request_delay + random.uniform(0, 0.2))
+
         url = article.url or ""
 
         if not url:
@@ -469,6 +498,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="기사 본문 HTML 추가 수집을 끈다",
     )
+    parser.add_argument(
+        "--request-delay",
+        type=float,
+        default=1.0,
+        help="Google RSS/feed/body 요청 사이 대기 초. 기본 1.0.",
+    )
 
     parser.add_argument(
         "--output",
@@ -498,6 +533,7 @@ async def main() -> None:
             max_entries_per_source=args.max_entries,
             fetch_body=not args.no_body,
             recent_hours=args.hours,
+            request_delay=args.request_delay,
         )
 
         peer_articles = await crawler.crawl()

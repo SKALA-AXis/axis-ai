@@ -4,6 +4,8 @@
   uv run python run_pipeline_once.py                # 프로세스 env 그대로 사용
   uv run python run_pipeline_once.py --env local    # .env.local 로드 (로컬 컨테이너 DB)
   uv run python run_pipeline_once.py --env cloud    # .env.cloud 로드 (Supabase + Qdrant Cloud)
+  uv run python run_pipeline_once.py --company sk_ax
+  uv run python run_pipeline_once.py --company samsung_sds --company lg_cns
 """
 
 import argparse
@@ -23,6 +25,12 @@ _parser.add_argument(
     default=None,
     help="DB 프로파일. .env.{profile} 파일이 있으면 로드, 없으면 프로세스 env 사용.",
 )
+_parser.add_argument(
+    "--company",
+    action="append",
+    default=None,
+    help="처리할 company id. 여러 번 지정 가능. 생략하면 config의 전체 회사.",
+)
 _args = _parser.parse_args()
 
 from src.config.env_loader import load_profile  # noqa: E402
@@ -30,15 +38,32 @@ from src.config.env_loader import load_profile  # noqa: E402
 _profile = load_profile(_args.env)
 log.info("실행 프로파일: %s", _profile)
 
+from src.config.companies import COMPANY_IDS, company_name_ko  # noqa: E402
 from src.config.sectors import sector_name_ko  # noqa: E402
 from src.pipeline.ingestion_graph import ingestion_graph  # noqa: E402
 
 _BAND_MARK = {"high": "■■■", "medium": "■■ ", "low": "■  "}
 
 
+def _resolve_companies() -> list[str]:
+    if not _args.company:
+        return list(COMPANY_IDS)
+
+    invalid = sorted({company for company in _args.company if company not in COMPANY_IDS})
+    if invalid:
+        _parser.error(
+            "알 수 없는 company id: "
+            + ", ".join(invalid)
+            + f" | available={', '.join(COMPANY_IDS)}"
+        )
+
+    return list(dict.fromkeys(_args.company))
+
+
 def main() -> None:
-    company = ["samsung_sds", "lg_cns"]
-    log.info("파이프라인 시작 | company=%s", company)
+    company = _resolve_companies()
+    company_labels = [company_name_ko(company_id) for company_id in company]
+    log.info("파이프라인 시작 | company=%s labels=%s", company, company_labels)
 
     initial_state = {
         "company": company,

@@ -1,7 +1,7 @@
 # src/crawler 파일별 동작 문서
 
-작성 기준: 현재 워크스페이스의 `src/crawler/**/*.py` 실제 코드 기준.  
-목적: 크롤러 폴더 안의 각 Python 파일이 어떤 입력을 받고, 어떤 단계로 실행되며, 어떤 결과물을 만드는지 운영/개발자가 바로 확인할 수 있게 정리한다.
+작성 기준: 현재 워크스페이스의 `src/crawler/**/*.py`와 루트 로컬 실행기 실제 코드 기준.  
+목적: 크롤러 폴더 안의 각 Python 파일과 로컬 실행 진입점이 어떤 입력을 받고, 어떤 단계로 실행되며, 어떤 결과물을 만드는지 운영/개발자가 바로 확인할 수 있게 정리한다.
 
 ## 목차
 
@@ -41,11 +41,13 @@
    7. [`sources/naver_research.py`](#sourcesnaver_researchpy)
    8. [`sources/official.py`](#sourcesofficialpy)
    9. [`sources/rss.py`](#sourcesrsspy)
-6. [현재 코드 기준 import/실행 주의점](#현재-코드-기준-import실행-주의점)
+6. [루트 실행 파일](#루트-실행-파일)
+   1. [`run_local_crawler_once.py`](#run_local_crawler_oncepy)
+7. [현재 코드 기준 import/실행 주의점](#현재-코드-기준-import실행-주의점)
 
 ## 전체 구조와 공통 결과 모델
 
-`src/crawler`는 크게 네 계층으로 나뉜다.
+크롤러 실행 구조는 크게 네 계층으로 나뉜다.
 
 1. 공통 기반 계층
    - `base.py`: `RawArticle`, 상태 타입, 수집 한도 가드, 재시도 정책을 제공한다.
@@ -58,6 +60,7 @@
    - `sources/` 아래에는 `BatchProcessor`가 Track A/B에서 쓰려는 소스별 크롤러가 있다. 단, 현재 import 계약이 일부 깨져 있어 주의가 필요하다.
 
 3. 오케스트레이션 계층
+   - 루트 `run_local_crawler_once.py`: 로컬에서 단독/전체 크롤러를 한 번 실행하고 JSONL로 저장하는 CLI 진입점이다.
    - `batch_processor.py`: Track A/Track B 수집, 링크 검사, 중복 제거, DB 저장을 연결한다.
    - `scheduler.py`: APScheduler 잡으로 Track A/B와 keepalive를 등록한다.
 
@@ -852,10 +855,10 @@ PDF helper:
 - JSONL 파일. 한 줄이 하나의 article/document다.
 
 현재 코드 주의:
-- `run_local_crawler_once.py`는 `save_crawler_results(..., peer_aliases=PEER_ALIASES)`를 호출하지만 현재 함수 시그니처에는 `peer_aliases` 인자가 없다. 해당 runner 저장 단계에서 `TypeError`가 발생할 수 있다.
+- `save_crawler_results()`는 `to_common_dict()`가 있는 객체를 우선 신뢰한다. `StockCrawlResult`처럼 `RawArticle`이 아닌 객체도 이 경로로 저장된다.
 
 자체 검증:
-- 저장 파일명, directory 생성, to_common_dict 우선 경로, legacy fallback 경로, runner 시그니처 mismatch를 확인했다.
+- 저장 파일명, directory 생성, to_common_dict 우선 경로, legacy fallback 경로, 현재 runner 호출 시그니처를 확인했다.
 
 ### `rss_crawler.py`
 
@@ -1580,11 +1583,88 @@ generic `_fetch_generic()`:
 자체 검증:
 - feed fetch, keyword filter, Google News query path, date parse, import 문제를 모두 확인했다.
 
+## 루트 실행 파일
+
+### `run_local_crawler_once.py`
+
+역할:
+- 로컬에서 크롤러를 한 번 실행하고 `src/crawler/crawler_results`에 JSONL 결과를 저장하는 CLI 진입점이다.
+- 회사별 크롤러와 산업 동향 크롤러를 한 실행 계획으로 묶고, 수집 후 링크 검사, 일일 한도 적용, 피어 뉴스 필터, 결과 저장까지 담당한다.
+
+실행 예시:
+```bash
+uv run python run_local_crawler_once.py
+uv run python run_local_crawler_once.py --source naver_news --company samsung_sds
+uv run python run_local_crawler_once.py --source bcg --days 7 --max-articles 100
+uv run python run_local_crawler_once.py --source spri --month 2026-04
+```
+
+지원 source:
+- 회사별 source: `naver_news`, `rss`, `dart`, `jobs`, `ir`, `naver_research`.
+- 산업/공통 source: `naver_datalab`, `company_news`, `bcg`, `spri`.
+
+주요 옵션:
+- `--source`: 특정 크롤러만 실행한다. 생략하면 전체 source를 실행한다.
+- `--company` / `--peer`: 특정 회사 id만 실행한다. 생략하면 전체 회사를 대상으로 한다.
+- `--env`: `local` 또는 `cloud` 실행 프로파일을 로드한다.
+- `--hours`: `naver_news`/`rss` 최근 N시간 수집 범위. 기본 24.
+- `--days`: BCG 최근 N일 수집 범위. 기본 7.
+- `--month`: SPRi 월호. 생략하면 직전 월을 사용한다.
+- `--max-results`: 네이버 뉴스 검색어별 최대 수집 결과 수.
+- `--max-rss-entries`: Google News RSS 검색어별 최대 entry 수.
+- `--max-articles`: BCG 최대 상세 글 수.
+- `--latest-limit`: 회사 공식 뉴스 회사별 최신 수집 개수.
+- `--no-body`: 네이버/RSS 상세 본문 fetch를 끈다.
+
+실행 계획 생성:
+- `_build_run_plan(source, company)`가 실행 대상 `(source, company)` 목록을 만든다.
+- 산업 source는 회사가 없으므로 `(source, None)`으로 실행한다.
+- `--source`와 `--company`가 둘 다 있으면 해당 source/company만 실행한다.
+- `--company`만 있으면 회사별 source 전체를 해당 회사에 대해 실행한다.
+- 아무 옵션도 없으면 모든 회사별 source를 전체 회사에 대해 실행하고, 산업 source를 한 번씩 실행한다.
+
+크롤러 생성:
+- `_build_crawler(source, company, args)`가 source 이름에 따라 실제 크롤러 객체를 만든다.
+- `naver_news`: `NaverNewsCrawler`, 회사 alias, `--hours`, `--max-results`, body fetch 옵션을 사용한다.
+- `rss`: `RssCrawler`, 회사 alias, `--hours`, `--max-rss-entries`, body fetch 옵션을 사용한다.
+- `bcg`: `BcgCrawler`, `--days`, `--max-articles`를 사용한다.
+- `spri`: `SpriCrawler`, `--month` 또는 직전 월을 사용한다.
+- `naver_datalab`: `KeywordCrawler`.
+- `company_news`: `CompanyNewsCrawler`.
+- `dart`, `jobs`, `ir`, `naver_research`: 회사별 크롤러를 생성한다.
+
+수집 후 처리 단계:
+1. `_run_one()`이 크롤러의 `crawl()`을 호출한다.
+2. `naver_news`와 `rss`는 `_filter_peer_news_articles()`에서 `annotate_peer_relevance()`를 적용하고, `peer_relevance == "pass"`이면서 `company`가 남은 기사만 유지한다.
+3. `_apply_daily_limit()`이 `DailyLimitGuard`로 source type별/전역 수집 한도를 적용한다.
+4. `LinkChecker().filter_accessible()`이 접근성 검사를 수행한다. API성 source는 link check skip 메타를 붙인다.
+5. `_run_one_with_retry()`가 일부 source의 0건 결과 또는 예외에 대해 최대 2회 재시도한다.
+
+저장 단계:
+- `_make_output_group()`이 여러 회사 결과를 합칠 source를 결정한다.
+- `MERGED_OUTPUT_SOURCES`에 포함된 `dart`, `ir`, `jobs`, `naver_news`, `rss`, `naver_datalab`, `naver_research`는 source 단위로 합쳐 저장한다.
+- `bcg`, `spri`, `company_news`는 산업/공통 source로 저장된다.
+- `save_crawler_results(articles, source_name=...)`가 `{source_name}_{YYYYMMDD_HHMMSS}.jsonl` 파일을 만든다.
+- `naver_datalab`는 JSONL 저장 후 `save_trend_chart()`로 차트 이미지도 저장한다.
+
+결과물:
+- 기본 저장 위치: `src/crawler/crawler_results`.
+- 예: `naver_news_YYYYMMDD_HHMMSS.jsonl`, `rss_YYYYMMDD_HHMMSS.jsonl`, `bcg_all_YYYYMMDD_HHMMSS.jsonl`.
+
+현재 코드 주의:
+- `run_local_crawler_once.py`는 실제 운영상 가장 최신 로컬 실행 경로다. 개별 크롤러 파일의 단독 CLI와 동작 옵션이 일부 다를 수 있다.
+- 네이버/RSS 피어 관련 필터는 runner에서 기본 적용된다. 개별 크롤러를 직접 실행하면 저장/필터 경로가 다를 수 있다.
+- BCG와 SPRi 같은 산업 source는 company 없이 실행되고, DB 저장 경로에서는 별도 fallback으로 산업 동향 bucket 처리가 필요하다.
+
+자체 검증:
+- `_parse_args`, `_build_crawler`, `_build_run_plan`, `_run_one`, `_filter_peer_news_articles`, `_run_one_with_retry`, `_run` 저장 단계를 확인했다.
+
 ## 현재 코드 기준 import/실행 주의점
 
 아래는 `uv run python`으로 각 모듈 import를 확인한 결과와 코드 분석을 합친 운영 주의사항이다.
 
 정상 import되는 주요 루트 모듈:
+- `run_local_crawler_once.py`
 - `article_filter.py`
 - `base.py`
 - `base_crawler.py`
@@ -1624,7 +1704,7 @@ generic `_fetch_generic()`:
 - `allow()`를 호출하는 모든 크롤러는 import가 해결된 뒤에도 이 문제를 만날 수 있다.
 
 문서 작성 자체 검증:
-- `find src/crawler -type f -name '*.py'` 기준 31개 파일을 전부 목차와 본문에 포함했다.
+- `find src/crawler -type f -name '*.py'` 기준 31개 파일과 루트 `run_local_crawler_once.py`를 목차와 본문에 포함했다.
 - 빈 `__init__.py` 3개도 별도 섹션으로 기록했다.
 - 루트 구현과 `sources/` 구현이 중복 이름을 갖는 경우도 각각 별도로 설명했다.
 - 각 섹션마다 결과물, 단계, 예외/주의, 자체 검증을 포함했다.

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from src.agents.relevance_agent import _metadata_patch_for_relevance
 from src.crawler.base import RawArticle
+from src.crawler.bcg_crawler import match_bcg_core_sectors
 from src.crawler.naver_crawler import (
     article_mentions_target_peer,
     classify_peer_relevance,
@@ -134,3 +135,26 @@ def test_naver_relevance_rejects_overbroad_sk_title_match():
 
     assert result["peer_relevance"] == "reject"
     assert result["_company_peer_ids"] == []
+
+
+def test_bcg_core_sector_filter_keeps_sector_report():
+    sectors = match_bcg_core_sectors(
+        title="Responsible AI Needs More Than Good Intentions",
+        description="Learn why GenAI, agentic AI, and regulation should raise the bar.",
+        url="https://www.bcg.com/publications/2026/responsible-ai-needs-more-than-good-intentions",
+    )
+
+    assert "ax" in sectors
+
+
+def test_bcg_core_sector_filter_drops_incidental_ai_report():
+    sectors = match_bcg_core_sectors(
+        title="Fashion CFO Agenda 2026",
+        description=(
+            "Discover how sustainability issues are hitting fashion P&Ls, "
+            "from raw material shocks to margin pressure."
+        ),
+        url="https://www.bcg.com/publications/2026/fashion-cfo-agenda-sustainability-and-resilience",
+    )
+
+    assert sectors == []

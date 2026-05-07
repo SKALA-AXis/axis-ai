@@ -7,6 +7,9 @@
   uv run python run_crawler_once.py --track all
   uv run python run_crawler_once.py --env local           # .env.local 로드 (로컬 DB)
   uv run python run_crawler_once.py --env cloud           # .env.cloud 로드
+  uv run python run_crawler_once.py --company sk_ax
+  uv run python run_crawler_once.py --company samsung_sds --company lg_cns
+  uv run python run_crawler_once.py --news-hours 1        # Track A 최근 1시간 뉴스
 """
 
 import argparse
@@ -45,9 +48,21 @@ def _parse_args() -> argparse.Namespace:
         help="DB 저장을 건너뛰고 크롤링/중복제거 결과만 반환한다.",
     )
     parser.add_argument(
+        "--company",
+        action="append",
+        default=None,
+        help="수집할 company id. 여러 번 지정 가능. 생략하면 config의 전체 회사.",
+    )
+    parser.add_argument(
         "--local-output",
         default=None,
-        help="크롤 결과 JSONL을 저장할 디렉터리. 예: data/crawl_outputs",
+        help="크롤 결과 JSON을 저장할 디렉터리. 예: data/crawl_outputs",
+    )
+    parser.add_argument(
+        "--news-hours",
+        type=int,
+        default=1,
+        help="Track A 뉴스 수집 범위. 최근 N시간 기사만 수집한다. 기본 1.",
     )
     parser.add_argument(
         "--lookback-days",
@@ -75,11 +90,25 @@ from src.config.env_loader import load_profile  # noqa: E402
 _profile = load_profile(_args.env)
 log.info("실행 프로파일: %s", _profile)
 
-from src.config.companies import COMPANY_ALIASES  # noqa: E402
+from src.config.companies import COMPANY_ALIASES, COMPANY_IDS, company_name_ko  # noqa: E402
 from src.crawler.base import CrawlWindow, RawArticle  # noqa: E402
 from src.crawler.batch_processor import BatchProcessor  # noqa: E402
 
-COMPANY_KEYWORDS = dict(COMPANY_ALIASES)
+
+def _resolve_company_keywords() -> dict[str, list[str]]:
+    if not _args.company:
+        return dict(COMPANY_ALIASES)
+
+    invalid = sorted({company for company in _args.company if company not in COMPANY_IDS})
+    if invalid:
+        raise SystemExit(
+            "알 수 없는 company id: "
+            + ", ".join(invalid)
+            + f" | available={', '.join(COMPANY_IDS)}"
+        )
+
+    selected = list(dict.fromkeys(_args.company))
+    return {company: COMPANY_ALIASES[company] for company in selected}
 
 
 def _summarize(label: str, articles: list[RawArticle]) -> None:
@@ -129,10 +158,15 @@ def _save_local(label: str, articles: list[RawArticle]) -> Path | None:
     output_dir = Path(_args.local_output)
     output_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = output_dir / f"{label.lower()}_{ts}.jsonl"
-    with output_path.open("w", encoding="utf-8") as f:
-        for article in articles:
-            f.write(json.dumps(_article_to_dict(article), ensure_ascii=False) + "\n")
+    output_path = output_dir / f"{label.lower()}_{ts}.json"
+    output_path.write_text(
+        json.dumps(
+            [_article_to_dict(article) for article in articles],
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     print(f"\n  로컬 저장: {output_path}")
     return output_path
 
@@ -155,16 +189,22 @@ async def _run(track: str) -> None:
     processor = BatchProcessor()
     persist = not _args.skip_db
     crawl_window = _build_window()
+    company_keywords = _resolve_company_keywords()
+    company_labels = [company_name_ko(company_id) for company_id in company_keywords]
     if track in ("a", "all"):
-        log.info("Track A 시작 | company=%s", list(COMPANY_KEYWORDS))
-        articles = await processor.run_track_a(COMPANY_KEYWORDS, persist=persist)
+        log.info("Track A 시작 | company=%s labels=%s", list(company_keywords), company_labels)
+        articles = await processor.run_track_a(
+            company_keywords,
+            persist=persist,
+            recent_hours=_args.news_hours,
+        )
         _summarize("Track A", articles)
         _save_local("track_a", articles)
 
     if track in ("b", "all"):
-        log.info("Track B 시작 | company=%s", list(COMPANY_KEYWORDS))
+        log.info("Track B 시작 | company=%s labels=%s", list(company_keywords), company_labels)
         articles = await processor.run_track_b(
-            COMPANY_KEYWORDS,
+            company_keywords,
             persist=persist,
             crawl_window=crawl_window,
         )
