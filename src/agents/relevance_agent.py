@@ -18,6 +18,7 @@ from sqlalchemy import text
 
 from src.config.companies import COMPANY_ALIASES
 from src.config.sectors import match_sectors
+from src.db.article_store import INDUSTRY_TREND_COMPANY
 from src.db.postgres import SessionLocal
 
 log = logging.getLogger(__name__)
@@ -25,7 +26,16 @@ log = logging.getLogger(__name__)
 RELEVANCE_THRESHOLD = 0.60
 LLM_CONTENT_LIMIT = 1800
 
-_llm = ChatOpenAI(model="gpt-4o", temperature=0.1, max_completion_tokens=500)
+_llm: ChatOpenAI | None = None
+
+
+def _get_llm() -> ChatOpenAI:
+    global _llm
+
+    if _llm is None:
+        _llm = ChatOpenAI(model="gpt-4o", temperature=0.1, max_completion_tokens=500)
+
+    return _llm
 
 _RELEVANCE_PROMPT = """\
 당신은 SK AX 전략 모니터링 시스템의 관련성 판단 Agent입니다.
@@ -96,7 +106,8 @@ class RelevanceAgent:
                         content,
                         company,
                         source_type,
-                        crawl_status
+                        crawl_status,
+                        metadata
                     FROM raw_articles
                     WHERE id = ANY(:ids)
                 """),
@@ -107,6 +118,7 @@ class RelevanceAgent:
                 result = self._analyze(row)
 
                 is_relevant = _is_relevant(result)
+                metadata_patch = _metadata_patch_for_relevance(row, result, is_relevant)
 
                 db.execute(
                     text("""
@@ -116,6 +128,8 @@ class RelevanceAgent:
                             relevance_reason = :relevance_reason,
                             matched_companies = CAST(:matched_companies AS jsonb),
                             matched_sectors = CAST(:matched_sectors AS jsonb),
+                            metadata = COALESCE(metadata, '{}'::jsonb)
+                                || CAST(:metadata_patch AS jsonb),
                             processing_status = CASE
                                 WHEN :is_relevant THEN processing_status
                                 ELSE 'SKIPPED_RELEVANCE'
@@ -134,6 +148,7 @@ class RelevanceAgent:
                             result["matched_sectors"],
                             ensure_ascii=False,
                         ),
+                        "metadata_patch": json.dumps(metadata_patch, ensure_ascii=False),
                         "is_relevant": is_relevant,
                         "id": row.id,
                     },
@@ -240,7 +255,7 @@ class RelevanceAgent:
         )
 
         try:
-            response = _llm.invoke(prompt)
+            response = _get_llm().invoke(prompt)
             response_text = (
                 response.content if isinstance(response.content, str) else str(response.content)
             )
@@ -330,6 +345,47 @@ def _is_relevant(result: dict[str, Any]) -> bool:
         return True
 
     return False
+
+
+def _metadata_patch_for_relevance(
+    row: Any,
+    result: dict[str, Any],
+    is_relevant: bool,
+) -> dict[str, Any]:
+    if not is_relevant:
+        return {}
+
+    companies = _normalize_company(row.company)
+    matched_companies = result.get("matched_companies") or []
+    matched_sectors = result.get("matched_sectors") or []
+    has_sector = bool(matched_sectors and matched_sectors != ["other"])
+
+    if not has_sector and row.source_type not in {"search_trend", "trend_report"}:
+        return {}
+
+    is_industry_bucket = INDUSTRY_TREND_COMPANY in companies
+    is_companyless_sector = has_sector and not matched_companies
+    is_multi_peer_sector = has_sector and len(matched_companies) >= 2
+    is_trend_source = row.source_type in {"search_trend", "trend_report"}
+
+    if not (
+        is_industry_bucket
+        or is_companyless_sector
+        or is_multi_peer_sector
+        or is_trend_source
+    ):
+        return {}
+
+    patch: dict[str, Any] = {
+        "topic_scope": "industry_trend",
+        "matched_companies": matched_companies,
+        "matched_sectors": matched_sectors,
+    }
+
+    if is_multi_peer_sector:
+        patch["primary_company"] = None
+
+    return patch
 
 
 def _match_companies(text_body: str, company: list[str]) -> list[str]:

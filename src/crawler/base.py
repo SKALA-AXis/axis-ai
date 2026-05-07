@@ -117,7 +117,7 @@ class DailyLimitGuard:
     GLOBAL_LIMIT = 5_000
 
     SOURCE_TYPE_LIMITS: dict[SourceType, int] = {
-        "news": 300,
+        "news": 500,
         "official": 100,
         "ir": 100,
         "dart": 100,
@@ -156,18 +156,22 @@ class DailyLimitGuard:
         self._global_count += new_count
         return True
 
-    def allow(self, source: str) -> bool:
+    def allow(self, source_type: str) -> bool:
         """소스별 수집 한도를 확인하고 사용량을 반영한다."""
         self._maybe_reset()
 
-        limit = self.SOURCE_LIMITS.get(source, 500)
-        current = self._source_counts.get(source, 0)
+        limit = self.SOURCE_TYPE_LIMITS.get(source_type, 500)
+        current = self._source_counts.get(source_type, 0)
 
         if current >= limit:
-            log.warning("소스별 수집 한도 초과 | source=%s limit=%d", source, limit)
+            log.warning(
+                "소스 타입별 수집 한도 초과 | source_type=%s limit=%d",
+                source_type,
+                limit,
+            )
             return False
 
-        self._source_counts[source] = current + 1
+        self._source_counts[source_type] = current + 1
         return self.check(1)
 
 

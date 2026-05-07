@@ -13,6 +13,11 @@ from src.db.postgres import SessionLocal
 
 log = logging.getLogger(__name__)
 
+INDUSTRY_TREND_COMPANY = "industry_trend"
+_INDUSTRY_SOURCE_TYPES = {"trend_report", "search_trend"}
+_INDUSTRY_MARKER_KEYS = {"sector", "industry", "upjong_code"}
+_INDUSTRY_REPORT_TYPES = {"industry", "industry_report", "sector_report"}
+
 _INSERT_SQL = text("""
     INSERT INTO raw_articles (
         source_type, source_name, publisher, title, content, url, url_hash,
@@ -40,7 +45,8 @@ def save_articles(articles: list[RawArticle]) -> int:
     inserted = 0
     with SessionLocal() as db:
         for article in articles:
-            if not _is_valid(article):
+            storage_company = _company_for_storage(article)
+            if not _is_valid(article, storage_company):
                 continue
             try:
                 result = db.execute(
@@ -55,12 +61,12 @@ def save_articles(articles: list[RawArticle]) -> int:
                         "url_hash": article.url_hash,
                         "published_at": article.published_at or article.collected_at,
                         "collected_at": article.collected_at,
-                        "company": json.dumps(article.company, ensure_ascii=False),
+                        "company": json.dumps(storage_company, ensure_ascii=False),
                         "language": article.language,
                         "content_type": article.content_type,
                         "crawl_status": article.crawl_status,
                         "error_message": article.error_message,
-                        "metadata": _metadata_json(article),
+                        "metadata": _metadata_json(article, storage_company),
                     },
                 )
                 if result.fetchone():
@@ -364,22 +370,63 @@ def _generate_card_id(company: str) -> str:
 # ──────────────────────────────────────────────────────────────
 
 
-def _is_valid(article: RawArticle) -> bool:
+def _company_for_storage(article: RawArticle) -> list[str]:
+    """DB 저장용 company를 반환한다.
+
+    기업이 명시되지 않은 산업 동향 자료는 파이프라인 필터링을 위해
+    가상 company bucket으로 저장한다. 일반 무소속 기사는 계속 제외한다.
+    """
+    if article.company:
+        return article.company
+    if _is_industry_trend_article(article):
+        return [INDUSTRY_TREND_COMPANY]
+    return []
+
+
+def _is_industry_trend_article(article: RawArticle) -> bool:
+    if article.source_type in _INDUSTRY_SOURCE_TYPES:
+        return True
+
+    extra = article.extra or {}
+    report_type = str(extra.get("type") or extra.get("report_type") or "").strip()
+    if report_type in _INDUSTRY_REPORT_TYPES:
+        return True
+
+    if any(extra.get(key) for key in _INDUSTRY_MARKER_KEYS):
+        return True
+
+    return "industry" in (article.source_name or "").lower()
+
+
+def _is_valid(article: RawArticle, storage_company: Optional[list[str]] = None) -> bool:
     """Gate 1: 최소 품질 필터."""
     if not article.url or not article.title:
         return False
-    if not article.company:
+    if not (storage_company if storage_company is not None else article.company):
         return False
     if len(article.content or "") < 10 and len(article.title) < 5:
         return False
     return True
 
 
-def _metadata_json(article: RawArticle) -> str:
+def _metadata_json(
+    article: RawArticle,
+    storage_company: Optional[list[str]] = None,
+) -> str:
     import json
 
     meta = dict(article.extra)
     meta["url_hash"] = article.url_hash
     if article.peer_id and "peer_id" not in meta:
         meta["peer_id"] = article.peer_id
+    if (
+        not article.company
+        and storage_company
+        and INDUSTRY_TREND_COMPANY in storage_company
+    ):
+        meta["topic_scope"] = "industry_trend"
+        meta["company_scope"] = "industry"
+        meta["company_fallback"] = INDUSTRY_TREND_COMPANY
+    elif _is_industry_trend_article(article):
+        meta.setdefault("topic_scope", "industry_trend")
     return json.dumps(meta, ensure_ascii=False)

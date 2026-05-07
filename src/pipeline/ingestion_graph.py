@@ -107,6 +107,36 @@ def _first_company(article: dict) -> str:
     return ""
 
 
+def _company_for_context(article: dict, requested_companies: list[str]) -> str:
+    article_companies = _company_list(article)
+
+    for company in requested_companies:
+        if company in article_companies:
+            return company
+
+    return article_companies[0] if article_companies else (
+        requested_companies[0] if requested_companies else ""
+    )
+
+
+def _company_list(article: dict) -> list[str]:
+    company = article.get("company")
+
+    if isinstance(company, list):
+        return [str(value) for value in company if value]
+
+    if isinstance(company, str):
+        try:
+            parsed = json.loads(company)
+            if isinstance(parsed, list):
+                return [str(value) for value in parsed if value]
+        except json.JSONDecodeError:
+            stripped = company.strip()
+            return [stripped] if stripped else []
+
+    return []
+
+
 # ── 노드 구현 ──────────────────────────────────────────────────
 
 
@@ -157,9 +187,7 @@ def classify_node(state: IngestionState) -> IngestionState:
         )
         if rep_id is None:
             return None
-        company = _first_company(rep_articles.get(rep_id, {})) or (
-            state["company"][0] if state["company"] else ""
-        )
+        company = _company_for_context(rep_articles.get(rep_id, {}), state["company"])
         result = agent.classify(
             cluster_id=cluster_id,
             representative_id=rep_id,

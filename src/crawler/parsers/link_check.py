@@ -24,7 +24,7 @@ _DOCUMENT_TYPES = (
 # API 기반 소스는 URL 접근성 체크 불필요
 # - content를 이미 API 응답에서 가져왔음
 # - URL 자체가 브라우저 세션 없이 접근 불가인 경우가 많음 (DART 등)
-_SKIP_LINK_CHECK_SOURCE_TYPES = {"api", "dart", "ir", "search_trend"}
+_SKIP_LINK_CHECK_SOURCE_TYPES = {"api", "dart", "ir", "search_trend", "trend_report"}
 
 # URL 접근성 체크를 스킵할 도메인
 # DART 뷰어는 브라우저 세션 없이 항상 403 반환

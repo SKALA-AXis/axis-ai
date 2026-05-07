@@ -4,7 +4,7 @@
     uv run python run_local_crawler_once.py
 
     수집 데이터 유형 지정
-    uv run python run_local_crawler_once.py --source ir --peer samsung_sds
+    uv run python run_local_crawler_once.py --source ir --company samsung_sds
 """
 
 from __future__ import annotations
@@ -12,24 +12,33 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 
 from src.config.companies import COMPANY_ALIASES, CORP_CODES
 from src.config.env_loader import load_profile
+from src.crawler.base import DailyLimitGuard
+from src.crawler.bcg_crawler import BcgCrawler
+from src.crawler.company_news_crawler import CompanyNewsCrawler
 from src.crawler.dart_crawler import DartCrawler
 from src.crawler.ir_crawler import IRCrawler
 from src.crawler.job_crawler import JobCrawler
 from src.crawler.keyword_crawler import KeywordCrawler, save_trend_chart
+from src.crawler.naver_crawler import NaverNewsCrawler, annotate_peer_relevance
 from src.crawler.parsers.link_check import LinkChecker
 from src.crawler.research_crawler import NaverResearchCrawler
-from src.crawler.result_writer import save_crawler_results
+from src.crawler.result_writer import DEFAULT_RESULTS_DIR, save_crawler_results
+from src.crawler.rss_crawler import RssCrawler
+from src.crawler.spri_crawler import SpriCrawler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("run_local_crawler")
 
-PEER_ALIASES = dict(COMPANY_ALIASES)
+COMPANY_SEARCH_ALIASES = dict(COMPANY_ALIASES)
 
-PEER_SOURCES = [
+COMPANY_SOURCES = [
+    "naver_news",
+    "rss",
     "dart",
     "jobs",
     "ir",
@@ -37,12 +46,36 @@ PEER_SOURCES = [
 ]
 INDUSTRY_SOURCES = [
     "naver_datalab",
+    "company_news",
+    "bcg",
+    "spri",
 ]
 
-ALL_SOURCES = PEER_SOURCES + INDUSTRY_SOURCES
-MERGED_OUTPUT_SOURCES = {"dart", "ir", "jobs", "naver_datalab", "naver_research"}
+ALL_SOURCES = COMPANY_SOURCES + INDUSTRY_SOURCES
+MERGED_OUTPUT_SOURCES = {
+    "dart",
+    "ir",
+    "jobs",
+    "naver_news",
+    "rss",
+    "naver_datalab",
+    "naver_research",
+}
 RETRY_ON_EMPTY_SOURCES = {"dart", "ir", "naver_datalab", "naver_research"}
 MAX_CRAWL_ATTEMPTS = 2
+DEFAULT_NEWS_LIMIT = DailyLimitGuard.SOURCE_TYPE_LIMITS["news"]
+
+
+def _previous_month_label() -> str:
+    today = datetime.now().date()
+    year = today.year
+    month = today.month - 1
+
+    if month == 0:
+        year -= 1
+        month = 12
+
+    return f"{year:04d}-{month:02d}"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -54,86 +87,227 @@ def _parse_args() -> argparse.Namespace:
         help="실행할 크롤러. 생략하면 전체 source 실행",
     )
     parser.add_argument(
+        "--company",
         "--peer",
-        choices=list(PEER_ALIASES),
+        dest="company",
+        choices=list(COMPANY_SEARCH_ALIASES),
         default=None,
-        help="수집할 Peer사. 생략하면 전체 Peer사 실행",
+        help="수집할 회사 id. 생략하면 전체 회사 실행. --peer는 하위 호환 alias.",
     )
     parser.add_argument("--env", choices=["local", "cloud"], default=None)
+    parser.add_argument(
+        "--month",
+        default=None,
+        help="SPRi 월호. 예: 2026-04. 생략하면 직전 월을 사용한다.",
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help="BCG 최근 N일 수집 범위. 기본 7.",
+    )
+    parser.add_argument(
+        "--max-articles",
+        type=int,
+        default=100,
+        help="BCG 최대 상세 글 수. 기본 100.",
+    )
+    parser.add_argument(
+        "--max-results",
+        type=int,
+        default=DEFAULT_NEWS_LIMIT,
+        help=(
+            "네이버 뉴스 검색어별 최대 수집 결과 수. "
+            f"기본 base.py news 한도({DEFAULT_NEWS_LIMIT})."
+        ),
+    )
+    parser.add_argument(
+        "--max-rss-entries",
+        type=int,
+        default=DEFAULT_NEWS_LIMIT,
+        help=(
+            "Google News RSS 검색어별 최대 entry 수. "
+            f"기본 base.py news 한도({DEFAULT_NEWS_LIMIT})."
+        ),
+    )
+    parser.add_argument(
+        "--hours",
+        type=int,
+        default=24,
+        help="naver_news/rss 최근 N시간 수집 범위. 0 이하이면 시간 필터를 끈다. 기본 24.",
+    )
+    parser.add_argument(
+        "--latest-limit",
+        type=int,
+        default=5,
+        help="회사 공식 뉴스 회사별 최신 수집 개수. 기본 5.",
+    )
+    parser.add_argument(
+        "--no-body",
+        action="store_true",
+        help="naver/rss 상세 본문 추가 수집을 끈다",
+    )
     return parser.parse_args()
 
 
-def _build_crawler(source: str, peer: str | None) -> Any:
+def _build_crawler(source: str, company: str | None, args: argparse.Namespace) -> Any:
     if source == "naver_datalab":
         return KeywordCrawler()
 
+    if source == "company_news":
+        return CompanyNewsCrawler(latest_limit=args.latest_limit)
+
+    if source == "bcg":
+        return BcgCrawler(
+            days=args.days,
+            max_articles=args.max_articles,
+            output_path=DEFAULT_RESULTS_DIR / "bcg_crawler.json",
+        )
+
+    if source == "spri":
+        return SpriCrawler(
+            month=args.month or _previous_month_label(),
+            output_path=DEFAULT_RESULTS_DIR / "spri_crawler.json",
+        )
+
+    if source == "naver_news":
+        if company is None:
+            raise ValueError("naver_news 크롤러는 company가 필요합니다.")
+        cutoff_datetime = (
+            datetime.now().astimezone() - timedelta(hours=args.hours)
+            if args.hours > 0
+            else None
+        )
+        return NaverNewsCrawler(
+            peer_id=company,
+            aliases=COMPANY_SEARCH_ALIASES[company],
+            max_results=args.max_results,
+            cutoff_datetime=cutoff_datetime,
+            fetch_body=not args.no_body,
+        )
+
+    if source == "rss":
+        if company is None:
+            raise ValueError("rss 크롤러는 company가 필요합니다.")
+        return RssCrawler(
+            peer_id=company,
+            aliases=COMPANY_SEARCH_ALIASES[company],
+            max_entries_per_source=args.max_rss_entries,
+            fetch_body=not args.no_body,
+            recent_hours=args.hours,
+        )
+
     if source == "dart":
-        if peer is None:
-            raise ValueError("dart 크롤러는 peer가 필요합니다.")
+        if company is None:
+            raise ValueError("dart 크롤러는 company가 필요합니다.")
         return DartCrawler(
-            peer_id=peer,
-            corp_code=CORP_CODES.get(peer),
-            corp_names=PEER_ALIASES[peer],
+            peer_id=company,
+            corp_code=CORP_CODES.get(company),
+            corp_names=COMPANY_SEARCH_ALIASES[company],
         )
 
     if source == "jobs":
-        if peer is None:
-            raise ValueError("jobs 크롤러는 peer가 필요합니다.")
-        return JobCrawler(peer_id=peer)
+        if company is None:
+            raise ValueError("jobs 크롤러는 company가 필요합니다.")
+        return JobCrawler(peer_id=company)
 
     if source == "ir":
-        if peer is None:
-            raise ValueError("ir 크롤러는 peer가 필요합니다.")
-        return IRCrawler(peer_id=peer)
+        if company is None:
+            raise ValueError("ir 크롤러는 company가 필요합니다.")
+        return IRCrawler(peer_id=company)
 
     if source == "naver_research":
-        if peer is None:
-            raise ValueError("naver_research 크롤러는 peer가 필요합니다.")
-        return NaverResearchCrawler(peer_id=peer)
+        if company is None:
+            raise ValueError("naver_research 크롤러는 company가 필요합니다.")
+        return NaverResearchCrawler(peer_id=company)
 
     raise ValueError(f"지원하지 않는 source입니다: {source}")
 
 
-def _make_output_source_name(source: str, peer: str | None) -> str:
-    if peer is not None:
-        return f"{source}_{peer}"
+def _make_output_source_name(source: str, company: str | None) -> str:
+    if company is not None:
+        return f"{source}_{company}"
     return source
 
 
-def _make_output_group(source: str, peer: str) -> tuple[str, str | None]:
+def _make_output_group(source: str, company: str) -> tuple[str, str | None]:
     if source in MERGED_OUTPUT_SOURCES:
         return source, None
-    return source, peer
+    return source, company
 
 
-async def _run_one(source: str, peer: str | None) -> tuple[list[Any], int]:
-    crawler = _build_crawler(source, peer)
+async def _run_one(
+    source: str,
+    company: str | None,
+    args: argparse.Namespace,
+    limit_guard: DailyLimitGuard,
+) -> tuple[list[Any], int]:
+    crawler = _build_crawler(source, company, args)
     articles = await crawler.crawl()
+    articles = _filter_peer_news_articles(source, company, articles)
+    articles, limited_count = _apply_daily_limit(articles, limit_guard)
     articles, rejected = await LinkChecker().filter_accessible(articles)
 
     log.info(
-        "수집 완료 | source=%s peer=%s valid=%d rejected=%d",
+        "수집 완료 | source=%s company=%s valid=%d rejected=%d limited=%d",
         source,
-        peer or "industry",
+        company or "industry",
         len(articles),
         len(rejected),
+        limited_count,
     )
     return articles, len(rejected)
 
 
-async def _run_one_with_retry(source: str, peer: str | None) -> tuple[list[Any], int]:
+def _filter_peer_news_articles(
+    source: str,
+    company: str | None,
+    articles: list[Any],
+) -> list[Any]:
+    if source not in {"naver_news", "rss"} or company is None:
+        return articles
+
+    before = len(articles)
+    annotate_peer_relevance(
+        articles,
+        target_peer_id=company,
+        tracked_peer_ids=list(COMPANY_SEARCH_ALIASES),
+    )
+    filtered = [
+        article
+        for article in articles
+        if getattr(article, "extra", {}).get("peer_relevance") == "pass"
+        and getattr(article, "company", [])
+    ]
+
+    log.info(
+        "피어 관련 뉴스 필터 완료 | source=%s company=%s before=%d after=%d",
+        source,
+        company,
+        before,
+        len(filtered),
+    )
+    return filtered
+
+
+async def _run_one_with_retry(
+    source: str,
+    company: str | None,
+    args: argparse.Namespace,
+    limit_guard: DailyLimitGuard,
+) -> tuple[list[Any], int]:
     last_error: Exception | None = None
 
     for attempt in range(1, MAX_CRAWL_ATTEMPTS + 1):
         try:
-            articles, rejected_count = await _run_one(source, peer)
+            articles, rejected_count = await _run_one(source, company, args, limit_guard)
         except Exception as e:
             last_error = e
             if attempt < MAX_CRAWL_ATTEMPTS:
                 log.warning(
-                    "크롤러 실행 실패, 재시도 예정 | source=%s peer=%s attempt=%d/%d error=%s",
+                    "크롤러 실행 실패, 재시도 예정 | source=%s company=%s attempt=%d/%d error=%s",
                     source,
-                    peer,
+                    company,
                     attempt,
                     MAX_CRAWL_ATTEMPTS,
                     e,
@@ -145,9 +319,9 @@ async def _run_one_with_retry(source: str, peer: str | None) -> tuple[list[Any],
 
         if attempt < MAX_CRAWL_ATTEMPTS:
             log.warning(
-                "수집 결과 0건, 재시도 예정 | source=%s peer=%s attempt=%d/%d",
+                "수집 결과 0건, 재시도 예정 | source=%s company=%s attempt=%d/%d",
                 source,
-                peer,
+                company,
                 attempt,
                 MAX_CRAWL_ATTEMPTS,
             )
@@ -158,20 +332,20 @@ async def _run_one_with_retry(source: str, peer: str | None) -> tuple[list[Any],
     return [], 0
 
 
-def _article_peer_ids(articles: list[Any]) -> set[str]:
-    peer_ids: set[str] = set()
+def _article_company_ids(articles: list[Any]) -> set[str]:
+    company_ids: set[str] = set()
 
     for article in articles:
         companies = getattr(article, "company", None)
         if companies:
-            peer_ids.update(str(company) for company in companies)
+            company_ids.update(str(company) for company in companies)
             continue
 
         peer_id = getattr(article, "peer_id", None)
         if peer_id:
-            peer_ids.add(str(peer_id))
+            company_ids.add(str(peer_id))
 
-    return peer_ids
+    return company_ids
 
 
 def _datalab_rows(articles: list[Any]) -> list[dict[str, Any]]:
@@ -185,27 +359,45 @@ def _datalab_rows(articles: list[Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def _build_run_plan(source: str | None, peer: str | None) -> list[tuple[str, str | None]]:
+def _apply_daily_limit(
+    articles: list[Any],
+    limit_guard: DailyLimitGuard,
+) -> tuple[list[Any], int]:
+    limited_articles: list[Any] = []
+    limited_count = 0
+
+    for article in articles:
+        source_type = str(getattr(article, "source_type", "news") or "news")
+
+        if limit_guard.allow(source_type):
+            limited_articles.append(article)
+        else:
+            limited_count += 1
+
+    return limited_articles, limited_count
+
+
+def _build_run_plan(source: str | None, company: str | None) -> list[tuple[str, str | None]]:
     run_plan: list[tuple[str, str | None]] = []
 
     if source in INDUSTRY_SOURCES:
         return [(source, None)]
 
-    if source and peer:
-        return [(source, peer)]
+    if source and company:
+        return [(source, company)]
 
     if source:
-        return [(source, peer_id) for peer_id in PEER_ALIASES]
+        return [(source, company_id) for company_id in COMPANY_SEARCH_ALIASES]
 
-    if peer:
-        for peer_source in PEER_SOURCES:
-            run_plan.append((peer_source, peer))
+    if company:
+        for company_source in COMPANY_SOURCES:
+            run_plan.append((company_source, company))
 
         return run_plan
 
-    for peer_id in PEER_ALIASES:
-        for peer_source in PEER_SOURCES:
-            run_plan.append((peer_source, peer_id))
+    for company_id in COMPANY_SEARCH_ALIASES:
+        for company_source in COMPANY_SOURCES:
+            run_plan.append((company_source, company_id))
 
     for industry_source in INDUSTRY_SOURCES:
         run_plan.append((industry_source, None))
@@ -218,58 +410,65 @@ async def _run() -> None:
     profile = load_profile(args.env)
     log.info("실행 프로파일: %s", profile)
 
-    run_plan = _build_run_plan(args.source, args.peer)
+    run_plan = _build_run_plan(args.source, args.company)
 
     log.info("실행 대상 수: %d", len(run_plan))
 
     articles_by_output: dict[tuple[str, str | None], list[Any]] = {}
-    peers_by_output: dict[tuple[str, str | None], set[str]] = {}
+    companies_by_output: dict[tuple[str, str | None], set[str]] = {}
     rejected_by_output: dict[tuple[str, str | None], int] = {}
+    limit_guard = DailyLimitGuard()
 
-    for source, peer in run_plan:
-        if peer is None and source not in INDUSTRY_SOURCES:
+    for source, company in run_plan:
+        if company is None and source not in INDUSTRY_SOURCES:
             continue
         try:
-            articles, rejected_count = await _run_one_with_retry(source, peer)
-            output_group = _make_output_group(source, peer or "all")
+            articles, rejected_count = await _run_one_with_retry(
+                source,
+                company,
+                args,
+                limit_guard,
+            )
+            output_group = _make_output_group(source, company or "all")
             articles_by_output.setdefault(output_group, []).extend(articles)
-            if peer is not None:
-                peers_by_output.setdefault(output_group, set()).add(peer)
+            if company is not None:
+                companies_by_output.setdefault(output_group, set()).add(company)
             else:
-                peers_by_output.setdefault(output_group, set())
+                companies_by_output.setdefault(output_group, set())
             rejected_by_output[output_group] = (
                 rejected_by_output.get(output_group, 0) + rejected_count
             )
         except Exception as e:
             log.error(
-                "크롤러 실행 실패 | source=%s peer=%s error=%s",
+                "크롤러 실행 실패 | source=%s company=%s error=%s",
                 source,
-                peer,
+                company,
                 e,
             )
 
-    for (source, output_peer), articles in articles_by_output.items():
-        output_source_name = _make_output_source_name(source, output_peer)
-        missing_peers = peers_by_output[(source, output_peer)] - _article_peer_ids(articles)
-        if missing_peers and source in RETRY_ON_EMPTY_SOURCES:
+    for (source, output_company), articles in articles_by_output.items():
+        output_source_name = _make_output_source_name(source, output_company)
+        missing_companies = (
+            companies_by_output[(source, output_company)] - _article_company_ids(articles)
+        )
+        if missing_companies and source in RETRY_ON_EMPTY_SOURCES:
             log.error(
-                "저장 결과에 일부 peer 데이터가 없습니다 | source=%s missing_peers=%s",
+                "저장 결과에 일부 회사 데이터가 없습니다 | source=%s missing_companies=%s",
                 source,
-                sorted(missing_peers),
+                sorted(missing_companies),
             )
 
         output_path = save_crawler_results(
             articles,
             source_name=output_source_name,
-            peer_aliases=PEER_ALIASES,
         )
 
         log.info(
-            "저장 완료 | source=%s peers=%d valid=%d rejected=%d output=%s",
+            "저장 완료 | source=%s companies=%d valid=%d rejected=%d output=%s",
             source,
-            len(peers_by_output[(source, output_peer)]),
+            len(companies_by_output[(source, output_company)]),
             len(articles),
-            rejected_by_output.get((source, output_peer), 0),
+            rejected_by_output.get((source, output_company), 0),
             output_path,
         )
 
