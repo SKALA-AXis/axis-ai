@@ -42,7 +42,7 @@ def company_tier(company: str | None) -> CompanyTier:
     return "overseas"
 
 
-def company_tiers(companies: list[str]) -> dict[str, CompanyTier]:
+def company_tier_map(companies: list[str]) -> dict[str, CompanyTier]:
     return {company: company_tier(company) for company in companies if company}
 
 

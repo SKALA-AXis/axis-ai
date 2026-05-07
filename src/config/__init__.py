@@ -15,7 +15,7 @@ from src.config.companies import (
 from src.config.company_tiers import (
     CompanyTier,
     company_tier,
-    company_tiers,
+    company_tier_map,
     resolve_company_id,
 )
 from src.config.sectors import (
@@ -43,7 +43,7 @@ __all__ = [
     "company_aliases",
     "company_name_ko",
     "company_tier",
-    "company_tiers",
+    "company_tier_map",
     "match_sectors",
     "primary_sector",
     "resolve_company_id",

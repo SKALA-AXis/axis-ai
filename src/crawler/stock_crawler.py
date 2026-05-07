@@ -38,11 +38,11 @@ from uuid import uuid4
 import httpx
 
 try:
-    from src.config.company_tiers import company_tiers
+    from src.config.company_tiers import company_tier_map
     from src.config.companies import COMPANIES, NAVER_ITEM_CODES
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from src.config.company_tiers import company_tiers
+    from src.config.company_tiers import company_tier_map
     from src.config.companies import COMPANIES, NAVER_ITEM_CODES
 
 log = logging.getLogger(__name__)
@@ -152,7 +152,7 @@ class StockCrawlResult:
             "published_at": None,
             "collected_at": self.collected_at.isoformat(),
             "company": self.company,
-            "company_tier": company_tiers(self.company),
+            "company_tier": company_tier_map(self.company),
             "peer_id": self.peer_id,
             "language": "ko",
             "content_type": self.content_type,
