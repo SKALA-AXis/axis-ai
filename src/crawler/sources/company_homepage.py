@@ -9,10 +9,10 @@
 
 실행:
 cd /Users/shim-yujeong/workspace/final_pj/axis-ai
-.venv/bin/python src/crawler/company_homepage_crawler.py --company samsung_sds
+.venv/bin/python src/crawler/sources/company_homepage.py --company samsung_sds
 
 링크 확인:
-.venv/bin/python src/crawler/company_homepage_crawler.py --company samsung_sds --debug-links
+.venv/bin/python src/crawler/sources/company_homepage.py --company samsung_sds --debug-links
 """
 
 import argparse
