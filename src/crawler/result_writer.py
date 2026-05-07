@@ -1,4 +1,4 @@
-"""단독 크롤러 실행 결과를 로컬 JSONL로 저장한다."""
+"""단독 크롤러 실행 결과를 로컬 JSON으로 저장한다."""
 
 from __future__ import annotations
 
@@ -15,17 +15,19 @@ def save_crawler_results(
     source_name: str,
     output_dir: Path | str = DEFAULT_RESULTS_DIR,
 ) -> Path:
-    """크롤러 결과를 JSONL 파일로 저장한다."""
+    """크롤러 결과를 JSON 배열 파일로 저장한다."""
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    filename = f"{source_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+    filename = f"{source_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     result_path = output_path / filename
 
-    with result_path.open("w", encoding="utf-8") as f:
-        for article in articles:
-            f.write(json.dumps(_to_dict(article), ensure_ascii=False) + "\n")
+    payload = [_to_dict(article) for article in articles]
+    result_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
     return result_path
 

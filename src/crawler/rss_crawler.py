@@ -29,6 +29,8 @@ from src.crawler.base import DailyLimitGuard, RawArticle  # noqa: E402
 from src.crawler.base_crawler import BaseCrawler  # noqa: E402
 from src.crawler.naver_crawler import (  # noqa: E402
     REQUEST_HEADERS,
+    clean_publisher_name,
+    extract_publisher,
     get_search_aliases,
     merge_articles_by_url,
     strip_html,
@@ -147,6 +149,11 @@ class RssCrawler(BaseCrawler):
         source: dict[str, str],
         entry,
     ) -> RawArticle:
+        title, publisher = split_title_and_publisher(
+            strip_html(entry.get("title", "")),
+            source_name=source_name,
+            url=entry.get("link", ""),
+        )
         content = first_text(
             entry.get("summary", ""),
             entry.get("description", ""),
@@ -155,12 +162,12 @@ class RssCrawler(BaseCrawler):
 
         return RawArticle(
             url=entry.get("link", ""),
-            title=strip_html(entry.get("title", "")),
+            title=title,
             content=extract_rss_entry_text(content),
             published_at=parse_entry_date(entry),
             source_name=source_name,
             source_type="news",
-            publisher=source_name.split(":", 1)[0],
+            publisher=publisher,
             company=[self.peer_id],
             language="ko",
             content_type="rss",
@@ -215,6 +222,73 @@ def first_text(*values: str) -> str:
             return str(value)
 
     return ""
+
+
+def split_title_and_publisher(
+    title: str,
+    source_name: str = "",
+    url: str = "",
+) -> tuple[str, str | None]:
+    title = normalize_whitespace(title)
+    publisher: str | None = None
+
+    if is_google_news_source(source_name):
+        title, publisher = split_google_news_title(title)
+
+    if not publisher:
+        publisher = publisher_from_url_or_source(url, source_name)
+
+    return title, publisher
+
+
+def split_google_news_title(title: str) -> tuple[str, str | None]:
+    if " - " not in title:
+        return title, None
+
+    article_title, suffix = title.rsplit(" - ", 1)
+    publisher = clean_publisher_name(suffix)
+
+    if not article_title.strip() or not is_plausible_publisher(publisher):
+        return title, None
+
+    return normalize_whitespace(article_title), publisher
+
+
+def publisher_from_url_or_source(url: str, source_name: str) -> str | None:
+    _ = url
+
+    if not is_google_news_source(source_name):
+        return clean_publisher_name(source_name.split(":", 1)[0])
+
+    return None
+
+
+def is_google_news_source(source_name: str) -> bool:
+    return source_name.startswith("google_news:")
+
+
+def is_plausible_publisher(publisher: str | None) -> bool:
+    if not publisher:
+        return False
+
+    if len(publisher) > 30:
+        return False
+
+    return not any(char in publisher for char in "<>{}[]")
+
+
+def is_generic_feed_publisher(publisher: str | None) -> bool:
+    if not publisher:
+        return True
+
+    return publisher.strip().lower() in {
+        "google",
+        "google news",
+        "google 뉴스",
+        "구글",
+        "구글 뉴스",
+        "google.com",
+    }
 
 
 def _extract_google_news_target_url(html: str) -> str:
@@ -311,6 +385,10 @@ async def enrich_with_body_text_and_images(
 
             html = resp.text
             base_url = str(resp.url)
+
+            publisher = extract_publisher(html, base_url)
+            if publisher and not is_generic_feed_publisher(publisher):
+                article.publisher = publisher
 
             article.extra["image_urls"] = extract_image_urls(html, base_url)
 

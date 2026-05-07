@@ -1,4 +1,4 @@
-""" 단독 또는 전체 크롤러 실행 후 src/crawler/crawler_results 에 JSONL 저장.
+""" 단독 또는 전체 크롤러 실행 후 src/crawler/crawler_results 에 JSON 저장.
 
     전체 수집
     uv run python run_local_crawler_once.py

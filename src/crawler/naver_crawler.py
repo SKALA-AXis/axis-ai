@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -54,7 +55,6 @@ REQUEST_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
 }
-
 
 class NaverNewsCrawler(BaseCrawler):
     def __init__(
@@ -190,6 +190,10 @@ async def enrich_with_body_text(
                 article.extra["body_fetch_status"] = f"failed:{resp.status_code}"
                 continue
 
+            publisher = extract_publisher(resp.text, str(resp.url))
+            if publisher:
+                article.publisher = publisher
+
             article.extra["image_urls"] = extract_image_urls(resp.text, str(resp.url))
 
             subtitle = extract_subtitle(resp.text)
@@ -221,6 +225,162 @@ def resolve_fetch_url(url: str) -> str:
             return f"{parsed.scheme}://{parsed.netloc}/front/newsview.asp?click=F&key={key}"
 
     return url
+
+
+def extract_publisher(html: str, url: str) -> str | None:
+    publisher = extract_publisher_from_html(html)
+
+    if publisher:
+        return publisher
+
+    return None
+
+
+def extract_publisher_from_html(html: str) -> str | None:
+    soup = BeautifulSoup(html or "", "html.parser")
+
+    publisher = extract_json_ld_publisher(soup)
+
+    if publisher:
+        return publisher
+
+    meta_selectors = (
+        'meta[property="og:site_name"]',
+        'meta[name="application-name"]',
+        'meta[name="subject"]',
+        'meta[name="copyright"]',
+        'meta[name="Copyright"]',
+        'meta[name="title"]',
+        'meta[property="og:title"]',
+        'meta[name="twitter:title"]',
+    )
+
+    for selector in meta_selectors:
+        meta = soup.select_one(selector)
+        publisher = clean_publisher_name(
+            extract_publisher_candidate(str(meta.get("content", "")) if meta else "")
+        )
+
+        if publisher:
+            return publisher
+
+    for selector in (
+        "header h1 img",
+        "#header h1 img",
+        ".head_top h1 img",
+        "h1 img",
+        ".media_end_head_top_logo img",
+        ".press_logo img",
+        ".journalistcard_summary_press",
+        ".byline .press",
+    ):
+        node = soup.select_one(selector)
+
+        if not node:
+            continue
+
+        publisher = clean_publisher_name(
+            str(node.get("alt", "") or node.get_text(" ", strip=True))
+        )
+
+        if publisher:
+            return publisher
+
+    return None
+
+
+def extract_json_ld_publisher(soup: BeautifulSoup) -> str | None:
+    for node in soup.select('script[type="application/ld+json"]'):
+        raw_json = node.string or node.get_text("", strip=True)
+
+        if not raw_json:
+            continue
+
+        try:
+            data = json.loads(raw_json)
+        except json.JSONDecodeError:
+            continue
+
+        publisher = publisher_from_structured_data(data)
+
+        if publisher:
+            return publisher
+
+    return None
+
+
+def publisher_from_structured_data(data: object) -> str | None:
+    if isinstance(data, list):
+        for item in data:
+            publisher = publisher_from_structured_data(item)
+
+            if publisher:
+                return publisher
+
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    publisher = data.get("publisher")
+
+    if isinstance(publisher, dict):
+        candidate = clean_publisher_name(str(publisher.get("name", "")))
+
+        if candidate:
+            return candidate
+
+    if isinstance(publisher, str):
+        candidate = clean_publisher_name(publisher)
+
+        if candidate:
+            return candidate
+
+    graph = data.get("@graph")
+
+    if isinstance(graph, list):
+        return publisher_from_structured_data(graph)
+
+    return None
+
+
+def extract_publisher_candidate(value: str) -> str:
+    text = strip_html(value)
+
+    bracket_match = re.match(r"^\s*\[([^\[\]]{2,30})\]", text)
+
+    if bracket_match:
+        return bracket_match.group(1)
+
+    return text
+
+
+def clean_publisher_name(value: str) -> str | None:
+    text = strip_html(value)
+    text = re.sub(r"^@", "", text)
+    text = re.sub(r"\s*[-|:：]\s*뉴스$", "", text)
+    text = text.strip()
+
+    if not text:
+        return None
+
+    parsed = urlparse(text)
+
+    if parsed.scheme or parsed.netloc:
+        return None
+
+    blocked = {
+        "뉴스",
+        "네이버 뉴스",
+        "네이버뉴스",
+        "naver news",
+        "news",
+    }
+
+    if text.lower() in blocked:
+        return None
+
+    return text[:50]
 
 
 def strip_html(text: str) -> str:
