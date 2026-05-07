@@ -14,6 +14,7 @@ class CompanyConfig(TypedDict, total=False):
     aliases: list[str]
     dart_corp_code: str
     naver_item_code: str
+    naver_item_name_ko: str
     saramin_name: str
     kipris_applicant: str
     ir_pages: list[str]
@@ -27,6 +28,7 @@ COMPANIES: Final[dict[str, CompanyConfig]] = {
         "aliases": ["삼성SDS", "삼성 SDS", "Samsung SDS", "삼성에스디에스"],
         "dart_corp_code": "00126186",
         "naver_item_code": "018260",
+        "naver_item_name_ko": "삼성SDS",
         "saramin_name": "삼성SDS",
         "kipris_applicant": "삼성에스디에스",
         "ir_pages": [
@@ -40,6 +42,7 @@ COMPANIES: Final[dict[str, CompanyConfig]] = {
         "aliases": ["LG CNS", "LGCNS", "엘지씨엔에스"],
         "dart_corp_code": "00139834",
         "naver_item_code": "064400",
+        "naver_item_name_ko": "LG CNS",
         "saramin_name": "LG CNS",
         "kipris_applicant": "엘지씨엔에스",
         "ir_pages": [
@@ -53,6 +56,7 @@ COMPANIES: Final[dict[str, CompanyConfig]] = {
         "aliases": ["현대오토에버", "현대 오토에버", "Hyundai Autoever", "Hyundai AutoEver"],
         "dart_corp_code": "00362441",
         "naver_item_code": "307950",
+        "naver_item_name_ko": "현대오토에버",
         "saramin_name": "현대오토에버",
         "kipris_applicant": "현대오토에버",
         "ir_pages": [
@@ -66,6 +70,7 @@ COMPANIES: Final[dict[str, CompanyConfig]] = {
         "aliases": ["포스코DX", "포스코 DX", "포스코디엑스", "POSCO DX", "포스코ICT", "POSCO ICT"],
         "dart_corp_code": "00155212",
         "naver_item_code": "022100",
+        "naver_item_name_ko": "포스코DX",
         "saramin_name": "포스코DX",
         "kipris_applicant": "포스코디엑스",
         "ir_pages": [
@@ -91,6 +96,7 @@ COMPANIES: Final[dict[str, CompanyConfig]] = {
         ],
         "dart_corp_code": "00111722",
         "naver_item_code": "034730",
+        "naver_item_name_ko": "SK",
         "ir_pages": [
             "https://sk-inc.com/kr/ir/irArchive.aspx",
             "https://www.sk-inc.com/en/ir/irArchive.aspx",
@@ -160,4 +166,3 @@ def all_company_aliases() -> list[str]:
             aliases.append(value)
 
     return aliases
-
