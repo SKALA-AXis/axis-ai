@@ -113,6 +113,56 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
     return [dict(row._mapping) for row in rows]
 
 
+def list_card_news_cluster_candidates(
+    limit: int = 10,
+    today_only: bool = False,
+) -> list[dict[str, Any]]:
+    """프론트 카드뉴스 생성을 위한 뉴스 대표 클러스터 후보를 조회한다."""
+    limit = max(1, min(limit, 30))
+    where_today = "AND r.published_at >= NOW() - INTERVAL '24 hours'" if today_only else ""
+    query = text(f"""
+        SELECT
+            r.cluster_id,
+            r.id AS representative_id,
+            r.company,
+            r.title,
+            r.url,
+            r.importance_level,
+            r.importance_score,
+            r.credibility_score,
+            r.published_at,
+            r.collected_at,
+            COALESCE(
+                array_agg(a.id ORDER BY a.credibility_score DESC NULLS LAST, a.published_at DESC)
+                    FILTER (WHERE a.id IS NOT NULL),
+                ARRAY[]::bigint[]
+            ) AS article_ids,
+            COUNT(a.id) AS cluster_size
+        FROM raw_articles r
+        LEFT JOIN raw_articles a
+            ON a.cluster_id = r.cluster_id
+           AND a.source_type = 'news'
+           AND a.collected_at::date = r.collected_at::date
+        WHERE r.source_type = 'news'
+          AND r.is_representative = true
+          AND r.cluster_id IS NOT NULL
+          AND r.processing_status = 'CLASSIFIED'
+          {where_today}
+        GROUP BY
+            r.cluster_id, r.id, r.company, r.title, r.url,
+            r.importance_level, r.importance_score, r.credibility_score,
+            r.published_at, r.collected_at
+        ORDER BY
+            COALESCE(r.importance_score, 0) DESC,
+            r.published_at DESC NULLS LAST,
+            r.collected_at DESC
+        LIMIT :limit
+    """)
+    with SessionLocal() as db:
+        rows = db.execute(query, {"limit": limit}).fetchall()
+    return [dict(row._mapping) for row in rows]
+
+
 def update_preprocess_status(
     article_id: int,
     processing_status: str,

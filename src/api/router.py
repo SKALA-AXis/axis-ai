@@ -33,7 +33,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080"],
+    allow_origins=["http://localhost:8080", "http://localhost:5173"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -73,6 +73,21 @@ async def run_delivery():
     log.info("전달 파이프라인 시작")
     # TODO: delivery_graph.py 실행
     return {"status": "accepted", "message": "전달 파이프라인 큐 등록 완료"}
+
+
+@app.get("/api/cards")
+async def list_cards(sort: str = "exposure_desc", limit: int = 30):
+    """프론트 CardNewsItem schema에 맞는 카드뉴스 목록을 반환한다."""
+    del sort
+    items = _build_card_news_items(limit=limit, today_only=False)
+    return {"items": items}
+
+
+@app.get("/api/cards/today")
+async def list_today_cards(limit: int = 10):
+    """최근 24시간 뉴스 기반 카드뉴스 목록을 반환한다."""
+    items = _build_card_news_items(limit=limit, today_only=True)
+    return {"items": items}
 
 
 @app.post("/search", response_model=SearchResponse)
@@ -128,3 +143,74 @@ def _check_qdrant() -> bool:
     except Exception as e:
         log.warning("Qdrant 연결 확인 실패: %s", e)
         return False
+
+
+def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
+    """DB 대표 클러스터를 요약·분석·카드뉴스 에이전트 흐름으로 변환한다."""
+    from src.agents.card_news_agent import CardNewsAgent
+    from src.agents.classification_agent import ClassificationAgent
+    from src.agents.news_analysis_agent import PeerNewsAnalysisAgent
+    from src.agents.news_summary_agent import PeerNewsSummaryAgent
+    from src.db.article_store import get_articles_by_ids, list_card_news_cluster_candidates
+
+    candidates = list_card_news_cluster_candidates(limit=limit, today_only=today_only)
+    if not candidates:
+        return []
+
+    classifier = ClassificationAgent()
+    summary_agent = PeerNewsSummaryAgent()
+    analysis_agent = PeerNewsAnalysisAgent()
+    card_agent = CardNewsAgent()
+    cards: list[dict] = []
+
+    for candidate in candidates:
+        cluster_id = int(candidate["cluster_id"])
+        representative_id = int(candidate["representative_id"])
+        article_ids = [int(article_id) for article_id in candidate.get("article_ids") or []]
+        if representative_id not in article_ids:
+            article_ids.insert(0, representative_id)
+
+        articles = get_articles_by_ids(article_ids[:5])
+        company = _first_company(candidate.get("company"))
+        classification = classifier.classify(
+            cluster_id=cluster_id,
+            representative_id=representative_id,
+            cluster_article_ids=article_ids,
+            company=company,
+        )
+        summary = summary_agent.summarize_articles(
+            cluster_id=cluster_id,
+            representative_id=representative_id,
+            articles=articles,
+            cluster_article_ids=article_ids,
+        )
+        if not summary.get("is_valid_summary"):
+            continue
+
+        analysis = analysis_agent.analyze(
+            summary=summary,
+            classification=classification,
+            cluster_metadata={
+                "cluster_size": int(candidate.get("cluster_size") or len(article_ids)),
+                "source_count": len({article.get("source_name") for article in articles}),
+                "source_names": sorted({str(article.get("source_name")) for article in articles}),
+            },
+        )
+        cards.append(
+            card_agent.generate(
+                summary=summary,
+                analysis=analysis,
+                classification=classification,
+                articles=articles,
+            )
+        )
+
+    return cards
+
+
+def _first_company(value: object) -> str:
+    if isinstance(value, list) and value:
+        return str(value[0])
+    if isinstance(value, str):
+        return value
+    return ""
