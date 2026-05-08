@@ -66,6 +66,7 @@ HEADERS = {
 }
 
 REQUEST_TIMEOUT = 30
+OFFICIAL_MAX_AGE_DAYS = 30
 
 
 COMPANY_CONFIGS = [
@@ -1502,6 +1503,15 @@ class CompanyNewsCrawler(BaseCrawler):
                     use_render=self.use_render or self.render_fallback,
                 )
 
+                if not _is_recent_official_article(published_at):
+                    log.info(
+                        "[%s] 오래된 공식 뉴스 제외 | date=%s title=%s",
+                        company,
+                        published_at,
+                        title,
+                    )
+                    continue
+
                 article = RawArticle(
                     url=detail_url,
                     title=title,
@@ -1579,6 +1589,15 @@ class CompanyNewsCrawler(BaseCrawler):
                 "company_name": company,
             },
         )
+
+
+def _is_recent_official_article(published_at: datetime | None) -> bool:
+    if published_at is None:
+        return False
+
+    now = datetime.now(published_at.tzinfo) if published_at.tzinfo else datetime.now()
+    age_days = (now - published_at).days
+    return age_days <= OFFICIAL_MAX_AGE_DAYS
 
 
 # =========================================================

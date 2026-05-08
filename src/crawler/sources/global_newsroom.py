@@ -46,6 +46,7 @@ HEADERS = {
 REQUEST_TIMEOUT = 20
 MIN_CONTENT_LENGTH = 120
 MAX_CONTENT_LENGTH = 20000
+OFFICIAL_MAX_AGE_DAYS = 30
 GLOBAL_BLOCKED_PATH_KEYWORDS = (
     "/_gallery/",
     "/wp-content/",
@@ -1056,6 +1057,15 @@ def datetime_sort_value(value: datetime | None) -> float:
     return value.timestamp()
 
 
+def is_recent_official_article(published_at: datetime | None) -> bool:
+    if published_at is None:
+        return False
+
+    now = datetime.now(published_at.tzinfo) if published_at.tzinfo else datetime.now()
+    age_days = (now - published_at).days
+    return age_days <= OFFICIAL_MAX_AGE_DAYS
+
+
 class _SyncGlobalNewsroomCrawler:
     def __init__(
         self,
@@ -1122,6 +1132,14 @@ class _SyncGlobalNewsroomCrawler:
                 )
 
                 if article:
+                    if not is_recent_official_article(article.published_at):
+                        log.info(
+                            "오래된 글로벌 공식 뉴스 제외 | company=%s date=%s title=%s",
+                            self.config.company,
+                            article.published_at,
+                            article.title,
+                        )
+                        continue
                     articles.append(article)
                     log.info(
                         "뉴스룸 수집 완료 | company=%s source=%s title=%s",
