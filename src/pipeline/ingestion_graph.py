@@ -24,7 +24,8 @@ log = logging.getLogger(__name__)
 
 # GPT-4o rate limit 고려: 분류·카드 병렬 호출 수
 _GPT_WORKERS = 5
-RELEVANCE_SOURCE_TYPES = {"news", "official"}
+RELEVANCE_SOURCE_TYPES = {"news"}
+OFFICIAL_DOCUMENT_SOURCE_TYPES = {"official"}
 PARSED_DOCUMENT_SOURCE_TYPES = {"dart", "ir", "securities_report"}
 STRUCTURED_SIGNAL_SOURCE_TYPES = {"job", "market_data", "search_trend", "social"}
 
@@ -36,6 +37,7 @@ class IngestionState(TypedDict):
     raw_article_ids: list[int]
     credible_ids: list[int]
     relevant_ids: list[int]
+    official_document_ids: list[int]
     parsed_document_ids: list[int]
     industry_document_ids: list[int]
     structured_signal_ids: list[int]
@@ -209,6 +211,7 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
         return {
             **state,
             "relevant_ids": [],
+            "official_document_ids": [],
             "parsed_document_ids": [],
             "industry_document_ids": [],
             "structured_signal_ids": [],
@@ -221,6 +224,7 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
         by_source.setdefault(_source_type(article), []).append(int(article["id"]))
 
     relevant_ids: list[int] = []
+    official_document_ids: list[int] = []
     parsed_document_ids: list[int] = []
     industry_document_ids: list[int] = []
     structured_signal_ids: list[int] = []
@@ -244,6 +248,22 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
             continue
 
         agent_article = _article_for_agent(article)
+
+        if source_type in OFFICIAL_DOCUMENT_SOURCE_TYPES:
+            official_document_ids.append(article_id)
+            update_preprocess_status(
+                article_id,
+                "PREPROCESSED_OFFICIAL_DOCUMENT",
+                {
+                    "document_scope": "company_official",
+                    "preprocess_note": (
+                        "official 문서는 회사별 공식 원문으로 보존. "
+                        "기사 relevance/dedup/classification 단계는 생략하고 "
+                        "추후 동향 분석에서 사용"
+                    ),
+                },
+            )
+            continue
 
         if source_type in PARSED_DOCUMENT_SOURCE_TYPES:
             item, ok, reason = analyze_parser_quality_article(agent_article)
@@ -317,8 +337,12 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
         )
 
     log.info(
-        "전처리 라우팅 완료 | relevant=%d parsed_docs=%d industry_docs=%d structured=%d skipped=%d",
+        (
+            "전처리 라우팅 완료 | relevant=%d official_docs=%d parsed_docs=%d "
+            "industry_docs=%d structured=%d skipped=%d"
+        ),
         len(relevant_ids),
+        len(official_document_ids),
         len(parsed_document_ids),
         len(industry_document_ids),
         len(structured_signal_ids),
@@ -327,6 +351,7 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
     return {
         **state,
         "relevant_ids": relevant_ids,
+        "official_document_ids": official_document_ids,
         "parsed_document_ids": parsed_document_ids,
         "industry_document_ids": industry_document_ids,
         "structured_signal_ids": structured_signal_ids,

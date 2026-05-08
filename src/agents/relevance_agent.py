@@ -552,7 +552,7 @@ _FAST_PASS_ACTION_KEYWORDS = [
     "고도화",
     "플랫폼",
 ]
-_FAST_PASS_SOURCE_TYPES = {"news", "official"}
+_FAST_PASS_SOURCE_TYPES = {"news"}
 
 
 def _noise_reject_result(

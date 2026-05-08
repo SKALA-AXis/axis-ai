@@ -31,10 +31,12 @@ log = logging.getLogger("run_preprocess")
 DEFAULT_INPUT_DIR = Path("src/crawler/crawler_results")
 DEFAULT_OUTPUT_DIR = Path("src/crawler/crawler_results/preprocessed")
 
-RELEVANCE_SOURCE_TYPES = {"news", "official"}
+RELEVANCE_SOURCE_TYPES = {"news"}
+OFFICIAL_DOCUMENT_SOURCE_TYPES = {"official"}
 PARSED_DOCUMENT_SOURCE_TYPES = {"dart", "ir", "securities_report"}
 INDUSTRY_DOCUMENT_SOURCE_NAMES = {"bcg", "spri"}
 STRUCTURED_SIGNAL_SOURCE_TYPES = {"job", "market_data", "search_trend", "social"}
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="DB 없이 저장된 crawler JSON 전처리 결과 확인")
@@ -135,6 +137,7 @@ def _filter_by_source_type(
 
 def _preprocess(articles: list[dict[str, Any]]) -> dict[str, Any]:
     enriched: list[dict[str, Any]] = []
+    official_documents: list[dict[str, Any]] = []
     parsed_documents: list[dict[str, Any]] = []
     industry_documents: list[dict[str, Any]] = []
     structured_signals: list[dict[str, Any]] = []
@@ -155,6 +158,9 @@ def _preprocess(articles: list[dict[str, Any]]) -> dict[str, Any]:
 
         if route == "relevance":
             item, is_relevant = analyze_relevance_article(item)
+        elif route == "official_document":
+            official_documents.append(_mark_official_document(item))
+            continue
         elif route == "parsed_document":
             item, parse_ok, _parse_reason = analyze_parser_quality_article(item)
             if not parse_ok:
@@ -189,6 +195,7 @@ def _preprocess(articles: list[dict[str, Any]]) -> dict[str, Any]:
             "raw": len(articles),
             "valid_after_credibility": credible_count,
             "relevant": len(enriched),
+            "official_documents": len(official_documents),
             "parsed_documents": len(parsed_documents),
             "industry_documents": len(industry_documents),
             "structured_signals": len(structured_signals),
@@ -200,6 +207,7 @@ def _preprocess(articles: list[dict[str, Any]]) -> dict[str, Any]:
         "representative_ids": representative_ids,
         "classified_clusters": classified,
         "articles": enriched,
+        "official_documents": official_documents,
         "parsed_documents": parsed_documents,
         "industry_documents": industry_documents,
         "structured_signals": structured_signals,
@@ -214,6 +222,9 @@ def _preprocess_route(article: dict[str, Any]) -> str:
     if source_type in RELEVANCE_SOURCE_TYPES:
         return "relevance"
 
+    if source_type in OFFICIAL_DOCUMENT_SOURCE_TYPES:
+        return "official_document"
+
     if source_type in PARSED_DOCUMENT_SOURCE_TYPES:
         return "parsed_document"
 
@@ -227,6 +238,19 @@ def _preprocess_route(article: dict[str, Any]) -> str:
         return "structured_signal"
 
     return "unsupported"
+
+
+def _mark_official_document(article: dict[str, Any]) -> dict[str, Any]:
+    item = dict(article)
+    item["processing_status"] = "PREPROCESSED_OFFICIAL_DOCUMENT"
+    item["document_scope"] = "company_official"
+    item["matched_companies"] = _normalize_company(item.get("company"))
+    item["matched_sectors"] = _matched_sectors_from_article(item)
+    item["preprocess_note"] = (
+        "official 문서는 회사별 공식 원문으로 보존. "
+        "기사 relevance/dedup/classification 단계는 생략하고 추후 동향 분석에서 사용"
+    )
+    return item
 
 
 def _mark_parsed_document(article: dict[str, Any]) -> dict[str, Any]:
@@ -411,6 +435,7 @@ def _run() -> None:
     print("=" * 78)
     print(f"  raw:             {counts['raw']}건")
     print(f"  relevant:        {counts['relevant']}건")
+    print(f"  official_docs:   {counts['official_documents']}건")
     print(f"  parsed_docs:     {counts['parsed_documents']}건")
     print(f"  skipped:         {counts['skipped']}건")
     print(f"  industry_docs:   {counts['industry_documents']}건")

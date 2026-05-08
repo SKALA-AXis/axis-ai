@@ -100,6 +100,7 @@ def main() -> None:
         "raw_article_ids": [],
         "credible_ids": [],
         "relevant_ids": [],
+        "official_document_ids": [],
         "parsed_document_ids": [],
         "industry_document_ids": [],
         "structured_signal_ids": [],
@@ -135,6 +136,7 @@ def main() -> None:
     print(f"  RAW 기사:        {len(result.get('raw_article_ids', []))}건")
     print(f"  신뢰도 통과:     {len(result.get('credible_ids', []))}건")
     print(f"  관련 기사:       {len(result.get('relevant_ids', []))}건")
+    print(f"  공식 문서:       {len(result.get('official_document_ids', []))}건")
     print(f"  문서형 자료:     {len(result.get('parsed_document_ids', []))}건")
     print(f"  산업 동향:       {len(result.get('industry_document_ids', []))}건")
     print(f"  구조화 신호:     {len(result.get('structured_signal_ids', []))}건")
@@ -236,6 +238,7 @@ def _print_preprocess_result(result: dict) -> None:
     print(f"  RAW 기사:        {len(result.get('raw_article_ids', []))}건")
     print(f"  신뢰도 통과:     {len(result.get('credible_ids', []))}건")
     print(f"  관련 기사:       {len(result.get('relevant_ids', []))}건")
+    print(f"  공식 문서:       {len(result.get('official_document_ids', []))}건")
     print(f"  파싱 문서:       {len(result.get('parsed_document_ids', []))}건")
     print(f"  산업 문서:       {len(result.get('industry_document_ids', []))}건")
     print(f"  구조화 신호:     {len(result.get('structured_signal_ids', []))}건")
