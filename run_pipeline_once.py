@@ -52,6 +52,7 @@ from src.pipeline.ingestion_graph import (  # noqa: E402
     credibility_node,
     dedup_node,
     ingestion_graph,
+    preprocess_route_node,
 )
 
 _BAND_MARK = {"high": "■■■", "medium": "■■ ", "low": "■  "}
@@ -92,6 +93,11 @@ def main() -> None:
         "trigger_type": "manual",
         "raw_article_ids": [],
         "credible_ids": [],
+        "relevant_ids": [],
+        "parsed_document_ids": [],
+        "industry_document_ids": [],
+        "structured_signal_ids": [],
+        "skipped_preprocess_ids": [],
         "cluster_map": {},
         "representative_ids": [],
         "classified_clusters": [],
@@ -105,6 +111,7 @@ def main() -> None:
     if _args.preprocess_only:
         result = crawl_node(initial_state)
         result = credibility_node(result)
+        result = preprocess_route_node(result)
         result = dedup_node(result)
         result = classify_node(result)
         _print_preprocess_result(result)
@@ -121,6 +128,11 @@ def main() -> None:
     print("=" * 78)
     print(f"  RAW 기사:        {len(result.get('raw_article_ids', []))}건")
     print(f"  신뢰도 통과:     {len(result.get('credible_ids', []))}건")
+    print(f"  관련 기사:       {len(result.get('relevant_ids', []))}건")
+    print(f"  문서형 자료:     {len(result.get('parsed_document_ids', []))}건")
+    print(f"  산업 동향:       {len(result.get('industry_document_ids', []))}건")
+    print(f"  구조화 신호:     {len(result.get('structured_signal_ids', []))}건")
+    print(f"  전처리 제외:     {len(result.get('skipped_preprocess_ids', []))}건")
     print(f"  클러스터:        {len(result.get('cluster_map', {}))}개")
     print(f"  대표 기사:       {len(result.get('representative_ids', []))}건")
     print(f"  이슈카드:        {len(cards)}건")

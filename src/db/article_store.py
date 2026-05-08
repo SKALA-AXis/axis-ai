@@ -99,7 +99,11 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
         rows = db.execute(
             text("""
                 SELECT id, company, title, content, url,
-                       credibility_score, source_name, published_at, metadata
+                       source_type, content_type, publisher, language,
+                       credibility_score, credibility_grade,
+                       relevance_score, relevance_label, relevance_reason,
+                       matched_companies, matched_sectors,
+                       source_name, published_at, collected_at, metadata
                 FROM raw_articles
                 WHERE id = ANY(:ids)
                 ORDER BY credibility_score DESC NULLS LAST
@@ -107,6 +111,33 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
             {"ids": ids},
         ).fetchall()
     return [dict(row._mapping) for row in rows]
+
+
+def update_preprocess_status(
+    article_id: int,
+    processing_status: str,
+    metadata_patch: Optional[dict[str, Any]] = None,
+    error_message: Optional[str] = None,
+) -> None:
+    """전처리 라우팅 결과를 raw_articles에 반영한다."""
+    with SessionLocal() as db:
+        db.execute(
+            text("""
+                UPDATE raw_articles
+                SET processing_status = :processing_status,
+                    metadata = COALESCE(metadata, '{}'::jsonb)
+                        || CAST(:metadata_patch AS jsonb),
+                    error_message = COALESCE(:error_message, error_message)
+                WHERE id = :id
+            """),
+            {
+                "processing_status": processing_status,
+                "metadata_patch": json.dumps(metadata_patch or {}, ensure_ascii=False),
+                "error_message": error_message,
+                "id": article_id,
+            },
+        )
+        db.commit()
 
 
 # ──────────────────────────────────────────────────────────────

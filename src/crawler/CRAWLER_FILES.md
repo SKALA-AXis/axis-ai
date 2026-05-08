@@ -137,7 +137,7 @@ uv run python run_all_once.py --company samsung_sds --company nvidia
 
 1. `run_crawler_once.py`를 subprocess로 실행해 DB `raw_articles`에 RAW 데이터를 저장한다.
 2. 크롤러가 성공한 경우에만 `run_pipeline_once.py --preprocess-only`를 이어 실행한다.
-3. DB 전처리는 RAW row를 읽어 credibility, dedup/clustering, classification까지만 처리한다.
+3. DB 전처리는 RAW row를 읽어 credibility, source_type 라우팅, relevance/parser quality, dedup/clustering, classification까지만 처리한다.
 
 `--skip-preprocess`를 주면 크롤링까지만 실행한다. 이슈카드/evidence/financial refs는 만들지 않는다.
 
@@ -151,7 +151,7 @@ uv run python run_pipeline_once.py --preprocess-only --env local
 uv run python run_pipeline_once.py --preprocess-only --company samsung_sds
 ```
 
-실행 범위는 RAW ID 로드, credibility score/grade 보정, dedup/clustering, classification까지다. issue card/evidence/vector index는 생성하지 않는다.
+실행 범위는 RAW ID 로드, credibility score/grade 보정, source_type별 relevance/parser quality 라우팅, dedup/clustering, classification까지다. issue card/evidence/vector index는 생성하지 않는다.
 
 ### run_local_crawler_once.py
 

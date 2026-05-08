@@ -630,7 +630,7 @@ uv run python run_all_once.py --track b       # Track B만 수집 후 전처리 
 uv run python run_all_once.py --company nvidia
 ```
 
-`run_all_once.py`는 내부에서 `run_crawler_once.py`를 먼저 실행하고, 성공한 경우에만 `run_pipeline_once.py --preprocess-only`를 이어서 실행합니다. 전처리 범위는 `credibility → dedup/clustering → classification`까지입니다. DB에 쌓지 않는 JSON 검수 흐름(`run_local_crawler_once.py`/`run_preprocess_once.py`)과는 별개입니다.
+`run_all_once.py`는 내부에서 `run_crawler_once.py`를 먼저 실행하고, 성공한 경우에만 `run_pipeline_once.py --preprocess-only`를 이어서 실행합니다. 전처리 범위는 `credibility → source_type 라우팅 → relevance/parser quality → dedup/clustering → classification`까지입니다. DB에 쌓지 않는 JSON 검수 흐름(`run_local_crawler_once.py`/`run_preprocess_once.py`)과는 별개입니다.
 
 ### 2. JSON 크롤러 단독 실행
 

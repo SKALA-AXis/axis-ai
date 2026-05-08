@@ -24,6 +24,9 @@ log = logging.getLogger(__name__)
 
 # GPT-4o rate limit 고려: 분류·카드 병렬 호출 수
 _GPT_WORKERS = 5
+RELEVANCE_SOURCE_TYPES = {"news", "official"}
+PARSED_DOCUMENT_SOURCE_TYPES = {"dart", "ir", "securities_report"}
+STRUCTURED_SIGNAL_SOURCE_TYPES = {"job", "market_data", "search_trend", "social"}
 
 
 class IngestionState(TypedDict):
@@ -31,6 +34,11 @@ class IngestionState(TypedDict):
     trigger_type: str
     raw_article_ids: list[int]
     credible_ids: list[int]
+    relevant_ids: list[int]
+    parsed_document_ids: list[int]
+    industry_document_ids: list[int]
+    structured_signal_ids: list[int]
+    skipped_preprocess_ids: list[int]
     cluster_map: dict  # {cluster_id: [article_ids]}
     representative_ids: list[int]
     classified_clusters: list[dict]
@@ -137,6 +145,23 @@ def _company_list(article: dict) -> list[str]:
     return []
 
 
+def _source_type(article: dict) -> str:
+    return str(article.get("source_type") or "").strip().lower()
+
+
+def _article_for_agent(article: dict) -> dict:
+    item = dict(article)
+    metadata = item.get("metadata")
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            metadata = {}
+    item["metadata"] = metadata if isinstance(metadata, dict) else {}
+    item["extra"] = item["metadata"]
+    return item
+
+
 # ── 노드 구현 ──────────────────────────────────────────────────
 
 
@@ -160,12 +185,149 @@ def credibility_node(state: IngestionState) -> IngestionState:
     return {**state, "credible_ids": credible_ids}
 
 
-@_logged_step("dedup", "credible_ids", "representative_ids")
+@_logged_step("preprocess_route", "credible_ids", "relevant_ids")
+def preprocess_route_node(state: IngestionState) -> IngestionState:
+    """source_type별 DB 전처리 라우팅."""
+    from src.agents.parser_agent import ParserAgent
+    from src.agents.parser_quality_agent import analyze_parser_quality_article
+    from src.agents.relevance_agent import RelevanceAgent
+    from src.db.article_store import get_articles_by_ids, update_preprocess_status
+
+    credible_ids = state.get("credible_ids", [])
+    if not credible_ids:
+        return {
+            **state,
+            "relevant_ids": [],
+            "parsed_document_ids": [],
+            "industry_document_ids": [],
+            "structured_signal_ids": [],
+            "skipped_preprocess_ids": [],
+        }
+
+    articles = get_articles_by_ids(credible_ids)
+    by_source: dict[str, list[int]] = {}
+    for article in articles:
+        by_source.setdefault(_source_type(article), []).append(int(article["id"]))
+
+    relevant_ids: list[int] = []
+    parsed_document_ids: list[int] = []
+    industry_document_ids: list[int] = []
+    structured_signal_ids: list[int] = []
+    skipped_ids: list[int] = []
+
+    relevance_ids = [
+        article_id
+        for source_type in RELEVANCE_SOURCE_TYPES
+        for article_id in by_source.get(source_type, [])
+    ]
+    if relevance_ids:
+        passed, skipped = RelevanceAgent().filter(relevance_ids)
+        relevant_ids.extend(passed)
+        skipped_ids.extend(skipped)
+
+    for article in articles:
+        article_id = int(article["id"])
+        source_type = _source_type(article)
+
+        if source_type in RELEVANCE_SOURCE_TYPES:
+            continue
+
+        agent_article = _article_for_agent(article)
+
+        if source_type in PARSED_DOCUMENT_SOURCE_TYPES:
+            item, ok, reason = analyze_parser_quality_article(agent_article)
+            metadata_patch = {
+                "parser_result": item.get("parser_result"),
+                "parser_quality_score": item.get("parser_quality_score"),
+                "parser_quality_label": item.get("parser_quality_label"),
+                "parser_quality_reason": item.get("parser_quality_reason"),
+            }
+            if ok:
+                parsed_document_ids.append(article_id)
+                update_preprocess_status(
+                    article_id,
+                    "PREPROCESSED_PARSED_DOCUMENT",
+                    {
+                        **metadata_patch,
+                        "document_scope": "company_document",
+                        "preprocess_note": (
+                            f"{source_type} 문서는 parser quality check 후 보존. "
+                            "기사 relevance/dedup/classification 단계는 생략"
+                        ),
+                    },
+                )
+            else:
+                skipped_ids.append(article_id)
+                update_preprocess_status(
+                    article_id,
+                    "SKIPPED_PARSER_QUALITY",
+                    metadata_patch,
+                    error_message=reason,
+                )
+            continue
+
+        if source_type == "trend_report":
+            parser_result = ParserAgent().parse_article(agent_article)
+            industry_document_ids.append(article_id)
+            update_preprocess_status(
+                article_id,
+                "PREPROCESSED_INDUSTRY_DOCUMENT",
+                {
+                    "parser_result": parser_result,
+                    "document_scope": "industry_trend",
+                    "preprocess_note": (
+                        "산업 동향 문서는 기사 relevance/signal 축약 없이 추후 본문 분석 대상으로 보존"
+                    ),
+                },
+            )
+            continue
+
+        if source_type in STRUCTURED_SIGNAL_SOURCE_TYPES:
+            structured_signal_ids.append(article_id)
+            update_preprocess_status(
+                article_id,
+                "PREPROCESSED_STRUCTURED_SIGNAL",
+                {
+                    "signal_scope": source_type,
+                    "preprocess_note": (
+                        f"{source_type} 데이터는 기사/문서가 아닌 구조화 신호로 보존. "
+                        "급변/급증 탐지 및 종합 분석 단계에서 사용"
+                    ),
+                },
+            )
+            continue
+
+        skipped_ids.append(article_id)
+        update_preprocess_status(
+            article_id,
+            "SKIPPED_PREPROCESS_UNSUPPORTED_SOURCE",
+            {"skip_reason": f"{source_type or 'unknown'} source_type은 현재 전처리 대상이 아님"},
+        )
+
+    log.info(
+        "전처리 라우팅 완료 | relevant=%d parsed_docs=%d industry_docs=%d structured=%d skipped=%d",
+        len(relevant_ids),
+        len(parsed_document_ids),
+        len(industry_document_ids),
+        len(structured_signal_ids),
+        len(skipped_ids),
+    )
+    return {
+        **state,
+        "relevant_ids": relevant_ids,
+        "parsed_document_ids": parsed_document_ids,
+        "industry_document_ids": industry_document_ids,
+        "structured_signal_ids": structured_signal_ids,
+        "skipped_preprocess_ids": skipped_ids,
+    }
+
+
+@_logged_step("dedup", "relevant_ids", "representative_ids")
 def dedup_node(state: IngestionState) -> IngestionState:
     """Gate 3: BGE-M3 코사인 유사도 클러스터링."""
     from src.agents.dedup_agent import DeduplicationAgent
 
-    cluster_map, rep_ids = DeduplicationAgent().deduplicate(state["credible_ids"])
+    cluster_map, rep_ids = DeduplicationAgent().deduplicate(state.get("relevant_ids", []))
     log.info("Gate 3 완료 | clusters=%d reps=%d", len(cluster_map), len(rep_ids))
     return {**state, "cluster_map": cluster_map, "representative_ids": rep_ids}
 
@@ -325,6 +487,7 @@ def build_ingestion_graph() -> StateGraph:
 
     graph.add_node("crawl", crawl_node)
     graph.add_node("credibility", credibility_node)
+    graph.add_node("preprocess_route", preprocess_route_node)
     graph.add_node("dedup", dedup_node)
     graph.add_node("classify", classify_node)
     graph.add_node("issue_card", issue_card_node)
@@ -333,7 +496,8 @@ def build_ingestion_graph() -> StateGraph:
 
     graph.set_entry_point("crawl")
     graph.add_edge("crawl", "credibility")
-    graph.add_edge("credibility", "dedup")
+    graph.add_edge("credibility", "preprocess_route")
+    graph.add_edge("preprocess_route", "dedup")
     graph.add_edge("dedup", "classify")
     graph.add_edge("classify", "issue_card")
     graph.add_edge("issue_card", "evidence")
