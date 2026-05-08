@@ -31,7 +31,7 @@ import fitz  # PyMuPDF
 import httpx
 from bs4 import BeautifulSoup
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -1279,7 +1279,7 @@ def parse_args() -> argparse.Namespace:
 
 def default_output_path() -> Path:
     return (
-        Path(__file__).resolve().parent
+        Path(__file__).resolve().parent.parent
         / "crawler_results"
         / f"{Path(__file__).stem}.json"
     )

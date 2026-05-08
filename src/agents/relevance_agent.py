@@ -18,6 +18,7 @@ from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
 from src.config.companies import COMPANY_ALIASES
+from src.config.global_companies import GLOBAL_COMPANY_ALIASES
 from src.config.sectors import match_sectors
 from src.db.article_store import INDUSTRY_TREND_COMPANY
 from src.db.postgres import SessionLocal
@@ -26,6 +27,7 @@ log = logging.getLogger(__name__)
 
 RELEVANCE_THRESHOLD = 0.60
 LLM_CONTENT_LIMIT = 1800
+ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
 
 _llm: ChatOpenAI | None = None
 
@@ -596,7 +598,7 @@ def _fast_pass_result(
     company_in_title = any(
         _compact(alias) in title_compact
         for company_id in matched_companies
-        for alias in COMPANY_ALIASES.get(company_id, [company_id])
+        for alias in ALL_COMPANY_ALIASES.get(company_id, [company_id])
     )
     if not company_in_title:
         return None
@@ -648,7 +650,7 @@ def _is_event_listing_noise(
     company_in_title = any(
         _compact(alias) in title_compact
         for company_id in matched_companies
-        for alias in COMPANY_ALIASES.get(company_id, [company_id])
+        for alias in ALL_COMPANY_ALIASES.get(company_id, [company_id])
     )
     event_in_title = any(
         _compact(keyword) in title_compact for keyword in _EVENT_LISTING_KEYWORDS
@@ -723,7 +725,7 @@ def _match_companies(text_body: str, company: list[str]) -> list[str]:
     matched: list[str] = []
 
     for company_id in company:
-        aliases = COMPANY_ALIASES.get(company_id, [company_id])
+        aliases = ALL_COMPANY_ALIASES.get(company_id, [company_id])
         if any(_compact(alias) in _compact(text_body) for alias in aliases):
             matched.append(company_id)
 

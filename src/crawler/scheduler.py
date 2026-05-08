@@ -40,9 +40,9 @@ def build_scheduler() -> AsyncIOScheduler:
     )
     _add_cron_job(
         scheduler,
-        _run_google_rss,
-        job_id="news_google_rss",
-        name="뉴스 — Google RSS",
+        _run_global_newsroom,
+        job_id="global_newsroom",
+        name="공식 뉴스룸 — Global",
         minute=25,
         misfire_grace_time=600,
     )
@@ -192,17 +192,10 @@ async def _run_naver_news() -> None:
     )
 
 
-async def _run_google_rss() -> None:
-    from src.crawler.sources.rss import RssCrawler
+async def _run_global_newsroom() -> None:
+    from src.crawler.sources.global_newsroom import GlobalNewsroomCrawler
 
-    await _run_company_source(
-        "news_google_rss",
-        lambda peer_id, aliases: RssCrawler(
-            peer_id=peer_id,
-            aliases=aliases,
-            recent_hours=1,
-        ),
-    )
+    await _run_shared_source("global_newsroom", GlobalNewsroomCrawler(max_pages=5))
 
 
 async def _run_company_news() -> None:
@@ -373,6 +366,8 @@ def _to_raw_article(item: Any) -> RawArticle:
 
     if data.get("data") is not None:
         extra.setdefault("data", data["data"])
+    if data.get("company_tier") is not None:
+        extra.setdefault("company_tier", data["company_tier"])
 
     return RawArticle(
         url=str(data.get("url") or data.get("source") or ""),

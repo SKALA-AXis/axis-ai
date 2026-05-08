@@ -36,7 +36,7 @@ import requests
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -152,7 +152,7 @@ def get_default_output_path(file_format: str = "json") -> str:
     current_file_path = Path(__file__).resolve()
     current_file_name = current_file_path.stem
 
-    output_dir = current_file_path.parent / "crawler_results"
+    output_dir = current_file_path.parent.parent / "crawler_results"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     return str(output_dir / f"{current_file_name}.{file_format}")

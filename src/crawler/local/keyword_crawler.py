@@ -22,7 +22,7 @@ API_URL = "https://openapi.naver.com/v1/datalab/search"
 SOURCE_NAME = "naver_datalab"
 CRAWL_TYPE = "trend_signal"
 
-DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "crawler_results"
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "crawler_results"
 DEFAULT_CHART_DIR = DEFAULT_OUTPUT_DIR / "charts"
 
 DEFAULT_TIMEOUT = 10

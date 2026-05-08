@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from src.config.companies import CORP_CODES
+from src.config.global_companies import GLOBAL_COMPANY_IDS
 from src.crawler.base import CrawlWindow, DailyLimitGuard, RawArticle
 from src.crawler.parsers.dedup import DedupStore
 from src.crawler.parsers.link_check import LinkChecker
@@ -29,9 +30,8 @@ class BatchProcessor:
         persist: bool = True,
         recent_hours: int = 1,
     ) -> list[RawArticle]:
-        """Track A — Naver News / Google News RSS (1시간 간격)."""
+        """Track A — Naver News (1시간 간격)."""
         from src.crawler.sources.naver import NaverNewsCrawler
-        from src.crawler.sources.rss import RssCrawler
 
         cutoff_datetime = _hours_cutoff(recent_hours)
         articles: list[RawArticle] = []
@@ -42,7 +42,6 @@ class BatchProcessor:
                     aliases=kws,
                     cutoff_datetime=cutoff_datetime,
                 ),
-                RssCrawler(peer_id=peer_id, aliases=kws, recent_hours=recent_hours),
             ]:
                 try:
                     results = await crawler.crawl()
@@ -75,13 +74,23 @@ class BatchProcessor:
         """Track B — DART, IR, 리서치, 공식 뉴스룸, 채용공고, 검색 트렌드."""
         from src.crawler.sources.company_news import CompanyNewsCrawler
         from src.crawler.sources.dart import DartCrawler
+        from src.crawler.sources.global_newsroom import GlobalNewsroomCrawler
         from src.crawler.sources.ir import IRCrawler
         from src.crawler.sources.jobs import JobCrawler
         from src.crawler.sources.keyword import KeywordCrawler
         from src.crawler.sources.naver_research import NaverResearchCrawler
 
         articles: list[RawArticle] = []
-        for peer_id, kws in keywords.items():
+        domestic_keywords = {
+            peer_id: kws
+            for peer_id, kws in keywords.items()
+            if peer_id not in GLOBAL_COMPANY_IDS
+        }
+        global_company_ids = [
+            peer_id for peer_id in keywords if peer_id in GLOBAL_COMPANY_IDS
+        ]
+
+        for peer_id, kws in domestic_keywords.items():
             for crawler in [
                 DartCrawler(
                     peer_id=peer_id,
@@ -107,6 +116,17 @@ class BatchProcessor:
             ("CompanyNewsCrawler", CompanyNewsCrawler()),
             ("KeywordCrawler", KeywordCrawler()),
         ]
+        if global_company_ids:
+            shared_crawlers.extend(
+                (
+                    f"GlobalNewsroomCrawler[{company_id}]",
+                    GlobalNewsroomCrawler(company=company_id),
+                )
+                for company_id in global_company_ids
+            )
+        elif not keywords:
+            shared_crawlers.append(("GlobalNewsroomCrawler", GlobalNewsroomCrawler()))
+
         for name, shared in shared_crawlers:
             try:
                 articles.extend(await shared.crawl())

@@ -8,6 +8,7 @@ from typing import Any
 from langchain_openai import ChatOpenAI
 
 from src.agents.sector_keywords import SECTOR_IDS, match_sectors, primary_sector
+from src.config.global_companies import GLOBAL_COMPANY_ALIASES
 from src.db.article_store import get_articles_by_ids, update_classification
 
 log = logging.getLogger(__name__)
@@ -317,6 +318,7 @@ def _company_aliases(company: str) -> list[str]:
         "posco_dx": ["포스코DX", "포스코 DX", "POSCO DX"],
         "SK AX": ["SK AX", "SK에이엑스", "SK C&C", "SK㈜ C&C", "에스케이 씨앤씨"],
         "sk_ax": ["SK AX", "SK에이엑스", "SK C&C", "SK㈜ C&C", "에스케이 씨앤씨"],
+        **GLOBAL_COMPANY_ALIASES,
     }
 
     if not company:

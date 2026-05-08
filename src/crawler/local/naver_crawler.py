@@ -19,7 +19,7 @@ import httpx
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -1202,7 +1202,7 @@ def write_image_url_files(articles: list[RawArticle], output_path: Path) -> Path
 
 
 def default_output_path() -> Path:
-    return Path(__file__).resolve().parent / "crawler_results" / f"{Path(__file__).stem}.json"
+    return Path(__file__).resolve().parent.parent / "crawler_results" / f"{Path(__file__).stem}.json"
 
 
 if __name__ == "__main__":

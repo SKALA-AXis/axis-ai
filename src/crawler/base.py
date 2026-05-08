@@ -36,7 +36,6 @@ ContentType = Literal[
     "html",
     "pdf",
     "api",
-    "rss",
     "text",
     "unknown",
 ]

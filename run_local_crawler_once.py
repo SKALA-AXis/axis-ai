@@ -17,29 +17,34 @@ from typing import Any
 
 from src.config.companies import COMPANY_ALIASES, CORP_CODES
 from src.config.env_loader import load_profile
+from src.config.global_companies import GLOBAL_COMPANY_ALIASES, GLOBAL_COMPANY_IDS
 from src.crawler.base import DailyLimitGuard
-from src.crawler.bcg_crawler import BcgCrawler
-from src.crawler.company_news_crawler import CompanyNewsCrawler
-from src.crawler.dart_crawler import DartCrawler
-from src.crawler.ir_crawler import IRCrawler
-from src.crawler.job_crawler import JobCrawler
-from src.crawler.keyword_crawler import KeywordCrawler, save_trend_chart
-from src.crawler.naver_crawler import NaverNewsCrawler, annotate_peer_relevance
+from src.crawler.local.bcg_crawler import BcgCrawler
+from src.crawler.local.company_news_crawler import CompanyNewsCrawler
+from src.crawler.local.dart_crawler import DartCrawler
+from src.crawler.sources.global_newsroom import GlobalNewsroomCrawler
+from src.crawler.local.ir_crawler import IRCrawler
+from src.crawler.local.job_crawler import JobCrawler
+from src.crawler.local.keyword_crawler import KeywordCrawler, save_trend_chart
+from src.crawler.local.naver_crawler import NaverNewsCrawler, annotate_peer_relevance
 from src.crawler.parsers.link_check import LinkChecker
-from src.crawler.research_crawler import NaverResearchCrawler
+from src.crawler.local.research_crawler import NaverResearchCrawler
 from src.crawler.result_writer import DEFAULT_RESULTS_DIR, save_crawler_results
-from src.crawler.rss_crawler import RssCrawler
-from src.crawler.spri_crawler import SpriCrawler
-from src.crawler.stock_crawler import StockCrawler
+from src.crawler.local.spri_crawler import SpriCrawler
+from src.crawler.local.stock_crawler import StockCrawler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("run_local_crawler")
 
-COMPANY_SEARCH_ALIASES = dict(COMPANY_ALIASES)
+DOMESTIC_COMPANY_SEARCH_ALIASES = dict(COMPANY_ALIASES)
+GLOBAL_COMPANY_SEARCH_ALIASES = dict(GLOBAL_COMPANY_ALIASES)
+COMPANY_SEARCH_ALIASES = {
+    **DOMESTIC_COMPANY_SEARCH_ALIASES,
+    **GLOBAL_COMPANY_SEARCH_ALIASES,
+}
 
 COMPANY_SOURCES = [
     "naver_news",
-    "rss",
     "dart",
     "jobs",
     "ir",
@@ -49,6 +54,7 @@ COMPANY_SOURCES = [
 INDUSTRY_SOURCES = [
     "naver_datalab",
     "company_news",
+    "global_newsroom",
     "bcg",
     "spri",
 ]
@@ -57,15 +63,16 @@ ALL_SOURCES = COMPANY_SOURCES + INDUSTRY_SOURCES
 SOURCE_ALIASES = {
     "official": "company_news",
     "job": "jobs",
+    "rss": "global_newsroom",
 }
 MERGED_OUTPUT_SOURCES = {
     "dart",
     "ir",
     "jobs",
     "naver_news",
-    "rss",
     "naver_datalab",
     "naver_research",
+    "global_newsroom",
     "stock",
 }
 RETRY_ON_EMPTY_SOURCES = {"dart", "ir", "naver_datalab", "naver_research"}
@@ -94,7 +101,7 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "실행할 크롤러. 쉼표 구분/공백 포함 쉼표 구분/반복 지정 가능. "
-            "예: --source naver_news,rss,naver_research 또는 --source naver_news, rss"
+            "예: --source naver_news,global_newsroom,naver_research 또는 --source naver_news, global_newsroom"
         ),
     )
     parser.add_argument(
@@ -104,6 +111,17 @@ def _parse_args() -> argparse.Namespace:
         choices=list(COMPANY_SEARCH_ALIASES),
         default=None,
         help="수집할 회사 id. 생략하면 전체 회사 실행. --peer는 하위 호환 alias.",
+    )
+    parser.add_argument(
+        "--company-tier",
+        "--company_tier",
+        dest="company_tier",
+        choices=["domestic", "overseas", "self"],
+        default=None,
+        help=(
+            "수집할 회사 tier. overseas는 global_newsroom, domestic은 국내 peer source를 실행한다. "
+            "예: --source official --company-tier overseas"
+        ),
     )
     parser.add_argument("--env", choices=["local", "cloud"], default=None)
     parser.add_argument(
@@ -137,21 +155,20 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_NEWS_LIMIT,
         help=(
-            "Google News RSS 검색어별 최대 entry 수. "
-            f"기본 base.py news 한도({DEFAULT_NEWS_LIMIT})."
+            "하위 호환용 인자. rss 크롤러 제거 후 global_newsroom에서는 사용하지 않음."
         ),
     )
     parser.add_argument(
         "--rss-delay",
         type=float,
         default=1.0,
-        help="Google News RSS/feed/body 요청 사이 대기 초. 기본 1.0.",
+        help="하위 호환용 인자. rss 크롤러 제거 후 global_newsroom에서는 사용하지 않음.",
     )
     parser.add_argument(
         "--hours",
         type=int,
         default=24,
-        help="naver_news/rss 최근 N시간 수집 범위. 0 이하이면 시간 필터를 끈다. 기본 24.",
+        help="naver_news 최근 N시간 수집 범위. 0 이하이면 시간 필터를 끈다. 기본 24.",
     )
     parser.add_argument(
         "--latest-limit",
@@ -173,7 +190,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-body",
         action="store_true",
-        help="naver/rss 상세 본문 추가 수집을 끈다",
+        help="naver_news 상세 본문 추가 수집을 끈다",
     )
     parser.add_argument(
         "--link-check-concurrency",
@@ -190,6 +207,12 @@ def _build_crawler(source: str, company: str | None, args: argparse.Namespace) -
 
     if source == "company_news":
         return CompanyNewsCrawler(latest_limit=args.latest_limit)
+
+    if source == "global_newsroom":
+        return GlobalNewsroomCrawler(
+            company=company if company in GLOBAL_COMPANY_IDS else None,
+            max_pages=args.latest_limit,
+        )
 
     if source == "bcg":
         return BcgCrawler(
@@ -214,22 +237,10 @@ def _build_crawler(source: str, company: str | None, args: argparse.Namespace) -
         )
         return NaverNewsCrawler(
             peer_id=company,
-            aliases=COMPANY_SEARCH_ALIASES[company],
+            aliases=DOMESTIC_COMPANY_SEARCH_ALIASES[company],
             max_results=args.max_results,
             cutoff_datetime=cutoff_datetime,
             fetch_body=not args.no_body,
-        )
-
-    if source == "rss":
-        if company is None:
-            raise ValueError("rss 크롤러는 company가 필요합니다.")
-        return RssCrawler(
-            peer_id=company,
-            aliases=COMPANY_SEARCH_ALIASES[company],
-            max_entries_per_source=args.max_rss_entries,
-            fetch_body=not args.no_body,
-            recent_hours=args.hours,
-            request_delay=args.rss_delay,
         )
 
     if source == "dart":
@@ -238,7 +249,7 @@ def _build_crawler(source: str, company: str | None, args: argparse.Namespace) -
         return DartCrawler(
             peer_id=company,
             corp_code=CORP_CODES.get(company),
-            corp_names=COMPANY_SEARCH_ALIASES[company],
+            corp_names=DOMESTIC_COMPANY_SEARCH_ALIASES[company],
         )
 
     if source == "jobs":
@@ -310,14 +321,14 @@ def _filter_peer_news_articles(
     company: str | None,
     articles: list[Any],
 ) -> list[Any]:
-    if source not in {"naver_news", "rss"} or company is None:
+    if source not in {"naver_news"} or company is None:
         return articles
 
     before = len(articles)
     annotate_peer_relevance(
         articles,
         target_peer_id=company,
-        tracked_peer_ids=list(COMPANY_SEARCH_ALIASES),
+        tracked_peer_ids=list(DOMESTIC_COMPANY_SEARCH_ALIASES),
     )
     filtered = [
         article
@@ -456,31 +467,99 @@ def _parse_sources(source_values: list[list[str]] | None) -> list[str] | None:
     return sources or None
 
 
+def _resolve_sources_for_company_tier(
+    sources: list[str] | None,
+    company_tier: str | None,
+) -> list[str] | None:
+    if company_tier != "overseas" or not sources:
+        return sources
+
+    resolved: list[str] = []
+    for source in sources:
+        # official은 국내 company_news와 해외 global_newsroom을 모두 뜻할 수 있다.
+        # overseas tier가 명시되면 해외 공식 뉴스룸으로 해석한다.
+        source = "global_newsroom" if source == "company_news" else source
+        if source not in resolved:
+            resolved.append(source)
+    return resolved
+
+
 def _build_run_plan(
     sources: list[str] | None,
     company: str | None,
+    company_tier: str | None = None,
 ) -> list[tuple[str, str | None]]:
     run_plan: list[tuple[str, str | None]] = []
+    domestic_company_ids = list(DOMESTIC_COMPANY_SEARCH_ALIASES)
+    global_company_ids = list(GLOBAL_COMPANY_IDS)
+
+    if company_tier and company:
+        valid_for_tier = (
+            company in DOMESTIC_COMPANY_SEARCH_ALIASES
+            if company_tier == "domestic"
+            else company in GLOBAL_COMPANY_IDS
+            if company_tier == "overseas"
+            else company == "sk_ax"
+        )
+        if not valid_for_tier:
+            raise SystemExit(
+                f"company와 company-tier가 맞지 않습니다: company={company} tier={company_tier}"
+            )
 
     if sources:
         for source in sources:
-            if source in INDUSTRY_SOURCES:
+            if source == "global_newsroom":
+                if company in GLOBAL_COMPANY_IDS:
+                    run_plan.append((source, company))
+                elif company_tier == "overseas":
+                    run_plan.extend((source, company_id) for company_id in global_company_ids)
+                elif company is None:
+                    run_plan.append((source, None))
+            elif source in INDUSTRY_SOURCES:
+                if company_tier == "overseas" and source == "company_news":
+                    run_plan.extend(
+                        ("global_newsroom", company_id) for company_id in global_company_ids
+                    )
+                    continue
+                if company_tier == "overseas":
+                    continue
                 run_plan.append((source, None))
             elif company:
-                run_plan.append((source, company))
+                if company in DOMESTIC_COMPANY_SEARCH_ALIASES:
+                    run_plan.append((source, company))
+            elif company_tier == "domestic" or company_tier is None:
+                run_plan.extend((source, company_id) for company_id in domestic_company_ids)
             else:
-                run_plan.extend((source, company_id) for company_id in COMPANY_SEARCH_ALIASES)
+                continue
 
         return run_plan
 
     if company:
-        for company_source in COMPANY_SOURCES:
-            run_plan.append((company_source, company))
+        if company in DOMESTIC_COMPANY_SEARCH_ALIASES:
+            for company_source in COMPANY_SOURCES:
+                run_plan.append((company_source, company))
+        if company in GLOBAL_COMPANY_IDS:
+            run_plan.append(("global_newsroom", company))
 
         return run_plan
 
+    if company_tier == "overseas":
+        run_plan.extend(("global_newsroom", company_id) for company_id in global_company_ids)
+        return run_plan
+
+    if company_tier == "domestic":
+        for company_source in COMPANY_SOURCES:
+            for company_id in domestic_company_ids:
+                run_plan.append((company_source, company_id))
+        run_plan.append(("company_news", None))
+        return run_plan
+
+    if company_tier == "self":
+        log.warning("self tier는 현재 로컬 크롤러 실행 대상이 없습니다 | company=sk_ax")
+        return run_plan
+
     for company_source in COMPANY_SOURCES:
-        for company_id in COMPANY_SEARCH_ALIASES:
+        for company_id in domestic_company_ids:
             run_plan.append((company_source, company_id))
 
     for industry_source in INDUSTRY_SOURCES:
@@ -494,8 +573,11 @@ async def _run() -> None:
     profile = load_profile(args.env)
     log.info("실행 프로파일: %s", profile)
 
-    sources = _parse_sources(args.source)
-    run_plan = _build_run_plan(sources, args.company)
+    sources = _resolve_sources_for_company_tier(
+        _parse_sources(args.source),
+        args.company_tier,
+    )
+    run_plan = _build_run_plan(sources, args.company, args.company_tier)
 
     log.info("실행 대상 수: %d", len(run_plan))
 

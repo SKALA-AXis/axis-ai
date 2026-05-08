@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
+from src.config.company_tiers import company_tier_map
 from src.crawler.base import RawArticle
 from src.db.postgres import SessionLocal
 
@@ -417,6 +418,7 @@ def _metadata_json(
 
     meta = dict(article.extra)
     meta["url_hash"] = article.url_hash
+    meta["company_tier"] = company_tier_map(storage_company or article.company)
     if article.peer_id and "peer_id" not in meta:
         meta["peer_id"] = article.peer_id
     if (

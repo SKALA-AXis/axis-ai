@@ -39,22 +39,32 @@ _profile = load_profile(_args.env)
 log.info("실행 프로파일: %s", _profile)
 
 from src.config.companies import COMPANY_IDS, company_name_ko  # noqa: E402
+from src.config.global_companies import GLOBAL_COMPANY_IDS, global_company_name_ko  # noqa: E402
 from src.config.sectors import sector_name_ko  # noqa: E402
 from src.pipeline.ingestion_graph import ingestion_graph  # noqa: E402
 
 _BAND_MARK = {"high": "■■■", "medium": "■■ ", "low": "■  "}
 
 
+ALL_COMPANY_IDS = [*COMPANY_IDS, *GLOBAL_COMPANY_IDS]
+
+
+def _company_label(company_id: str) -> str:
+    if company_id in GLOBAL_COMPANY_IDS:
+        return global_company_name_ko(company_id)
+    return company_name_ko(company_id)
+
+
 def _resolve_companies() -> list[str]:
     if not _args.company:
-        return list(COMPANY_IDS)
+        return list(ALL_COMPANY_IDS)
 
-    invalid = sorted({company for company in _args.company if company not in COMPANY_IDS})
+    invalid = sorted({company for company in _args.company if company not in ALL_COMPANY_IDS})
     if invalid:
         _parser.error(
             "알 수 없는 company id: "
             + ", ".join(invalid)
-            + f" | available={', '.join(COMPANY_IDS)}"
+            + f" | available={', '.join(ALL_COMPANY_IDS)}"
         )
 
     return list(dict.fromkeys(_args.company))
@@ -62,7 +72,7 @@ def _resolve_companies() -> list[str]:
 
 def main() -> None:
     company = _resolve_companies()
-    company_labels = [company_name_ko(company_id) for company_id in company]
+    company_labels = [_company_label(company_id) for company_id in company]
     log.info("파이프라인 시작 | company=%s labels=%s", company, company_labels)
 
     initial_state = {

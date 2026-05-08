@@ -91,24 +91,43 @@ _profile = load_profile(_args.env)
 log.info("실행 프로파일: %s", _profile)
 
 from src.config.companies import COMPANY_ALIASES, COMPANY_IDS, company_name_ko  # noqa: E402
+from src.config.company_tiers import company_tier_map  # noqa: E402
+from src.config.global_companies import (  # noqa: E402
+    GLOBAL_COMPANY_ALIASES,
+    GLOBAL_COMPANY_IDS,
+    global_company_name_ko,
+)
 from src.crawler.base import CrawlWindow, RawArticle  # noqa: E402
 from src.crawler.batch_processor import BatchProcessor  # noqa: E402
 
 
-def _resolve_company_keywords() -> dict[str, list[str]]:
+ALL_COMPANY_IDS = [*COMPANY_IDS, *GLOBAL_COMPANY_IDS]
+ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
+
+
+def _company_label(company_id: str) -> str:
+    if company_id in GLOBAL_COMPANY_IDS:
+        return global_company_name_ko(company_id)
+    return company_name_ko(company_id)
+
+
+def _resolve_company_keywords(*, include_global: bool) -> dict[str, list[str]]:
     if not _args.company:
+        if include_global:
+            return dict(ALL_COMPANY_ALIASES)
         return dict(COMPANY_ALIASES)
 
-    invalid = sorted({company for company in _args.company if company not in COMPANY_IDS})
+    invalid = sorted({company for company in _args.company if company not in ALL_COMPANY_IDS})
     if invalid:
         raise SystemExit(
             "알 수 없는 company id: "
             + ", ".join(invalid)
-            + f" | available={', '.join(COMPANY_IDS)}"
+            + f" | available={', '.join(ALL_COMPANY_IDS)}"
         )
 
     selected = list(dict.fromkeys(_args.company))
-    return {company: COMPANY_ALIASES[company] for company in selected}
+    allowed = set(ALL_COMPANY_IDS if include_global else COMPANY_IDS)
+    return {company: ALL_COMPANY_ALIASES[company] for company in selected if company in allowed}
 
 
 def _summarize(label: str, articles: list[RawArticle]) -> None:
@@ -181,6 +200,7 @@ def _article_to_dict(article: RawArticle) -> dict:
         "source_name": article.source_name,
         "publisher": article.publisher,
         "company": article.company,
+        "company_tier": company_tier_map(article.company),
         "published_at": article.published_at.isoformat() if article.published_at else None,
         "collected_at": article.collected_at.isoformat(),
         "url_hash": article.url_hash,
@@ -196,9 +216,9 @@ async def _run(track: str) -> None:
     processor = BatchProcessor()
     persist = not _args.skip_db
     crawl_window = _build_window()
-    company_keywords = _resolve_company_keywords()
-    company_labels = [company_name_ko(company_id) for company_id in company_keywords]
     if track in ("a", "all"):
+        company_keywords = _resolve_company_keywords(include_global=False)
+        company_labels = [_company_label(company_id) for company_id in company_keywords]
         log.info("Track A 시작 | company=%s labels=%s", list(company_keywords), company_labels)
         articles = await processor.run_track_a(
             company_keywords,
@@ -209,6 +229,8 @@ async def _run(track: str) -> None:
         _save_local("track_a", articles)
 
     if track in ("b", "all"):
+        company_keywords = _resolve_company_keywords(include_global=True)
+        company_labels = [_company_label(company_id) for company_id in company_keywords]
         log.info("Track B 시작 | company=%s labels=%s", list(company_keywords), company_labels)
         articles = await processor.run_track_b(
             company_keywords,

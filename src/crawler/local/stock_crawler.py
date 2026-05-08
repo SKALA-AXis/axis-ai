@@ -41,7 +41,7 @@ try:
     from src.config.company_tiers import company_tier_map
     from src.config.companies import COMPANIES, NAVER_ITEM_CODES
 except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
     from src.config.company_tiers import company_tier_map
     from src.config.companies import COMPANIES, NAVER_ITEM_CODES
 

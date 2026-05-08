@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 from src.agents.relevance_agent import _metadata_patch_for_relevance
 from src.crawler.base import RawArticle
-from src.crawler.bcg_crawler import match_bcg_core_sectors
-from src.crawler.naver_crawler import (
+from src.crawler.sources.bcg import match_bcg_core_sectors
+from src.crawler.sources.naver import (
     article_mentions_target_peer,
     classify_peer_relevance,
     get_search_aliases,
