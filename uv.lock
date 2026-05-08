@@ -238,6 +238,8 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+    { name = "types-python-dateutil" },
+    { name = "types-requests" },
 ]
 
 [package.metadata]
@@ -274,6 +276,8 @@ dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "ruff", specifier = ">=0.5" },
+    { name = "types-python-dateutil", specifier = ">=2.9.0.20260408" },
+    { name = "types-requests", specifier = ">=2.33.0.20260503" },
 ]
 
 [[package]]
@@ -4171,6 +4175,27 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/df/3d/9e7eee57b37c80cec63322c0231bb6da3cfe535a91d7a4d64896fcb89357/triton-3.6.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a17a5d5985f0ac494ed8a8e54568f092f7057ef60e1b0fa09d3fd1512064e803", size = 188273063, upload-time = "2026-01-20T16:01:07.278Z" },
     { url = "https://files.pythonhosted.org/packages/48/db/56ee649cab5eaff4757541325aca81f52d02d4a7cd3506776cad2451e060/triton-3.6.0-cp314-cp314t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:0b3a97e8ed304dfa9bd23bb41ca04cdf6b2e617d5e782a8653d616037a5d537d", size = 176274804, upload-time = "2026-01-20T16:16:31.528Z" },
     { url = "https://files.pythonhosted.org/packages/f6/56/6113c23ff46c00aae423333eb58b3e60bdfe9179d542781955a5e1514cb3/triton-3.6.0-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:46bd1c1af4b6704e554cad2eeb3b0a6513a980d470ccfa63189737340c7746a7", size = 188397994, upload-time = "2026-01-20T16:01:14.236Z" },
+]
+
+[[package]]
+name = "types-python-dateutil"
+version = "2.9.0.20260408"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/f3/2427775f80cd5e19a0a71ba8e5ab7645a01a852f43a5fd0ffc24f66338e0/types_python_dateutil-2.9.0.20260408.tar.gz", hash = "sha256:8b056ec01568674235f64ecbcef928972a5fac412f5aab09c516dfa2acfbb582", size = 16981, upload-time = "2026-04-08T04:28:10.995Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/c6/eeba37bfee282a6a97f889faef9352d6172c6a5088eb9a4daf570d9d748d/types_python_dateutil-2.9.0.20260408-py3-none-any.whl", hash = "sha256:473139d514a71c9d1fbd8bb328974bedcb1cc3dba57aad04ffa4157f483c216f", size = 18437, upload-time = "2026-04-08T04:28:10.095Z" },
+]
+
+[[package]]
+name = "types-requests"
+version = "2.33.0.20260503"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a1/b8/57e94268c0d82ac3eaa2fc35aa8ca7bbc2542f726b67dcf90b0b00a3b14d/types_requests-2.33.0.20260503.tar.gz", hash = "sha256:9721b2d9dbee7131f2fb39f20f0ebb1999c18cef4b512c9a7932f3722de7c5f4", size = 23931, upload-time = "2026-05-03T05:20:08.882Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c3/82/959113a6351f3ca046cd0a8cd2cee071d7ea47473560557a01eeae9a6fe2/types_requests-2.33.0.20260503-py3-none-any.whl", hash = "sha256:02aaa7e3577a13471715bb1bddb693cc985ea514f754b503bf033e6a09a3e528", size = 20736, upload-time = "2026-05-03T05:20:07.858Z" },
 ]
 
 [[package]]

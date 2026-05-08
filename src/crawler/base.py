@@ -144,7 +144,7 @@ class DailyLimitGuard:
 
     GLOBAL_LIMIT = 20_000
 
-    SOURCE_TYPE_LIMITS: dict[SourceType, int] = {
+    SOURCE_TYPE_LIMITS: dict[str, int] = {
         "news": 10000,
         "official": 100,
         "ir": 100,
@@ -220,9 +220,7 @@ def _dedupe_keep_order(values: list[str]) -> list[str]:
     return result
 
 
-def _align_tz(boundary: Optional[datetime], value: datetime) -> Optional[datetime]:
-    if boundary is None:
-        return None
+def _align_tz(boundary: datetime, value: datetime) -> datetime:
     if value.tzinfo is None and boundary.tzinfo is not None:
         return boundary.replace(tzinfo=None)
     if value.tzinfo is not None and boundary.tzinfo is None:

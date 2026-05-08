@@ -348,9 +348,8 @@ class IRParserAgent:
 
         pages: list[str] = []
         try:
-            for idx, page in enumerate(doc):
-                if idx >= max_pages:
-                    break
+            for idx in range(min(len(doc), max_pages)):
+                page = doc.load_page(idx)
                 pages.append(page.get_text("text") or "")
         finally:
             doc.close()

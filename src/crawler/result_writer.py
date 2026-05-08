@@ -47,7 +47,7 @@ def _to_dict(article: Any) -> dict[str, Any]:
     published_at = getattr(article, "published_at", None)
     collected_at = getattr(article, "collected_at", None)
 
-    data = {
+    data: dict[str, Any] = {
         "id": getattr(article, "id", None),
         "source_type": getattr(article, "source_type", "news"),
         "source_name": getattr(article, "source_name", None),
@@ -72,6 +72,7 @@ def _to_dict(article: Any) -> dict[str, Any]:
     if peer_id and not data["company"]:
         data["company"] = [peer_id]
 
-    data["company_tier"] = company_tier_map(data["company"])
+    companies = [str(company) for company in data["company"] if company]
+    data["company_tier"] = company_tier_map(companies)
 
     return data

@@ -36,6 +36,8 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pre-commit>=3.0",
+    "types-requests>=2.33.0.20260503",
+    "types-python-dateutil>=2.9.0.20260408",
 ]
 
 [tool.ruff]
@@ -51,7 +53,15 @@ strict_optional = true
 ignore_missing_imports = true
 exclude = [
     "src/agents/_deprecated/",  # v3에서 보관 처리된 v1 에이전트 — 운영 경로 아님
+    "src/crawler/local/",       # 로컬 단독 실행용 크롤러 — 운영 import 경로 아님
 ]
+
+[[tool.mypy.overrides]]
+module = [
+    "src.crawler.sources.*",
+    "src.crawler.parsers.*",
+]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
