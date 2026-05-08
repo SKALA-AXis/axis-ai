@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -50,8 +50,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--lookback-days",
         type=int,
-        default=1,
-        help="Track B 수집 기간. 기본 1일이며 run_crawler_once.py에 전달한다.",
+        default=None,
+        help="Track B 수집 기간. 지정 시 run_crawler_once.py에 전달한다.",
     )
     parser.add_argument(
         "--start-date",
@@ -94,15 +94,10 @@ def _crawler_cmd(args: argparse.Namespace) -> list[str]:
     return cmd
 
 
-def _preprocess_cmd(
-    args: argparse.Namespace,
-    collected_since: str,
-    published_since: str,
-) -> list[str]:
+def _preprocess_cmd(args: argparse.Namespace, collected_since: str) -> list[str]:
     cmd = [sys.executable, str(ROOT / "run_pipeline_once.py"), "--preprocess-only"]
     _append_shared_args(cmd, args)
     cmd.extend(["--collected-since", collected_since])
-    cmd.extend(["--published-since", published_since])
     return cmd
 
 
@@ -126,20 +121,13 @@ def main() -> None:
     args = _parse_args()
     started_at = datetime.now(timezone.utc)
     collected_since = started_at.isoformat()
-    published_since = _published_since(args, started_at)
     _run_step("1/2 크롤러", _crawler_cmd(args))
 
     if args.skip_preprocess:
         print("\n--skip-preprocess 지정으로 DB 전처리 실행을 건너뜁니다.")
         return
 
-    _run_step("2/2 DB 전처리", _preprocess_cmd(args, collected_since, published_since))
-
-
-def _published_since(args: argparse.Namespace, now: datetime) -> str:
-    if args.track == "a":
-        return (now - timedelta(hours=args.news_hours or 1)).isoformat()
-    return (now - timedelta(days=args.lookback_days or 1)).isoformat()
+    _run_step("2/2 DB 전처리", _preprocess_cmd(args, collected_since))
 
 
 if __name__ == "__main__":

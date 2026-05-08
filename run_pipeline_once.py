@@ -41,11 +41,6 @@ _parser.add_argument(
     default=None,
     help="지정 시 해당 ISO timestamp 이후 collected_at을 가진 RAW만 처리한다.",
 )
-_parser.add_argument(
-    "--published-since",
-    default=None,
-    help="지정 시 해당 ISO timestamp 이후 published_at을 가진 RAW만 처리한다.",
-)
 _args = _parser.parse_args()
 
 from src.config.env_loader import load_profile  # noqa: E402
@@ -102,7 +97,6 @@ def main() -> None:
         "company": company,
         "trigger_type": "manual",
         "collected_since": _args.collected_since,
-        "published_since": _args.published_since,
         "raw_article_ids": [],
         "credible_ids": [],
         "relevant_ids": [],

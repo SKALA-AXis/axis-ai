@@ -130,17 +130,6 @@ class BatchProcessor:
             except Exception as e:
                 log.error("Track B 크롤 오류 | crawler=%s error=%s", name, e)
 
-        if crawl_window:
-            before_count = len(articles)
-            articles = [
-                article for article in articles if crawl_window.contains(article.published_at)
-            ]
-            log.info(
-                "Track B 발행일 필터 적용 | before=%d after=%d",
-                before_count,
-                len(articles),
-            )
-
         accessible, rejected = await self.link_checker.filter_accessible(articles)
         new_articles = self.dedup.filter_new(accessible)
         inserted = save_articles(new_articles) if persist else 0
