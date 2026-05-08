@@ -334,6 +334,40 @@ def _company_aliases(company: str) -> list[str]:
     return aliases.get(company, [company])
 
 
+def _matched_sectors(article: dict[str, Any], *, title: str, content: str) -> list[str]:
+    stored = _string_list(article.get("matched_sectors"))
+    valid_stored = [sector for sector in stored if sector in SECTOR_IDS and sector != "other"]
+    if valid_stored:
+        return valid_stored
+
+    scores: dict[str, int] = {}
+    for sector in match_sectors(title):
+        if sector != "other":
+            scores[sector] = scores.get(sector, 0) + 3
+    for sector in match_sectors(content):
+        if sector != "other":
+            scores[sector] = scores.get(sector, 0) + 1
+
+    if not scores:
+        return ["other"]
+
+    return sorted(scores, key=lambda sector: (-scores[sector], SECTOR_IDS.index(sector)))
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            stripped = value.strip()
+            return [stripped] if stripped else []
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed if item]
+    return []
+
+
 def _zero_exposure() -> dict[str, Any]:
     return {
         "exposure_score": 0.0,
@@ -365,9 +399,10 @@ class ClassificationAgent:
 
         target_company = company or rep.get("company", "")
 
-        haystack = f"{rep.get('title', '')} {rep.get('content', '')}"
-        matched_sectors = match_sectors(haystack)
-        sector = primary_sector(haystack)
+        title = str(rep.get("title") or "")
+        content = str(rep.get("content") or "")
+        matched_sectors = _matched_sectors(rep, title=title, content=content)
+        sector = matched_sectors[0]
 
         exposure = compute_exposure(articles, target_company)
 
@@ -425,8 +460,10 @@ class ClassificationAgent:
         rep_article: dict[str, Any],
         exposure: dict[str, Any],
     ) -> tuple[str, str]:
-        text = f"{rep_article.get('title', '')} {rep_article.get('content', '')}"
-        rule_event_type, rule_reasoning = _classify_event_type_rule_based(text)
+        rule_event_type, rule_reasoning = _classify_event_type_rule_based(
+            title=str(rep_article.get("title") or ""),
+            content=str(rep_article.get("content") or ""),
+        )
 
         if rule_event_type:
             return rule_event_type, rule_reasoning
@@ -460,7 +497,30 @@ class ClassificationAgent:
             return "company", ""
 
 
-def _classify_event_type_rule_based(text: str) -> tuple[str | None, str]:
+def _classify_event_type_rule_based(
+    text: str | None = None,
+    *,
+    title: str = "",
+    content: str = "",
+) -> tuple[str | None, str]:
+    if text is not None:
+        title = text
+        content = ""
+
+    title_matches = _event_type_matches(title)
+    if title_matches:
+        event_type, count = title_matches[0]
+        return event_type, f"규칙 기반 제목 키워드 매칭: {event_type}({count})"
+
+    content_matches = _event_type_matches(content)
+    if content_matches:
+        event_type, count = content_matches[0]
+        return event_type, f"규칙 기반 본문 키워드 매칭: {event_type}({count})"
+
+    return None, ""
+
+
+def _event_type_matches(text: str) -> list[tuple[str, int]]:
     matched: list[tuple[str, int]] = []
 
     for event_type, keywords in EVENT_TYPE_KEYWORDS.items():
@@ -468,18 +528,8 @@ def _classify_event_type_rule_based(text: str) -> tuple[str | None, str]:
         if count > 0:
             matched.append((event_type, count))
 
-    if not matched:
-        return None, ""
-
     matched.sort(key=lambda x: (-x[1], EVENT_TYPE_PRIORITY.get(x[0], 99)))
-
-    if len(matched) == 1:
-        return matched[0][0], f"규칙 기반 키워드 매칭: {matched[0][0]}"
-
-    if matched[0][1] > matched[1][1]:
-        return matched[0][0], f"규칙 기반 키워드 매칭: {matched[0][0]}"
-
-    return matched[0][0], f"규칙 기반 키워드 동점 우선순위: {matched[0][0]}"
+    return matched
 
 
 def _to_band(score: float) -> str:
