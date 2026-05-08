@@ -36,6 +36,11 @@ _parser.add_argument(
     action="store_true",
     help="issue_card/evidence/vector index 없이 전처리(classification)까지만 실행.",
 )
+_parser.add_argument(
+    "--collected-since",
+    default=None,
+    help="지정 시 해당 ISO timestamp 이후 collected_at을 가진 RAW만 처리한다.",
+)
 _args = _parser.parse_args()
 
 from src.config.env_loader import load_profile  # noqa: E402
@@ -91,6 +96,7 @@ def main() -> None:
     initial_state = {
         "company": company,
         "trigger_type": "manual",
+        "collected_since": _args.collected_since,
         "raw_article_ids": [],
         "credible_ids": [],
         "relevant_ids": [],

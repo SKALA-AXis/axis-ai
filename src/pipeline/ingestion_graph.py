@@ -32,6 +32,7 @@ STRUCTURED_SIGNAL_SOURCE_TYPES = {"job", "market_data", "search_trend", "social"
 class IngestionState(TypedDict):
     company: list[str]
     trigger_type: str
+    collected_since: str | None
     raw_article_ids: list[int]
     credible_ids: list[int]
     relevant_ids: list[int]
@@ -172,8 +173,16 @@ def crawl_node(state: IngestionState) -> IngestionState:
     """처리 대기 중인 RAW 기사 ID를 DB에서 조회한다."""
     from src.agents.crawler_agent import CrawlerAgent
 
-    raw_ids = CrawlerAgent().load_raw_ids(state["company"])
-    log.info("RAW 기사 로드 | company=%s count=%d", state["company"], len(raw_ids))
+    raw_ids = CrawlerAgent().load_raw_ids(
+        state["company"],
+        collected_since=state.get("collected_since"),
+    )
+    log.info(
+        "RAW 기사 로드 | company=%s collected_since=%s count=%d",
+        state["company"],
+        state.get("collected_since"),
+        len(raw_ids),
+    )
     return {**state, "raw_article_ids": raw_ids}
 
 

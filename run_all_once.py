@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -93,9 +94,10 @@ def _crawler_cmd(args: argparse.Namespace) -> list[str]:
     return cmd
 
 
-def _preprocess_cmd(args: argparse.Namespace) -> list[str]:
+def _preprocess_cmd(args: argparse.Namespace, collected_since: str) -> list[str]:
     cmd = [sys.executable, str(ROOT / "run_pipeline_once.py"), "--preprocess-only"]
     _append_shared_args(cmd, args)
+    cmd.extend(["--collected-since", collected_since])
     return cmd
 
 
@@ -117,13 +119,14 @@ def _run_step(label: str, cmd: list[str]) -> None:
 
 def main() -> None:
     args = _parse_args()
+    collected_since = datetime.now(timezone.utc).isoformat()
     _run_step("1/2 크롤러", _crawler_cmd(args))
 
     if args.skip_preprocess:
         print("\n--skip-preprocess 지정으로 DB 전처리 실행을 건너뜁니다.")
         return
 
-    _run_step("2/2 DB 전처리", _preprocess_cmd(args))
+    _run_step("2/2 DB 전처리", _preprocess_cmd(args, collected_since))
 
 
 if __name__ == "__main__":

@@ -25,6 +25,18 @@ EVENT_TYPES = [
     "company",
 ]
 
+EVENT_TYPE_PRIORITY = {
+    "ma": 0,
+    "contract": 1,
+    "financial": 2,
+    "partnership": 3,
+    "regulation": 4,
+    "expansion": 5,
+    "personnel": 6,
+    "tech_release": 7,
+    "company": 8,
+}
+
 EVENT_TYPE_KEYWORDS: dict[str, list[str]] = {
     "partnership": [
         "협약",
@@ -437,15 +449,15 @@ class ClassificationAgent:
             )
             data = _parse_json(content)
 
-            event_type = data.get("event_type", "tech_release")
+            event_type = data.get("event_type", "company")
             if event_type not in EVENT_TYPES:
-                event_type = "tech_release"
+                event_type = "company"
 
             return event_type, data.get("reasoning", "")
 
         except Exception as e:
-            log.warning("event_type 분류 실패, tech_release 기본값 | error=%s", e)
-            return "tech_release", ""
+            log.warning("event_type 분류 실패, company 기본값 | error=%s", e)
+            return "company", ""
 
 
 def _classify_event_type_rule_based(text: str) -> tuple[str | None, str]:
@@ -459,7 +471,7 @@ def _classify_event_type_rule_based(text: str) -> tuple[str | None, str]:
     if not matched:
         return None, ""
 
-    matched.sort(key=lambda x: x[1], reverse=True)
+    matched.sort(key=lambda x: (-x[1], EVENT_TYPE_PRIORITY.get(x[0], 99)))
 
     if len(matched) == 1:
         return matched[0][0], f"규칙 기반 키워드 매칭: {matched[0][0]}"
@@ -467,7 +479,7 @@ def _classify_event_type_rule_based(text: str) -> tuple[str | None, str]:
     if matched[0][1] > matched[1][1]:
         return matched[0][0], f"규칙 기반 키워드 매칭: {matched[0][0]}"
 
-    return None, "복수 event_type 후보가 유사하여 LLM 판단 필요"
+    return matched[0][0], f"규칙 기반 키워드 동점 우선순위: {matched[0][0]}"
 
 
 def _to_band(score: float) -> str:
@@ -521,7 +533,7 @@ def _default_result() -> dict[str, Any]:
             "credibility_max": 0.0,
             "impact_signals": [],
         },
-        "event_type": "tech_release",
+        "event_type": "company",
         "reasoning": "",
         "importance": "low",
         "importance_score": 0.0,
