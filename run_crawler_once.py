@@ -6,13 +6,19 @@
   uv run python run_crawler_once.py --track b
   uv run python run_crawler_once.py --track all
   uv run python run_crawler_once.py --env local           # .env.local 로드 (로컬 DB)
-  uv run python run_crawler_once.py --env cloud           # .env.cloud 로드 (Supabase + Qdrant Cloud)
+  uv run python run_crawler_once.py --env cloud           # .env.cloud 로드
+  uv run python run_crawler_once.py --company sk_ax
+  uv run python run_crawler_once.py --company samsung_sds --company lg_cns
+  uv run python run_crawler_once.py --news-hours 1        # Track A 최근 1시간 뉴스
 """
 
 import argparse
 import asyncio
+import json
 import logging
 from collections import Counter
+from datetime import datetime, time, timedelta
+from pathlib import Path
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,6 +42,44 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="DB 프로파일. .env.{profile} 파일이 있으면 로드, 없으면 프로세스 env 사용.",
     )
+    parser.add_argument(
+        "--skip-db",
+        action="store_true",
+        help="DB 저장을 건너뛰고 크롤링/중복제거 결과만 반환한다.",
+    )
+    parser.add_argument(
+        "--company",
+        action="append",
+        default=None,
+        help="수집할 company id. 여러 번 지정 가능. 생략하면 config의 전체 회사.",
+    )
+    parser.add_argument(
+        "--local-output",
+        default=None,
+        help="크롤 결과 JSON을 저장할 디렉터리. 예: data/crawl_outputs",
+    )
+    parser.add_argument(
+        "--news-hours",
+        type=int,
+        default=1,
+        help="Track A 뉴스 수집 범위. 최근 N시간 기사만 수집한다. 기본 1.",
+    )
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=None,
+        help="Track B 수집 기간. --start-date가 없을 때 오늘 기준 최근 N일.",
+    )
+    parser.add_argument(
+        "--start-date",
+        default=None,
+        help="Track B 수집 시작일 YYYY-MM-DD.",
+    )
+    parser.add_argument(
+        "--end-date",
+        default=None,
+        help="Track B 수집 종료일 YYYY-MM-DD. 미지정 시 현재 시각.",
+    )
     return parser.parse_args()
 
 
@@ -46,9 +90,44 @@ from src.config.env_loader import load_profile  # noqa: E402
 _profile = load_profile(_args.env)
 log.info("실행 프로파일: %s", _profile)
 
-from src.crawler.base import RawArticle  # noqa: E402
+from src.config.companies import COMPANY_ALIASES, COMPANY_IDS, company_name_ko  # noqa: E402
+from src.config.company_tiers import company_tier_map  # noqa: E402
+from src.config.global_companies import (  # noqa: E402
+    GLOBAL_COMPANY_ALIASES,
+    GLOBAL_COMPANY_IDS,
+    global_company_name_ko,
+)
+from src.crawler.base import CrawlWindow, RawArticle  # noqa: E402
 from src.crawler.batch_processor import BatchProcessor  # noqa: E402
-from src.crawler.scheduler import PEER_KEYWORDS  # noqa: E402
+
+
+ALL_COMPANY_IDS = [*COMPANY_IDS, *GLOBAL_COMPANY_IDS]
+ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
+
+
+def _company_label(company_id: str) -> str:
+    if company_id in GLOBAL_COMPANY_IDS:
+        return global_company_name_ko(company_id)
+    return company_name_ko(company_id)
+
+
+def _resolve_company_keywords(*, include_global: bool) -> dict[str, list[str]]:
+    if not _args.company:
+        if include_global:
+            return dict(ALL_COMPANY_ALIASES)
+        return dict(COMPANY_ALIASES)
+
+    invalid = sorted({company for company in _args.company if company not in ALL_COMPANY_IDS})
+    if invalid:
+        raise SystemExit(
+            "알 수 없는 company id: "
+            + ", ".join(invalid)
+            + f" | available={', '.join(ALL_COMPANY_IDS)}"
+        )
+
+    selected = list(dict.fromkeys(_args.company))
+    allowed = set(ALL_COMPANY_IDS if include_global else COMPANY_IDS)
+    return {company: ALL_COMPANY_ALIASES[company] for company in selected if company in allowed}
 
 
 def _summarize(label: str, articles: list[RawArticle]) -> None:
@@ -59,29 +138,107 @@ def _summarize(label: str, articles: list[RawArticle]) -> None:
     if not articles:
         return
 
-    by_peer: Counter[str] = Counter(a.peer_id or "unknown" for a in articles)
+    by_company: Counter[str] = Counter((a.company or ["unknown"])[0] for a in articles)
     by_source: Counter[str] = Counter(a.source_name for a in articles)
+    with_content_count = sum(1 for a in articles if a.content)
 
-    print("\n  ── Peer별 ──")
-    for peer, n in by_peer.most_common():
-        print(f"    {peer:18s} {n}건")
+    print("\n  ── Company별 ──")
+    for company, n in by_company.most_common():
+        print(f"    {company:18s} {n}건")
 
     print("\n  ── 소스별 ──")
     for source, n in by_source.most_common():
         print(f"    {source:24s} {n}건")
 
+    print("\n  ── 기본 상태 ──")
+    print(f"    content 존재           {with_content_count}/{len(articles)}건")
+
+
+def _build_window() -> CrawlWindow | None:
+    if not (_args.start_date or _args.end_date or _args.lookback_days):
+        return None
+
+    if _args.start_date:
+        start = datetime.combine(datetime.strptime(_args.start_date, "%Y-%m-%d").date(), time.min)
+    else:
+        days = _args.lookback_days or 1
+        start = datetime.now().replace(microsecond=0) - timedelta(days=days)
+
+    if _args.end_date:
+        end = datetime.combine(datetime.strptime(_args.end_date, "%Y-%m-%d").date(), time.max)
+    else:
+        end = datetime.now().replace(microsecond=0)
+    return CrawlWindow(start=start, end=end)
+
+
+def _save_local(label: str, articles: list[RawArticle]) -> Path | None:
+    if not _args.local_output:
+        return None
+    output_dir = Path(_args.local_output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path = output_dir / f"{label.lower()}_{ts}.json"
+    output_path.write_text(
+        json.dumps(
+            [_article_to_dict(article) for article in articles],
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    print(f"\n  로컬 저장: {output_path}")
+    return output_path
+
+
+def _article_to_dict(article: RawArticle) -> dict:
+    return {
+        "id": article.id,
+        "source_type": article.source_type,
+        "url": article.url,
+        "title": article.title,
+        "content": article.content,
+        "source_name": article.source_name,
+        "publisher": article.publisher,
+        "company": article.company,
+        "company_tier": company_tier_map(article.company),
+        "published_at": article.published_at.isoformat() if article.published_at else None,
+        "collected_at": article.collected_at.isoformat(),
+        "url_hash": article.url_hash,
+        "language": article.language,
+        "content_type": article.content_type,
+        "crawl_status": article.crawl_status,
+        "error_message": article.error_message,
+        "extra": article.extra,
+    }
+
 
 async def _run(track: str) -> None:
     processor = BatchProcessor()
+    persist = not _args.skip_db
+    crawl_window = _build_window()
     if track in ("a", "all"):
-        log.info("Track A 시작 | peers=%s", list(PEER_KEYWORDS))
-        articles = await processor.run_track_a(PEER_KEYWORDS)
+        company_keywords = _resolve_company_keywords(include_global=False)
+        company_labels = [_company_label(company_id) for company_id in company_keywords]
+        log.info("Track A 시작 | company=%s labels=%s", list(company_keywords), company_labels)
+        articles = await processor.run_track_a(
+            company_keywords,
+            persist=persist,
+            recent_hours=_args.news_hours,
+        )
         _summarize("Track A", articles)
+        _save_local("track_a", articles)
 
     if track in ("b", "all"):
-        log.info("Track B 시작 | peers=%s", list(PEER_KEYWORDS))
-        articles = await processor.run_track_b(PEER_KEYWORDS)
+        company_keywords = _resolve_company_keywords(include_global=True)
+        company_labels = [_company_label(company_id) for company_id in company_keywords]
+        log.info("Track B 시작 | company=%s labels=%s", list(company_keywords), company_labels)
+        articles = await processor.run_track_b(
+            company_keywords,
+            persist=persist,
+            crawl_window=crawl_window,
+        )
         _summarize("Track B", articles)
+        _save_local("track_b", articles)
 
 
 def main() -> None:

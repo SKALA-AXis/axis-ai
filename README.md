@@ -1,6 +1,6 @@
 # axis-ai
 
-AXIS 서비스의 Python AI 서버. **뉴스·공시·채용공고 크롤링 → LangGraph 5-노드 분석 파이프라인 → 이슈 카드 + 검증 첨부 4종 생성**까지 담당합니다.
+AXIS 서비스의 Python AI 서버. **뉴스·공시·채용공고 크롤링 → 로컬 JSON 저장/전처리 → LangGraph 5-노드 분석 파이프라인 → 이슈 카드 + 검증 첨부 4종 생성**까지 담당합니다.
 
 > 전체 프로젝트 개요는 [axis-infra](https://github.com/SKALA-AXis/axis-infra) 참조.
 
@@ -97,7 +97,14 @@ docker compose --profile local --env-file .env.local up -d
 | **FinancialLinkerAgent 신설** | 카드 ↔ 재무 segment QoQ/YoY 매칭 + vs SK AX 결정적 비교 4지표 | DART OpenAPI 실수치 기반 |
 | **classification_agent v3** | 트렌드 섹터(5종) + **결정적 노출도** 산식 (LLM 5축 점수 폐기) | 추적·재현 가능한 점수 |
 | **`data/peer_financials/` 신설** | 4개 peer + sk_ax JSON, DART OpenAPI 실수치 + segment/AI비중 stub | FinancialLinkerAgent 입력 |
-| **IRParserAgent 추가 (스켈레톤)** | PyMuPDF 기반 IR PDF 텍스트 추출 | W5에서 본격 활성 |
+| **ParserAgent 추가** | PyMuPDF 기반 PDF/문서 payload 파싱 | IR·증권사 리포트·산업 동향 PDF에 공통 적용 |
+| **크롤러 결과 JSON 통일** | `crawler_results/*.json` 배열 포맷 사용 | JSONL 대신 일반 JSON으로 저장/전처리 |
+| **`company_tier` 추가** | `self`, `domestic`, `overseas` 구분 | SK AX=self, 기존 config 회사=domestic, 향후 global_companies=overseas |
+| **전처리 runner 분리** | `run_preprocess_once.py`는 크롤링 없이 저장된 JSON만 처리 | `--source-type news`처럼 결과 파일 내부 source_type 기준 필터 |
+| **homepage crawler 정리** | 미사용 `company_homepage` 계열 제거 | 공식/회사 뉴스는 `company_news` 흐름으로 관리 |
+| **RSS 제거 / 글로벌 공식 뉴스룸 추가** | `rss` 소스 제거, `global_newsroom` 추가 | 해외 peer 공식 발표는 `source_type=official`로 수집 |
+| **공통 PDF 파서 추가** | IR, 증권사 리포트, SPRi/BCG 등 PDF payload 추출 | page text/table/image 후보를 JSON extra에 보존 |
+| **전처리 source별 라우팅** | 기사형/문서형/구조화 신호를 분리 | DART·IR·증권사 리포트는 관련도 판단 없이 parser quality 후 보존 |
 
 ---
 
@@ -151,6 +158,9 @@ axis-ai/
 ├── pyproject.toml                  # uv 의존성 정의
 ├── uv.lock                         # 잠금 파일 — 반드시 커밋
 ├── run_crawler_once.py             # 크롤러 1회 실행 (Track A/B 선택)
+├── run_all_once.py                 # DB 크롤링 → DB 전처리 순차 실행
+├── run_local_crawler_once.py       # 크롤러 1회 실행 후 crawler_results/*.json 저장
+├── run_preprocess_once.py          # 저장된 crawler JSON만 전처리하는 로컬 runner
 ├── run_pipeline_once.py            # 파이프라인 1회 실행 스크립트 (디버깅용)
 ├── .env.example
 │
@@ -161,7 +171,7 @@ axis-ai/
 │   │   ├── hyundai_autoever.json
 │   │   └── posco_dx.json
 │   ├── sk_ax_financials.json       # SK 지주(holding) 매출 — _scope_warning 마킹
-│   └── ir_samples/                 # IR PDF 샘플 (IRParserAgent 입력, W5)
+│   └── ir_samples/                 # IR PDF 샘플 (ParserAgent 입력)
 │
 ├── src/
 │   ├── api/
@@ -176,7 +186,8 @@ axis-ai/
 │   │   ├── issue_card_agent.py     # GPT-4o로 3줄 요약 + 시사점 생성
 │   │   ├── evidence_agent.py       # ★ 신설: 검증 첨부 4종 부착
 │   │   ├── financial_linker_agent.py # ★ 신설: 카드 ↔ 재무 segment 매칭 + vs SK AX
-│   │   ├── ir_parser_agent.py      # ★ 신설(스켈레톤): IR PDF 파싱 (W5)
+│   │   ├── parser_agent.py         # PDF/문서 payload 공통 파싱
+│   │   ├── parser_quality_agent.py # 파서 결과 품질 점검
 │   │   ├── notification_agent.py   # 이메일 발송 (Slack Webhook 폐기)
 │   │   ├── sector_keywords.py      # 섹터 분류 키워드 사전
 │   │   └── _deprecated/            # ← v1 에이전트 보관소
@@ -186,22 +197,31 @@ axis-ai/
 │   │
 │   ├── crawler/                    # ── 크롤러 ──
 │   │   ├── base.py                 # SOURCE_CREDIBILITY, DailyLimitGuard, RawArticle
+│   │   ├── base_crawler.py         # 크롤러 공통 부모 클래스
 │   │   ├── batch_processor.py      # Track A/B 오케스트레이션 + DART CORP_CODES (4 peer)
 │   │   ├── scheduler.py            # APScheduler + PEER_KEYWORDS (4 peer)
+│   │   ├── result_writer.py        # crawler_results/*.json 저장 공통 유틸
 │   │   ├── playwright_client.py    # 공통 Playwright 헤드리스 클라이언트
-│   │   ├── fast_filter.py          # Gate 1 (품질) 사전 필터
+│   │   ├── article_filter.py       # HTML 문자열 정리 유틸
 │   │   ├── parsers/
+│   │   │   ├── article_content.py  # HTML 본문/이미지 추출
 │   │   │   ├── content.py          # readability 본문 추출
-│   │   │   └── dedup.py            # URL 해시 중복 제거
+│   │   │   ├── dedup.py            # URL 해시 중복 제거
+│   │   │   ├── link_check.py       # URL 접근성 검사
+│   │   │   └── pdf_payload.py      # PDF 텍스트/표 후보/이미지 후보 추출
 │   │   ├── monitors/
-│   │   │   └── urgent.py           # 긴급 키워드 모니터링
-│   │   └── sources/                # 소스별 크롤러 (BigKinds 삭제됨)
+│   │   │   └── keepalive.py        # Supabase/Qdrant keepalive
+│   │   ├── local/                  # run_local_crawler_once.py 전용 로컬 실행 사본
+│   │   └── sources/                # 파이프라인용 소스별 크롤러
 │   │       ├── naver.py            # Naver News API
-│   │       ├── rss.py              # ETnews / ZDNet / Bloter / 연합뉴스 / Google News RSS
 │   │       ├── dart.py             # DART OpenAPI 공시
-│   │       ├── kipris.py           # 특허 (4 peer)
+│   │       ├── company_news.py     # 회사 공식 뉴스/뉴스룸
+│   │       ├── global_newsroom.py  # 해외 peer 공식 뉴스룸(source_type=official)
+│   │       ├── bcg.py              # BCG 산업 동향
+│   │       ├── spri.py             # SPRi 산업 동향 PDF
+│   │       ├── stock.py            # 시장 데이터
+│   │       ├── keyword.py          # 네이버 데이터랩 검색 트렌드
 │   │       ├── official.py         # 공식 뉴스룸 (SDS/LGCNS + hyundai/posco generic)
-│   │       ├── consensus.py        # 한경 컨센서스 (4 peer)
 │   │       ├── naver_research.py   # 네이버 금융 리서치 (4 peer, itemCode 버그 수정)
 │   │       └── jobs.py             # 사람인 채용 (4 peer)
 │   │
@@ -237,6 +257,8 @@ axis-ai/
 
 비교 기준 — `sk_ax`: SK주식회사 지주(`corp_code 00181712`). **현재 SK 그룹 전체 매출**이라 매출 절대값 비교 시 스코프 차이 큼 (`_scope_warning` 마킹). 정확한 SK AX 부문 매출은 사업전략팀 내부 자료로 교체 필요.
 
+해외 peer는 [src/config/global_companies.py](src/config/global_companies.py)에 별도 정의되어 있으며 현재 `nvidia`, `apple`, `microsoft`, `google`, `amazon`, `meta`를 지원합니다. 해외 peer는 `company_tier=overseas`로 저장되고, 현재 수집 중심 소스는 `global_newsroom`입니다.
+
 ---
 
 ## 크롤러 소스 — Track A / Track B
@@ -245,28 +267,28 @@ axis-ai/
 
 | 소스 | 신뢰도 | 수집 방법 | 일일 한도 |
 |---|---|---|---|
-| 네이버 뉴스 API | 0.75 | REST API + 본문 enrichment | 200 |
-| Google News RSS | 0.65 | feedparser + httpx | 200 |
-| ETnews (IT/산업/경제) | 0.70 | RSS, 3개 섹션 | 300(공유) |
-| ZDNet Korea | 0.68 | RSS (feedburner) | 〃 |
-| Bloter | 0.68 | RSS (feedburner) | 〃 |
-| 연합뉴스 산업 | 0.85 | RSS | 200 |
+| 네이버 뉴스 API | 0.70 | REST API + 본문 enrichment + peer 필수 필터 | `news` 한도 |
+
+RSS/Google News RSS는 현재 크롤러 흐름에서 제거되었습니다. 해외 peer 공식 발표는 Track B의 `global_newsroom`에서 `source_type=official`로 수집합니다.
 
 ### Track B — 매일 새벽 2시 (배치)
 
 | 소스 | 신뢰도 | 수집 방법 | 4 peer 처리 |
 |---|---|---|---|
-| **DART** (금감원 공시) | 1.00 | OpenAPI `/api/list.json` | corp_code 4개 등록 |
-| **KIPRIS** (특허) | 0.95 | 공공데이터 REST | 한글 출원인명 4개 |
+| **DART** (금감원 공시) | 1.00 | OpenAPI 목록 + 원문 document XML 수집 | corp_code 등록 회사 |
 | **공식 뉴스룸** SDS | 0.90 | Playwright + URL 슬러그 패턴 | samsung_sds 전용 |
 | **공식 뉴스룸** LG CNS | 0.90 | 내부 fingerprint REST | lg_cns 전용 |
 | **공식 뉴스룸** 현대오토에버 | 0.90 | Playwright generic ★ 신규 | best-effort 셀렉터 |
 | **공식 뉴스룸** 포스코DX | 0.90 | Playwright generic ★ 신규 | 〃 |
-| 한경 컨센서스 | 0.80 | Playwright (SPA) | 4 peer 검색 |
-| 네이버 금융 리서치 | 0.75 | Playwright | itemCode 4개 (LG CNS 버그 수정) |
-| 사람인 채용공고 | 0.50 | Saramin API | 4 peer 회사명 |
+| **글로벌 공식 뉴스룸** | 0.90 | NVIDIA/MS/Google 등 공식 뉴스룸 HTML | overseas peer |
+| 네이버 금융 리서치 | 0.80 | PDF 링크 수집 + PDF payload 파싱 | 국내 peer |
+| IR 자료 | 1.00 | 기업 IR PDF 수집 + PDF payload 파싱 | 국내 peer |
+| 채용공고 | 0.60 | Work24/채용 API·페이지 | 국내 peer |
+| 네이버 데이터랩 | 0.55 | 검색 트렌드 API | 구조화 신호 |
+| 주가/시장 데이터 | 0.55 | 시장 데이터 API/페이지 | 구조화 신호 |
+| BCG/SPRi 산업 동향 | 0.70 | HTML/PDF 산업 리포트 파싱 | 산업 동향 |
 
-> **BigKinds, LinkedIn, 잡플래닛은 미구현** — BigKinds는 의도적으로 제외, LinkedIn/잡플래닛은 공식 API 미승인. Saramin이 채용공고 단일 소스.
+> **BigKinds, RSS, LinkedIn, 잡플래닛은 미사용** — BigKinds/RSS는 제거, LinkedIn/잡플래닛은 공식 API 미승인.
 
 ### 크롤러 예외 처리 원칙
 - HTTP 403/429 → 5분 대기 후 1회 재시도, 실패 시 SKIP + 로그
@@ -440,7 +462,7 @@ DART OpenAPI 실수치 (총매출·영업이익 5분기) + segment/AI비중/head
 
 ### `data/ir_samples/`
 
-IR 분기·연간 PDF 샘플. IRParserAgent(W5) 입력.
+IR 분기·연간 PDF 샘플. ParserAgent 입력.
 
 ---
 
@@ -539,9 +561,16 @@ uv run python run_pipeline_once.py --env local # Local
 
 ## 단독 실행 스크립트 (로컬 디버깅)
 
-크롤 → 파이프라인을 두 단계로 분리해서 수동 실행할 수 있습니다. 운영 환경에서는 APScheduler가 자동으로 돌리지만, **새 변경사항을 한 번에 검증**할 때 유용합니다.
+크롤 → 전처리/파이프라인을 수동 실행할 수 있습니다. 운영 환경에서는 APScheduler가 자동으로 돌리지만, **새 변경사항을 한 번에 검증**할 때 유용합니다.
 
-### 흐름
+현재 로컬 디버깅 경로는 두 가지입니다.
+
+| 경로 | 저장 위치 | 용도 |
+|---|---|---|
+| DB 경로 | PostgreSQL `raw_articles` | 실제 서비스 파이프라인 검증 |
+| JSON 경로 | `src/crawler/crawler_results/*.json` | DB 저장 없이 크롤링 결과와 전처리 결과 확인 |
+
+### 흐름 A — DB 기반 서비스 파이프라인
 
 ```
 [1] run_crawler_once.py       →  raw_articles 테이블에 RAW 상태로 저장
@@ -550,7 +579,29 @@ uv run python run_pipeline_once.py --env local # Local
                                   → issue_card → evidence → issue_cards 저장
 ```
 
-### 1. 크롤러 단독 실행
+크롤링과 전처리까지만 한 번에 실행하려면 `run_all_once.py`를 사용합니다.
+
+```bash
+uv run python run_all_once.py
+uv run python run_all_once.py --track all --env local
+uv run python run_all_once.py --company samsung_sds --company nvidia
+```
+
+`run_all_once.py`는 이슈카드/evidence/financial refs를 생성하지 않습니다. 최종 카드까지 만들고 싶을 때만 별도로 `run_pipeline_once.py`를 실행합니다.
+
+### 흐름 B — JSON 기반 로컬 전처리
+
+```
+[1] run_local_crawler_once.py  →  src/crawler/crawler_results/*.json 저장
+                                  ↓
+[2] run_preprocess_once.py     →  저장된 JSON 로드
+                                  → credibility → relevance → dedup → classification
+                                  → src/crawler/crawler_results/preprocessed/*.json 저장
+```
+
+`run_preprocess_once.py`는 크롤링을 실행하지 않습니다. 이미 저장된 crawler JSON만 읽습니다.
+
+### 1. DB 크롤러 단독 실행
 
 ```bash
 uv run python run_crawler_once.py              # Track A만 (기본, 1~2분)
@@ -565,12 +616,80 @@ uv run python run_crawler_once.py --track a --env local  # .env.local 로드
 
 | 트랙 | 소스 | 실행 시간 | 필요 환경 |
 | --- | --- | --- | --- |
-| **A** | 네이버·RSS·Google News·연합뉴스 | 1~2분 | NAVER_CLIENT_ID/SECRET |
-| **B** | DART·KIPRIS·공식뉴스룸·사람인 | 5~10분 | DART_API_KEY, Playwright(`uv run playwright install chromium`), 옵션: KIPRIS/SARAMIN |
+| **A** | 네이버 뉴스 | 1~2분 | NAVER_CLIENT_ID/SECRET |
+| **B** | DART·IR·증권사 리포트·공식뉴스룸·글로벌 뉴스룸·채용·트렌드·시장 데이터 | 5~10분+ | DART_API_KEY, Playwright(`uv run playwright install chromium`), 소스별 API 키 |
 
 출력: Peer별 / 소스별 신규 저장 건수 요약.
 
-### 2. 파이프라인 단독 실행
+### 1-A. DB 크롤링 + 전처리 한 번에 실행
+
+```bash
+uv run python run_all_once.py                 # Track A+B 수집 후 전처리 실행
+uv run python run_all_once.py --env local     # 로컬 DB에 저장 후 전처리 실행
+uv run python run_all_once.py --track b       # Track B만 수집 후 전처리 실행
+uv run python run_all_once.py --company nvidia
+```
+
+`run_all_once.py`는 내부에서 `run_crawler_once.py`를 먼저 실행하고, 성공한 경우에만 `run_pipeline_once.py --preprocess-only`를 이어서 실행합니다. 전처리 범위는 `credibility → source_type 라우팅 → relevance/parser quality → dedup/clustering → classification`까지입니다. DB에 쌓지 않는 JSON 검수 흐름(`run_local_crawler_once.py`/`run_preprocess_once.py`)과는 별개입니다.
+
+### 2. JSON 크롤러 단독 실행
+
+```bash
+uv run python run_local_crawler_once.py
+uv run python run_local_crawler_once.py --source naver_news --company samsung_sds
+uv run python run_local_crawler_once.py --source dart --company lg_cns
+uv run python run_local_crawler_once.py --source company_news
+uv run python run_local_crawler_once.py --source global_newsroom --company nvidia
+uv run python run_local_crawler_once.py --source official --company-tier overseas
+uv run python run_local_crawler_once.py --source naver_news,global_newsroom,naver_research
+uv run python run_local_crawler_once.py --source naver_datalab
+```
+
+결과는 `src/crawler/crawler_results/{source}_{YYYYMMDD_HHMMSS}.json` 형태로 저장됩니다. 각 row에는 공통적으로 `source_type`, `company`, `company_tier`, `title`, `content`, `url`, `published_at`, `collected_at` 등이 들어갑니다.
+
+`--source`는 쉼표 구분을 지원합니다. `--company-tier overseas`를 같이 주면 `official`은 해외 공식 뉴스룸(`global_newsroom`)으로 해석됩니다. 예전 호환을 위해 `--source rss`도 `global_newsroom`으로 alias 처리되지만, 실제 RSS 크롤러는 사용하지 않습니다.
+
+`company_tier`는 company별 구분값입니다.
+
+| 값 | 의미 |
+|---|---|
+| `self` | 본인 회사. 현재 `sk_ax` |
+| `domestic` | 현재 `companies.py` config에 있는 국내 peer |
+| `overseas` | `global_companies.py`에 있는 해외 peer 또는 국내 config 밖 회사 |
+
+### 3. JSON 전처리 단독 실행
+
+```bash
+# crawler_results/*.json 전체 전처리
+uv run python run_preprocess_once.py
+
+# crawler_results/*.json 전체에서 source_type=news만 전처리
+uv run python run_preprocess_once.py --source-type news
+
+# 여러 source_type 처리
+uv run python run_preprocess_once.py --source-type news --source-type official
+
+# 특정 JSON 파일만 전처리
+uv run python run_preprocess_once.py \
+  --input src/crawler/crawler_results/naver_news_20260507_172457.json
+```
+
+`--input`을 생략하면 `src/crawler/crawler_results` 바로 아래의 `.json` 파일을 모두 읽습니다. `preprocessed/` 안의 전처리 결과 파일은 다시 읽지 않습니다.
+
+`--source-type`은 파일명이 아니라 JSON row 내부의 `"source_type"` 값을 기준으로 필터링합니다. 예를 들어 `naver_news_*.json` 안의 `"source_type": "news"` row만 처리하려면 `--source-type news`를 사용합니다.
+
+전처리 단계에서 호출되는 agents:
+
+| source_type | 전처리 흐름 |
+|---|---|
+| `news`, `official` | credibility → relevance → dedup/cluster → classification |
+| `dart`, `ir`, `securities_report` | credibility → parser_agent → parser_quality_agent → auto relevant 보존 |
+| `trend_report` | credibility → parser_agent → 산업 문서로 보존 |
+| `job`, `market_data`, `search_trend`, `social` | credibility/source tagging 후 구조화 신호로 보존 |
+
+`signal_agent.py`는 현재 전처리 흐름에서 제외되어 있습니다. 추후 급변/급증 탐지 단계에서 다시 사용할 예정입니다.
+
+### 4. DB 파이프라인 단독 실행
 
 ```bash
 uv run python run_pipeline_once.py             # Cloud (기본 .env)
@@ -588,7 +707,7 @@ uv run python run_pipeline_once.py --env local # .env.local 로드 (로컬 컨�
 | `RAW 기사 로드 \| count=0` | 새 기사 없음. `run_crawler_once.py` 먼저 실행 |
 | `NAVER_CLIENT_ID 미설정` | `.env`에 키 입력 (없으면 해당 소스만 SKIP, 다른 소스는 계속 동작) |
 | Playwright 미설치 (Track B) | `uv run playwright install chromium` |
-| `소스별 수집 한도 초과` | DailyLimitGuard에 의한 정상 동작. 한도 조정은 [src/crawler/base.py](axis-ai/src/crawler/base.py) `SOURCE_LIMITS` |
+| `소스별 수집 한도 초과` | DailyLimitGuard에 의한 정상 동작. 한도 조정은 [src/crawler/base.py](axis-ai/src/crawler/base.py) `SOURCE_TYPE_LIMITS` |
 | 카드 0건인데 RAW는 있음 | dedup 단계에서 모두 기존 클러스터로 흡수됐을 가능성. 같은 RAW를 재처리하려면 DB에서 `processing_status='RAW'`로 리셋 필요 |
 
 ### DB 상태 빠른 확인
@@ -631,7 +750,6 @@ QDRANT_API_KEY=<qdrant-cloud-jwt>
 NAVER_CLIENT_ID=...
 NAVER_CLIENT_SECRET=...
 DART_API_KEY=...
-KIPRIS_API_KEY=...
 SARAMIN_API_KEY=...           # 옵션 (없으면 채용공고 SKIP)
 
 # 서버

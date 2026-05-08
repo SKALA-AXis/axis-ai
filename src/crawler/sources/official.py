@@ -17,7 +17,6 @@ from bs4 import BeautifulSoup
 
 from src.crawler.base import (
     RETRY_POLICY,
-    SOURCE_CREDIBILITY,
     BaseCrawler,
     DailyLimitGuard,
     RawArticle,
@@ -63,8 +62,6 @@ _GENERIC_SOURCES: dict[str, dict[str, str | list[str]]] = {
 }
 
 # Generic 뉴스룸 크리덴셜 (코퍼레이트 사이트는 Tier 1)
-_GENERIC_CREDIBILITY = 0.90
-
 _SDS_BODY_SELECTORS: list[str] = [
     "div.news-detail__content",
     "div.news-detail",
@@ -149,10 +146,8 @@ class OfficialNewsroomCrawler(BaseCrawler):
                     url=full_url,
                     title=title,
                     content="",
-                    source_tier=1,
                     source_name="samsung_sds_newsroom",
                     peer_id="samsung_sds",
-                    credibility_score=SOURCE_CREDIBILITY["samsung_sds_newsroom"],
                     published_at=_parse_sds_url_date(href),
                 )
             )
@@ -223,10 +218,8 @@ class OfficialNewsroomCrawler(BaseCrawler):
                         url=link,
                         title=title,
                         content=item.get("_summary", ""),
-                        source_tier=1,
                         source_name="lg_cns_newsroom",
                         peer_id="lg_cns",
-                        credibility_score=SOURCE_CREDIBILITY["lg_cns_newsroom"],
                         published_at=published_at,
                     )
                 )
@@ -280,10 +273,8 @@ class OfficialNewsroomCrawler(BaseCrawler):
                 url=url,
                 title=title,
                 content="",
-                source_tier=1,
                 source_name=source_name,
                 peer_id=self.peer_id,
-                credibility_score=SOURCE_CREDIBILITY.get(source_name, _GENERIC_CREDIBILITY),
             )
             for url, title in candidates
         ]

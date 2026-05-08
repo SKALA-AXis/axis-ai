@@ -4,6 +4,8 @@
   uv run python run_pipeline_once.py                # 프로세스 env 그대로 사용
   uv run python run_pipeline_once.py --env local    # .env.local 로드 (로컬 컨테이너 DB)
   uv run python run_pipeline_once.py --env cloud    # .env.cloud 로드 (Supabase + Qdrant Cloud)
+  uv run python run_pipeline_once.py --company sk_ax
+  uv run python run_pipeline_once.py --company samsung_sds --company lg_cns
 """
 
 import argparse
@@ -23,6 +25,22 @@ _parser.add_argument(
     default=None,
     help="DB 프로파일. .env.{profile} 파일이 있으면 로드, 없으면 프로세스 env 사용.",
 )
+_parser.add_argument(
+    "--company",
+    action="append",
+    default=None,
+    help="처리할 company id. 여러 번 지정 가능. 생략하면 config의 전체 회사.",
+)
+_parser.add_argument(
+    "--preprocess-only",
+    action="store_true",
+    help="issue_card/evidence/vector index 없이 전처리(classification)까지만 실행.",
+)
+_parser.add_argument(
+    "--collected-since",
+    default=None,
+    help="지정 시 해당 ISO timestamp 이후 collected_at을 가진 RAW만 처리한다.",
+)
 _args = _parser.parse_args()
 
 from src.config.env_loader import load_profile  # noqa: E402
@@ -30,21 +48,62 @@ from src.config.env_loader import load_profile  # noqa: E402
 _profile = load_profile(_args.env)
 log.info("실행 프로파일: %s", _profile)
 
-from src.agents.sector_keywords import sector_name_ko  # noqa: E402
-from src.pipeline.ingestion_graph import ingestion_graph  # noqa: E402
+from src.config.companies import COMPANY_IDS, company_name_ko  # noqa: E402
+from src.config.global_companies import GLOBAL_COMPANY_IDS, global_company_name_ko  # noqa: E402
+from src.config.sectors import sector_name_ko  # noqa: E402
+from src.pipeline.ingestion_graph import (  # noqa: E402
+    classify_node,
+    crawl_node,
+    credibility_node,
+    dedup_node,
+    ingestion_graph,
+    preprocess_route_node,
+)
 
 _BAND_MARK = {"high": "■■■", "medium": "■■ ", "low": "■  "}
 
 
+ALL_COMPANY_IDS = [*COMPANY_IDS, *GLOBAL_COMPANY_IDS]
+
+
+def _company_label(company_id: str) -> str:
+    if company_id in GLOBAL_COMPANY_IDS:
+        return global_company_name_ko(company_id)
+    return company_name_ko(company_id)
+
+
+def _resolve_companies() -> list[str]:
+    if not _args.company:
+        return list(ALL_COMPANY_IDS)
+
+    invalid = sorted({company for company in _args.company if company not in ALL_COMPANY_IDS})
+    if invalid:
+        _parser.error(
+            "알 수 없는 company id: "
+            + ", ".join(invalid)
+            + f" | available={', '.join(ALL_COMPANY_IDS)}"
+        )
+
+    return list(dict.fromkeys(_args.company))
+
+
 def main() -> None:
-    peer_ids = ["samsung_sds", "lg_cns"]
-    log.info("파이프라인 시작 | peer_ids=%s", peer_ids)
+    company = _resolve_companies()
+    company_labels = [_company_label(company_id) for company_id in company]
+    mode = "전처리 전용" if _args.preprocess_only else "파이프라인"
+    log.info("%s 시작 | company=%s labels=%s", mode, company, company_labels)
 
     initial_state = {
-        "peer_ids": peer_ids,
+        "company": company,
         "trigger_type": "manual",
+        "collected_since": _args.collected_since,
         "raw_article_ids": [],
         "credible_ids": [],
+        "relevant_ids": [],
+        "parsed_document_ids": [],
+        "industry_document_ids": [],
+        "structured_signal_ids": [],
+        "skipped_preprocess_ids": [],
         "cluster_map": {},
         "representative_ids": [],
         "classified_clusters": [],
@@ -54,6 +113,15 @@ def main() -> None:
         "errors": [],
         "human_review_flags": [],
     }
+
+    if _args.preprocess_only:
+        result = crawl_node(initial_state)
+        result = credibility_node(result)
+        result = preprocess_route_node(result)
+        result = dedup_node(result)
+        result = classify_node(result)
+        _print_preprocess_result(result)
+        return
 
     result = ingestion_graph.invoke(initial_state)
 
@@ -66,6 +134,11 @@ def main() -> None:
     print("=" * 78)
     print(f"  RAW 기사:        {len(result.get('raw_article_ids', []))}건")
     print(f"  신뢰도 통과:     {len(result.get('credible_ids', []))}건")
+    print(f"  관련 기사:       {len(result.get('relevant_ids', []))}건")
+    print(f"  문서형 자료:     {len(result.get('parsed_document_ids', []))}건")
+    print(f"  산업 동향:       {len(result.get('industry_document_ids', []))}건")
+    print(f"  구조화 신호:     {len(result.get('structured_signal_ids', []))}건")
+    print(f"  전처리 제외:     {len(result.get('skipped_preprocess_ids', []))}건")
     print(f"  클러스터:        {len(result.get('cluster_map', {}))}개")
     print(f"  대표 기사:       {len(result.get('representative_ids', []))}건")
     print(f"  이슈카드:        {len(cards)}건")
@@ -106,13 +179,13 @@ def main() -> None:
 
         evidence_mark = "✅" if val.get("pass") else "⚠️"
 
-        print(f"\n[{i}] {_BAND_MARK[band]} {sector_name_ko(sector)} | {card.get('peer_id', '?')}")
+        print(f"\n[{i}] {_BAND_MARK[band]} {sector_name_ko(sector)} | {card.get('company', '?')}")
         print(f"     ID: {card.get('id', '?')}  |  Event: {card.get('event_type', '?')}")
         print(f"     제목: {card.get('title', '')}")
         print(
             f"     노출도: {card.get('exposure_score', 0):.2f} ({band})"
             f"  |  cluster={signals.get('cluster_size', 0)}"
-            f"  peer={signals.get('peer_mention_count', 0)}"
+            f"  company={signals.get('company_mention_count', 0)}"
             f"  cred={signals.get('credibility_max', 0):.2f}"
             f"  tier1={signals.get('tier1_count', 0)}"
         )
@@ -149,7 +222,38 @@ def main() -> None:
         print("     ─── 출처 (상위 2) ───")
         for s in card.get("sources", [])[:2]:
             title = s.get("title", "")[:60]
-            print(f"       [{s.get('index','')}] {s.get('source_name','')} — {title}")
+            print(f"       [{s.get('index', '')}] {s.get('source_name', '')} — {title}")
+
+    print("\n" + "=" * 78)
+
+
+def _print_preprocess_result(result: dict) -> None:
+    classified = result.get("classified_clusters", [])
+
+    print("\n" + "=" * 78)
+    print("DB 전처리 실행 결과")
+    print("=" * 78)
+    print(f"  RAW 기사:        {len(result.get('raw_article_ids', []))}건")
+    print(f"  신뢰도 통과:     {len(result.get('credible_ids', []))}건")
+    print(f"  관련 기사:       {len(result.get('relevant_ids', []))}건")
+    print(f"  파싱 문서:       {len(result.get('parsed_document_ids', []))}건")
+    print(f"  산업 문서:       {len(result.get('industry_document_ids', []))}건")
+    print(f"  구조화 신호:     {len(result.get('structured_signal_ids', []))}건")
+    print(f"  전처리 제외:     {len(result.get('skipped_preprocess_ids', []))}건")
+    print(f"  클러스터:        {len(result.get('cluster_map', {}))}개")
+    print(f"  대표 기사:       {len(result.get('representative_ids', []))}건")
+    print(f"  분류 완료:       {len(classified)}개")
+    print("  이슈카드:        생성 안 함")
+    print("  Evidence:        생성 안 함")
+
+    if classified:
+        print("\n  ── 대표 클러스터 ──")
+        for cluster in sorted(classified, key=lambda item: item.get("cluster_id", 0))[:10]:
+            print(
+                f"    [{cluster['cluster_id']}] {cluster.get('sector')} / "
+                f"{cluster.get('event_type')} / {cluster.get('exposure_band')} | "
+                f"{cluster.get('title', '')[:70]}"
+            )
 
     print("\n" + "=" * 78)
 

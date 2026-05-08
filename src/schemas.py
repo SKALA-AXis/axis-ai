@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 
 class PipelineRunRequest(BaseModel):
-    peer_ids: list[str]
+    company: list[str]
     trigger_type: str = "scheduled"
 
 
@@ -23,14 +23,14 @@ class PipelineRunResponse(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str
-    peer_id: Optional[str] = None
+    company: Optional[str] = None
     event_type: Optional[str] = None
     top_k: int = 10
 
 
 class SearchHit(BaseModel):
     rdb_id: int
-    peer_id: str
+    company: str
     title: str
     summary: str
     importance: str
@@ -47,7 +47,7 @@ class SearchResponse(BaseModel):
 
 class GenSearchRequest(BaseModel):
     query: str
-    peer_id: Optional[str] = None
+    company: Optional[str] = None
     top_k: int = 10
 
 

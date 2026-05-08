@@ -58,12 +58,12 @@ async def run_pipeline(request: PipelineRunRequest):
     import uuid
 
     task_id = str(uuid.uuid4())
-    log.info("수집 파이프라인 시작 | peer_ids=%s task_id=%s", request.peer_ids, task_id)
+    log.info("수집 파이프라인 시작 | company=%s task_id=%s", request.company, task_id)
     # TODO: ingestion_graph.py 실행 (백그라운드 태스크)
     return PipelineRunResponse(
         task_id=task_id,
         status="accepted",
-        message=f"파이프라인 큐 등록 완료 — peer_ids: {request.peer_ids}",
+        message=f"파이프라인 큐 등록 완료 - company: {request.company}",
     )
 
 
@@ -78,7 +78,7 @@ async def run_delivery():
 @app.post("/search", response_model=SearchResponse)
 async def search(request: SearchRequest):
     """BGE-M3 하이브리드 검색 (Dense + Sparse RRF)"""
-    log.info("검색 요청 | query=%s peer_id=%s", request.query, request.peer_id)
+    log.info("검색 요청 | query=%s company=%s", request.query, request.company)
     # TODO: hybrid_search.py 실행
     return SearchResponse(hits=[], total=0)
 

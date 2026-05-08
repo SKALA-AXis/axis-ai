@@ -8,18 +8,26 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
+from src.config.company_tiers import company_tier_map
 from src.crawler.base import RawArticle
 from src.db.postgres import SessionLocal
 
 log = logging.getLogger(__name__)
 
+INDUSTRY_TREND_COMPANY = "industry_trend"
+_INDUSTRY_SOURCE_TYPES = {"trend_report", "search_trend"}
+_INDUSTRY_MARKER_KEYS = {"sector", "industry", "upjong_code"}
+_INDUSTRY_REPORT_TYPES = {"industry", "industry_report", "sector_report"}
+
 _INSERT_SQL = text("""
     INSERT INTO raw_articles (
-        peer_id, source_tier, source_name, title, content, url,
-        published_at, collected_at, credibility_score, processing_status, metadata
+        source_type, source_name, publisher, title, content, url, url_hash,
+        published_at, collected_at, company, language, content_type,
+        crawl_status, error_message, processing_status, metadata
     ) VALUES (
-        :peer_id, :source_tier, :source_name, :title, :content, :url,
-        :published_at, :collected_at, :credibility_score, 'RAW', CAST(:metadata AS jsonb)
+        :source_type, :source_name, :publisher, :title, :content, :url, :url_hash,
+        :published_at, :collected_at, CAST(:company AS jsonb), :language, :content_type,
+        :crawl_status, :error_message, 'RAW', CAST(:metadata AS jsonb)
     )
     ON CONFLICT (url) DO NOTHING
     RETURNING id
@@ -38,22 +46,28 @@ def save_articles(articles: list[RawArticle]) -> int:
     inserted = 0
     with SessionLocal() as db:
         for article in articles:
-            if not _is_valid(article):
+            storage_company = _company_for_storage(article)
+            if not _is_valid(article, storage_company):
                 continue
             try:
                 result = db.execute(
                     _INSERT_SQL,
                     {
-                        "peer_id": article.peer_id,
-                        "source_tier": article.source_tier,
+                        "source_type": article.source_type,
                         "source_name": article.source_name,
+                        "publisher": article.publisher,
                         "title": article.title[:500],
                         "content": article.content[:10_000] if article.content else "",
                         "url": article.url,
+                        "url_hash": article.url_hash,
                         "published_at": article.published_at or article.collected_at,
                         "collected_at": article.collected_at,
-                        "credibility_score": article.credibility_score,
-                        "metadata": _metadata_json(article),
+                        "company": json.dumps(storage_company, ensure_ascii=False),
+                        "language": article.language,
+                        "content_type": article.content_type,
+                        "crawl_status": article.crawl_status,
+                        "error_message": article.error_message,
+                        "metadata": _metadata_json(article, storage_company),
                     },
                 )
                 if result.fetchone():
@@ -84,15 +98,46 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
     with SessionLocal() as db:
         rows = db.execute(
             text("""
-                SELECT id, peer_id, title, content, url,
-                       credibility_score, source_name, published_at, metadata
+                SELECT id, company, title, content, url,
+                       source_type, content_type, publisher, language,
+                       credibility_score, credibility_grade,
+                       relevance_score, relevance_label, relevance_reason,
+                       matched_companies, matched_sectors,
+                       source_name, published_at, collected_at, metadata
                 FROM raw_articles
                 WHERE id = ANY(:ids)
-                ORDER BY credibility_score DESC
+                ORDER BY credibility_score DESC NULLS LAST
             """),
             {"ids": ids},
         ).fetchall()
     return [dict(row._mapping) for row in rows]
+
+
+def update_preprocess_status(
+    article_id: int,
+    processing_status: str,
+    metadata_patch: Optional[dict[str, Any]] = None,
+    error_message: Optional[str] = None,
+) -> None:
+    """전처리 라우팅 결과를 raw_articles에 반영한다."""
+    with SessionLocal() as db:
+        db.execute(
+            text("""
+                UPDATE raw_articles
+                SET processing_status = :processing_status,
+                    metadata = COALESCE(metadata, '{}'::jsonb)
+                        || CAST(:metadata_patch AS jsonb),
+                    error_message = COALESCE(:error_message, error_message)
+                WHERE id = :id
+            """),
+            {
+                "processing_status": processing_status,
+                "metadata_patch": json.dumps(metadata_patch or {}, ensure_ascii=False),
+                "error_message": error_message,
+                "id": article_id,
+            },
+        )
+        db.commit()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -159,11 +204,11 @@ def update_classification(
 
 _INSERT_ISSUE_CARD = text("""
     INSERT INTO issue_cards (
-        id, peer_id, cluster_id, title, summary_lines,
+        id, company, cluster_id, title, summary_lines,
         event_type, importance, importance_score,
         implication, sources, validation_pass, validation_sc_score
     ) VALUES (
-        :id, :peer_id, :cluster_id, :title, :summary_lines,
+        :id, :company, :cluster_id, :title, :summary_lines,
         :event_type, :importance, :importance_score,
         CAST(:implication AS jsonb), CAST(:sources AS jsonb),
         :validation_pass, :validation_sc_score
@@ -201,7 +246,7 @@ def save_issue_card(card: dict[str, Any]) -> Optional[str]:
                 _INSERT_ISSUE_CARD,
                 {
                     "id": card["id"],
-                    "peer_id": card["peer_id"],
+                    "company": card.get("company") or card.get("peer_id"),
                     "cluster_id": card.get("cluster_id"),
                     "title": card["title"][:500],
                     "summary_lines": card.get("summary_lines", []),
@@ -291,10 +336,10 @@ def save_evidence_chain(
 
 _INSERT_PIPELINE_LOG = text("""
     INSERT INTO pipeline_logs (
-        pipeline_step, peer_id, input_count, output_count,
+        pipeline_step, company, input_count, output_count,
         elapsed_ms, llm_tokens_used, error_msg
     ) VALUES (
-        :step, :peer_id, :input_count, :output_count,
+        :step, :company, :input_count, :output_count,
         :elapsed_ms, :llm_tokens_used, :error_msg
     )
 """)
@@ -302,7 +347,7 @@ _INSERT_PIPELINE_LOG = text("""
 
 def save_pipeline_log(
     step: str,
-    peer_id: Optional[str],
+    company: Optional[str],
     input_count: int,
     output_count: int,
     elapsed_ms: int,
@@ -316,7 +361,7 @@ def save_pipeline_log(
                 _INSERT_PIPELINE_LOG,
                 {
                     "step": step,
-                    "peer_id": peer_id,
+                    "company": company,
                     "input_count": input_count,
                     "output_count": output_count,
                     "elapsed_ms": elapsed_ms,
@@ -336,7 +381,7 @@ _card_id_state: dict[str, int] = {}  # {date_str: last_seq}
 _card_id_lock = threading.Lock()
 
 
-def _generate_card_id(peer_id: str) -> str:
+def _generate_card_id(company: str) -> str:
     """IC-YYYYMMDD-NNN 형식의 이슈카드 ID를 생성한다.
 
     DB 저장 전에 병렬 호출되므로 Lock으로 중복 방지.
@@ -357,20 +402,60 @@ def _generate_card_id(peer_id: str) -> str:
 # ──────────────────────────────────────────────────────────────
 
 
-def _is_valid(article: RawArticle) -> bool:
+def _company_for_storage(article: RawArticle) -> list[str]:
+    """DB 저장용 company를 반환한다.
+
+    기업이 명시되지 않은 산업 동향 자료는 파이프라인 필터링을 위해
+    가상 company bucket으로 저장한다. 일반 무소속 기사는 계속 제외한다.
+    """
+    if article.company:
+        return article.company
+    if _is_industry_trend_article(article):
+        return [INDUSTRY_TREND_COMPANY]
+    return []
+
+
+def _is_industry_trend_article(article: RawArticle) -> bool:
+    if article.source_type in _INDUSTRY_SOURCE_TYPES:
+        return True
+
+    extra = article.extra or {}
+    report_type = str(extra.get("type") or extra.get("report_type") or "").strip()
+    if report_type in _INDUSTRY_REPORT_TYPES:
+        return True
+
+    if any(extra.get(key) for key in _INDUSTRY_MARKER_KEYS):
+        return True
+
+    return "industry" in (article.source_name or "").lower()
+
+
+def _is_valid(article: RawArticle, storage_company: Optional[list[str]] = None) -> bool:
     """Gate 1: 최소 품질 필터."""
     if not article.url or not article.title:
         return False
-    if not article.peer_id:
+    if not (storage_company if storage_company is not None else article.company):
         return False
     if len(article.content or "") < 10 and len(article.title) < 5:
         return False
     return True
 
 
-def _metadata_json(article: RawArticle) -> str:
+def _metadata_json(
+    article: RawArticle,
+    storage_company: Optional[list[str]] = None,
+) -> str:
     import json
 
-    meta = dict(article.metadata)
+    meta = dict(article.extra)
     meta["url_hash"] = article.url_hash
+    meta["company_tier"] = company_tier_map(storage_company or article.company)
+    if article.peer_id and "peer_id" not in meta:
+        meta["peer_id"] = article.peer_id
+    if not article.company and storage_company and INDUSTRY_TREND_COMPANY in storage_company:
+        meta["topic_scope"] = "industry_trend"
+        meta["company_scope"] = "industry"
+        meta["company_fallback"] = INDUSTRY_TREND_COMPANY
+    elif _is_industry_trend_article(article):
+        meta.setdefault("topic_scope", "industry_trend")
     return json.dumps(meta, ensure_ascii=False)

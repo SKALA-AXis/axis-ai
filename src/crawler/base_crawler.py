@@ -1,35 +1,52 @@
-"""크롤러 베이스 클래스"""
+"""크롤러 공통 부모 클래스."""
 
-import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional
 
-log = logging.getLogger(__name__)
-
-CRAWL_TIMEOUT = 10
-MAX_RETRIES = 1
-
-
-@dataclass
-class RawArticle:
-    url: str
-    title: str
-    content: str
-    published_at: Optional[datetime]
-    source_name: str
-    peer_id: str
+from src.crawler.base import DailyLimitGuard, RawArticle
 
 
 class BaseCrawler(ABC):
-    def __init__(self, peer_id: str):
-        self.peer_id = peer_id
+    """모든 크롤러가 상속하는 공통 베이스 클래스."""
+
+    def __init__(
+        self,
+        company: Optional[list[str] | str] = None,
+        peer_id: Optional[str] = None,
+        limit_guard: Optional[DailyLimitGuard] = None,
+    ) -> None:
+        if company is None:
+            company_values = [peer_id] if peer_id else []
+        elif isinstance(company, str):
+            company_values = [company]
+        else:
+            company_values = company
+
+        self.company = _dedupe_keep_order(company_values)
+        self.peer_id = peer_id or (self.company[0] if self.company else None)
+        self.limit_guard = limit_guard or DailyLimitGuard()
 
     @abstractmethod
     async def crawl(self) -> list[RawArticle]:
-        """소스에서 기사를 수집한다."""
+        """소스에서 기사 또는 자료를 수집한다."""
         ...
 
     def _is_blocked(self, status_code: int) -> bool:
+        """차단성 HTTP 상태 코드인지 확인한다."""
         return status_code in (403, 429)
+
+
+def _dedupe_keep_order(values: list[str]) -> list[str]:
+    """리스트 순서를 유지하면서 중복 값을 제거한다."""
+    seen: set[str] = set()
+    result: list[str] = []
+
+    for value in values:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            continue
+
+        seen.add(normalized)
+        result.append(normalized)
+
+    return result

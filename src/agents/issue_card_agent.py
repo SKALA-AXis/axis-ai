@@ -56,22 +56,25 @@ class IssueCardAgent:
         self,
         cluster_id: int,
         representative_id: int,
-        peer_id: str,
+        company: str,
         classification: dict[str, Any],
         cluster_article_ids: list[int] | None = None,
+        peer_id: str = "",
     ) -> dict[str, Any]:
         """이슈 카드를 생성한다.
 
         Args:
             cluster_id: 클러스터 ID.
             representative_id: 대표 기사 ID (가장 신뢰도 높은 기사).
-            peer_id: 'samsung_sds' | 'lg_cns'.
+            company: 회사 ID.
             classification: ClassificationAgent 결과.
             cluster_article_ids: 클러스터 내 전체 기사 ID 목록 (없으면 대표 기사만 사용).
 
         Returns:
             IssueCard dict (저장 전 validation 없는 상태).
         """
+        company = company or peer_id
+
         # 대표 기사 포함 최대 3건 조회 (credibility_score DESC 정렬)
         ids_to_fetch = _build_fetch_ids(representative_id, cluster_article_ids)
         articles = get_articles_by_ids(ids_to_fetch)
@@ -89,8 +92,8 @@ class IssueCardAgent:
             card_data = _parse_json(content)
 
             card = {
-                "id": _generate_card_id(peer_id),
-                "peer_id": peer_id,
+                "id": _generate_card_id(company),
+                "company": company,
                 "cluster_id": cluster_id,
                 "representative_id": representative_id,
                 "title": card_data.get("title", articles[0]["title"][:100]),
@@ -135,9 +138,11 @@ def _build_fetch_ids(representative_id: int, cluster_article_ids: list[int] | No
 def _format_articles(articles: list[dict[str, Any]]) -> str:
     lines = []
     for i, a in enumerate(articles, 1):
+        credibility_score = a.get("credibility_score")
+        credibility_text = f"{credibility_score:.2f}" if credibility_score is not None else "미계산"
         lines.append(
             f"[{i}] 제목: {a['title']}\n"
-            f"    출처: {a['source_name']} (신뢰도: {a.get('credibility_score', 0):.2f})"
+            f"    출처: {a['source_name']} (신뢰도: {credibility_text})"
             f" | URL: {a['url']}\n"
             f"    내용: {(a.get('content') or '')[:600]}"
         )
@@ -160,7 +165,7 @@ def _default_sources(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "title": a["title"],
             "source_name": a["source_name"],
             "url": a["url"],
-            "credibility_score": a.get("credibility_score", 0.5),
+            "credibility_score": a.get("credibility_score"),
         }
         for i, a in enumerate(articles)
     ]

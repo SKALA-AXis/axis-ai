@@ -1,12 +1,11 @@
 """파이프라인 단위 테스트"""
-import pytest
 
 from src.pipeline.ingestion_graph import IngestionState
 
 
 def test_ingestion_state_structure():
     state: IngestionState = {
-        "peer_ids": ["samsung_sds"],
+        "company": ["samsung_sds"],
         "trigger_type": "scheduled",
         "raw_article_ids": [],
         "credible_ids": [],
@@ -19,4 +18,4 @@ def test_ingestion_state_structure():
         "errors": [],
         "human_review_flags": [],
     }
-    assert state["peer_ids"] == ["samsung_sds"]
+    assert state["company"] == ["samsung_sds"]
