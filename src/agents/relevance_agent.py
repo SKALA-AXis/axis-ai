@@ -44,7 +44,8 @@ def _get_llm() -> ChatOpenAI:
 _RELEVANCE_PROMPT = """\
 당신은 기사 본문의 프로젝트 목적과의 관련성 판단 Agent입니다.
 
-이 Agent의 목적은 크롤링된 후보 기사 중에서 Peer사의 전략 모니터링 대상으로 분석할 가치가 있는 기사만 선별하는 것입니다.
+이 Agent의 목적은 크롤링된 후보 기사 중에서 Peer사의 전략 모니터링 대상으로
+분석할 가치가 있는 기사만 선별하는 것입니다.
 단순 키워드 포함 여부가 아니라, company 관련성, sector 관련성, 동향 신호를 분리해서 판단해야 합니다.
 
 ## 입력 정보
@@ -60,28 +61,44 @@ _RELEVANCE_PROMPT = """\
 
 1. Company 관련성
 - 대상 company가 기사에서 핵심 주체로 등장해야 합니다.
-- 핵심 주체란 수주, 계약, 제휴, 투자, 출시, 실적, 공시, IR, 채용 확대, 조직 개편, 시장 진출, 기술 개발, 고객 확보 등의 행위를 수행하거나 그 영향을 받는 기업을 의미합니다.
-- company 이름이 단순 나열, 광고, 태그, 관련 기사, 행사 후원사, 배경 설명에만 등장하면 핵심 주체로 보지 마세요.
+- 핵심 주체란 수주, 계약, 제휴, 투자, 출시, 실적, 공시, IR, 채용 확대,
+  조직 개편, 시장 진출, 기술 개발, 고객 확보 등의 행위를 수행하거나
+  그 영향을 받는 기업을 의미합니다.
+- company 이름이 단순 나열, 광고, 태그, 관련 기사, 행사 후원사,
+  배경 설명에만 등장하면 핵심 주체로 보지 마세요.
 - 그룹사가 언급되더라도 target_companies에 포함된 회사가 핵심 주체가 아니면 irrelevant로 판단하세요.
-- 여러 peer사가 함께 언급된 경우, 경쟁 구도, 비교, 협력, 시장 변화 관점에서 의미 있게 다뤄지면 relevant로 판단할 수 있습니다.
+- 여러 peer사가 함께 언급된 경우, 경쟁 구도, 비교, 협력,
+  시장 변화 관점에서 의미 있게 다뤄지면 relevant로 판단할 수 있습니다.
 
 2. Sector 관련성
 - sector는 단순 키워드가 아니라 실제 사업, 기술, 시장 맥락과 연결되어야 합니다.
-- 예를 들어 AI, 클라우드, 보안, 인프라, 제조 AX, 물류, ERP, 데이터센터, 스마트팩토리, 공공 DX 등이 회사의 사업 변화나 기술 변화와 연결되면 sector 관련성이 있습니다.
+- 예를 들어 AI, 클라우드, 보안, 인프라, 제조 AX, 물류, ERP,
+  데이터센터, 스마트팩토리, 공공 DX 등이 회사의 사업 변화나
+  기술 변화와 연결되면 sector 관련성이 있습니다.
 - sector 단어가 일반 표현, 배경 설명, 비유, 문장 장식으로만 등장하면 sector 관련성이 낮습니다.
-- matched_sector_candidates가 ["other"]이거나 비어 있으면 sector 관련성은 낮게 판단하세요. 단, 공시, IR, 실적, 대규모 수주처럼 회사 동향 자체가 명확하면 relevant가 될 수 있습니다.
+- matched_sector_candidates가 ["other"]이거나 비어 있으면 sector 관련성은 낮게 판단하세요.
+  단, 공시, IR, 실적, 대규모 수주처럼 회사 동향 자체가 명확하면
+  relevant가 될 수 있습니다.
 
 3. 동향 신호
 - 전략 모니터링에 사용할 수 있는 변화 신호가 있어야 합니다.
-- 동향 신호에는 신규 수주, 계약, 제휴, 투자, 인수합병, 신제품 출시, 서비스 출시, 플랫폼 고도화, 기술 개발, 특허, 채용 확대, 조직 개편, 실적 변화, 공시, IR, 신규 시장 진출, 고객사 확보, 정부 사업 참여, 정책 변화, 산업 트렌드 변화가 포함됩니다.
-- 단순 행사 참석, 단순 수상, 단순 인물 인터뷰, 광고성 기사, 제품 홍보만 있는 기사는 동향 신호가 약하므로 irrelevant로 판단하세요.
-- 전시회/컨퍼런스/박람회/시상식/행사 일정 안내 기사에서 company가 참가사·후원사·발표 기업 목록에만 등장하면 irrelevant로 판단하세요.
-- 주가 등락, 장중 시황, 종목별 상승·하락 마감처럼 가격 움직임만 설명하는 기사는 market_data로 별도 처리하므로 news relevance에서는 irrelevant로 판단하세요.
+- 동향 신호에는 신규 수주, 계약, 제휴, 투자, 인수합병, 신제품 출시,
+  서비스 출시, 플랫폼 고도화, 기술 개발, 특허, 채용 확대, 조직 개편,
+  실적 변화, 공시, IR, 신규 시장 진출, 고객사 확보, 정부 사업 참여,
+  정책 변화, 산업 트렌드 변화가 포함됩니다.
+- 단순 행사 참석, 단순 수상, 단순 인물 인터뷰, 광고성 기사,
+  제품 홍보만 있는 기사는 동향 신호가 약하므로 irrelevant로 판단하세요.
+- 전시회/컨퍼런스/박람회/시상식/행사 일정 안내 기사에서 company가
+  참가사·후원사·발표 기업 목록에만 등장하면 irrelevant로 판단하세요.
+- 주가 등락, 장중 시황, 종목별 상승·하락 마감처럼 가격 움직임만
+  설명하는 기사는 market_data로 별도 처리하므로 news relevance에서는
+  irrelevant로 판단하세요.
 
 ## label 정의
 relevant:
 - company 관련성, sector 관련성, 동향 신호가 모두 명확합니다.
-- 또는 공시, IR, 실적, 대규모 수주처럼 company 동향 자체가 명확하여 sector가 약해도 분석 가치가 높습니다.
+- 또는 공시, IR, 실적, 대규모 수주처럼 company 동향 자체가 명확하여
+  sector가 약해도 분석 가치가 높습니다.
 
 irrelevant:
 - company가 단순 언급입니다.
@@ -299,7 +316,8 @@ class RelevanceAgent:
         )
 
         log.info(
-            "Gate 2.5 규칙 전처리 | id=%s decision=%s company_candidates=%s sector_candidates=%s reason=%s",
+            "Gate 2.5 규칙 전처리 | id=%s decision=%s company_candidates=%s "
+            "sector_candidates=%s reason=%s",
             getattr(row, "id", None),
             precheck["decision"],
             matched_company_candidates,
@@ -563,7 +581,9 @@ def _noise_reject_result(
             score=0.20,
             companies=matched_companies,
             sectors=matched_sectors,
-            reason="주가 등락/시황 중심 기사라 뉴스 relevance 대상에서 제외하고 market_data에서 처리",
+            reason=(
+                "주가 등락/시황 중심 기사라 뉴스 relevance 대상에서 제외하고 market_data에서 처리"
+            ),
         )
 
     if _is_event_listing_noise(
@@ -576,7 +596,9 @@ def _noise_reject_result(
             score=0.30,
             companies=matched_companies,
             sectors=matched_sectors,
-            reason="전시회·행사 안내에서 company가 참가사/나열 대상으로만 등장해 전략 동향 신호가 약함",
+            reason=(
+                "전시회·행사 안내에서 company가 참가사/나열 대상으로만 등장해 전략 동향 신호가 약함"
+            ),
         )
 
     return None
@@ -621,7 +643,10 @@ def _fast_pass_result(
         score=score,
         companies=matched_companies,
         sectors=matched_sectors,
-        reason="fast-pass: 제목에 피어사가 있고 명확한 핵심 이벤트 키워드가 있어 LLM 없이 관련 기사로 판단",
+        reason=(
+            "fast-pass: 제목에 피어사가 있고 명확한 핵심 이벤트 키워드가 있어 "
+            "LLM 없이 관련 기사로 판단"
+        ),
     )
 
 

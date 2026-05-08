@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 from src.crawler.base import RawArticle
 from src.crawler.base_crawler import BaseCrawler
 
-
 log = logging.getLogger(__name__)
 
 KST = timezone(timedelta(hours=9))

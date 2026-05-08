@@ -38,12 +38,12 @@ from uuid import uuid4
 import httpx
 
 try:
-    from src.config.company_tiers import company_tier_map
     from src.config.companies import COMPANIES, NAVER_ITEM_CODES
+    from src.config.company_tiers import company_tier_map
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-    from src.config.company_tiers import company_tier_map
     from src.config.companies import COMPANIES, NAVER_ITEM_CODES
+    from src.config.company_tiers import company_tier_map
 
 log = logging.getLogger(__name__)
 

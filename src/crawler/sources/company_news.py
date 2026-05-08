@@ -1590,13 +1590,6 @@ def save_json(
     articles: list[RawArticle],
     output_path: str,
 ) -> None:
-    save_json(articles, str(Path(output_path).with_suffix(".json")))
-
-
-def save_json(
-    articles: list[RawArticle],
-    output_path: str,
-) -> None:
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)
 

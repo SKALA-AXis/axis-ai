@@ -35,12 +35,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.crawler.base import RawArticle  # noqa: E402
-from src.crawler.base_crawler import BaseCrawler  # noqa: E402
-from src.crawler.parsers.article_content import extract_image_urls  # noqa: E402
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError  # noqa: E402
 
 from src.config.sectors import match_sectors  # noqa: E402
+from src.crawler.base import RawArticle  # noqa: E402
+from src.crawler.base_crawler import BaseCrawler  # noqa: E402
+from src.crawler.parsers.article_content import extract_image_urls  # noqa: E402
 from src.crawler.playwright_client import PlaywrightClient  # noqa: E402
 
 log = logging.getLogger(__name__)

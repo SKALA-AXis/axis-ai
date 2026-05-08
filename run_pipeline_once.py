@@ -216,7 +216,7 @@ def main() -> None:
         print("     ─── 출처 (상위 2) ───")
         for s in card.get("sources", [])[:2]:
             title = s.get("title", "")[:60]
-            print(f"       [{s.get('index','')}] {s.get('source_name','')} — {title}")
+            print(f"       [{s.get('index', '')}] {s.get('source_name', '')} — {title}")
 
     print("\n" + "=" * 78)
 
@@ -229,6 +229,11 @@ def _print_preprocess_result(result: dict) -> None:
     print("=" * 78)
     print(f"  RAW 기사:        {len(result.get('raw_article_ids', []))}건")
     print(f"  신뢰도 통과:     {len(result.get('credible_ids', []))}건")
+    print(f"  관련 기사:       {len(result.get('relevant_ids', []))}건")
+    print(f"  파싱 문서:       {len(result.get('parsed_document_ids', []))}건")
+    print(f"  산업 문서:       {len(result.get('industry_document_ids', []))}건")
+    print(f"  구조화 신호:     {len(result.get('structured_signal_ids', []))}건")
+    print(f"  전처리 제외:     {len(result.get('skipped_preprocess_ids', []))}건")
     print(f"  클러스터:        {len(result.get('cluster_map', {}))}개")
     print(f"  대표 기사:       {len(result.get('representative_ids', []))}건")
     print(f"  분류 완료:       {len(classified)}개")
@@ -237,7 +242,7 @@ def _print_preprocess_result(result: dict) -> None:
 
     if classified:
         print("\n  ── 대표 클러스터 ──")
-        for cluster in classified[:10]:
+        for cluster in sorted(classified, key=lambda item: item.get("cluster_id", 0))[:10]:
             print(
                 f"    [{cluster['cluster_id']}] {cluster.get('sector')} / "
                 f"{cluster.get('event_type')} / {cluster.get('exposure_band')} | "

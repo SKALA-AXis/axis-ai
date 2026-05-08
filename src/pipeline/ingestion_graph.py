@@ -278,7 +278,8 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
                     "parser_result": parser_result,
                     "document_scope": "industry_trend",
                     "preprocess_note": (
-                        "산업 동향 문서는 기사 relevance/signal 축약 없이 추후 본문 분석 대상으로 보존"
+                        "산업 동향 문서는 기사 relevance/signal 축약 없이 "
+                        "추후 본문 분석 대상으로 보존"
                     ),
                 },
             )

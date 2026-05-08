@@ -5,6 +5,7 @@ title/content 임베딩 유사도로 같은 이슈를 묶는다.
 원본 기사는 삭제하지 않고 raw_articles에 cluster_id와 is_representative만 저장한다.
 """
 
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -295,7 +296,16 @@ def _issue_dedup_key(article: dict[str, Any]) -> str | None:
 def _company_key(article: dict[str, Any]) -> list[str]:
     value = article.get("matched_companies") or article.get("company") or []
     if isinstance(value, str):
-        return [value] if value.strip() else []
+        stripped = value.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, list):
+                return sorted(str(item) for item in parsed if item)
+        except json.JSONDecodeError:
+            pass
+        return [stripped]
     if isinstance(value, (list, tuple)):
         return sorted(str(item) for item in value if item)
     return []

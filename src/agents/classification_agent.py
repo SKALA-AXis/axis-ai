@@ -191,7 +191,8 @@ ARTICLES_TEXT_PLACEHOLDER
 - company: 회사 전반의 경영 동향, 사업 방향, IR 해설, 재무 상태, 지배구조, 브랜드/비전 변화
 
 복수 해당 시 본문에서 가장 크게 다루는 측면 하나만 선택하세요.
-구체적 이벤트가 있으면 company보다 partnership, ma, personnel, tech_release, regulation, contract, financial, expansion을 우선하세요.
+구체적 이벤트가 있으면 company보다 partnership, ma, personnel, tech_release,
+regulation, contract, financial, expansion을 우선하세요.
 애매하면 tech_release보다 partnership, contract, financial, expansion을 우선하세요.
 
 JSON으로만 응답:
@@ -364,6 +365,8 @@ class ClassificationAgent:
         importance_band = _to_band(importance_score)
 
         result = {
+            "title": rep.get("title") or "",
+            "url": rep.get("url") or "",
             "sector": sector,
             "sectors": matched_sectors,
             "exposure_score": exposure["exposure_score"],
@@ -390,7 +393,8 @@ class ClassificationAgent:
 
         elapsed = int((time.time() - start) * 1000)
         log.info(
-            "분류 완료 | cluster=%d company=%s sector=%s importance=%s score=%.2f exposure=%.2f impact=%.2f event=%s elapsed=%dms",
+            "분류 완료 | cluster=%d company=%s sector=%s importance=%s "
+            "score=%.2f exposure=%.2f impact=%.2f event=%s elapsed=%dms",
             cluster_id,
             target_company,
             sector,

@@ -3,7 +3,7 @@
 사용법:
   uv run python run_all_once.py
   uv run python run_all_once.py --track all
-  uv run python run_all_once.py --env local --track all
+  uv run python run_all_once.py --env cloud --track all
   uv run python run_all_once.py --company samsung_sds --company nvidia
 """
 
@@ -14,14 +14,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="AXIS DB 크롤링 후 전처리까지만 1회 순차 실행"
-    )
+    parser = argparse.ArgumentParser(description="AXIS DB 크롤링 후 전처리까지만 1회 순차 실행")
     parser.add_argument(
         "--track",
         choices=["a", "b", "all"],
@@ -31,8 +28,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--env",
         choices=["local", "cloud"],
-        default=None,
-        help="DB 프로파일. run_crawler_once.py/run_pipeline_once.py에 동일하게 전달한다.",
+        default="local",
+        help=(
+            "DB 프로파일. 기본은 local이며 "
+            "run_crawler_once.py/run_pipeline_once.py에 동일하게 전달한다."
+        ),
     )
     parser.add_argument(
         "--company",
