@@ -752,7 +752,7 @@ class KeywordCrawler(BaseCrawler):
         return build_default_keyword_groups()
 
 
-def save_jsonl(
+def save_json(
     rows: list[dict[str, Any]],
     output_path: str | Path,
 ) -> Path:
@@ -904,7 +904,7 @@ def run_keyword_crawler(
     raw_rows = collect_naver_datalab_trends()
     marked_rows = mark_relative_peak_candidates(raw_rows)
 
-    save_jsonl(
+    save_json(
         marked_rows,
         build_output_path("naver_datalab"),
     )

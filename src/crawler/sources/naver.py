@@ -468,6 +468,15 @@ def classify_peer_relevance(
     content = article.content or ""
     subtitle = str(article.extra.get("subtitle", ""))
 
+    if _is_peer_filter_noise(title=title, content=content):
+        return {
+            "matched_aliases_by_peer": {},
+            "_company_peer_ids": [],
+            "peer_relevance": "reject",
+            "peer_relevance_reason": "news_noise_market_or_event_listing",
+            "target_peer_mention_count": 0,
+        }
+
     title_norm = normalize(title)
     subtitle_norm = normalize(subtitle)
     content_norm = normalize(content)
@@ -543,9 +552,12 @@ def classify_peer_relevance(
 
     # 부제 + 본문 기준:
     # 제목에는 없지만 부제 + 정제된 본문에서 타깃 피어사명이 2회 이상 반복 등장하면 pass.
-    elif target_subbody_count >= 2:
+    elif target_subbody_count >= 2 and _target_has_core_role_context(
+        subbody_norm,
+        target_peer_id,
+    ):
         decision = "pass"
-        reason = "target_peer_in_subtitle_body_2plus"
+        reason = "target_peer_core_role_in_body"
 
     # 본문에 1회 이상 등장했지만 기준 미달인 경우.
     elif target_count >= 1:
@@ -583,6 +595,127 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", "", text.lower())
 
 
+_MARKET_PRICE_RE = re.compile(
+    r"(주가|종가|장중|상승\s*마감|하락\s*마감|강세|약세|급등|급락|상한가|하한가|시가총액)"
+)
+_MARKET_METRIC_RE = re.compile(r"(\d+(?:\.\d+)?\s*%|\d{1,3}(?:,\d{3})+\s*원)")
+_EVENT_LISTING_KEYWORDS = [
+    "전시회",
+    "박람회",
+    "컨퍼런스",
+    "세미나",
+    "포럼",
+    "행사",
+    "코엑스",
+    "개최",
+    "참가",
+    "총집결",
+    "부스",
+    "시상식",
+]
+_STRONG_PEER_NEWS_KEYWORDS = [
+    "수주",
+    "계약",
+    "우선협상",
+    "협약",
+    "업무협약",
+    "제휴",
+    "투자유치",
+    "지분투자",
+    "투자계획",
+    "인수",
+    "합병",
+    "실적",
+    "공시",
+    "조직개편",
+    "채용",
+]
+_TARGET_CORE_ROLE_KEYWORDS = [
+    "수주",
+    "계약",
+    "구축",
+    "공급",
+    "선정",
+    "우선협상",
+    "컨소시엄",
+    "협약",
+    "업무협약",
+    "제휴",
+    "출시",
+    "공개",
+    "개발",
+    "투자유치",
+    "지분투자",
+    "인수",
+    "합병",
+    "실적",
+    "공시",
+]
+_CONTEXT_WINDOW = 80
+
+
+def _is_peer_filter_noise(*, title: str, content: str) -> bool:
+    if _is_non_korean_title(title):
+        return True
+
+    text = f"{title} {content}"
+    if _MARKET_PRICE_RE.search(text) and _MARKET_METRIC_RE.search(text):
+        return True
+
+    compact_text = normalize(text)
+    has_event_keyword = any(normalize(keyword) in compact_text for keyword in _EVENT_LISTING_KEYWORDS)
+    if not has_event_keyword:
+        return False
+
+    title_norm = normalize(title)
+    peer_in_title = any(
+        normalize(alias) in title_norm
+        for aliases in COMPANY_ALIASES.values()
+        for alias in aliases
+    )
+    event_in_title = any(
+        normalize(keyword) in title_norm for keyword in _EVENT_LISTING_KEYWORDS
+    )
+    if event_in_title and not peer_in_title:
+        return True
+
+    has_strong_keyword = any(
+        normalize(keyword) in compact_text for keyword in _STRONG_PEER_NEWS_KEYWORDS
+    )
+    return not peer_in_title and not has_strong_keyword
+
+
+def _is_non_korean_title(title: str) -> bool:
+    title = title or ""
+    return bool(title.strip()) and re.search(r"[가-힣]", title) is None
+
+
+def _target_has_core_role_context(text_norm: str, target_peer_id: str) -> bool:
+    aliases = [
+        alias_norm
+        for alias_norm in (
+            _search_alias_norm(alias) for alias in get_relevance_aliases(target_peer_id)
+        )
+        if alias_norm
+    ]
+    keyword_norms = [normalize(keyword) for keyword in _TARGET_CORE_ROLE_KEYWORDS]
+
+    for alias_norm in aliases:
+        start = 0
+        while True:
+            pos = text_norm.find(alias_norm, start)
+            if pos < 0:
+                break
+            left = max(0, pos - _CONTEXT_WINDOW)
+            right = min(len(text_norm), pos + len(alias_norm) + _CONTEXT_WINDOW)
+            context = text_norm[left:right]
+            if any(keyword in context for keyword in keyword_norms):
+                return True
+            start = pos + len(alias_norm)
+
+    return False
+
+
 def company_peer_ids_for_article(
     decision: str,
     reason: str,
@@ -594,6 +727,7 @@ def company_peer_ids_for_article(
         "tracked_peer_in_title",
         "target_peer_in_title",
         "multiple_tracked_peers_in_title",
+        "target_peer_core_role_in_body",
     }:
         return sorted(set(title_peers or [target_peer_id]))
 

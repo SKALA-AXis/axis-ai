@@ -1,8 +1,5 @@
 """Gate 2 소스 타입 기반 신뢰도 보정 에이전트.
 
-크롤러는 신뢰도를 계산하지 않는다.
-raw_articles 최초 저장 시 credibility_score, credibility_grade는 비어 있을 수 있다.
-
 이 단계에서는 source_type 기준으로 기본 credibility_score와 credibility_grade를 채운다.
 신뢰도 점수만으로 기사를 탈락시키지는 않는다.
 수집 실패, URL 없음, 제목 없음처럼 명백히 사용할 수 없는 데이터만 제외한다.
@@ -21,10 +18,11 @@ DEFAULT_CREDIBILITY_SCORE = 0.50
 SOURCE_TYPE_CREDIBILITY: dict[str, float] = {
     "dart": 1.00,
     "official": 0.90,
-    "ir": 0.90,
+    "ir": 1.00,
     "securities_report": 0.80,
     "trend_report": 0.70,
     "news": 0.70,
+    "market_data": 0.70,
     "job": 0.60,
     "search_trend": 0.55,
     "social": 0.40,
@@ -140,6 +138,31 @@ def compute_credibility_score(source_type: str | None) -> float:
     return SOURCE_TYPE_CREDIBILITY.get(key, DEFAULT_CREDIBILITY_SCORE)
 
 
+def analyze_credibility_article(article: dict) -> tuple[dict, bool, str | None]:
+    """JSON article에 Gate 2 신뢰도 결과를 붙인다.
+
+    DB 기반 `CredibilityAgent.filter()`와 같은 validate/score 규칙을 로컬
+    runner에서 재사용하기 위한 함수다.
+    """
+
+    valid, reason = _validate_mapping(article)
+    item = dict(article)
+
+    if not valid:
+        item["processing_status"] = "SKIPPED_INVALID_SOURCE"
+        item["skip_reason"] = reason
+        return item, False, reason
+
+    score = item.get("credibility_score")
+    if score is None:
+        score = compute_credibility_score(item.get("source_type"))
+
+    score = float(score)
+    item["credibility_score"] = score
+    item["credibility_grade"] = _to_grade(score)
+    return item, True, None
+
+
 def _validate_row(row) -> tuple[bool, str | None]:
     if row.crawl_status == "failed":
         return False, "crawl_failed"
@@ -152,6 +175,23 @@ def _validate_row(row) -> tuple[bool, str | None]:
 
     if row.source_type and row.source_type not in _ALLOWED_SOURCE_TYPES:
         return False, f"invalid_source_type:{row.source_type}"
+
+    return True, None
+
+
+def _validate_mapping(article: dict) -> tuple[bool, str | None]:
+    if article.get("crawl_status") == "failed":
+        return False, "crawl_failed"
+
+    if not article.get("url"):
+        return False, "empty_url"
+
+    if not article.get("title"):
+        return False, "empty_title"
+
+    source_type = article.get("source_type")
+    if source_type and source_type not in _ALLOWED_SOURCE_TYPES:
+        return False, f"invalid_source_type:{source_type}"
 
     return True, None
 

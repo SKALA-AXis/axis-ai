@@ -173,15 +173,22 @@ def _save_local(label: str, articles: list[RawArticle]) -> Path | None:
 
 def _article_to_dict(article: RawArticle) -> dict:
     return {
+        "id": article.id,
+        "source_type": article.source_type,
         "url": article.url,
         "title": article.title,
         "content": article.content,
         "source_name": article.source_name,
+        "publisher": article.publisher,
         "company": article.company,
         "published_at": article.published_at.isoformat() if article.published_at else None,
         "collected_at": article.collected_at.isoformat(),
         "url_hash": article.url_hash,
-        "metadata": article.extra,
+        "language": article.language,
+        "content_type": article.content_type,
+        "crawl_status": article.crawl_status,
+        "error_message": article.error_message,
+        "extra": article.extra,
     }
 
 

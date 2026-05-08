@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from langchain_openai import ChatOpenAI
@@ -38,37 +39,89 @@ def _get_llm() -> ChatOpenAI:
     return _llm
 
 _RELEVANCE_PROMPT = """\
-당신은 SK AX 전략 모니터링 시스템의 관련성 판단 Agent입니다.
+당신은 기사 본문의 프로젝트 목적과의 관련성 판단 Agent입니다.
 
-아래 기사가 모니터링 대상 company와 sector 관점에서 실제 분석할 가치가 있는지 판단하세요.
+이 Agent의 목적은 크롤링된 후보 기사 중에서 Peer사의 전략 모니터링 대상으로 분석할 가치가 있는 기사만 선별하는 것입니다.
+단순 키워드 포함 여부가 아니라, company 관련성, sector 관련성, 동향 신호를 분리해서 판단해야 합니다.
 
-## 판단 기준
+## 입력 정보
+- title: 기사 제목
+- content: 기사 본문
+- source_type: 기사 출처 타입
+- target_companies: 수집 단계에서 모니터링 대상으로 지정된 company 목록
+- matched_company_candidates: 규칙 기반으로 본문에서 감지된 company 후보
+- matched_sector_candidates: 규칙 기반으로 본문에서 감지된 sector 후보
+
+## 판단 원칙
+아래 3가지가 모두 충족되면 relevant로 판단하세요.
+
+1. Company 관련성
+- 대상 company가 기사에서 핵심 주체로 등장해야 합니다.
+- 핵심 주체란 수주, 계약, 제휴, 투자, 출시, 실적, 공시, IR, 채용 확대, 조직 개편, 시장 진출, 기술 개발, 고객 확보 등의 행위를 수행하거나 그 영향을 받는 기업을 의미합니다.
+- company 이름이 단순 나열, 광고, 태그, 관련 기사, 행사 후원사, 배경 설명에만 등장하면 핵심 주체로 보지 마세요.
+- 그룹사가 언급되더라도 target_companies에 포함된 회사가 핵심 주체가 아니면 irrelevant로 판단하세요.
+- 여러 peer사가 함께 언급된 경우, 경쟁 구도, 비교, 협력, 시장 변화 관점에서 의미 있게 다뤄지면 relevant로 판단할 수 있습니다.
+
+2. Sector 관련성
+- sector는 단순 키워드가 아니라 실제 사업, 기술, 시장 맥락과 연결되어야 합니다.
+- 예를 들어 AI, 클라우드, 보안, 인프라, 제조 AX, 물류, ERP, 데이터센터, 스마트팩토리, 공공 DX 등이 회사의 사업 변화나 기술 변화와 연결되면 sector 관련성이 있습니다.
+- sector 단어가 일반 표현, 배경 설명, 비유, 문장 장식으로만 등장하면 sector 관련성이 낮습니다.
+- matched_sector_candidates가 ["other"]이거나 비어 있으면 sector 관련성은 낮게 판단하세요. 단, 공시, IR, 실적, 대규모 수주처럼 회사 동향 자체가 명확하면 relevant가 될 수 있습니다.
+
+3. 동향 신호
+- 전략 모니터링에 사용할 수 있는 변화 신호가 있어야 합니다.
+- 동향 신호에는 신규 수주, 계약, 제휴, 투자, 인수합병, 신제품 출시, 서비스 출시, 플랫폼 고도화, 기술 개발, 특허, 채용 확대, 조직 개편, 실적 변화, 공시, IR, 신규 시장 진출, 고객사 확보, 정부 사업 참여, 정책 변화, 산업 트렌드 변화가 포함됩니다.
+- 단순 행사 참석, 단순 수상, 단순 인물 인터뷰, 광고성 기사, 제품 홍보만 있는 기사는 동향 신호가 약하므로 irrelevant로 판단하세요.
+- 전시회/컨퍼런스/박람회/시상식/행사 일정 안내 기사에서 company가 참가사·후원사·발표 기업 목록에만 등장하면 irrelevant로 판단하세요.
+- 주가 등락, 장중 시황, 종목별 상승·하락 마감처럼 가격 움직임만 설명하는 기사는 market_data로 별도 처리하므로 news relevance에서는 irrelevant로 판단하세요.
+
+## label 정의
 relevant:
-- 대상 company가 기사 핵심 주체다.
-- sector와 실제 사업/기술 맥락상 관련 있다.
-- 수주, 제휴, 기술 출시, 플랫폼 고도화, 채용 확대, 공시, IR, 실적, 시장 진출 등 동향 신호가 있다.
+- company 관련성, sector 관련성, 동향 신호가 모두 명확합니다.
+- 또는 공시, IR, 실적, 대규모 수주처럼 company 동향 자체가 명확하여 sector가 약해도 분석 가치가 높습니다.
 
 irrelevant:
-- company가 단순 언급만 됐다.
-- sector keyword가 단순 단어로만 등장한다.
-- 행사 후기, 단순 인물 인터뷰, 광고성 내용 등 전략 모니터링 가치가 낮다.
-- 대상 company가 아니라 그룹사나 다른 기업이 핵심 주체다.
+- company가 단순 언급입니다.
+- sector keyword가 단순 단어 수준입니다.
+- 동향 신호가 없습니다.
+- 대상 company가 아니라 다른 회사나 그룹사가 핵심 주체입니다.
+- 광고성, 행사성, 인물성, 단순 홍보성 기사입니다.
 
 uncertain:
-- 관련성은 있으나 본문이 부족하거나 판단이 애매하다.
+- 본문이 부족해 핵심 주체나 동향 신호를 확정하기 어렵습니다.
+- company와 sector 후보는 있으나 실제 사업 맥락인지 불명확합니다.
+- 관련 가능성은 있으나 근거가 약합니다.
+
+## score 기준
+- 0.90 ~ 1.00: company, sector, 동향 신호가 모두 매우 명확함
+- 0.75 ~ 0.89: 관련성이 높고 분석 가치가 있음
+- 0.60 ~ 0.74: 관련 가능성은 있으나 일부 근거가 약함
+- 0.40 ~ 0.59: 애매하거나 근거 부족
+- 0.00 ~ 0.39: 관련성 낮음
+
+## 출력 규칙
+- 반드시 JSON만 출력하세요.
+- 마크다운 코드블록을 사용하지 마세요.
+- relevance_label은 relevant, irrelevant, uncertain 중 하나만 사용하세요.
+- relevance_score는 0.0부터 1.0 사이의 숫자로 작성하세요.
+- matched_companies는 실제 기사 맥락상 의미 있게 등장한 company만 포함하세요.
+- matched_sectors는 실제 기사 맥락상 의미 있게 연결된 sector만 포함하세요.
+- reason은 판단 근거를 1문장으로 작성하세요.
+- reason에는 company 관련성, sector 관련성, 동향 신호 중 무엇이 충족되었거나 부족한지 포함하세요.
 
 ## 기사
 title: {title}
 content: {content}
+source_type: {source_type}
 
-## 수집 시 감지된 company
+## 수집 시 감지된 target_companies
 {company}
 
 ## 규칙 기반 감지 결과
 matched_company_candidates: {matched_company_candidates}
 matched_sector_candidates: {matched_sector_candidates}
 
-JSON으로만 응답:
+## JSON 출력 형식
 {{
   "relevance_label": "relevant|irrelevant|uncertain",
   "relevance_score": 0.0,
@@ -97,6 +150,8 @@ class RelevanceAgent:
         relevant_ids: list[int] = []
         skipped_ids: list[int] = []
 
+        log.info("Gate 2.5 관련성 전처리 시작 | total=%d", len(raw_article_ids))
+
         with SessionLocal() as db:
             rows = db.execute(
                 text("""
@@ -115,6 +170,12 @@ class RelevanceAgent:
             ).fetchall()
 
             for row in rows:
+                log.info(
+                    "Gate 2.5 기사 전처리 중 | id=%s source_type=%s title=%s",
+                    row.id,
+                    row.source_type,
+                    _shorten(row.title or "", 80),
+                )
                 result = self._analyze(row)
 
                 is_relevant = _is_relevant(result)
@@ -156,9 +217,17 @@ class RelevanceAgent:
 
                 if is_relevant:
                     relevant_ids.append(row.id)
+                    log.info(
+                        "Gate 2.5 통과 | id=%s label=%s score=%.2f companies=%s sectors=%s",
+                        row.id,
+                        result["relevance_label"],
+                        result["relevance_score"],
+                        result["matched_companies"],
+                        result["matched_sectors"],
+                    )
                 else:
                     skipped_ids.append(row.id)
-                    log.debug(
+                    log.info(
                         "관련성 제외 | id=%d label=%s score=%.2f reason=%s",
                         row.id,
                         result["relevance_label"],
@@ -204,12 +273,35 @@ class RelevanceAgent:
         matched_company_candidates = _match_companies(text_body, company)
         matched_sector_candidates = match_sectors(text_body)
 
+        noise_result = _noise_reject_result(
+            title=title,
+            content=content,
+            source_type=row.source_type,
+            matched_companies=matched_company_candidates,
+            matched_sectors=matched_sector_candidates,
+        )
+        if noise_result is not None:
+            log.info(
+                "Gate 2.5 노이즈 기사 제외 | id=%s reason=%s",
+                getattr(row, "id", None),
+                noise_result["reason"],
+            )
+            return noise_result
+
         precheck = _precheck(
             company=company,
             matched_companies=matched_company_candidates,
             matched_sectors=matched_sector_candidates,
             source_type=row.source_type,
-            content=content,
+        )
+
+        log.info(
+            "Gate 2.5 규칙 전처리 | id=%s decision=%s company_candidates=%s sector_candidates=%s reason=%s",
+            getattr(row, "id", None),
+            precheck["decision"],
+            matched_company_candidates,
+            matched_sector_candidates,
+            precheck["reason"],
         )
 
         if precheck["decision"] == "reject":
@@ -221,18 +313,25 @@ class RelevanceAgent:
                 reason=precheck["reason"],
             )
 
-        if precheck["decision"] == "accept":
-            return _result(
-                label="relevant",
-                score=precheck["score"],
-                companies=matched_company_candidates,
-                sectors=matched_sector_candidates,
-                reason=precheck["reason"],
+        fast_pass_result = _fast_pass_result(
+            title=title,
+            content=content,
+            source_type=row.source_type,
+            matched_companies=matched_company_candidates,
+            matched_sectors=matched_sector_candidates,
+        )
+        if fast_pass_result is not None:
+            log.info(
+                "Gate 2.5 fast-pass | id=%s reason=%s",
+                getattr(row, "id", None),
+                fast_pass_result["reason"],
             )
+            return fast_pass_result
 
         return self._analyze_with_llm(
             title=title,
             content=content,
+            source_type=row.source_type,
             company=company,
             matched_company_candidates=matched_company_candidates,
             matched_sector_candidates=matched_sector_candidates,
@@ -242,6 +341,7 @@ class RelevanceAgent:
         self,
         title: str,
         content: str,
+        source_type: str | None,
         company: list[str],
         matched_company_candidates: list[str],
         matched_sector_candidates: list[str],
@@ -249,27 +349,41 @@ class RelevanceAgent:
         prompt = _RELEVANCE_PROMPT.format(
             title=title,
             content=content[:LLM_CONTENT_LIMIT],
+            source_type=source_type or "",
             company=company,
             matched_company_candidates=matched_company_candidates,
             matched_sector_candidates=matched_sector_candidates,
         )
 
         try:
+            log.info(
+                "Gate 2.5 LLM 내용 분석 중 | source_type=%s companies=%s sectors=%s",
+                source_type,
+                matched_company_candidates,
+                matched_sector_candidates,
+            )
             response = _get_llm().invoke(prompt)
             response_text = (
                 response.content if isinstance(response.content, str) else str(response.content)
             )
-            return _parse_relevance_json(response_text)
+            result = _parse_relevance_json(response_text)
+            log.info(
+                "Gate 2.5 LLM 판단 완료 | label=%s score=%.2f reason=%s",
+                result["relevance_label"],
+                result["relevance_score"],
+                result["reason"],
+            )
+            return result
         except Exception as e:
             log.warning("관련성 LLM 판단 실패 | error=%s", e)
 
             if matched_company_candidates and matched_sector_candidates:
                 return _result(
                     label="uncertain",
-                    score=0.60,
+                    score=0.50,
                     companies=matched_company_candidates,
                     sectors=matched_sector_candidates,
-                    reason="LLM 판단 실패, company와 sector 후보가 모두 감지되어 보류 통과",
+                    reason="LLM 판단 실패로 핵심 주체와 동향 신호를 확정하지 못함",
                 )
 
             return _result(
@@ -281,57 +395,277 @@ class RelevanceAgent:
             )
 
 
+def analyze_relevance_article(article: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """JSON article에 Gate 2.5 관련성 결과를 붙인다."""
+
+    row = _DictRow(article)
+    result = RelevanceAgent()._analyze(row)
+    is_relevant = _is_relevant(result)
+
+    item = dict(article)
+    item.update(
+        {
+            "relevance_label": result["relevance_label"],
+            "relevance_score": result["relevance_score"],
+            "relevance_reason": result["reason"],
+            "matched_companies": result["matched_companies"],
+            "matched_sectors": result["matched_sectors"],
+        }
+    )
+
+    if not is_relevant:
+        item["processing_status"] = "SKIPPED_RELEVANCE"
+
+    return item, is_relevant
+
+
+class _DictRow:
+    def __init__(self, article: dict[str, Any]) -> None:
+        self.id = article.get("id")
+        self.title = article.get("title")
+        self.content = article.get("content")
+        self.company = article.get("company")
+        self.source_type = article.get("source_type")
+        self.crawl_status = article.get("crawl_status", "success")
+        self.metadata = article.get("metadata") or article.get("extra") or {}
+
+
 def _precheck(
     company: list[str],
     matched_companies: list[str],
     matched_sectors: list[str],
     source_type: str | None,
-    content: str,
 ) -> dict[str, Any]:
     has_company = bool(matched_companies)
     has_sector = bool(matched_sectors and matched_sectors != ["other"])
-    content_len = len(content or "")
+    is_company_source = source_type in {"dart", "ir", "official"} and bool(company)
 
-    if source_type in {"dart", "ir", "official"} and company:
-        return {
-            "decision": "accept",
-            "score": 0.85,
-            "reason": "공식성 source_type이며 수집 시 company가 지정된 자료",
-        }
-
-    if not has_company and not has_sector:
+    if not has_company and not has_sector and not is_company_source:
         return {
             "decision": "reject",
             "score": 0.10,
             "reason": "대상 company와 sector 후보가 모두 감지되지 않음",
         }
 
-    if not has_company and source_type not in {"search_trend", "trend_report"}:
+    if (
+        not has_company
+        and source_type not in {"dart", "ir", "official", "search_trend", "trend_report"}
+    ):
         return {
             "decision": "reject",
             "score": 0.25,
             "reason": "sector 후보는 있으나 대상 company가 본문에서 확인되지 않음",
         }
 
-    if has_company and has_sector and content_len >= 500:
-        return {
-            "decision": "analyze",
-            "score": 0.70,
-            "reason": "company와 sector 후보가 모두 감지되어 내용 분석 필요",
-        }
-
-    if has_company and has_sector and content_len < 500:
-        return {
-            "decision": "accept",
-            "score": 0.62,
-            "reason": "본문은 짧지만 company와 sector 후보가 모두 감지됨",
-        }
-
     return {
         "decision": "analyze",
         "score": 0.50,
-        "reason": "관련성 판단이 애매하여 내용 분석 필요",
+        "reason": "규칙 후보 기반으로 LLM 내용 분석 필요",
     }
+
+
+_MARKET_PRICE_RE = re.compile(
+    r"(주가|종가|장중|상승\s*마감|하락\s*마감|강세|약세|급등|급락|상한가|하한가|시가총액)"
+)
+_MARKET_METRIC_RE = re.compile(r"(\d+(?:\.\d+)?\s*%|\d{1,3}(?:,\d{3})+\s*원)")
+_EVENT_LISTING_KEYWORDS = [
+    "전시회",
+    "박람회",
+    "컨퍼런스",
+    "세미나",
+    "포럼",
+    "행사",
+    "코엑스",
+    "개최",
+    "참가",
+    "총집결",
+    "부스",
+    "시상식",
+]
+_STRATEGIC_ACTION_KEYWORDS = [
+    "수주",
+    "계약",
+    "구축",
+    "선정",
+    "우선협상",
+    "협약",
+    "업무협약",
+    "제휴",
+    "공동",
+    "출시",
+    "공개",
+    "개발",
+    "투자",
+    "인수",
+    "합병",
+    "실적",
+    "공시",
+    "조직개편",
+    "채용",
+]
+_STRONG_STRATEGIC_ACTION_KEYWORDS = [
+    "수주",
+    "계약",
+    "구축",
+    "우선협상",
+    "협약",
+    "업무협약",
+    "제휴",
+    "투자",
+    "인수",
+    "합병",
+    "실적",
+    "공시",
+    "조직개편",
+    "채용",
+]
+_FAST_PASS_ACTION_KEYWORDS = [
+    *_STRONG_STRATEGIC_ACTION_KEYWORDS,
+    "출시",
+    "공개",
+    "선정",
+    "개발",
+    "고도화",
+    "플랫폼",
+]
+_FAST_PASS_SOURCE_TYPES = {"news", "official"}
+
+
+def _noise_reject_result(
+    *,
+    title: str,
+    content: str,
+    source_type: str | None,
+    matched_companies: list[str],
+    matched_sectors: list[str],
+) -> dict[str, Any] | None:
+    text = f"{title} {content}"
+    compact_text = _compact(text)
+
+    if _is_non_korean_news_title(title=title, source_type=source_type):
+        return _result(
+            label="irrelevant",
+            score=0.25,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason="한국어 뉴스 모니터링 대상에서 제외: 제목에 한글이 없는 외국어 기사",
+        )
+
+    if _is_market_price_noise(text):
+        return _result(
+            label="irrelevant",
+            score=0.20,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason="주가 등락/시황 중심 기사라 뉴스 relevance 대상에서 제외하고 market_data에서 처리",
+        )
+
+    if _is_event_listing_noise(
+        title=title,
+        compact_text=compact_text,
+        matched_companies=matched_companies,
+    ):
+        return _result(
+            label="irrelevant",
+            score=0.30,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason="전시회·행사 안내에서 company가 참가사/나열 대상으로만 등장해 전략 동향 신호가 약함",
+        )
+
+    return None
+
+
+def _fast_pass_result(
+    *,
+    title: str,
+    content: str,
+    source_type: str | None,
+    matched_companies: list[str],
+    matched_sectors: list[str],
+) -> dict[str, Any] | None:
+    if str(source_type or "").strip().lower() not in _FAST_PASS_SOURCE_TYPES:
+        return None
+
+    if not matched_companies:
+        return None
+
+    title_compact = _compact(title)
+    text_compact = _compact(f"{title} {content}")
+
+    company_in_title = any(
+        _compact(alias) in title_compact
+        for company_id in matched_companies
+        for alias in COMPANY_ALIASES.get(company_id, [company_id])
+    )
+    if not company_in_title:
+        return None
+
+    has_strong_action = any(
+        _compact(keyword) in text_compact for keyword in _FAST_PASS_ACTION_KEYWORDS
+    )
+    if not has_strong_action:
+        return None
+
+    has_sector = bool(matched_sectors and matched_sectors != ["other"])
+    score = 0.82 if has_sector else 0.72
+
+    return _result(
+        label="relevant",
+        score=score,
+        companies=matched_companies,
+        sectors=matched_sectors,
+        reason="fast-pass: 제목에 피어사가 있고 명확한 핵심 이벤트 키워드가 있어 LLM 없이 관련 기사로 판단",
+    )
+
+
+def _is_market_price_noise(text: str) -> bool:
+    return bool(_MARKET_PRICE_RE.search(text) and _MARKET_METRIC_RE.search(text))
+
+
+def _is_non_korean_news_title(*, title: str, source_type: str | None) -> bool:
+    if str(source_type or "").strip().lower() != "news":
+        return False
+
+    title = title or ""
+    if not title.strip():
+        return False
+
+    return re.search(r"[가-힣]", title) is None
+
+
+def _is_event_listing_noise(
+    *,
+    title: str,
+    compact_text: str,
+    matched_companies: list[str],
+) -> bool:
+    has_event_keyword = any(_compact(keyword) in compact_text for keyword in _EVENT_LISTING_KEYWORDS)
+    if not has_event_keyword:
+        return False
+
+    title_compact = _compact(title)
+    company_in_title = any(
+        _compact(alias) in title_compact
+        for company_id in matched_companies
+        for alias in COMPANY_ALIASES.get(company_id, [company_id])
+    )
+    event_in_title = any(
+        _compact(keyword) in title_compact for keyword in _EVENT_LISTING_KEYWORDS
+    )
+    if event_in_title and not company_in_title:
+        return True
+
+    has_strong_action_keyword = any(
+        _compact(keyword) in compact_text for keyword in _STRONG_STRATEGIC_ACTION_KEYWORDS
+    )
+    if not company_in_title and not has_strong_action_keyword:
+        return True
+
+    has_action_keyword = any(
+        _compact(keyword) in compact_text for keyword in _STRATEGIC_ACTION_KEYWORDS
+    )
+    return not has_action_keyword
 
 
 def _is_relevant(result: dict[str, Any]) -> bool:
@@ -339,9 +673,6 @@ def _is_relevant(result: dict[str, Any]) -> bool:
     score = float(result.get("relevance_score", 0.0))
 
     if label == "relevant" and score >= RELEVANCE_THRESHOLD:
-        return True
-
-    if label == "uncertain" and score >= RELEVANCE_THRESHOLD:
         return True
 
     return False
@@ -464,6 +795,13 @@ def _result(
 
 def _compact(value: str) -> str:
     return "".join(value.lower().split())
+
+
+def _shorten(value: str, limit: int) -> str:
+    compacted = " ".join(value.split())
+    if len(compacted) <= limit:
+        return compacted
+    return f"{compacted[: limit - 3]}..."
 
 
 def _dedupe_keep_order(values: list[str]) -> list[str]:

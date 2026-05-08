@@ -6,6 +6,7 @@ title/content 임베딩 유사도로 같은 이슈를 묶는다.
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,6 +18,21 @@ log = logging.getLogger(__name__)
 
 DEDUP_THRESHOLD = 0.83
 EMBED_BATCH_SIZE = 32
+
+_CANONICAL_ISSUE_TERMS = {
+    "physicalworks": (
+        "physicalworks",
+        "피지컬웍스",
+        "physical works",
+        "피지컬 웍스",
+    ),
+    "national_ai_computing_center": (
+        "국가ai컴퓨팅센터",
+        "국가 ai 컴퓨팅 센터",
+        "국가인공지능컴퓨팅센터",
+        "ai컴퓨팅센터",
+    ),
+}
 
 
 class DeduplicationAgent:
@@ -67,13 +83,97 @@ class DeduplicationAgent:
         return cluster_map, representative_ids
 
 
-def _embed(articles: list[dict[str, Any]]) -> np.ndarray:
-    """BGE-M3 dense 벡터 배치 임베딩. 실패 시 OpenAI fallback."""
+def deduplicate_articles(
+    articles: list[dict[str, Any]],
+    id_key: str = "preprocess_id",
+) -> tuple[dict[int, list[int]], list[int]]:
+    """JSON article 목록을 Gate 3 클러스터링 규칙으로 묶는다.
+
+    DB 저장 없이 `DeduplicationAgent`의 embedding/대표 선정 로직을 재사용한다.
+    임베딩 모델을 사용할 수 없는 로컬 환경에서는 제목 기반 클러스터링으로
+    graceful fallback 한다.
+    """
+
+    if not articles:
+        return {}, []
+
+    normalized = [_normalize_local_article(article, id_key) for article in articles]
+
+    try:
+        embeddings = _embed(normalized, allow_openai_fallback=False)
+        cluster_map = _cluster(
+            articles=normalized,
+            embeddings=embeddings,
+            threshold=DEDUP_THRESHOLD,
+        )
+        representative_ids = _select_representatives(
+            cluster_map=cluster_map,
+            articles=normalized,
+            embeddings=embeddings,
+        )
+        return cluster_map, representative_ids
+    except Exception as e:
+        log.warning("로컬 전처리 dedup 임베딩 실패, 제목 기반 fallback | error=%s", e)
+        return _deduplicate_by_title(normalized)
+
+
+def _normalize_local_article(article: dict[str, Any], id_key: str) -> dict[str, Any]:
+    item = dict(article)
+    item["id"] = int(item.get(id_key) or item.get("id") or 0)
+    return item
+
+
+def _deduplicate_by_title(articles: list[dict[str, Any]]) -> tuple[dict[int, list[int]], list[int]]:
+    groups: dict[str, list[int]] = {}
+    by_id = {int(article["id"]): article for article in articles}
+
+    for article in articles:
+        key = _fallback_dedup_key(article)
+        groups.setdefault(key, []).append(int(article["id"]))
+
+    cluster_map = {cluster_id: ids for cluster_id, ids in enumerate(groups.values())}
+    representative_ids = [
+        max(ids, key=lambda article_id: _representative_score_fallback(by_id[article_id]))
+        for ids in cluster_map.values()
+    ]
+    return cluster_map, representative_ids
+
+
+def _fallback_dedup_key(article: dict[str, Any]) -> str:
+    issue_key = _issue_dedup_key(article)
+    if issue_key:
+        return issue_key
+
+    title = " ".join(str(article.get("title") or "").lower().split())
+    if title:
+        return title
+    return str(article.get("url_hash") or article.get("url") or article.get("id"))
+
+
+def _representative_score_fallback(article: dict[str, Any]) -> tuple[float, float, int]:
+    return (
+        float(article.get("relevance_score") or 0.0),
+        float(article.get("credibility_score") or 0.0),
+        len(article.get("content") or ""),
+    )
+
+
+def _embed(
+    articles: list[dict[str, Any]],
+    allow_openai_fallback: bool = True,
+) -> np.ndarray:
+    """BGE-M3 dense 벡터 배치 임베딩.
+
+    DB 파이프라인에서는 OpenAI fallback을 허용한다. 로컬 JSON 전처리에서는
+    비용/네트워크 호출을 피하기 위해 fallback을 끄고 제목 기반 dedup으로 넘어간다.
+    """
     texts = [_build_embedding_text(article) for article in articles]
 
     try:
         return _embed_bge(texts)
     except Exception as e:
+        if not allow_openai_fallback:
+            raise
         log.warning("BGE-M3 임베딩 실패, OpenAI fallback | error=%s", e)
         return _embed_openai(texts)
 
@@ -148,7 +248,7 @@ def _cluster(
 
     for i in range(n):
         for j in range(i + 1, n):
-            if sim_matrix[i, j] >= threshold:
+            if sim_matrix[i, j] >= threshold or _same_issue(articles[i], articles[j]):
                 union(i, j)
 
     groups: dict[int, list[int]] = {}
@@ -160,6 +260,59 @@ def _cluster(
     # TODO: 운영 환경에서는 batch마다 0부터 시작하는 local cluster_id 대신
     # article_clusters 테이블 또는 batch_id 기반 cluster_key를 사용하는 방식 검토.
     return {cluster_id: ids for cluster_id, ids in enumerate(groups.values())}
+
+
+def _same_issue(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_key = _issue_dedup_key(left)
+    return bool(left_key and left_key == _issue_dedup_key(right))
+
+
+def _issue_dedup_key(article: dict[str, Any]) -> str | None:
+    companies = _company_key(article)
+    if not companies:
+        return None
+
+    text = _compact_text(
+        " ".join(
+            [
+                str(article.get("title") or ""),
+                str(article.get("content") or "")[:1200],
+            ]
+        )
+    )
+
+    for issue, aliases in _CANONICAL_ISSUE_TERMS.items():
+        if any(_compact_text(alias) in text for alias in aliases):
+            return f"{','.join(companies)}::{issue}"
+
+    quoted = _quoted_product_key(article)
+    if quoted:
+        return f"{','.join(companies)}::quoted::{quoted}"
+
+    return None
+
+
+def _company_key(article: dict[str, Any]) -> list[str]:
+    value = article.get("matched_companies") or article.get("company") or []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        return sorted(str(item) for item in value if item)
+    return []
+
+
+def _quoted_product_key(article: dict[str, Any]) -> str | None:
+    title = str(article.get("title") or "")
+    quoted_terms = re.findall(r"['‘’\"“”「」](.{2,40}?)['‘’\"“”「」]", title)
+    for term in quoted_terms:
+        compact = _compact_text(term)
+        if len(compact) >= 4 and not compact.isdigit():
+            return compact
+    return None
+
+
+def _compact_text(value: str) -> str:
+    return re.sub(r"[\s·'‘’\"“”「」()\[\]{}:：,._\-…]+", "", value.lower())
 
 
 def _select_representatives(

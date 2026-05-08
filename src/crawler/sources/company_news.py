@@ -40,6 +40,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.config.companies import company_name_ko  # noqa: E402
 from src.crawler.base import RawArticle  # noqa: E402
 from src.crawler.base_crawler import BaseCrawler  # noqa: E402
 
@@ -69,31 +70,31 @@ REQUEST_TIMEOUT = 30
 
 COMPANY_CONFIGS = [
     {
-        "company": "삼성SDS",
+        "company": "samsung_sds",
         "source_name": "Samsung SDS Press Release",
         "source_type": "official",
         "list_url": "https://www.samsungsds.com/kr/news/index.html",
     },
     {
-        "company": "SK AX",
+        "company": "sk_ax",
         "source_name": "SK AX Newsroom",
         "source_type": "official",
         "list_url": "https://www.skax.co.kr/company/news-rooms",
     },
     {
-        "company": "현대오토에버",
+        "company": "hyundai_autoever",
         "source_name": "Hyundai AutoEver News",
         "source_type": "official",
         "list_url": "https://www.hyundai-autoever.com/kor/about/pr/news/list.do",
     },
     {
-        "company": "포스코DX",
+        "company": "posco_dx",
         "source_name": "POSCO DX NewsRoom",
         "source_type": "official",
         "list_url": "https://www.poscodx.com/kor/pr/newsRoom.do",
     },
     {
-        "company": "LG CNS",
+        "company": "lg_cns",
         "source_name": "LG CNS Press",
         "source_type": "official",
         "list_url": "https://www.lgcns.com/kr/newsroom/press.page_1",
@@ -1424,7 +1425,8 @@ class CompanyNewsCrawler(BaseCrawler):
         self,
         config: dict,
     ) -> list[RawArticle]:
-        company = config["company"]
+        company_id = config["company"]
+        company = company_name_ko(company_id)
         list_url = config["list_url"]
 
         log.info("[%s] 목록 수집 시작: %s", company, list_url)
@@ -1511,13 +1513,14 @@ class CompanyNewsCrawler(BaseCrawler):
                     source_name=config["source_name"],
                     source_type=config["source_type"],
                     publisher=company,
-                    company=[company],
+                    company=[company_id],
                     language="ko",
                     content_type="html",
                     crawl_status="success",
                     error_message=None,
                     extra={
                         "list_url": list_url,
+                        "company_name": company,
                         "candidate_score": candidate["score"],
                         "used_list_render": used_list_render,
                         "used_detail_render": used_detail_render,
@@ -1558,7 +1561,8 @@ class CompanyNewsCrawler(BaseCrawler):
         config: dict,
         error_message: str,
     ) -> RawArticle:
-        company = config["company"]
+        company_id = config["company"]
+        company = company_name_ko(company_id)
 
         return RawArticle(
             url=config["list_url"],
@@ -1568,13 +1572,14 @@ class CompanyNewsCrawler(BaseCrawler):
             source_name=config["source_name"],
             source_type=config["source_type"],
             publisher=company,
-            company=[company],
+            company=[company_id],
             language="ko",
             content_type="html",
             crawl_status="failed",
             error_message=error_message,
             extra={
                 "list_url": config["list_url"],
+                "company_name": company,
             },
         )
 
@@ -1583,7 +1588,7 @@ class CompanyNewsCrawler(BaseCrawler):
 # 6. 저장 함수
 # =========================================================
 
-def save_jsonl(
+def save_json(
     articles: list[RawArticle],
     output_path: str,
 ) -> None:

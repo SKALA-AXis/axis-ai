@@ -76,6 +76,12 @@ class JobCrawler(BaseCrawler):
                 )
                 continue
 
+            company_ids = (
+                [self.peer_id]
+                if self.peer_id
+                else _company_ids_from_peer_company(peer_company)
+            )
+
             articles.append(
                 RawArticle(
                     url=job.get("url", ""),
@@ -87,7 +93,7 @@ class JobCrawler(BaseCrawler):
                     source_type="job",
                     content_type="api",
                     publisher="고용24",
-                    company=[job.get("company", "") or self.peer_id],
+                    company=company_ids,
                     extra={
                         "emp_seqno": job.get("emp_seqno", ""),
                         "peer_company": peer_company,
@@ -309,6 +315,18 @@ def _matches_peer_id(peer_id: str, peer_company: str) -> bool:
     aliases = PEER_ALIASES.get(peer_id, [peer_id])
 
     return any(alias.lower().replace(" ", "") in peer_text for alias in aliases)
+
+
+def _company_ids_from_peer_company(peer_company: str) -> list[str]:
+    peer_text = peer_company.lower().replace(" ", "")
+    if not peer_text:
+        return []
+
+    return [
+        peer_id
+        for peer_id, aliases in PEER_ALIASES.items()
+        if any(alias.lower().replace(" ", "") in peer_text for alias in aliases)
+    ]
 
 
 def _build_role_summaries(roles: list[dict]) -> list[dict]:

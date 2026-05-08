@@ -101,8 +101,8 @@ def build_scheduler() -> AsyncIOScheduler:
         job_id="naver_research",
         name="증권사 리포트 — 네이버 증권",
         day_of_week="mon-fri",
-        hour="8,12,16",
-        minute=0,
+        hour=10,
+        minute=30,
         misfire_grace_time=1800,
     )
     _add_cron_job(

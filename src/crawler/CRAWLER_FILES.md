@@ -52,7 +52,7 @@
 1. 공통 기반 계층
    - `base.py`: `RawArticle`, 상태 타입, 수집 한도 가드, 재시도 정책을 제공한다.
    - `base_crawler.py`: peer/company/limit_guard를 표준화하는 추상 부모 클래스를 제공한다.
-   - `result_writer.py`: 크롤러 결과 객체를 JSONL로 저장한다.
+   - `result_writer.py`: 크롤러 결과 객체를 JSON로 저장한다.
    - `parsers/link_check.py`, `parsers/dedup.py`, `parsers/content.py`: 접근성 검사, URL 중복 제거, HTML 본문 추출을 맡는다.
 
 2. 실제 수집 계층
@@ -60,7 +60,7 @@
    - `sources/` 아래에는 `BatchProcessor`가 Track A/B에서 쓰려는 소스별 크롤러가 있다. 단, 현재 import 계약이 일부 깨져 있어 주의가 필요하다.
 
 3. 오케스트레이션 계층
-   - 루트 `run_local_crawler_once.py`: 로컬에서 단독/전체 크롤러를 한 번 실행하고 JSONL로 저장하는 CLI 진입점이다.
+   - 루트 `run_local_crawler_once.py`: 로컬에서 단독/전체 크롤러를 한 번 실행하고 JSON로 저장하는 CLI 진입점이다.
    - `batch_processor.py`: Track A/Track B 수집, 링크 검사, 중복 제거, DB 저장을 연결한다.
    - `scheduler.py`: APScheduler 잡으로 Track A/B와 keepalive를 등록한다.
 
@@ -575,7 +575,7 @@ standalone 수집 함수:
 
 역할:
 - Naver DataLab Search API에서 섹터별 상대 검색지수를 수집한다.
-- 검색지수 급등 후보를 표시하고 `RawArticle` 또는 JSONL/차트로 출력한다.
+- 검색지수 급등 후보를 표시하고 `RawArticle` 또는 JSON/차트로 출력한다.
 
 환경변수:
 - `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`: 필수. `load_naver_credentials()`가 없으면 `ValueError`.
@@ -662,11 +662,11 @@ Article 변환:
   - 없으면 기본 섹터 그룹.
 
 저장/시각화:
-- `save_jsonl()`: row dict를 JSONL로 저장.
-- `build_output_path(prefix)`: `crawler_results/{prefix}_{YYYYMMDD}.jsonl`.
+- `save_json()`: row dict를 JSON로 저장.
+- `build_output_path(prefix)`: `crawler_results/{prefix}_{YYYYMMDD}.json`.
 - `configure_korean_font()`: macOS/Windows/Linux 후보 폰트 설정.
 - `save_trend_chart()`: group별 ratio scatter와 moving average line chart를 PNG로 저장.
-- `run_keyword_crawler(save_chart=False)`: 수집, peak marking, JSONL 저장, 선택 차트 저장.
+- `run_keyword_crawler(save_chart=False)`: 수집, peak marking, JSON 저장, 선택 차트 저장.
 - `main()`: logging 설정 후 `run_keyword_crawler(save_chart=True)`.
 
 예외/주의:
@@ -675,7 +675,7 @@ Article 변환:
 - peak 후보는 원인 탐색 후보일 뿐 급증 확정 신호가 아니다.
 
 자체 검증:
-- 인증, payload, API retry, normalize, peak detection, article 변환, JSONL/차트 저장, 클래스/CLI 실행 흐름까지 모두 포함했다.
+- 인증, payload, API retry, normalize, peak detection, article 변환, JSON/차트 저장, 클래스/CLI 실행 흐름까지 모두 포함했다.
 
 ### `naver_crawler.py`
 
@@ -834,12 +834,12 @@ PDF helper:
 ### `result_writer.py`
 
 역할:
-- 크롤러 결과를 로컬 JSONL 파일로 저장한다.
+- 크롤러 결과를 로컬 JSON 파일로 저장한다.
 - `RawArticle`, `StockCrawlResult`, legacy 객체를 모두 어느 정도 수용한다.
 
 `save_crawler_results(articles, source_name, output_dir=DEFAULT_RESULTS_DIR)` 단계:
 1. output directory를 생성한다.
-2. 파일명을 `{source_name}_{YYYYMMDD_HHMMSS}.jsonl`로 만든다.
+2. 파일명을 `{source_name}_{YYYYMMDD_HHMMSS}.json`로 만든다.
 3. articles를 순회한다.
 4. `_to_dict(article)` 결과를 `ensure_ascii=False` JSON 한 줄로 쓴다.
 5. 저장 경로를 반환한다.
@@ -853,7 +853,7 @@ PDF helper:
 6. peer_id가 있고 company가 비어 있으면 company를 `[peer_id]`로 채운다.
 
 결과물:
-- JSONL 파일. 한 줄이 하나의 article/document다.
+- JSON 파일. 최상위 배열의 각 원소가 하나의 article/document다.
 
 현재 코드 주의:
 - `save_crawler_results()`는 `to_common_dict()`가 있는 객체를 우선 신뢰한다. `StockCrawlResult`처럼 `RawArticle`이 아닌 객체도 이 경로로 저장된다.
@@ -1589,7 +1589,7 @@ generic `_fetch_generic()`:
 ### `run_local_crawler_once.py`
 
 역할:
-- 로컬에서 크롤러를 한 번 실행하고 `src/crawler/crawler_results`에 JSONL 결과를 저장하는 CLI 진입점이다.
+- 로컬에서 크롤러를 한 번 실행하고 `src/crawler/crawler_results`에 JSON 결과를 저장하는 CLI 진입점이다.
 - 회사별 크롤러와 산업 동향 크롤러를 한 실행 계획으로 묶고, 수집 후 링크 검사, 일일 한도 적용, 피어 뉴스 필터, 결과 저장까지 담당한다.
 
 실행 예시:
@@ -1645,12 +1645,12 @@ uv run python run_local_crawler_once.py --source spri --month 2026-04
 - `_make_output_group()`이 여러 회사 결과를 합칠 source를 결정한다.
 - `MERGED_OUTPUT_SOURCES`에 포함된 `dart`, `ir`, `jobs`, `naver_news`, `rss`, `naver_datalab`, `naver_research`는 source 단위로 합쳐 저장한다.
 - `bcg`, `spri`, `company_news`는 산업/공통 source로 저장된다.
-- `save_crawler_results(articles, source_name=...)`가 `{source_name}_{YYYYMMDD_HHMMSS}.jsonl` 파일을 만든다.
-- `naver_datalab`는 JSONL 저장 후 `save_trend_chart()`로 차트 이미지도 저장한다.
+- `save_crawler_results(articles, source_name=...)`가 `{source_name}_{YYYYMMDD_HHMMSS}.json` 파일을 만든다.
+- `naver_datalab`는 JSON 저장 후 `save_trend_chart()`로 차트 이미지도 저장한다.
 
 결과물:
 - 기본 저장 위치: `src/crawler/crawler_results`.
-- 예: `naver_news_YYYYMMDD_HHMMSS.jsonl`, `rss_YYYYMMDD_HHMMSS.jsonl`, `bcg_all_YYYYMMDD_HHMMSS.jsonl`.
+- 예: `naver_news_YYYYMMDD_HHMMSS.json`, `rss_YYYYMMDD_HHMMSS.json`, `bcg_all_YYYYMMDD_HHMMSS.json`.
 
 현재 코드 주의:
 - `run_local_crawler_once.py`는 실제 운영상 가장 최신 로컬 실행 경로다. 개별 크롤러 파일의 단독 CLI와 동작 옵션이 일부 다를 수 있다.

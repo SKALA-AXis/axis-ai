@@ -28,7 +28,7 @@ _DART_STATUS_BLOCKED = {"010", "011", "012", "020"}
 
 DEFAULT_LOOKBACK_DAYS = 365
 DEFAULT_PAGE_COUNT = 100
-DEFAULT_FETCH_DOCUMENT = False
+DEFAULT_FETCH_DOCUMENT = True
 DEFAULT_MAX_DOCUMENT_LENGTH = 200000
 DEFAULT_DISCLOSURE_TYPES = ("A", "B", "F")
 
@@ -518,6 +518,18 @@ def _extract_text_payload_from_markup(
 
     parser = _select_markup_parser(cleaned, filename)
 
+    if _should_use_fast_markup_parser(cleaned, filename):
+        parsed = _extract_text_payload_fast(cleaned)
+        log.info(
+            "DART 문서 빠른 파싱 완료 | receipt_no=%s filename=%s text_len=%d tables=%d images=%d",
+            receipt_no,
+            filename,
+            len(parsed["text"]),
+            parsed["table_count"],
+            parsed["image_count"],
+        )
+        return parsed
+
     log.info(
         "DART 문서 파싱 시작 | receipt_no=%s filename=%s parser=%s cleaned_len=%d",
         receipt_no,
@@ -564,6 +576,37 @@ def _extract_text_payload_from_markup(
     }
 
 
+def _should_use_fast_markup_parser(markup: str, filename: str) -> bool:
+    return filename.lower().endswith(".xml") or len(markup) >= 300_000
+
+
+def _extract_text_payload_fast(markup: str) -> dict:
+    table_count = len(re.findall(r"<table\b", markup, flags=re.IGNORECASE))
+    image_count = len(re.findall(r"<img\b", markup, flags=re.IGNORECASE))
+
+    def table_repl(match: re.Match[str]) -> str:
+        table_text = strip_html(match.group(0))
+        table_text = re.sub(r"\s+", " ", table_text).strip()
+        return f"\n[표]\n{table_text}\n[/표]\n" if table_text else "\n"
+
+    text_source = re.sub(
+        r"<table\b[^>]*>.*?</table>",
+        table_repl,
+        markup,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    text = strip_html(text_source)
+    normalized_text = _normalize_document_text(text)
+
+    return {
+        "text": normalized_text,
+        "contains_tables": table_count > 0,
+        "table_count": table_count,
+        "contains_images": image_count > 0,
+        "image_count": image_count,
+    }
+
+
 def _replace_tables_with_text(soup: BeautifulSoup) -> None:
     for idx, table in enumerate(soup.find_all("table"), start=1):
         table_text = _table_to_text(table)
@@ -594,13 +637,16 @@ def _select_markup_parser(markup: str, filename: str) -> str:
     lower_filename = (filename or "").lower()
     head = (markup or "")[:1000].lower()
 
+    if lower_filename.endswith(".xml"):
+        return "html.parser"
+
     if lower_filename.endswith((".html", ".htm")):
         return "html.parser"
 
     if "<html" in head or "<!doctype html" in head:
         return "html.parser"
 
-    return "xml"
+    return "html.parser"
 
 
 def _normalize_document_text(text: str) -> str:

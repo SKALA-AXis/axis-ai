@@ -103,6 +103,7 @@ class DartParserAgent:
 
         warnings: list[str] = []
         candidates: list[dict[str, Any]] = []
+        document_fetched = bool(extra.get("document_fetched"))
 
         revenue_total, revenue_raw = _first_amount(text, _REVENUE_PATTERNS)
         if revenue_total is not None:
@@ -133,12 +134,12 @@ class DartParserAgent:
             warnings.append("content 없음")
         if not period:
             warnings.append("period 추출 실패")
-        if revenue_total is None:
+        if not document_fetched:
+            warnings.append("DART 목록 메타데이터만 수집됨: 원문 HTML/XBRL 본문은 미수집")
+        elif revenue_total is None:
             warnings.append("revenue_total 추출 실패")
-        if operating_profit is None:
+        if document_fetched and operating_profit is None:
             warnings.append("operating_profit 추출 실패")
-        if not extra.get("document_fetched"):
-            warnings.append("DART 원문 미수집 상태일 수 있음")
 
         rcept_no = str(extra.get("rcept_no") or extra.get("receipt_no") or "")
         financial_record = {
@@ -155,6 +156,9 @@ class DartParserAgent:
             "dart_report_name": report_name,
             "dart_page": _candidate_page(candidates, "revenue_total")
             or _candidate_page(candidates, "operating_profit"),
+            "financial_metrics_source": (
+                "dart_document_text" if document_fetched else "not_available_without_document"
+            ),
         }
 
         result = {
@@ -177,7 +181,7 @@ class DartParserAgent:
             "operating_profit_krwbn": operating_profit,
             "candidates": candidates,
             "document": {
-                "document_fetched": extra.get("document_fetched"),
+                "document_fetched": document_fetched,
                 "document_fetch_error": extra.get("document_fetch_error"),
                 "document_text_length": extra.get("document_text_length"),
                 "content_chars": extra.get("content_chars") or len(text),

@@ -54,6 +54,10 @@ INDUSTRY_SOURCES = [
 ]
 
 ALL_SOURCES = COMPANY_SOURCES + INDUSTRY_SOURCES
+SOURCE_ALIASES = {
+    "official": "company_news",
+    "job": "jobs",
+}
 MERGED_OUTPUT_SOURCES = {
     "dart",
     "ir",
@@ -85,9 +89,13 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="개별 또는 전체 크롤러 로컬 실행")
     parser.add_argument(
         "--source",
-        choices=ALL_SOURCES,
+        action="append",
+        nargs="+",
         default=None,
-        help="실행할 크롤러. 생략하면 전체 source 실행",
+        help=(
+            "실행할 크롤러. 쉼표 구분/공백 포함 쉼표 구분/반복 지정 가능. "
+            "예: --source naver_news,rss,naver_research 또는 --source naver_news, rss"
+        ),
     )
     parser.add_argument(
         "--company",
@@ -415,17 +423,55 @@ def _apply_daily_limit(
     return limited_articles, limited_count
 
 
-def _build_run_plan(source: str | None, company: str | None) -> list[tuple[str, str | None]]:
+def _parse_sources(source_values: list[list[str]] | None) -> list[str] | None:
+    if not source_values:
+        return None
+
+    sources: list[str] = []
+    invalid: list[str] = []
+
+    for source_group in source_values:
+        for value in source_group:
+            value = value.strip()
+            if value == ",":
+                continue
+            for source in value.split(","):
+                source = source.strip()
+                if not source:
+                    continue
+                source = SOURCE_ALIASES.get(source, source)
+                if source not in ALL_SOURCES:
+                    invalid.append(source)
+                    continue
+                if source not in sources:
+                    sources.append(source)
+
+    if invalid:
+        raise SystemExit(
+            "알 수 없는 source: "
+            + ", ".join(sorted(set(invalid)))
+            + f" | available={', '.join(ALL_SOURCES)}"
+        )
+
+    return sources or None
+
+
+def _build_run_plan(
+    sources: list[str] | None,
+    company: str | None,
+) -> list[tuple[str, str | None]]:
     run_plan: list[tuple[str, str | None]] = []
 
-    if source in INDUSTRY_SOURCES:
-        return [(source, None)]
+    if sources:
+        for source in sources:
+            if source in INDUSTRY_SOURCES:
+                run_plan.append((source, None))
+            elif company:
+                run_plan.append((source, company))
+            else:
+                run_plan.extend((source, company_id) for company_id in COMPANY_SEARCH_ALIASES)
 
-    if source and company:
-        return [(source, company)]
-
-    if source:
-        return [(source, company_id) for company_id in COMPANY_SEARCH_ALIASES]
+        return run_plan
 
     if company:
         for company_source in COMPANY_SOURCES:
@@ -448,7 +494,8 @@ async def _run() -> None:
     profile = load_profile(args.env)
     log.info("실행 프로파일: %s", profile)
 
-    run_plan = _build_run_plan(args.source, args.company)
+    sources = _parse_sources(args.source)
+    run_plan = _build_run_plan(sources, args.company)
 
     log.info("실행 대상 수: %d", len(run_plan))
 

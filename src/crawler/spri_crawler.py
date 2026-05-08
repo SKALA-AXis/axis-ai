@@ -37,6 +37,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.crawler.base import RawArticle  # noqa: E402
 from src.crawler.base_crawler import BaseCrawler  # noqa: E402
+from src.crawler.parsers.pdf_payload import extract_pdf_payload  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -1164,7 +1165,8 @@ class SpriCrawler(BaseCrawler):
                     pdf_path = pdf_dir / pdf_filename
                     pdf_path.write_bytes(pdf_bytes)
 
-                    content, page_count = extract_pdf_text(pdf_path)
+                    pdf_payload = extract_pdf_payload(pdf_bytes)
+                    content = pdf_payload["text"]
 
                     visual_images = extract_visual_images_by_caption_and_source(
                         pdf_path=pdf_path,
@@ -1193,7 +1195,18 @@ class SpriCrawler(BaseCrawler):
                             "pdf_title": pdf_title,
                             "pdf_url": pdf_url,
                             "pdf_path": str(pdf_path),
-                            "page_count": page_count,
+                            "page_count": pdf_payload["page_count"],
+                            "pdf_pages": pdf_payload["page_count"],
+                            "pdf_parsed_pages": pdf_payload["parsed_page_count"],
+                            "pdf_page_blocks": pdf_payload["pages"],
+                            "pdf_parse_strategy": pdf_payload["pdf_parse_strategy"],
+                            "contains_images": pdf_payload["contains_images"],
+                            "image_count": pdf_payload["image_count"],
+                            "contains_tables": pdf_payload["contains_tables"],
+                            "table_count": pdf_payload["table_count"],
+                            "tables": pdf_payload["tables"],
+                            "table_parse_strategy": pdf_payload["table_parse_strategy"],
+                            "chart_parse_strategy": pdf_payload["chart_parse_strategy"],
                             "visual_images": visual_images,
                             "visual_image_count": len(visual_images),
                             "article_index": index,
@@ -1224,6 +1237,17 @@ class SpriCrawler(BaseCrawler):
                             "pdf_url": pdf_url,
                             "pdf_path": None,
                             "page_count": None,
+                            "pdf_pages": None,
+                            "pdf_parsed_pages": 0,
+                            "pdf_page_blocks": [],
+                            "pdf_parse_strategy": "failed",
+                            "contains_images": False,
+                            "image_count": 0,
+                            "contains_tables": False,
+                            "table_count": 0,
+                            "tables": [],
+                            "table_parse_strategy": "not_parsed",
+                            "chart_parse_strategy": "not_parsed",
                             "visual_images": [],
                             "visual_image_count": 0,
                             "article_index": index,
