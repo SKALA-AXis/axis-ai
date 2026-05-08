@@ -148,6 +148,7 @@ DATE_PATTERNS = [
 # 2. 공통 유틸 함수
 # =========================================================
 
+
 def get_default_output_path(file_format: str = "json") -> str:
     current_file_path = Path(__file__).resolve()
     current_file_name = current_file_path.stem
@@ -328,9 +329,7 @@ def fetch_html_by_curl(url: str) -> str:
     )
 
     if result.returncode != 0:
-        raise RuntimeError(
-            f"curl fallback 실패: {result.stderr.strip()}"
-        )
+        raise RuntimeError(f"curl fallback 실패: {result.stderr.strip()}")
 
     html = result.stdout.strip()
 
@@ -516,6 +515,7 @@ def sort_candidates(candidates: list[dict]) -> list[dict]:
 # 3. 회사별 목록 페이지 후보 링크 추출
 # =========================================================
 
+
 def extract_samsung_sds_links(
     list_url: str,
     soup: BeautifulSoup,
@@ -597,9 +597,7 @@ def extract_skax_newsroom_links(
         detail_url = urljoin(list_url, href)
         path = urlparse(detail_url).path
 
-        is_news_detail = bool(
-            re.search(r"/company/news-rooms?/[^/?#]+", path)
-        )
+        is_news_detail = bool(re.search(r"/company/news-rooms?/[^/?#]+", path))
 
         if not is_news_detail:
             continue
@@ -833,6 +831,7 @@ def extract_candidate_links(
 # 4. 상세 페이지 추출 함수
 # =========================================================
 
+
 def get_company_from_url(url: str) -> str:
     domain = urlparse(url).netloc
 
@@ -1014,10 +1013,10 @@ def extract_samsung_sds_content(
         return None
 
     if title and title in best_text:
-        best_text = best_text[best_text.find(title):]
+        best_text = best_text[best_text.find(title) :]
 
     # 제목 + 날짜 + 회사명까지만 남는 경우를 보완하기 위해 본문 시작 마커를 찾는다.
-    search_base = best_text[len(title):] if title and best_text.startswith(title) else best_text
+    search_base = best_text[len(title) :] if title and best_text.startswith(title) else best_text
 
     start_markers = [
         "□",
@@ -1089,7 +1088,7 @@ def trim_content_noise(
     title = clean_text(title)
 
     if title and title in text:
-        text = text[text.find(title):]
+        text = text[text.find(title) :]
 
     common_stop_markers = [
         "개인정보처리방침",
@@ -1340,6 +1339,7 @@ def crawl_detail_page(
 # 5. 통합 크롤러 클래스
 # =========================================================
 
+
 class CompanyNewsCrawler(BaseCrawler):
     def __init__(
         self,
@@ -1445,13 +1445,10 @@ class CompanyNewsCrawler(BaseCrawler):
                 company_name=company,
             )
 
-            should_try_render = (
-                self.use_render
-                or (
-                    self.render_fallback
-                    and len(candidates) < self.latest_limit
-                    and company in {"SK AX", "현대오토에버", "포스코DX", "LG CNS"}
-                )
+            should_try_render = self.use_render or (
+                self.render_fallback
+                and len(candidates) < self.latest_limit
+                and company in {"SK AX", "현대오토에버", "포스코DX", "LG CNS"}
             )
 
             if should_try_render:
@@ -1588,6 +1585,7 @@ class CompanyNewsCrawler(BaseCrawler):
 # 6. 저장 함수
 # =========================================================
 
+
 def save_json(
     articles: list[RawArticle],
     output_path: str,
@@ -1612,10 +1610,9 @@ def save_json(
 # 7. 실행부
 # =========================================================
 
+
 async def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="5개 회사 공식 뉴스 통합 크롤러"
-    )
+    parser = argparse.ArgumentParser(description="5개 회사 공식 뉴스 통합 크롤러")
 
     parser.add_argument(
         "--limit",
@@ -1675,15 +1672,9 @@ async def main() -> None:
 
     save_json(articles, output_path)
 
-    success_count = sum(
-        1 for article in articles
-        if article.crawl_status == "success"
-    )
+    success_count = sum(1 for article in articles if article.crawl_status == "success")
 
-    failed_count = sum(
-        1 for article in articles
-        if article.crawl_status == "failed"
-    )
+    failed_count = sum(1 for article in articles if article.crawl_status == "failed")
 
     print("\n==============================")
     print("5개 회사 뉴스 크롤링 완료")

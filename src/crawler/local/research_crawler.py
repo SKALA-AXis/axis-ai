@@ -19,8 +19,7 @@ from src.crawler.parsers.pdf_payload import extract_pdf_payload
 log = logging.getLogger(__name__)
 
 NAVER_RESEARCH_URL = (
-    "https://finance.naver.com/research/company_list.naver"
-    "?searchType=itemCode&itemCode={item_code}"
+    "https://finance.naver.com/research/company_list.naver?searchType=itemCode&itemCode={item_code}"
 )
 
 DEFAULT_LOOKBACK_DAYS = 3
@@ -99,9 +98,7 @@ class NaverResearchCrawler(BaseCrawler):
         report_title = strip_html(title_el.get_text(" ", strip=True))
         published_at = _parse_report_date(cells[2].get_text(" ", strip=True))
 
-        if published_at and published_at < datetime.now() - timedelta(
-            days=self.lookback_days
-        ):
+        if published_at and published_at < datetime.now() - timedelta(days=self.lookback_days):
             return None
 
         pdf_url = urljoin(base_url, pdf_el.get("href", "")) if pdf_el else ""

@@ -108,8 +108,7 @@ COMPANIES: Final[dict[str, CompanyConfig]] = {
 
 COMPANY_IDS: Final[list[str]] = list(COMPANIES.keys())
 COMPANY_ALIASES: Final[dict[str, list[str]]] = {
-    company_id: config.get("aliases", [company_id])
-    for company_id, config in COMPANIES.items()
+    company_id: config.get("aliases", [company_id]) for company_id, config in COMPANIES.items()
 }
 PEER_ALIASES: Final[dict[str, list[str]]] = COMPANY_ALIASES
 CORP_CODES: Final[dict[str, str]] = {

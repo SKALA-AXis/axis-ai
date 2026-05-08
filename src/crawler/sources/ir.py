@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 DEFAULT_LOOKBACK_DAYS = 365
 PDF_MAX_TEXT_CHARS = int(os.getenv("IR_PDF_MAX_TEXT_CHARS", "200000"))
 
+
 class IRCrawler(BaseCrawler):
     """회사 IR 페이지에서 PDF 링크를 찾고 본문 텍스트를 저장한다."""
 
@@ -40,11 +41,7 @@ class IRCrawler(BaseCrawler):
 
         config = IR_CONFIG.get(peer_id, {})
         env_key = f"IR_PAGES_{peer_id.upper()}"
-        env_pages = [
-            url.strip()
-            for url in os.getenv(env_key, "").split(",")
-            if url.strip()
-        ]
+        env_pages = [url.strip() for url in os.getenv(env_key, "").split(",") if url.strip()]
 
         self.ir_pages = ir_pages or env_pages or config.get("pages", [])
         self.fetch_strategy = config.get("fetch_strategy", "playwright_then_httpx")
@@ -265,9 +262,7 @@ async def _crawl_by_clicking_downloads(
         browser = await p.chromium.launch(headless=True)
 
         try:
-            page = await browser.new_page(
-                user_agent="Mozilla/5.0 AXIS-Crawler/1.0"
-            )
+            page = await browser.new_page(user_agent="Mozilla/5.0 AXIS-Crawler/1.0")
 
             await page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
 
@@ -590,9 +585,7 @@ def _find_lg_cns_card_label(anchor) -> str:
         if _looks_like_ir_performance_label(label):
             return label
 
-    previous = anchor.find_previous(
-        string=re.compile(r"20\d{2}\s*년.*?(?:경영실적|실적발표)")
-    )
+    previous = anchor.find_previous(string=re.compile(r"20\d{2}\s*년.*?(?:경영실적|실적발표)"))
 
     if previous:
         return strip_html(str(previous))
@@ -1115,10 +1108,7 @@ def _format_ir_title(
         return title
 
     normalized_title = title.replace(" ", "")
-    if (
-        "다시듣기" not in normalized_title
-        and "발표자료스크립트" not in normalized_title
-    ):
+    if "다시듣기" not in normalized_title and "발표자료스크립트" not in normalized_title:
         return title
 
     year = date_info.get("year")
@@ -1128,7 +1118,11 @@ def _format_ir_title(
         return title
 
     source_text = pdf_url.lower()
-    material_type = "실적발표 스크립트" if "script" in source_text or "스크립트" in source_text else "실적발표 자료"
+    material_type = (
+        "실적발표 스크립트"
+        if "script" in source_text or "스크립트" in source_text
+        else "실적발표 자료"
+    )
 
     return f"Samsung SDS {year}년 {quarter}분기 {material_type}"
 
@@ -1173,6 +1167,7 @@ async def _fetch_pdf_text(client: httpx.AsyncClient, pdf_url: str) -> str:
         return ""
 
     return _extract_pdf_payload(pdf_bytes).get("text", "")
+
 
 def _extract_pdf_payload(pdf_bytes: bytes) -> dict:
     try:
@@ -1235,6 +1230,7 @@ def _extract_pdf_payload(pdf_bytes: bytes) -> dict:
             "chart_parse_strategy": "not_parsed",
         }
 
+
 def _clean_pdf_text(text: str) -> str:
     text = text.replace("\\n", "\n")
     text = re.sub(r"[ \t]+", " ", text)
@@ -1246,6 +1242,7 @@ def _clean_pdf_text(text: str) -> str:
     text = re.sub(r"([가-힣])(?=\d)", r"\1 ", text)
     text = re.sub(r"(\d)(?=[가-힣])", r"\1 ", text)
     return text.strip()
+
 
 def _extract_pdf_page_blocks(page) -> list[dict]:
     blocks: list[dict] = []
@@ -1273,6 +1270,7 @@ def _extract_pdf_page_blocks(page) -> list[dict]:
         )
 
     return blocks
+
 
 def _looks_like_pdf_or_download(href: str, text: str) -> bool:
     value = f"{href} {text}".lower()
@@ -1749,8 +1747,4 @@ def _normalize_year(year: int) -> int:
 
 def _filename_title(url: str) -> str:
     tail = url.rstrip("/").split("/")[-1]
-    return strip_html(
-        tail.replace("%20", " ")
-        .replace("_", " ")
-        .replace("-", " ")
-    )
+    return strip_html(tail.replace("%20", " ").replace("_", " ").replace("-", " "))

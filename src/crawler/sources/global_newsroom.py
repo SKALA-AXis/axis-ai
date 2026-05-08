@@ -159,7 +159,9 @@ NEWSROOM_CONFIGS: dict[str, NewsroomConfig] = {
                 name="google_cloud_blog",
                 url="https://cloud.google.com/blog?hl=en",
                 allowed_domains=("cloud.google.com",),
-                article_path_patterns=(r"^/blog/(products|topics|transform|resources)/[^/]+/[^/]+",),
+                article_path_patterns=(
+                    r"^/blog/(products|topics|transform|resources)/[^/]+/[^/]+",
+                ),
                 detail_date_probe_limit=50,
             ),
         ),
@@ -841,11 +843,7 @@ def extract_google_more_news(
 
             context = clean_text(card.get_text(" ", strip=True))
             heading_node = card.find(["h2", "h3", "h4"])
-            text = (
-                clean_text(heading_node.get_text(" ", strip=True))
-                if heading_node
-                else context
-            )
+            text = clean_text(heading_node.get_text(" ", strip=True)) if heading_node else context
             candidates.append(
                 LinkCandidate(
                     url=url,

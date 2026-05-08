@@ -23,12 +23,8 @@ WORK24_API_KEY = os.getenv("WORK24_API_KEY")
 RETURN_TYPE = os.getenv("WORK24_RETURN_TYPE", "XML")
 
 WORK24_OPEN_API_HOST = "https://www.work24.go.kr"
-JOB_POSTING_URL = (
-    f"{WORK24_OPEN_API_HOST}/cm/openApi/call/wk/callOpenApiSvcInfo210L01.do"
-)
-RECRUIT_NEWS_URL = (
-    f"{WORK24_OPEN_API_HOST}/cm/openApi/call/wk/callOpenApiSvcInfo210L21.do"
-)
+JOB_POSTING_URL = f"{WORK24_OPEN_API_HOST}/cm/openApi/call/wk/callOpenApiSvcInfo210L01.do"
+RECRUIT_NEWS_URL = f"{WORK24_OPEN_API_HOST}/cm/openApi/call/wk/callOpenApiSvcInfo210L21.do"
 
 PEER_COMPANIES = all_company_aliases()
 PEER_ALIASES = dict(COMPANY_ALIASES)
@@ -77,9 +73,7 @@ class JobCrawler(BaseCrawler):
                 continue
 
             company_ids = (
-                [self.peer_id]
-                if self.peer_id
-                else _company_ids_from_peer_company(peer_company)
+                [self.peer_id] if self.peer_id else _company_ids_from_peer_company(peer_company)
             )
 
             articles.append(

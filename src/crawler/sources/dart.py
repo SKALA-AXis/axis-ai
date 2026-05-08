@@ -54,12 +54,8 @@ class DartCrawler(BaseCrawler):
         self.corp_names = corp_names or []
         self.api_key = os.getenv("DART_API_KEY", "")
 
-        self.lookback_days = int(
-            os.getenv("DART_LOOKBACK_DAYS", str(DEFAULT_LOOKBACK_DAYS))
-        )
-        self.page_count = int(
-            os.getenv("DART_PAGE_COUNT", str(DEFAULT_PAGE_COUNT))
-        )
+        self.lookback_days = int(os.getenv("DART_LOOKBACK_DAYS", str(DEFAULT_LOOKBACK_DAYS)))
+        self.page_count = int(os.getenv("DART_PAGE_COUNT", str(DEFAULT_PAGE_COUNT)))
         self.fetch_document = _env_bool(
             "DART_FETCH_DOCUMENT",
             DEFAULT_FETCH_DOCUMENT,
@@ -374,9 +370,7 @@ class DartCrawler(BaseCrawler):
                         "document_parsed_file_count": int(
                             document_payload.get("parsed_file_count", 0)
                         ),
-                        "collected_at": datetime.now(tz=timezone.utc).isoformat(
-                            timespec="seconds"
-                        ),
+                        "collected_at": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
                     },
                 )
             )
@@ -614,9 +608,7 @@ def _replace_tables_with_text(soup: BeautifulSoup) -> None:
         if not table_text:
             continue
 
-        table.replace_with(
-            soup.new_string(f"\n[표 {idx}]\n{table_text}\n[/표 {idx}]\n")
-        )
+        table.replace_with(soup.new_string(f"\n[표 {idx}]\n{table_text}\n[/표 {idx}]\n"))
 
 
 def _table_to_text(table: Tag) -> str:
@@ -702,11 +694,7 @@ def _parse_dart_date(date_str: str) -> datetime | None:
 
 def _normalize_name(name: str) -> str:
     return (
-        name.replace(" ", "")
-        .replace("㈜", "")
-        .replace("(주)", "")
-        .replace("주식회사", "")
-        .lower()
+        name.replace(" ", "").replace("㈜", "").replace("(주)", "").replace("주식회사", "").lower()
     )
 
 

@@ -53,9 +53,7 @@ REQUEST_HEADERS = {
 }
 
 CAPTION_PATTERN = re.compile(r"[\[【]?\s*(그림|표)\s*\d+[-–]?\d*\s*[\]】]?")
-CAPTION_PATTERN_STRICT = re.compile(
-    r"^\s*[\[【]?\s*(그림|표)\s*\d+[-–]?\d*\s*[\]】]?"
-)
+CAPTION_PATTERN_STRICT = re.compile(r"^\s*[\[【]?\s*(그림|표)\s*\d+[-–]?\d*\s*[\]】]?")
 # 출처/자료 라인은 문서에 따라 "* 출처:" / "• 출처:" 같은 형태로 등장한다.
 SOURCE_PATTERN = re.compile(r"^\s*[*•\u25cf\u2022]?\s*(출처|자료)\s*[:：]")
 
@@ -1028,8 +1026,7 @@ def extract_visual_images_by_caption_and_source(
             try:
                 caption_label_safe = safe_filename(caption["caption_label"])
                 image_filename = (
-                    f"{file_prefix}_page{page_num:03d}_"
-                    f"{caption_label_safe}_{caption_index:02d}.png"
+                    f"{file_prefix}_page{page_num:03d}_{caption_label_safe}_{caption_index:02d}.png"
                 )
                 image_path = image_dir / image_filename
 
@@ -1278,11 +1275,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def default_output_path() -> Path:
-    return (
-        Path(__file__).resolve().parent
-        / "crawler_results"
-        / f"{Path(__file__).stem}.json"
-    )
+    return Path(__file__).resolve().parent / "crawler_results" / f"{Path(__file__).stem}.json"
 
 
 async def main() -> None:
@@ -1309,10 +1302,7 @@ async def main() -> None:
 
     success_count = sum(1 for article in articles if article.crawl_status == "success")
     failed_count = sum(1 for article in articles if article.crawl_status == "failed")
-    total_visuals = sum(
-        int(article.extra.get("visual_image_count", 0))
-        for article in articles
-    )
+    total_visuals = sum(int(article.extra.get("visual_image_count", 0)) for article in articles)
 
     print(f"SPRi 수집 월호: {args.month}")
     print(f"전체 결과: {len(articles)}건")

@@ -120,10 +120,14 @@ def _period_from_ir_article(article: Any, extra: dict[str, Any], text: str) -> s
         if year and quarter:
             return f"{year}Q{quarter}"
 
-    return _extract_period(" ".join([
-        str(_article_get(article, "title", "") or ""),
-        text[:5000],
-    ]))
+    return _extract_period(
+        " ".join(
+            [
+                str(_article_get(article, "title", "") or ""),
+                text[:5000],
+            ]
+        )
+    )
 
 
 def _pages_from_ir_article(article: Any, extra: dict[str, Any]) -> list[dict[str, Any]]:

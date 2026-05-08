@@ -169,10 +169,7 @@ def _has_http_scheme(url: str) -> bool:
 
 
 def _is_allowed_content_type(content_type: str) -> bool:
-    return any(
-        content_type.startswith(prefix)
-        for prefix in (*_HTML_TYPES, *_DOCUMENT_TYPES)
-    )
+    return any(content_type.startswith(prefix) for prefix in (*_HTML_TYPES, *_DOCUMENT_TYPES))
 
 
 def _set_link_check(

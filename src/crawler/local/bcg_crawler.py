@@ -130,9 +130,7 @@ def default_output_path() -> Path:
     → src/crawler/crawler_results/bcg_crawler.json
     """
     return (
-        Path(__file__).resolve().parent.parent
-        / "crawler_results"
-        / f"{Path(__file__).stem}.json"
+        Path(__file__).resolve().parent.parent / "crawler_results" / f"{Path(__file__).stem}.json"
     )
 
 
@@ -476,20 +474,23 @@ def extract_body_content(soup: BeautifulSoup) -> str:
 
         lower = text.lower()
 
-        if any(
-            phrase in lower
-            for phrase in [
-                "cookie",
-                "accept cookies",
-                "sign up",
-                "subscribe",
-                "share",
-                "download",
-                "print",
-                "contact us",
-                "manage subscriptions",
-            ]
-        ) and len(text) < 180:
+        if (
+            any(
+                phrase in lower
+                for phrase in [
+                    "cookie",
+                    "accept cookies",
+                    "sign up",
+                    "subscribe",
+                    "share",
+                    "download",
+                    "print",
+                    "contact us",
+                    "manage subscriptions",
+                ]
+            )
+            and len(text) < 180
+        ):
             continue
 
         texts.append(text)
@@ -907,11 +908,15 @@ async def translate_article_to_korean(
         return title_ko or None, content_ko or None, meta
     except Exception as e:
         log.warning("번역 실패: 원문 유지 | error=%r", e)
-        return None, None, {
-            "translation_status": "error",
-            "translation_model": model,
-            "translation_error": str(e),
-        }
+        return (
+            None,
+            None,
+            {
+                "translation_status": "error",
+                "translation_model": model,
+                "translation_error": str(e),
+            },
+        )
 
 
 class BcgCrawler(BaseCrawler):

@@ -452,11 +452,7 @@ def _metadata_json(
     meta["company_tier"] = company_tier_map(storage_company or article.company)
     if article.peer_id and "peer_id" not in meta:
         meta["peer_id"] = article.peer_id
-    if (
-        not article.company
-        and storage_company
-        and INDUSTRY_TREND_COMPANY in storage_company
-    ):
+    if not article.company and storage_company and INDUSTRY_TREND_COMPANY in storage_company:
         meta["topic_scope"] = "industry_trend"
         meta["company_scope"] = "industry"
         meta["company_fallback"] = INDUSTRY_TREND_COMPANY

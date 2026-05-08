@@ -286,10 +286,7 @@ def is_valid_body_line(text: str) -> bool:
 
 
 def is_body_stop_line(text: str) -> bool:
-    return any(
-        text == marker or text.startswith(f"{marker} ")
-        for marker in BODY_STOP_LINE_MARKERS
-    )
+    return any(text == marker or text.startswith(f"{marker} ") for marker in BODY_STOP_LINE_MARKERS)
 
 
 def normalize_title_text(text: str) -> str:
@@ -602,10 +599,7 @@ def is_image_url(url: str) -> bool:
     image_params = ("src", "simg", "file", "filename", "image", "img", "url")
 
     return any(
-        any(
-            value.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp"))
-            for value in values
-        )
+        any(value.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp")) for value in values)
         for key, values in query.items()
         if key in image_params
     )

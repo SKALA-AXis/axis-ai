@@ -17,7 +17,9 @@ MIN_CONTENT_CHARS_BY_SOURCE_TYPE = {
 }
 
 
-def analyze_parser_quality_article(article: dict[str, Any]) -> tuple[dict[str, Any], bool, str | None]:
+def analyze_parser_quality_article(
+    article: dict[str, Any],
+) -> tuple[dict[str, Any], bool, str | None]:
     """문서형 article에 parser quality 결과를 붙인다."""
     item = dict(article)
     parser_result = ParserAgent().parse_article(item)
@@ -97,7 +99,9 @@ def _quality_from_parser_result(
             reason = "문서 파싱 품질 기준 통과"
     else:
         label = "fail"
-        reason = "; ".join(reasons or [str(warning) for warning in warnings] or ["parser quality fail"])
+        reason = "; ".join(
+            reasons or [str(warning) for warning in warnings] or ["parser quality fail"]
+        )
 
     return {
         "ok": ok,
@@ -122,10 +126,14 @@ def _has_dart_metadata(article: dict[str, Any], parser_result: dict[str, Any]) -
         or extra.get("rcept_no")
         or extra.get("receipt_no")
     )
-    report_name = parser_result.get("report_name") or extra.get("report_name") or article.get("title")
+    report_name = (
+        parser_result.get("report_name") or extra.get("report_name") or article.get("title")
+    )
     corp_code = parser_result.get("corp_code") or extra.get("corp_code")
 
-    return bool(receipt_no and report_name and (corp_code or _normalize_company(article.get("company"))))
+    return bool(
+        receipt_no and report_name and (corp_code or _normalize_company(article.get("company")))
+    )
 
 
 def _normalize_company(value: Any) -> list[str]:

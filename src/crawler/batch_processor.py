@@ -65,6 +65,7 @@ class BatchProcessor:
             inserted,
         )
         return new_articles
+
     async def run_track_b(
         self,
         keywords: dict[str, list[str]],
@@ -82,13 +83,9 @@ class BatchProcessor:
 
         articles: list[RawArticle] = []
         domestic_keywords = {
-            peer_id: kws
-            for peer_id, kws in keywords.items()
-            if peer_id not in GLOBAL_COMPANY_IDS
+            peer_id: kws for peer_id, kws in keywords.items() if peer_id not in GLOBAL_COMPANY_IDS
         }
-        global_company_ids = [
-            peer_id for peer_id in keywords if peer_id in GLOBAL_COMPANY_IDS
-        ]
+        global_company_ids = [peer_id for peer_id in keywords if peer_id in GLOBAL_COMPANY_IDS]
 
         for peer_id, kws in domestic_keywords.items():
             for crawler in [

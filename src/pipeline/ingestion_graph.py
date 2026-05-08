@@ -122,8 +122,10 @@ def _company_for_context(article: dict, requested_companies: list[str]) -> str:
         if company in article_companies:
             return company
 
-    return article_companies[0] if article_companies else (
-        requested_companies[0] if requested_companies else ""
+    return (
+        article_companies[0]
+        if article_companies
+        else (requested_companies[0] if requested_companies else "")
     )
 
 

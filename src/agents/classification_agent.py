@@ -222,8 +222,7 @@ def compute_exposure(
     cluster_size_score = min(cluster_size / _CLUSTER_SIZE_SATURATION, 1.0)
 
     credibility_max = max(
-        min(max(a.get("credibility_score") or 0.0, 0.0), 1.0)
-        for a in cluster_articles
+        min(max(a.get("credibility_score") or 0.0, 0.0), 1.0) for a in cluster_articles
     )
 
     company_aliases = _company_aliases(company)
@@ -231,17 +230,12 @@ def compute_exposure(
         1
         for a in cluster_articles
         if any(
-            alias in f"{a.get('title') or ''} {a.get('content') or ''}"
-            for alias in company_aliases
+            alias in f"{a.get('title') or ''} {a.get('content') or ''}" for alias in company_aliases
         )
     )
     company_mention_score = min(company_mention_count / max(cluster_size, 1), 1.0)
 
-    score = (
-        0.50 * cluster_size_score
-        + 0.30 * credibility_max
-        + 0.20 * company_mention_score
-    )
+    score = 0.50 * cluster_size_score + 0.30 * credibility_max + 0.20 * company_mention_score
 
     if score >= _HIGH_THRESHOLD:
         band = "high"
@@ -423,8 +417,7 @@ class ClassificationAgent:
 
         articles_text = _format_articles([rep_article])
         company_mention_text = (
-            f"{exposure['company_mention_count']}건 "
-            f"(cluster_size={exposure['cluster_size']})"
+            f"{exposure['company_mention_count']}건 (cluster_size={exposure['cluster_size']})"
         )
 
         prompt = (
@@ -435,7 +428,9 @@ class ClassificationAgent:
 
         try:
             response = _llm.invoke(prompt)
-            content = response.content if isinstance(response.content, str) else str(response.content)
+            content = (
+                response.content if isinstance(response.content, str) else str(response.content)
+            )
             data = _parse_json(content)
 
             event_type = data.get("event_type", "tech_release")
@@ -486,9 +481,7 @@ def _format_articles(articles: list[dict[str, Any]]) -> str:
 
     for i, a in enumerate(articles, 1):
         credibility_score = a.get("credibility_score")
-        credibility_text = (
-            f"{credibility_score:.2f}" if credibility_score is not None else "미계산"
-        )
+        credibility_text = f"{credibility_score:.2f}" if credibility_score is not None else "미계산"
 
         lines.append(
             f"[{i}] 제목: {a['title']}\n"
@@ -546,8 +539,7 @@ def classify_preprocessed_cluster(
         (
             article
             for article in cluster_articles
-            if int(article.get("preprocess_id") or article.get("id") or 0)
-            == int(representative_id)
+            if int(article.get("preprocess_id") or article.get("id") or 0) == int(representative_id)
         ),
         cluster_articles[0],
     )

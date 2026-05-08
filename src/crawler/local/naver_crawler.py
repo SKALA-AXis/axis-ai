@@ -56,6 +56,7 @@ REQUEST_HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
 }
 
+
 class NaverNewsCrawler(BaseCrawler):
     def __init__(
         self,
@@ -148,8 +149,7 @@ class NaverNewsCrawler(BaseCrawler):
             articles = [
                 article
                 for article in (
-                    self._item_to_article(item, query=query, sector=sector)
-                    for item in items
+                    self._item_to_article(item, query=query, sector=sector) for item in items
                 )
                 if article_within_cutoff(article, self.cutoff_datetime)
                 and article_mentions_target_peer(article, self.peer_id)
@@ -279,9 +279,7 @@ def extract_publisher_from_html(html: str) -> str | None:
         if not node:
             continue
 
-        publisher = clean_publisher_name(
-            str(node.get("alt", "") or node.get_text(" ", strip=True))
-        )
+        publisher = clean_publisher_name(str(node.get("alt", "") or node.get_text(" ", strip=True)))
 
         if publisher:
             return publisher
@@ -663,19 +661,17 @@ def _is_peer_filter_noise(*, title: str, content: str) -> bool:
         return True
 
     compact_text = normalize(text)
-    has_event_keyword = any(normalize(keyword) in compact_text for keyword in _EVENT_LISTING_KEYWORDS)
+    has_event_keyword = any(
+        normalize(keyword) in compact_text for keyword in _EVENT_LISTING_KEYWORDS
+    )
     if not has_event_keyword:
         return False
 
     title_norm = normalize(title)
     peer_in_title = any(
-        normalize(alias) in title_norm
-        for aliases in COMPANY_ALIASES.values()
-        for alias in aliases
+        normalize(alias) in title_norm for aliases in COMPANY_ALIASES.values() for alias in aliases
     )
-    event_in_title = any(
-        normalize(keyword) in title_norm for keyword in _EVENT_LISTING_KEYWORDS
-    )
+    event_in_title = any(normalize(keyword) in title_norm for keyword in _EVENT_LISTING_KEYWORDS)
     if event_in_title and not peer_in_title:
         return True
 
@@ -770,20 +766,12 @@ def get_peer_aliases(peer_id: str) -> tuple[str, ...] | list[str]:
 
 
 def get_relevance_aliases(peer_id: str) -> tuple[str, ...] | list[str]:
-    aliases = [
-        alias
-        for alias in get_peer_aliases(peer_id)
-        if _is_relevance_alias(alias)
-    ]
+    aliases = [alias for alias in get_peer_aliases(peer_id) if _is_relevance_alias(alias)]
     return aliases or [peer_id]
 
 
 def get_search_aliases(peer_id: str) -> tuple[str, ...] | list[str]:
-    aliases = [
-        alias
-        for alias in PEER_ALIASES.get(peer_id, [peer_id])
-        if _is_search_alias(alias)
-    ]
+    aliases = [alias for alias in PEER_ALIASES.get(peer_id, [peer_id]) if _is_search_alias(alias)]
     return aliases or [peer_id]
 
 
@@ -823,10 +811,7 @@ def parse_args() -> argparse.Namespace:
         dest="company",
         action="append",
         default=None,
-        help=(
-            "특정 회사 id만 테스트한다. 여러 번 지정 가능. "
-            "--peer-id는 하위 호환 alias."
-        ),
+        help=("특정 회사 id만 테스트한다. 여러 번 지정 가능. --peer-id는 하위 호환 alias."),
     )
     parser.add_argument(
         "--query",
@@ -1036,8 +1021,7 @@ def merge_article_extra(
 
     if aliases_by_peer:
         merged["matched_aliases_by_peer"] = {
-            peer_id: sorted(set(aliases))
-            for peer_id, aliases in sorted(aliases_by_peer.items())
+            peer_id: sorted(set(aliases)) for peer_id, aliases in sorted(aliases_by_peer.items())
         }
 
     body_mentions: dict[str, dict[str, object]] = {}
@@ -1177,7 +1161,7 @@ def print_relevance_summary(articles: list[RawArticle]) -> None:
 
         summary[key] += 1
 
-    print("관련도 라벨: " f"pass={summary['pass']} / reject={summary['reject']}")
+    print(f"관련도 라벨: pass={summary['pass']} / reject={summary['reject']}")
 
 
 def write_image_url_files(articles: list[RawArticle], output_path: Path) -> Path:
@@ -1202,7 +1186,9 @@ def write_image_url_files(articles: list[RawArticle], output_path: Path) -> Path
 
 
 def default_output_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "crawler_results" / f"{Path(__file__).stem}.json"
+    return (
+        Path(__file__).resolve().parent.parent / "crawler_results" / f"{Path(__file__).stem}.json"
+    )
 
 
 if __name__ == "__main__":

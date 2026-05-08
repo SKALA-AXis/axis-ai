@@ -367,12 +367,7 @@ def _representative_score(
     content_quality = _content_quality_score(article)
     recency = _recency_score(article.get("published_at"))
 
-    return (
-        0.40 * relevance_score
-        + 0.35 * centrality
-        + 0.20 * content_quality
-        + 0.05 * recency
-    )
+    return 0.40 * relevance_score + 0.35 * centrality + 0.20 * content_quality + 0.05 * recency
 
 
 def _cluster_centrality(
@@ -386,9 +381,7 @@ def _cluster_centrality(
 
     idx = id_to_index[article_id]
     other_indices = [
-        id_to_index[other_id]
-        for other_id in cluster_article_ids
-        if other_id != article_id
+        id_to_index[other_id] for other_id in cluster_article_ids if other_id != article_id
     ]
 
     if not other_indices:

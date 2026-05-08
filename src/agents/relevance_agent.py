@@ -40,6 +40,7 @@ def _get_llm() -> ChatOpenAI:
 
     return _llm
 
+
 _RELEVANCE_PROMPT = """\
 당신은 기사 본문의 프로젝트 목적과의 관련성 판단 Agent입니다.
 
@@ -449,10 +450,13 @@ def _precheck(
             "reason": "대상 company와 sector 후보가 모두 감지되지 않음",
         }
 
-    if (
-        not has_company
-        and source_type not in {"dart", "ir", "official", "search_trend", "trend_report"}
-    ):
+    if not has_company and source_type not in {
+        "dart",
+        "ir",
+        "official",
+        "search_trend",
+        "trend_report",
+    }:
         return {
             "decision": "reject",
             "score": 0.25,
@@ -642,7 +646,9 @@ def _is_event_listing_noise(
     compact_text: str,
     matched_companies: list[str],
 ) -> bool:
-    has_event_keyword = any(_compact(keyword) in compact_text for keyword in _EVENT_LISTING_KEYWORDS)
+    has_event_keyword = any(
+        _compact(keyword) in compact_text for keyword in _EVENT_LISTING_KEYWORDS
+    )
     if not has_event_keyword:
         return False
 
@@ -652,9 +658,7 @@ def _is_event_listing_noise(
         for company_id in matched_companies
         for alias in ALL_COMPANY_ALIASES.get(company_id, [company_id])
     )
-    event_in_title = any(
-        _compact(keyword) in title_compact for keyword in _EVENT_LISTING_KEYWORDS
-    )
+    event_in_title = any(_compact(keyword) in title_compact for keyword in _EVENT_LISTING_KEYWORDS)
     if event_in_title and not company_in_title:
         return True
 
@@ -701,12 +705,7 @@ def _metadata_patch_for_relevance(
     is_multi_peer_sector = has_sector and len(matched_companies) >= 2
     is_trend_source = row.source_type in {"search_trend", "trend_report"}
 
-    if not (
-        is_industry_bucket
-        or is_companyless_sector
-        or is_multi_peer_sector
-        or is_trend_source
-    ):
+    if not (is_industry_bucket or is_companyless_sector or is_multi_peer_sector or is_trend_source):
         return {}
 
     patch: dict[str, Any] = {

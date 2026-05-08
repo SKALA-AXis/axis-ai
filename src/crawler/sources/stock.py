@@ -228,11 +228,7 @@ def _target_from_company_config(
     if not ticker:
         return None
 
-    company_name = str(
-        config.get("naver_item_name_ko")
-        or config.get("name_ko")
-        or company_id
-    )
+    company_name = str(config.get("naver_item_name_ko") or config.get("name_ko") or company_id)
     aliases = _dedupe_strings(
         [
             company_id,
@@ -294,8 +290,7 @@ TARGET_BY_ALIAS = {
     alias: target
     for target in TARGETS
     for alias in {
-        _normalize_lookup(value)
-        for value in (target.key, target.ticker, *target.aliases)
+        _normalize_lookup(value) for value in (target.key, target.ticker, *target.aliases)
     }
 }
 
@@ -460,8 +455,7 @@ class StockCrawler:
                 f"{self.start_date.isoformat()}~{self.end_date.isoformat()}"
             ),
             content=(
-                f"{target.company_name} historical OHLCV collected from "
-                f"Naver Finance chart data."
+                f"{target.company_name} historical OHLCV collected from Naver Finance chart data."
             ),
             company=[target.key],
             peer_id=target.key,
@@ -573,10 +567,7 @@ class StockCrawler:
 
     def _chart_url(self, target: StockTarget) -> str:
         count = self._history_count()
-        return (
-            f"{NAVER_CHART_URL}?symbol={target.ticker}"
-            f"&timeframe=day&count={count}&requestType=0"
-        )
+        return f"{NAVER_CHART_URL}?symbol={target.ticker}&timeframe=day&count={count}&requestType=0"
 
     def _realtime_url(self, target: StockTarget) -> str:
         query = f"SERVICE_ITEM:{target.ticker}|SERVICE_RECENT_ITEM:{target.ticker}"
@@ -789,9 +780,7 @@ def _epoch_ms_to_iso(value: Any) -> str | None:
         if value is None:
             return None
         return (
-            datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc)
-            .astimezone(KST)
-            .isoformat()
+            datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc).astimezone(KST).isoformat()
         )
     except (TypeError, ValueError, OSError):
         return None

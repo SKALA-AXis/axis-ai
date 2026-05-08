@@ -139,9 +139,7 @@ def _format_articles(articles: list[dict[str, Any]]) -> str:
     lines = []
     for i, a in enumerate(articles, 1):
         credibility_score = a.get("credibility_score")
-        credibility_text = (
-            f"{credibility_score:.2f}" if credibility_score is not None else "미계산"
-        )
+        credibility_text = f"{credibility_score:.2f}" if credibility_score is not None else "미계산"
         lines.append(
             f"[{i}] 제목: {a['title']}\n"
             f"    출처: {a['source_name']} (신뢰도: {credibility_text})"

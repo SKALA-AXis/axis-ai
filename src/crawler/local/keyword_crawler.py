@@ -94,9 +94,7 @@ def load_naver_credentials() -> tuple[str, str]:
     client_secret = os.getenv("NAVER_CLIENT_SECRET")
 
     if not client_id or not client_secret:
-        raise ValueError(
-            "NAVER_CLIENT_ID 또는 NAVER_CLIENT_SECRET 환경변수가 설정되지 않았습니다."
-        )
+        raise ValueError("NAVER_CLIENT_ID 또는 NAVER_CLIENT_SECRET 환경변수가 설정되지 않았습니다.")
 
     client_id = client_id.strip().strip('"').strip("'")
     client_secret = client_secret.strip().strip('"').strip("'")
@@ -459,11 +457,7 @@ def detect_relative_peak_candidates(
             delta = current_ratio - previous_ratio
 
             is_valid_gap = gap_days is not None and 1 <= gap_days <= max_gap_days
-            is_peak_candidate = (
-                is_valid_gap
-                and current_ratio >= min_ratio
-                and delta >= min_delta
-            )
+            is_peak_candidate = is_valid_gap and current_ratio >= min_ratio and delta >= min_delta
 
             if is_peak_candidate:
                 candidates.append(
@@ -528,8 +522,7 @@ def mark_relative_peak_candidates(
     ]
 
     row_index: dict[tuple[str, str], dict[str, Any]] = {
-        (str(row.get("group_name") or ""), str(row.get("period") or "")): row
-        for row in marked_rows
+        (str(row.get("group_name") or ""), str(row.get("period") or "")): row for row in marked_rows
     }
 
     candidates = detect_relative_peak_candidates(
@@ -557,9 +550,7 @@ def mark_relative_peak_candidates(
             "delta": candidate.get("delta"),
             "gap_days": candidate.get("gap_days"),
             "rule": (
-                f"ratio >= {min_ratio} and "
-                f"delta >= {min_delta} and "
-                f"gap_days <= {max_gap_days}"
+                f"ratio >= {min_ratio} and delta >= {min_delta} and gap_days <= {max_gap_days}"
             ),
             "note": "실제 검색 건수가 아니라 조회 기간 내 상대 검색지수 기준의 피크 후보입니다.",
         }
@@ -722,9 +713,7 @@ class KeywordCrawler(BaseCrawler):
             return [
                 {
                     "groupName": str(self.peer_id or "custom"),
-                    "keywords": dedupe_texts(self.keywords)[
-                        :NAVER_DATALAB_MAX_KEYWORDS_PER_GROUP
-                    ],
+                    "keywords": dedupe_texts(self.keywords)[:NAVER_DATALAB_MAX_KEYWORDS_PER_GROUP],
                     "metadata": {
                         "mode": "custom_keywords",
                     },
@@ -738,9 +727,7 @@ class KeywordCrawler(BaseCrawler):
                 custom_groups.append(
                     {
                         "groupName": str(group_name),
-                        "keywords": dedupe_texts(keywords)[
-                            :NAVER_DATALAB_MAX_KEYWORDS_PER_GROUP
-                        ],
+                        "keywords": dedupe_texts(keywords)[:NAVER_DATALAB_MAX_KEYWORDS_PER_GROUP],
                         "metadata": {
                             "mode": "custom_keyword_groups",
                         },

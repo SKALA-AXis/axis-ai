@@ -57,8 +57,7 @@ GLOBAL_COMPANIES: Final[dict[str, GlobalCompanyConfig]] = {
 
 GLOBAL_COMPANY_IDS: Final[list[str]] = list(GLOBAL_COMPANIES.keys())
 GLOBAL_COMPANY_ALIASES: Final[dict[str, list[str]]] = {
-    company_id: config["aliases"]
-    for company_id, config in GLOBAL_COMPANIES.items()
+    company_id: config["aliases"] for company_id, config in GLOBAL_COMPANIES.items()
 }
 
 
