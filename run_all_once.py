@@ -1,4 +1,4 @@
-"""DB 기준 크롤링 + 수집 파이프라인을 한 번에 순차 실행한다.
+"""DB 기준 크롤링 + 전처리를 한 번에 순차 실행한다.
 
 사용법:
   uv run python run_all_once.py
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="AXIS DB 크롤링 후 ingestion pipeline까지 1회 순차 실행"
+        description="AXIS DB 크롤링 후 전처리까지만 1회 순차 실행"
     )
     parser.add_argument(
         "--track",
@@ -68,9 +68,9 @@ def _parse_args() -> argparse.Namespace:
         help="크롤 결과 JSON도 같이 저장할 디렉터리. run_crawler_once.py에만 전달한다.",
     )
     parser.add_argument(
-        "--skip-pipeline",
+        "--skip-preprocess",
         action="store_true",
-        help="크롤링만 실행하고 pipeline은 건너뛴다.",
+        help="크롤링만 실행하고 DB 전처리는 건너뛴다.",
     )
     return parser.parse_args()
 
@@ -93,8 +93,8 @@ def _crawler_cmd(args: argparse.Namespace) -> list[str]:
     return cmd
 
 
-def _pipeline_cmd(args: argparse.Namespace) -> list[str]:
-    cmd = [sys.executable, str(ROOT / "run_pipeline_once.py")]
+def _preprocess_cmd(args: argparse.Namespace) -> list[str]:
+    cmd = [sys.executable, str(ROOT / "run_pipeline_once.py"), "--preprocess-only"]
     _append_shared_args(cmd, args)
     return cmd
 
@@ -119,13 +119,12 @@ def main() -> None:
     args = _parse_args()
     _run_step("1/2 크롤러", _crawler_cmd(args))
 
-    if args.skip_pipeline:
-        print("\n--skip-pipeline 지정으로 pipeline 실행을 건너뜁니다.")
+    if args.skip_preprocess:
+        print("\n--skip-preprocess 지정으로 DB 전처리 실행을 건너뜁니다.")
         return
 
-    _run_step("2/2 파이프라인", _pipeline_cmd(args))
+    _run_step("2/2 DB 전처리", _preprocess_cmd(args))
 
 
 if __name__ == "__main__":
     main()
-

@@ -158,7 +158,7 @@ axis-ai/
 ├── pyproject.toml                  # uv 의존성 정의
 ├── uv.lock                         # 잠금 파일 — 반드시 커밋
 ├── run_crawler_once.py             # 크롤러 1회 실행 (Track A/B 선택)
-├── run_all_once.py                 # DB 크롤링 → ingestion pipeline 순차 실행
+├── run_all_once.py                 # DB 크롤링 → DB 전처리 순차 실행
 ├── run_local_crawler_once.py       # 크롤러 1회 실행 후 crawler_results/*.json 저장
 ├── run_preprocess_once.py          # 저장된 crawler JSON만 전처리하는 로컬 runner
 ├── run_pipeline_once.py            # 파이프라인 1회 실행 스크립트 (디버깅용)
@@ -579,13 +579,15 @@ uv run python run_pipeline_once.py --env local # Local
                                   → issue_card → evidence → issue_cards 저장
 ```
 
-한 번에 실행하려면 `run_all_once.py`를 사용합니다.
+크롤링과 전처리까지만 한 번에 실행하려면 `run_all_once.py`를 사용합니다.
 
 ```bash
 uv run python run_all_once.py
 uv run python run_all_once.py --track all --env local
 uv run python run_all_once.py --company samsung_sds --company nvidia
 ```
+
+`run_all_once.py`는 이슈카드/evidence/financial refs를 생성하지 않습니다. 최종 카드까지 만들고 싶을 때만 별도로 `run_pipeline_once.py`를 실행합니다.
 
 ### 흐름 B — JSON 기반 로컬 전처리
 
@@ -619,16 +621,16 @@ uv run python run_crawler_once.py --track a --env local  # .env.local 로드
 
 출력: Peer별 / 소스별 신규 저장 건수 요약.
 
-### 1-A. DB 크롤링 + 파이프라인 한 번에 실행
+### 1-A. DB 크롤링 + 전처리 한 번에 실행
 
 ```bash
-uv run python run_all_once.py                 # Track A+B 수집 후 pipeline 실행
-uv run python run_all_once.py --env local     # 로컬 DB에 저장 후 pipeline 실행
-uv run python run_all_once.py --track b       # Track B만 수집 후 pipeline 실행
+uv run python run_all_once.py                 # Track A+B 수집 후 전처리 실행
+uv run python run_all_once.py --env local     # 로컬 DB에 저장 후 전처리 실행
+uv run python run_all_once.py --track b       # Track B만 수집 후 전처리 실행
 uv run python run_all_once.py --company nvidia
 ```
 
-`run_all_once.py`는 내부에서 `run_crawler_once.py`를 먼저 실행하고, 성공한 경우에만 `run_pipeline_once.py`를 이어서 실행합니다. DB에 쌓지 않는 JSON 검수 흐름(`run_local_crawler_once.py`/`run_preprocess_once.py`)과는 별개입니다.
+`run_all_once.py`는 내부에서 `run_crawler_once.py`를 먼저 실행하고, 성공한 경우에만 `run_pipeline_once.py --preprocess-only`를 이어서 실행합니다. 전처리 범위는 `credibility → dedup/clustering → classification`까지입니다. DB에 쌓지 않는 JSON 검수 흐름(`run_local_crawler_once.py`/`run_preprocess_once.py`)과는 별개입니다.
 
 ### 2. JSON 크롤러 단독 실행
 

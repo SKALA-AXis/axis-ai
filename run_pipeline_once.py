@@ -31,6 +31,11 @@ _parser.add_argument(
     default=None,
     help="처리할 company id. 여러 번 지정 가능. 생략하면 config의 전체 회사.",
 )
+_parser.add_argument(
+    "--preprocess-only",
+    action="store_true",
+    help="issue_card/evidence/vector index 없이 전처리(classification)까지만 실행.",
+)
 _args = _parser.parse_args()
 
 from src.config.env_loader import load_profile  # noqa: E402
@@ -41,7 +46,13 @@ log.info("실행 프로파일: %s", _profile)
 from src.config.companies import COMPANY_IDS, company_name_ko  # noqa: E402
 from src.config.global_companies import GLOBAL_COMPANY_IDS, global_company_name_ko  # noqa: E402
 from src.config.sectors import sector_name_ko  # noqa: E402
-from src.pipeline.ingestion_graph import ingestion_graph  # noqa: E402
+from src.pipeline.ingestion_graph import (  # noqa: E402
+    classify_node,
+    crawl_node,
+    credibility_node,
+    dedup_node,
+    ingestion_graph,
+)
 
 _BAND_MARK = {"high": "■■■", "medium": "■■ ", "low": "■  "}
 
@@ -73,7 +84,8 @@ def _resolve_companies() -> list[str]:
 def main() -> None:
     company = _resolve_companies()
     company_labels = [_company_label(company_id) for company_id in company]
-    log.info("파이프라인 시작 | company=%s labels=%s", company, company_labels)
+    mode = "전처리 전용" if _args.preprocess_only else "파이프라인"
+    log.info("%s 시작 | company=%s labels=%s", mode, company, company_labels)
 
     initial_state = {
         "company": company,
@@ -89,6 +101,14 @@ def main() -> None:
         "errors": [],
         "human_review_flags": [],
     }
+
+    if _args.preprocess_only:
+        result = crawl_node(initial_state)
+        result = credibility_node(result)
+        result = dedup_node(result)
+        result = classify_node(result)
+        _print_preprocess_result(result)
+        return
 
     result = ingestion_graph.invoke(initial_state)
 
@@ -185,6 +205,32 @@ def main() -> None:
         for s in card.get("sources", [])[:2]:
             title = s.get("title", "")[:60]
             print(f"       [{s.get('index','')}] {s.get('source_name','')} — {title}")
+
+    print("\n" + "=" * 78)
+
+
+def _print_preprocess_result(result: dict) -> None:
+    classified = result.get("classified_clusters", [])
+
+    print("\n" + "=" * 78)
+    print("DB 전처리 실행 결과")
+    print("=" * 78)
+    print(f"  RAW 기사:        {len(result.get('raw_article_ids', []))}건")
+    print(f"  신뢰도 통과:     {len(result.get('credible_ids', []))}건")
+    print(f"  클러스터:        {len(result.get('cluster_map', {}))}개")
+    print(f"  대표 기사:       {len(result.get('representative_ids', []))}건")
+    print(f"  분류 완료:       {len(classified)}개")
+    print("  이슈카드:        생성 안 함")
+    print("  Evidence:        생성 안 함")
+
+    if classified:
+        print("\n  ── 대표 클러스터 ──")
+        for cluster in classified[:10]:
+            print(
+                f"    [{cluster['cluster_id']}] {cluster.get('sector')} / "
+                f"{cluster.get('event_type')} / {cluster.get('exposure_band')} | "
+                f"{cluster.get('title', '')[:70]}"
+            )
 
     print("\n" + "=" * 78)
 

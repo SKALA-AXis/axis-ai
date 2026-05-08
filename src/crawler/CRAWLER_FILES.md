@@ -125,7 +125,7 @@
 
 ### run_all_once.py
 
-DB에 수집 결과를 저장하고 ingestion pipeline까지 한 번에 실행하는 진입점이다.
+DB에 수집 결과를 저장하고 전처리까지만 한 번에 실행하는 진입점이다.
 
 ```bash
 uv run python run_all_once.py
@@ -136,10 +136,22 @@ uv run python run_all_once.py --company samsung_sds --company nvidia
 동작:
 
 1. `run_crawler_once.py`를 subprocess로 실행해 DB `raw_articles`에 RAW 데이터를 저장한다.
-2. 크롤러가 성공한 경우에만 `run_pipeline_once.py`를 이어 실행한다.
-3. pipeline은 DB의 RAW row를 읽어 credibility, relevance/dedup/classification, issue card/evidence 저장까지 처리한다.
+2. 크롤러가 성공한 경우에만 `run_pipeline_once.py --preprocess-only`를 이어 실행한다.
+3. DB 전처리는 RAW row를 읽어 credibility, dedup/clustering, classification까지만 처리한다.
 
-`--skip-pipeline`을 주면 크롤링까지만 실행한다.
+`--skip-preprocess`를 주면 크롤링까지만 실행한다. 이슈카드/evidence/financial refs는 만들지 않는다.
+
+### run_pipeline_once.py --preprocess-only
+
+DB의 `raw_articles.processing_status='RAW'` row를 전처리까지만 처리한다.
+
+```bash
+uv run python run_pipeline_once.py --preprocess-only
+uv run python run_pipeline_once.py --preprocess-only --env local
+uv run python run_pipeline_once.py --preprocess-only --company samsung_sds
+```
+
+실행 범위는 RAW ID 로드, credibility score/grade 보정, dedup/clustering, classification까지다. issue card/evidence/vector index는 생성하지 않는다.
 
 ### run_local_crawler_once.py
 
