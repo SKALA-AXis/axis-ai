@@ -92,7 +92,6 @@ COMPANIES: Final[dict[str, CompanyConfig]] = {
             "에스케이 씨앤씨",
             "SK Inc.",
             "SK주식회사",
-            "SK 그룹",
         ],
         "dart_corp_code": "00111722",
         "naver_item_code": "034730",

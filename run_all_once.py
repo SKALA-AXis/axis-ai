@@ -44,8 +44,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--news-hours",
         type=int,
-        default=None,
-        help="Track A 뉴스 수집 범위. 지정 시 run_crawler_once.py에 전달한다.",
+        default=10,
+        help="Track A 뉴스 수집 범위. 기본 10시간.",
     )
     parser.add_argument(
         "--lookback-days",

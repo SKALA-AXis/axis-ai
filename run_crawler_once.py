@@ -9,7 +9,7 @@
   uv run python run_crawler_once.py --env cloud           # .env.cloud 로드
   uv run python run_crawler_once.py --company sk_ax
   uv run python run_crawler_once.py --company samsung_sds --company lg_cns
-  uv run python run_crawler_once.py --news-hours 1        # Track A 최근 1시간 뉴스
+  uv run python run_crawler_once.py --news-hours 10       # Track A 최근 10시간 뉴스
 """
 
 import argparse
@@ -61,8 +61,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--news-hours",
         type=int,
-        default=1,
-        help="Track A 뉴스 수집 범위. 최근 N시간 기사만 수집한다. 기본 1.",
+        default=10,
+        help="Track A 뉴스 수집 범위. 최근 N시간 기사만 수집한다. 기본 10.",
     )
     parser.add_argument(
         "--lookback-days",
@@ -99,7 +99,6 @@ from src.config.global_companies import (  # noqa: E402
 )
 from src.crawler.base import CrawlWindow, RawArticle  # noqa: E402
 from src.crawler.batch_processor import BatchProcessor  # noqa: E402
-
 
 ALL_COMPANY_IDS = [*COMPANY_IDS, *GLOBAL_COMPANY_IDS]
 ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
