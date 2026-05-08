@@ -6,81 +6,179 @@ AXIS 서비스의 Python AI 서버. **뉴스·공시·채용공고 크롤링 →
 
 ---
 
-## 🚀 실행 방법 (Cloud / Local 두 가지 모드)
+## 🚀 실행 방법 (3가지 모드)
 
-axis-ai는 두 가지 DB 프로파일을 지원합니다. **둘 다 똑같은 코드**가 돌고, `.env` 파일만 다릅니다.
+axis-ai 는 **DB 는 클러스터에서, 코드는 로컬에서** 가 일상 권장 패턴입니다. 매번 docker build·push 안 해도 빠른 iteration 가능 (Vite HMR 수준).
 
-| 모드 | DB | Qdrant | 언제 쓰나 |
+| 모드 | DB / Qdrant | 코드 실행 | 언제 쓰나 |
 |---|---|---|---|
-| **Cloud** (기본) | Supabase Postgres | Qdrant Cloud | 팀 공용 데이터, 데모, PR 검증 |
-| **Local** | docker postgres | docker qdrant | 오프라인 작업, 스키마 실험, 비용 절감 |
+| **1. Cluster DB + Local code** ⭐ 권장 | SKALA EKS 클러스터 (port-forward) | 본인 Mac 의 `uv run python` | **일상 개발** — 크롤러 / 파이프라인 / 새 기능 작성·검증 |
+| **2. Local docker compose** | 본인 PC 의 docker postgres·qdrant | 본인 Mac | 오프라인 작업, 스키마 실험, 격리 환경 |
+| **3. Pod 안에서 실행** | 클러스터 내부 (port-forward 없음) | `kubectl exec` 로 pod 안 | 운영 / 디버깅 / scheduled CronJob 트리거 |
 
-### .env 파일 구성 (절대 커밋 금지)
+> 폐기됨 (2026-05-08): Supabase + Qdrant Cloud 모드. axis-infra 의 SKALA EKS overlay 로 통일.
 
+---
+
+### Mode 1 — Cluster DB + Local code ⭐ 일상 개발
+
+DB / 임베딩 데이터는 클러스터에 항상 떠 있고, 본인은 로컬에서 코드 iterating. 다른 팀원과 같은 DB 를 보면서 개발 — 데이터 일관성·격리 둘 다.
+
+#### 0. (1회) kubectl 클러스터 접속
+
+axis-infra README 참고 — `aws eks update-kubeconfig --region ap-northeast-2 --name skala-2025`. 매니저로부터 받은 자격증명 사용.
+
+검증:
+```bash
+kubectl get pods -n skala3-finalproj-class3-team13
+# postgres / qdrant / axis-ai / axis-backend / axis-frontend 모두 Running 인지
 ```
-axis-ai/
-├── .env          ← Cloud 기본값 (= axis-infra/.env 와 동일 값)
-└── .env.local    ← Local 컨테이너 모드 (호스트 → docker postgres/qdrant)
-```
 
-`.env`는 axis-infra/.env 의 Cloud 값과 **동일하게 유지**해야 합니다. (Single Source of Truth는 axis-infra)
-
-### Mode 1 — Cloud 모드로 실행 (기본)
+#### 1. 의존성 설치 (1회)
 
 ```bash
-# 1. 의존성 설치
+cd axis-ai
 uv sync
+uv run playwright install chromium    # Track B 크롤러 쓸 거면
+uv run pre-commit install
+```
 
-# 2. .env 받기 (axis-infra/.env 의 Cloud 값을 그대로 복사)
-#    팀 공용 .env는 노션/1Password 등에서 받으세요.
+#### 2. port-forward — postgres / qdrant 를 로컬 5432·6333 으로 (개발 내내 켜둠)
 
-# 3. AI 서버 실행
+```bash
+# 별도 터미널 1
+kubectl port-forward -n skala3-finalproj-class3-team13 svc/postgres 5432:5432
+
+# 별도 터미널 2
+kubectl port-forward -n skala3-finalproj-class3-team13 svc/qdrant 6333:6333
+```
+
+또는 background 로 한 줄:
+```bash
+kubectl port-forward -n skala3-finalproj-class3-team13 svc/postgres 5432:5432 &
+kubectl port-forward -n skala3-finalproj-class3-team13 svc/qdrant   6333:6333 &
+```
+
+#### 3. `.env` 작성 — 클러스터 DB 의 자격증명을 localhost 로 매핑
+
+```bash
+cp .env.example .env
+$EDITOR .env
+```
+
+핵심 값 (cluster postgres 가 띄울 때 받은 user/pw 로 채움 — axis-infra 의 `.env` 와 동일):
+
+```env
+# 로컬 port-forward 통해 클러스터 postgres 접근
+DATABASE_URL=postgresql://axuser:<axis-infra/.env 와 동일한 POSTGRES_PASSWORD>@localhost:5432/axis
+
+# 로컬 port-forward 통해 클러스터 qdrant 접근
+QDRANT_HOST=http://localhost
+QDRANT_PORT=6333
+QDRANT_API_KEY=
+
+# 외부 API (axis-infra/.env 와 동일 값)
+OPENAI_API_KEY=sk-...
+NAVER_CLIENT_ID=...
+NAVER_CLIENT_SECRET=...
+DART_API_KEY=...
+```
+
+> 팀 공용 `.env` 는 1Password / 이메일 PGP 같은 secret manager 로 공유. 절대 git 커밋 X.
+
+#### 4. 실행
+
+```bash
+# FastAPI 내부 서버 (개발 시)
 uv run uvicorn src.api.main:app --reload --port 8001
 
-# 4. 또는 단독 스크립트 (옵션 안 주면 .env = Cloud)
-uv run python run_pipeline_once.py
+# 또는 단독 스크립트
 uv run python run_crawler_once.py --track a
+uv run python run_pipeline_once.py
 ```
 
-### Mode 2 — Local 컨테이너 모드로 실행
+코드 수정 → 자동 reload (uvicorn) 또는 다시 실행. 매번 docker build 불필요.
+
+#### 5. DB 확인 — GUI 도구 (권장 TablePlus / DBeaver)
+
+port-forward 가 켜진 상태에서 GUI 도구로 connect:
+
+```
+Host:     localhost
+Port:     5432
+Database: axis
+User:     axuser
+Password: <.env 의 DATABASE_URL 안 password>
+```
+
+Qdrant 는 브라우저 dashboard 내장:
+```bash
+open http://localhost:6333/dashboard   # collection / point 검색·수정
+```
+
+---
+
+### Mode 2 — Local docker compose (오프라인 / 격리)
+
+인터넷 안 되거나, 클러스터 wipe 됐을 때, 또는 schema 실험할 때.
 
 ```bash
-# 1. axis-infra 쪽에서 postgres·qdrant 컨테이너부터 띄우기
+# 1. axis-infra 쪽에서 postgres·qdrant 컨테이너 띄우기
 cd ../axis-infra
-cp .env.local.example .env.local         # 처음 한 번만
+cp .env.local.example .env.local                 # 처음 한 번만
 docker compose --profile local --env-file .env.local up -d postgres qdrant
+
+# 2. axis-ai 쪽에서 .env.local 준비 (.env 와 동일하되 host 만 localhost)
 cd ../axis-ai
 
-# 2. .env.local 준비 (.env 와 같은 값을 베이스로, DB·QDRANT만 localhost 로 교체)
-#    템플릿은 .env.example 참고
-
-# 3. --env local 플래그로 단독 스크립트 실행
+# 3. --env local 플래그로 실행
 uv run python run_pipeline_once.py --env local
 uv run python run_crawler_once.py --track a --env local
 ```
 
-> `--env local` 은 `.env.local` 을 `override=True` 로 로드합니다. `.env.local` 이 없으면 기본 `.env`(Cloud)로 폴백 — 자세한 동작은 [src/config/env_loader.py](src/config/env_loader.py) 참고.
+> `--env local` 은 `.env.local` 을 `override=True` 로 로드 — [src/config/env_loader.py](src/config/env_loader.py) 참고.
 
-### Mode 3 — Docker 컨테이너 안에서 ai 서비스로 실행
+---
 
-axis-infra 의 docker compose 가 env 를 컨테이너에 주입하므로 `.env` 파일은 무시됩니다.
+### Mode 3 — Pod 안에서 실행 (운영 / 디버깅)
+
+배포된 axis-ai pod 가 환경변수 (DATABASE_URL / OPENAI_API_KEY 등) 자동 주입 + 클러스터 내부 네트워크 직접 접근. port-forward 불필요.
 
 ```bash
-# Cloud 모드 — Supabase + Qdrant Cloud 에 붙음
-cd ../axis-infra
-docker compose up -d ai
+# Pod shell 진입
+kubectl exec -it deployment/axis-ai -n skala3-finalproj-class3-team13 -- bash
 
-# Local 모드 — 같은 네트워크의 postgres/qdrant 컨테이너에 붙음
-docker compose --profile local --env-file .env.local up -d
+# 안에서 (의존성 다 설치되어 있음):
+python run_crawler_once.py
+python run_pipeline_once.py
+env | grep -E "DATABASE_URL|QDRANT_HOST"   # 주입된 환경변수 확인
+
+# 큰 historical backfill (background):
+nohup python run_crawler_once.py --since 2025-01-01 > /tmp/crawl.log 2>&1 &
+tail -f /tmp/crawl.log
 ```
+
+또는 1회성 K8s Job 으로:
+```bash
+kubectl create job --from=cronjob/axis-cron-ingestion-a axis-ingest-now-$(date +%H%M) \
+  -n skala3-finalproj-class3-team13
+kubectl logs -f job/axis-ingest-now-XXXX -n skala3-finalproj-class3-team13
+```
+
+운영 자동화는 axis-infra 의 4 CronJob (ingestion-a/b · delivery · weak-signal) 이 처리.
+
+---
 
 ### 환경 설정 체크리스트 (팀원 신규 세팅)
 
+- [ ] `aws configure --profile skala` — AWS 자격증명 (매니저 발급)
+- [ ] `aws eks update-kubeconfig --region ap-northeast-2 --name skala-2025`
+- [ ] `kubectl get pods -n skala3-finalproj-class3-team13` 으로 접속 검증
 - [ ] `uv sync` — Python 의존성 설치
-- [ ] Cloud 용 `.env` 받기 (axis-infra/.env 와 동일 값)
+- [ ] 팀 공용 `.env` 받기 (1Password / PGP)
 - [ ] (옵션) Track B 크롤러 쓸 거면: `uv run playwright install chromium`
-- [ ] (옵션) Local 모드 쓸 거면: `axis-infra` 에서 `--profile local` 컨테이너 기동 후 `.env.local` 작성
 - [ ] `uv run pre-commit install` — ruff format/check 자동화
+- [ ] (선택) TablePlus / DBeaver 설치 + port-forward 통해 connection 등록
 
 ---
 
