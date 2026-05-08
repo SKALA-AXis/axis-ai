@@ -33,6 +33,7 @@ class IngestionState(TypedDict):
     company: list[str]
     trigger_type: str
     collected_since: str | None
+    published_since: str | None
     raw_article_ids: list[int]
     credible_ids: list[int]
     relevant_ids: list[int]
@@ -176,11 +177,13 @@ def crawl_node(state: IngestionState) -> IngestionState:
     raw_ids = CrawlerAgent().load_raw_ids(
         state["company"],
         collected_since=state.get("collected_since"),
+        published_since=state.get("published_since"),
     )
     log.info(
-        "RAW 기사 로드 | company=%s collected_since=%s count=%d",
+        "RAW 기사 로드 | company=%s collected_since=%s published_since=%s count=%d",
         state["company"],
         state.get("collected_since"),
+        state.get("published_since"),
         len(raw_ids),
     )
     return {**state, "raw_article_ids": raw_ids}
