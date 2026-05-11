@@ -29,6 +29,7 @@ BACKFILL_SOURCES: dict[str, BackfillSourceConfig] = {
     "naver_datalab": BackfillSourceConfig("naver_datalab", 30, 1, DEFAULT_UNTIL_DATE),
     "spri": BackfillSourceConfig("spri", 90, 1, DEFAULT_UNTIL_DATE),
     "bcg": BackfillSourceConfig("bcg", 90, 1, DEFAULT_UNTIL_DATE),
+    "sk_ax_site": BackfillSourceConfig("sk_ax_site", 30, 1, DEFAULT_UNTIL_DATE),
 }
 
 

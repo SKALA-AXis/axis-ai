@@ -1,6 +1,7 @@
 """크롤러 단위 테스트"""
 
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from src.agents.relevance_agent import (
@@ -8,12 +9,19 @@ from src.agents.relevance_agent import (
     _metadata_patch_for_relevance,
     _result,
 )
-from src.crawler.base import RawArticle
+from src.crawler.base import CrawlWindow, RawArticle
+from src.crawler.batch_processor import _window_months
 from src.crawler.sources.bcg import match_bcg_core_sectors
 from src.crawler.sources.naver import (
     article_mentions_target_peer,
     classify_peer_relevance,
     get_search_aliases,
+)
+from src.crawler.sources.skax_crawler import (
+    classify_page_kind,
+    extract_internal_links,
+    normalize_skax_url,
+    parse_skax_page,
 )
 from src.db.article_store import (
     INDUSTRY_TREND_COMPANY,
@@ -34,6 +42,101 @@ def test_raw_article_fields():
     )
     assert article.url
     assert article.company == ["samsung_sds"]
+
+
+def test_window_months_includes_all_months_crossing_backfill_window():
+    window = CrawlWindow(
+        start=datetime(2026, 2, 10, tzinfo=timezone.utc),
+        end=datetime(2026, 5, 10, tzinfo=timezone.utc),
+    )
+
+    assert _window_months(window) == ["2026-02", "2026-03", "2026-04", "2026-05"]
+
+
+def test_skax_url_normalization_keeps_site_pages_and_excludes_newsroom():
+    assert (
+        normalize_skax_url("/ax-services/aicc/", "https://www.skax.co.kr/")
+        == "https://www.skax.co.kr/ax-services/aicc"
+    )
+    assert (
+        normalize_skax_url("/sitemap", "https://www.skax.co.kr/")
+        == "https://www.skax.co.kr/sitemap"
+    )
+    assert (
+        normalize_skax_url("/axgenticwire", "https://www.skax.co.kr/")
+        == "https://www.skax.co.kr/axgenticwire"
+    )
+    assert (
+        normalize_skax_url("/services/ai-workforce", "https://www.skax.co.kr/")
+        == "https://www.skax.co.kr/services/ai-workforce"
+    )
+    assert (
+        normalize_skax_url("/industries/manufacturing", "https://www.skax.co.kr/")
+        == "https://www.skax.co.kr/industries/manufacturing"
+    )
+    assert (
+        normalize_skax_url("/experiences/case-study", "https://www.skax.co.kr/")
+        == "https://www.skax.co.kr/experiences/case-study"
+    )
+    assert (
+        normalize_skax_url("/insights/trend", "https://www.skax.co.kr/")
+        == "https://www.skax.co.kr/insights/trend"
+    )
+    assert (
+        normalize_skax_url("/manufacturing", "https://www.skax.co.kr/")
+        == "https://www.skax.co.kr/manufacturing"
+    )
+    assert (
+        normalize_skax_url("/finance", "https://www.skax.co.kr/")
+        == "https://www.skax.co.kr/finance"
+    )
+    assert normalize_skax_url("/company/news-room/3284", "https://www.skax.co.kr/") is None
+
+
+def test_skax_page_parser_extracts_sections():
+    html = """
+    <html>
+      <head><title>AIOps Platform - SK AX</title></head>
+      <body>
+        <header>메뉴</header>
+        <main>
+          <h1>AIOps Platform</h1>
+          <section>
+            <h2>Features</h2>
+            <p>Agentic AI 서비스 활용</p>
+            <p>데이터 의사결정 지원</p>
+          </section>
+          <section>
+            <h2>Highlights</h2>
+            <p>통합 운영 환경을 제공합니다.</p>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    parsed = parse_skax_page(html, "https://www.skax.co.kr/ax-services/new-paradigm-operation")
+
+    assert parsed["title"] == "AIOps Platform"
+    assert parsed["headings"] == ["Features", "Highlights"]
+    assert "Agentic AI 서비스 활용" in parsed["content"]
+    assert classify_page_kind("https://www.skax.co.kr/ax-services/aicc") == "service"
+    assert classify_page_kind("https://www.skax.co.kr/axgenticwire") == "brand_campaign"
+    assert classify_page_kind("https://www.skax.co.kr/industries/manufacturing") == "industry"
+    assert classify_page_kind("https://www.skax.co.kr/experiences/case-study") == "experience"
+
+
+def test_skax_internal_links_are_deduped_and_filtered():
+    html = """
+    <a href="/company/about">about</a>
+    <a href="/company/about#top">about duplicate</a>
+    <a href="/company/news-room/3284">news</a>
+    <a href="https://example.com/out">out</a>
+    """
+
+    assert extract_internal_links(html, "https://www.skax.co.kr/") == [
+        "https://www.skax.co.kr/company/about"
+    ]
 
 
 def test_companyless_trend_report_is_stored_as_industry_trend():

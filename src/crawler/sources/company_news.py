@@ -4,7 +4,7 @@
 수집 대상:
 - 삼성SDS: 보도자료만 수집, "언론이 본 삼성SDS" 제외
 - SK AX: 공식 뉴스룸 수집
-- 현대오토에버: 공식 PR 뉴스 수집
+- 현대오토에버: 공식 PR 뉴스/블로그 수집
 - 포스코DX: 공식 NEWS 수집
 - LG CNS: 공식 보도자료/Press 수집
 
@@ -41,7 +41,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config.companies import company_name_ko  # noqa: E402
-from src.crawler.base import RawArticle  # noqa: E402
+from src.crawler.base import CrawlWindow, RawArticle  # noqa: E402
 from src.crawler.base_crawler import BaseCrawler  # noqa: E402
 
 # =========================================================
@@ -87,6 +87,12 @@ COMPANY_CONFIGS = [
         "source_name": "Hyundai AutoEver News",
         "source_type": "official",
         "list_url": "https://www.hyundai-autoever.com/kor/about/pr/news/list.do",
+    },
+    {
+        "company": "hyundai_autoever",
+        "source_name": "Hyundai AutoEver Blog",
+        "source_type": "official",
+        "list_url": "https://www.hyundai-autoever.com/kor/about/pr/blog/list.do",
     },
     {
         "company": "posco_dx",
@@ -664,12 +670,14 @@ def extract_hyundai_autoever_links(
     현대오토에버 전용 후보 추출.
 
     기준:
-    - 공식 PR 뉴스 상세 URL만 허용
+    - 공식 PR 뉴스/블로그 상세 URL만 허용
     - business-area, contents.do 같은 사업 소개 페이지 차단
     """
 
     candidates = []
     seen_urls = set()
+    is_blog_list = "/pr/blog/" in list_url
+    pr_section = "blog" if is_blog_list else "news"
 
     blocked_keywords = [
         "/business-area/",
@@ -678,17 +686,19 @@ def extract_hyundai_autoever_links(
         "/recruit/",
         "/contents.do",
         "cntnSeq=",
-        "blog",
         "newsletter",
         "insight",
     ]
 
+    if not is_blog_list:
+        blocked_keywords.append("blog")
+
     allowed_patterns = [
-        r"/kor/about/pr/news/.*view",
-        r"/kor/about/pr/news/.*detail",
-        r"/kor/about/pr/news/.*\.do",
-        r"/kor/about/pr/newsView",
-        r"/kor/about/pr/newsRoom",
+        rf"/kor/about/pr/{pr_section}/.*view",
+        rf"/kor/about/pr/{pr_section}/.*detail",
+        rf"/kor/about/pr/{pr_section}/.*\.do",
+        rf"/kor/about/pr/{pr_section}View",
+        rf"/kor/about/pr/{pr_section}Room",
     ]
 
     for a_tag in soup.find_all("a", href=True):
@@ -1348,6 +1358,7 @@ class CompanyNewsCrawler(BaseCrawler):
         use_render: bool = False,
         render_fallback: bool = True,
         debug_candidates: bool = False,
+        crawl_window: CrawlWindow | None = None,
     ):
         super().__init__(company=[])
 
@@ -1355,6 +1366,7 @@ class CompanyNewsCrawler(BaseCrawler):
         self.use_render = use_render
         self.render_fallback = render_fallback
         self.debug_candidates = debug_candidates
+        self.crawl_window = crawl_window
 
     async def crawl(self) -> list[RawArticle]:
         all_articles: list[RawArticle] = []
@@ -1503,9 +1515,9 @@ class CompanyNewsCrawler(BaseCrawler):
                     use_render=self.use_render or self.render_fallback,
                 )
 
-                if not _is_recent_official_article(published_at):
+                if not self._is_in_collection_window(published_at):
                     log.info(
-                        "[%s] 오래된 공식 뉴스 제외 | date=%s title=%s",
+                        "[%s] 공식 뉴스 기간 제외 | date=%s title=%s",
                         company,
                         published_at,
                         title,
@@ -1538,6 +1550,10 @@ class CompanyNewsCrawler(BaseCrawler):
 
                 time.sleep(0.3)
 
+            if not articles and self.crawl_window:
+                log.info("[%s] window 내 공식 뉴스 없음", company)
+                return []
+
             if not articles:
                 return [
                     self._make_failed_article(
@@ -1562,6 +1578,11 @@ class CompanyNewsCrawler(BaseCrawler):
                     error_message=str(e),
                 )
             ]
+
+    def _is_in_collection_window(self, published_at: datetime | None) -> bool:
+        if self.crawl_window:
+            return self.crawl_window.contains(published_at)
+        return _is_recent_official_article(published_at)
 
     def _make_failed_article(
         self,

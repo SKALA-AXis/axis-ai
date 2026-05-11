@@ -182,7 +182,15 @@ class BatchProcessor:
         # 아래 크롤러들은 내부에서 전체 company/industry를 처리하므로 1회만 호출
         shared_crawlers: list[tuple[str, _Crawlable]] = []
         if "company_news" in requested:
-            shared_crawlers.append(("company_news", CompanyNewsCrawler()))
+            shared_crawlers.append(
+                (
+                    "company_news",
+                    CompanyNewsCrawler(
+                        crawl_window=crawl_window,
+                        latest_limit=20 if crawl_window else 5,
+                    ),
+                )
+            )
         if "naver_datalab" in requested:
             shared_crawlers.append(
                 (
@@ -206,15 +214,15 @@ class BatchProcessor:
         if "spri" in requested:
             from src.crawler.sources.spri import SpriCrawler
 
-            month = _window_month(crawl_window)
-            shared_crawlers.append(
+            shared_crawlers.extend(
                 (
-                    "spri",
+                    f"spri[{month}]",
                     SpriCrawler(
                         month=month,
                         output_path=DEFAULT_RESULTS_DIR / f"spri_backfill_{month}.json",
                     ),
                 )
+                for month in _window_months(crawl_window)
             )
         if "bcg" in requested:
             from src.crawler.sources.bcg import BcgCrawler
@@ -226,6 +234,18 @@ class BatchProcessor:
                         days=_window_lookback_days(crawl_window) or 7,
                         max_articles=100,
                         output_path=DEFAULT_RESULTS_DIR / "bcg_backfill.json",
+                    ),
+                )
+            )
+        if "sk_ax_site" in requested:
+            from src.crawler.sources.skax_crawler import SkaxSiteCrawler
+
+            shared_crawlers.append(
+                (
+                    "sk_ax_site",
+                    SkaxSiteCrawler(
+                        max_pages=200,
+                        output_path=DEFAULT_RESULTS_DIR / "skax_site_backfill.json",
                     ),
                 )
             )
@@ -292,6 +312,28 @@ def _window_lookback_days(crawl_window: CrawlWindow | None) -> int | None:
 def _window_month(crawl_window: CrawlWindow | None) -> str:
     target = (crawl_window.end or crawl_window.start) if crawl_window else datetime.now()
     return target.strftime("%Y-%m")
+
+
+def _window_months(crawl_window: CrawlWindow | None) -> list[str]:
+    if not crawl_window:
+        return [_window_month(None)]
+
+    start = crawl_window.start.date().replace(day=1)
+    end_bound = crawl_window.end or crawl_window.start
+    end = end_bound.date().replace(day=1)
+
+    months: list[str] = []
+    cursor = start
+    while cursor <= end:
+        months.append(cursor.strftime("%Y-%m"))
+        cursor = _next_month(cursor)
+    return months
+
+
+def _next_month(value: date) -> date:
+    if value.month == 12:
+        return date(value.year + 1, 1, 1)
+    return date(value.year, value.month + 1, 1)
 
 
 def _normalize_articles(items: Sequence[object]) -> list[RawArticle]:
