@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from src.agents.credibility_agent import compute_credibility_score
 from src.agents.relevance_agent import (
     _core_company_role_reject_result,
     _metadata_patch_for_relevance,
@@ -22,6 +23,7 @@ from src.crawler.sources.skax_crawler import (
     extract_internal_links,
     normalize_skax_url,
     parse_skax_page,
+    title_from_path,
 )
 from src.db.article_store import (
     INDUSTRY_TREND_COMPANY,
@@ -122,8 +124,10 @@ def test_skax_page_parser_extracts_sections():
     assert "Agentic AI 서비스 활용" in parsed["content"]
     assert classify_page_kind("https://www.skax.co.kr/ax-services/aicc") == "service"
     assert classify_page_kind("https://www.skax.co.kr/axgenticwire") == "brand_campaign"
-    assert classify_page_kind("https://www.skax.co.kr/industries/manufacturing") == "industry"
+    assert classify_page_kind("https://www.skax.co.kr/manufacturing") == "industry"
     assert classify_page_kind("https://www.skax.co.kr/experiences/case-study") == "experience"
+    assert classify_page_kind("https://www.skax.co.kr/case-study/usecase") == "experience"
+    assert title_from_path("https://www.skax.co.kr/cloud") == "Cloud"
 
 
 def test_skax_internal_links_are_deduped_and_filtered():
@@ -137,6 +141,10 @@ def test_skax_internal_links_are_deduped_and_filtered():
     assert extract_internal_links(html, "https://www.skax.co.kr/") == [
         "https://www.skax.co.kr/company/about"
     ]
+
+
+def test_company_site_source_type_has_official_level_credibility():
+    assert compute_credibility_score("company_site") == 0.90
 
 
 def test_companyless_trend_report_is_stored_as_industry_trend():

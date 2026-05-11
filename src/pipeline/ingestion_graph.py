@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 _GPT_WORKERS = 5
 RELEVANCE_SOURCE_TYPES = {"news"}
 OFFICIAL_DOCUMENT_SOURCE_TYPES = {"official"}
+COMPANY_SITE_DOCUMENT_SOURCE_TYPES = {"company_site"}
 PARSED_DOCUMENT_SOURCE_TYPES = {"dart", "ir", "securities_report"}
 STRUCTURED_SIGNAL_SOURCE_TYPES = {"job", "market_data", "search_trend", "social"}
 
@@ -263,6 +264,22 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
                         "official 문서는 회사별 공식 원문으로 보존. "
                         "기사 relevance/dedup/classification 단계는 생략하고 "
                         "추후 동향 분석에서 사용"
+                    ),
+                },
+            )
+            continue
+
+        if source_type in COMPANY_SITE_DOCUMENT_SOURCE_TYPES:
+            official_document_ids.append(article_id)
+            update_preprocess_status(
+                article_id,
+                "PREPROCESSED_COMPANY_SITE_DOCUMENT",
+                {
+                    "document_scope": "company_site",
+                    "preprocess_note": (
+                        "company_site 문서는 회사 공식 홈페이지의 정적/반정적 원문으로 보존. "
+                        "뉴스룸 relevance/dedup/classification 단계는 생략하고 "
+                        "회사 지식베이스/과거 분석에서 사용"
                     ),
                 },
             )

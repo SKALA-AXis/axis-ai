@@ -29,6 +29,7 @@ SourceType = Literal[
     "search_trend",
     "social",
     "official",
+    "company_site",
     "market_data",
 ]
 
@@ -158,6 +159,7 @@ class DailyLimitGuard:
     SOURCE_TYPE_LIMITS: dict[str, int] = {
         "news": 10000,
         "official": 100,
+        "company_site": 500,
         "ir": 100,
         "dart": 100,
         "securities_report": 100,

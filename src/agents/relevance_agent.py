@@ -474,7 +474,7 @@ def _precheck(
 ) -> dict[str, Any]:
     has_company = bool(matched_companies)
     has_sector = bool(matched_sectors and matched_sectors != ["other"])
-    is_company_source = source_type in {"dart", "ir", "official"} and bool(company)
+    is_company_source = source_type in {"dart", "ir", "official", "company_site"} and bool(company)
 
     if not has_company and not has_sector and not is_company_source:
         return {
@@ -487,6 +487,7 @@ def _precheck(
         "dart",
         "ir",
         "official",
+        "company_site",
         "search_trend",
         "trend_report",
     }:

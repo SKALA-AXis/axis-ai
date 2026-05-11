@@ -276,7 +276,7 @@ def compute_article_impact(
     if source_type in {"dart", "ir"}:
         score = max(score, 0.80)
         signals.append(f"source_type:{source_type}")
-    elif source_type in {"official", "securities_report"}:
+    elif source_type in {"official", "company_site", "securities_report"}:
         score = max(score, 0.65)
         signals.append(f"source_type:{source_type}")
 

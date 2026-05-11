@@ -18,6 +18,7 @@ DEFAULT_CREDIBILITY_SCORE = 0.50
 SOURCE_TYPE_CREDIBILITY: dict[str, float] = {
     "dart": 1.00,
     "official": 0.90,
+    "company_site": 0.90,
     "ir": 1.00,
     "securities_report": 0.80,
     "trend_report": 0.70,

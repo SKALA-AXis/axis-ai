@@ -62,6 +62,27 @@ EXCLUDED_PATH_PARTS = (
 
 DISCOVERY_ONLY_PATHS = {"/sitemap"}
 
+INDUSTRY_PATHS = {
+    "/manufacturing",
+    "/finance",
+    "/cloud",
+    "/commerce",
+    "/telecom",
+    "/service",
+}
+
+GENERIC_TITLES = {
+    "SK AX",
+    "Overview",
+    "Highlights",
+    "Story",
+    "Features",
+    "Insights",
+    "Services",
+    "Industries",
+    "Experiences",
+}
+
 EXCLUDED_EXTENSIONS = (
     ".css",
     ".js",
@@ -126,10 +147,16 @@ class SkaxSiteCrawler(BaseCrawler):
     async def crawl(self) -> list[RawArticle]:
         urls = await self._discover_urls()
         articles: list[RawArticle] = []
+        seen_content_hashes: set[str] = set()
 
         for url in urls[: self.max_pages]:
             article = await self._crawl_page(url)
             if article:
+                content_hash = str(article.extra.get("content_hash", ""))
+                if content_hash and content_hash in seen_content_hashes:
+                    log.info("SK AX site 중복 본문 제외 | url=%s", url)
+                    continue
+                seen_content_hashes.add(content_hash)
                 articles.append(article)
 
         if self.output_path:
@@ -191,7 +218,7 @@ class SkaxSiteCrawler(BaseCrawler):
 
         return RawArticle(
             id=article_id,
-            source_type="official",
+            source_type="company_site",
             source_name="SK AX Site",
             title=parsed["title"],
             content=parsed["content"],
@@ -293,6 +320,8 @@ def parse_skax_page(html: str, url: str) -> dict[str, Any]:
     if not content:
         content = clean_text(root.get_text("\n", strip=True))
 
+    title = choose_page_title(title, headings, url)
+
     return {
         "title": title,
         "content": content,
@@ -311,25 +340,91 @@ def find_content_root(soup: BeautifulSoup) -> Tag:
 
 
 def extract_title(soup: BeautifulSoup, root: Tag, url: str) -> str:
-    for selector in ("h1", "h2"):
-        node = root.select_one(selector)
-        if node:
-            title = clean_text(node.get_text(" ", strip=True))
-            if title:
-                return title
+    candidates: list[str] = []
 
     og_title = soup.find("meta", attrs={"property": "og:title"})
     if og_title:
-        title = clean_text(str(og_title.get("content", "")))
-        if title:
-            return title
+        candidates.append(clean_text(str(og_title.get("content", ""))))
+
+    meta_title = soup.find("meta", attrs={"name": "title"})
+    if meta_title:
+        candidates.append(clean_text(str(meta_title.get("content", ""))))
 
     if soup.title and soup.title.string:
-        title = clean_text(soup.title.string)
+        candidates.append(clean_text(soup.title.string))
+
+    for selector in ("h1", "h2"):
+        node = root.select_one(selector)
+        if node:
+            candidates.append(clean_text(node.get_text(" ", strip=True)))
+
+    for selector in ("h1", "h2"):
+        node = soup.select_one(selector)
+        if node:
+            candidates.append(clean_text(node.get_text(" ", strip=True)))
+
+    normalized_candidates = [normalize_title(candidate) for candidate in candidates]
+    for title in normalized_candidates:
+        if title and title not in GENERIC_TITLES:
+            return title
+
+    for title in normalized_candidates:
         if title:
             return title
 
     return urlparse(url).path.strip("/") or "SK AX"
+
+
+def choose_page_title(raw_title: str, headings: list[str], url: str) -> str:
+    path = urlparse(url).path.rstrip("/") or "/"
+    if path == "/":
+        return "SK AX"
+
+    title = normalize_title(raw_title)
+    if title and title not in GENERIC_TITLES:
+        return title
+
+    path_title = title_from_path(url)
+    if path_title:
+        return path_title
+
+    for heading in headings:
+        normalized = normalize_title(heading)
+        if normalized and normalized not in GENERIC_TITLES:
+            return normalized
+
+    return title or "SK AX"
+
+
+def normalize_title(title: str) -> str:
+    title = clean_text(title)
+    title = re.sub(r"\s*[-│|]\s*SK AX\s*$", "", title)
+    title = re.sub(r"\s+", " ", title)
+    return title.strip()
+
+
+def title_from_path(url: str) -> str:
+    path = urlparse(url).path.rstrip("/") or "/"
+    mapping = {
+        "/": "SK AX",
+        "/axgenticwire": "AXgenticWire",
+        "/company/about": "회사소개",
+        "/ax-services/aicc": "AICC",
+        "/ax-services/new-paradigm-operation": "AIOps Platform",
+        "/case-study/usecase": "Experiences",
+        "/manufacturing": "제조",
+        "/finance": "금융",
+        "/cloud": "Cloud",
+        "/commerce": "유통/물류",
+        "/telecom": "통신",
+        "/service": "서비스",
+        "/insight/trends": "Trends",
+        "/insight/newsletter": "Newsletter",
+        "/insight/videos": "Videos",
+        "/insight/events": "Events",
+        "/insight/resources": "자료실",
+    }
+    return mapping.get(path, "")
 
 
 def extract_sections(root: Tag) -> list[dict[str, str]]:
@@ -368,7 +463,11 @@ def flush_section(
     text = clean_text("\n".join(deduped))
     if not text:
         return
-    sections.append({"heading": heading, "text": f"{heading}\n{text}".strip()})
+    normalized_heading = clean_text(heading)
+    section_text = f"{normalized_heading}\n{text}".strip() if normalized_heading else text
+    if any(existing["text"] == section_text for existing in sections):
+        return
+    sections.append({"heading": normalized_heading, "text": section_text})
 
 
 def dedupe_keep_order(values: list[str]) -> list[str]:
@@ -407,6 +506,10 @@ def classify_page_kind(url: str) -> str:
         return "home"
     if path.startswith("/axgenticwire"):
         return "brand_campaign"
+    if path in INDUSTRY_PATHS:
+        return "industry"
+    if path.startswith("/case-study"):
+        return "experience"
     if path.startswith("/services"):
         return "service"
     if path.startswith("/industries"):
@@ -429,7 +532,7 @@ def classify_page_kind(url: str) -> str:
 
 
 def make_id(url: str) -> str:
-    raw = f"official|SK AX Site|{url}"
+    raw = f"company_site|SK AX Site|{url}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
