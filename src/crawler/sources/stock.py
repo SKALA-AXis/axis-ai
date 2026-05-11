@@ -1,19 +1,16 @@
-"""KRX stock OHLCV crawler.
+"""KRX stock latest-price crawler.
 
 Design notes for safe, reproducible collection:
 - Target analysis: monitored Korean listed stocks are resolved from
   src.config.companies. The company registry owns Naver item codes and aliases;
-  this crawler owns only the OHLCV collection logic.
-- Access strategy: historical OHLCV is fetched from Naver Finance's static chart
-  XML endpoint. No browser automation is needed. Latest quote metadata is fetched
-  from Naver's polling JSON endpoint when requested.
-- Extraction and parsing: chart XML item rows are mapped as
-  date|open|high|low|close|volume, then normalized into a stock_price_ohlcv_v1
-  payload under the repository's common crawler envelope.
-- Exception handling: HTTP calls are retried with backoff, anti-bot friendly
-  headers, and per-ticker pacing. Bad rows are dropped by default and reported in
-  extra.validation; alternatively, missing prices can be filled with the previous
-  close via --missing-policy previous_close.
+  this crawler owns only the market-price collection logic.
+- Access strategy: latest KRX trading data is fetched with FinanceDataReader.
+- Extraction and parsing: the latest trading row is mapped as
+  date|open|high|low|close|volume|change_pct, then normalized into the existing
+  stock_price_ohlcv_v1 payload under the repository's common crawler envelope.
+- Exception handling: provider/import/data failures are returned as failed
+  common-envelope documents so the DB save path can record the failure without
+  breaking the whole crawler batch.
 """
 
 from __future__ import annotations
@@ -21,6 +18,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import importlib
 import json
 import logging
 import math
@@ -49,11 +47,22 @@ log = logging.getLogger(__name__)
 
 KST = timezone(timedelta(hours=9))
 SCHEMA_NAME = "stock_price_ohlcv_v1"
-SOURCE_NAME = "naver_finance_chart"
+SOURCE_NAME = "stock_market"
 SOURCE_TYPE = "market_data"
 CONTENT_TYPE = "api"
-DEFAULT_LOOKBACK_DAYS = int(os.getenv("STOCK_LOOKBACK_DAYS", "30"))
+DEFAULT_LOOKBACK_DAYS = int(os.getenv("STOCK_LOOKBACK_DAYS", "10"))
 DEFAULT_TARGET_KEYS = tuple(NAVER_ITEM_CODES.keys())
+
+MANUAL_CODE_MAP = {
+    "SK": "034730",
+    "삼성SDS": "018260",
+    "LG CNS": "064400",
+    "포스코DX": "022100",
+    "sk_ax": "034730",
+    "samsung_sds": "018260",
+    "lg_cns": "064400",
+    "posco_dx": "022100",
+}
 
 NAVER_CHART_URL = "https://fchart.stock.naver.com/sise.nhn"
 NAVER_REALTIME_URL = "https://polling.finance.naver.com/api/realtime"
@@ -93,6 +102,7 @@ class StockOHLCVRecord:
     low: float
     close: float
     volume: int
+    change_pct: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -102,6 +112,7 @@ class StockOHLCVRecord:
             "low": self.low,
             "close": self.close,
             "volume": self.volume,
+            "change_pct": self.change_pct,
         }
 
 
@@ -116,7 +127,7 @@ class StockCrawlResult:
     company: list[str]
     data: list[StockOHLCVRecord]
     peer_id: str | None = None
-    publisher: str = "Naver Financial / KRX / Koscom"
+    publisher: str = "FinanceDataReader / KRX"
     source_type: str = SOURCE_TYPE
     source_name: str = SOURCE_NAME
     content_type: str = CONTENT_TYPE
@@ -192,6 +203,10 @@ def _public_extra(extra: dict[str, Any]) -> dict[str, Any]:
     realtime_quote = extra.get("realtime_quote")
     if realtime_quote is not None:
         public["realtime_quote"] = realtime_quote
+
+    latest_price = extra.get("latest_price")
+    if latest_price is not None:
+        public["latest_price"] = latest_price
 
     realtime_error = extra.get("realtime_error")
     if realtime_error:
@@ -294,9 +309,136 @@ TARGET_BY_ALIAS = {
     }
 }
 
+_KRX_LISTING_CACHE: Any | None = None
+
+
+def _require_finance_datareader() -> Any:
+    try:
+        return importlib.import_module("FinanceDataReader")
+    except ModuleNotFoundError as exc:
+        raise StockCrawlerError(
+            "FinanceDataReader가 설치되어 있지 않습니다. "
+            "uv add finance-datareader pandas 또는 "
+            "pip install finance-datareader pandas 후 다시 실행하세요."
+        ) from exc
+
+
+def _krx_listing() -> Any:
+    global _KRX_LISTING_CACHE
+    if _KRX_LISTING_CACHE is None:
+        _KRX_LISTING_CACHE = _require_finance_datareader().StockListing("KRX")
+    return _KRX_LISTING_CACHE
+
+
+def _find_symbol(company_name: str, fallback_ticker: str | None = None) -> str | None:
+    """Resolve a KRX symbol by exact/normalized company name, then manual map."""
+
+    manual = MANUAL_CODE_MAP.get(company_name)
+    if manual:
+        return manual
+
+    listing = _krx_listing()
+    exact = listing[listing["Name"] == company_name]
+    if not exact.empty:
+        return str(exact.iloc[0]["Code"]).zfill(6)
+
+    normalized = company_name.replace(" ", "")
+    candidates = listing[
+        listing["Name"].str.replace(" ", "", regex=False).str.contains(normalized, na=False)
+    ]
+    if not candidates.empty:
+        return str(candidates.iloc[0]["Code"]).zfill(6)
+
+    manual = MANUAL_CODE_MAP.get(_normalize_lookup(company_name))
+    if manual:
+        return manual
+
+    return fallback_ticker
+
+
+def _fetch_latest_price(
+    *,
+    target: StockTarget,
+    start_date: date,
+    end_date: date,
+) -> tuple[StockOHLCVRecord, dict[str, Any]]:
+    """Fetch the latest trading row through FinanceDataReader."""
+
+    reader = _require_finance_datareader()
+    symbol = _find_symbol(target.company_name, fallback_ticker=target.ticker)
+    if not symbol:
+        raise DataIntegrityError(
+            f"{target.company_name} 종목코드 미확인 (비상장 또는 명칭 불일치 가능)"
+        )
+
+    effective_start = min(start_date, end_date - timedelta(days=10))
+    df = reader.DataReader(symbol, effective_start, end_date)
+    if df.empty:
+        raise DataIntegrityError(f"{symbol} 데이터가 비어 있습니다.")
+
+    latest = df.tail(1).copy()
+    row = latest.iloc[0]
+    trade_date = latest.index[-1]
+    trade_date_str = trade_date.strftime("%Y-%m-%d")
+    change_pct = _row_change_pct(df)
+
+    record = StockOHLCVRecord(
+        date=trade_date_str,
+        open=float(row.get("Open", row.get("Close", 0))),
+        high=float(row.get("High", row.get("Close", 0))),
+        low=float(row.get("Low", row.get("Close", 0))),
+        close=float(row["Close"]),
+        volume=int(row.get("Volume", 0) or 0),
+        change_pct=change_pct,
+    )
+    validation = {
+        "provider": "FinanceDataReader",
+        "resolved_symbol": symbol,
+        "requested_company_name": target.company_name,
+        "requested_ticker": target.ticker,
+        "status": "normal",
+        "dropped_rows": 0,
+    }
+    return record, validation
+
+
+def _row_change_pct(df: Any) -> float | None:
+    latest_row = df.tail(1).iloc[0]
+    if "Change" in df.columns and not _is_null_value(latest_row.get("Change")):
+        return float(latest_row["Change"] * 100)
+
+    close = df["Close"].dropna() if "Close" in df.columns else []
+    if len(close) >= 2:
+        previous_close = float(close.iloc[-2])
+        latest_close = float(close.iloc[-1])
+        if previous_close:
+            return ((latest_close - previous_close) / previous_close) * 100
+    return None
+
+
+def _is_null_value(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(math.isnan(float(value)))
+    except (TypeError, ValueError):
+        return False
+
+
+def _latest_price_payload(target: StockTarget, record: StockOHLCVRecord) -> dict[str, Any]:
+    return {
+        "company_name": target.company_name,
+        "ticker": target.ticker,
+        "trade_date": record.date,
+        "close": record.close,
+        "change_pct": record.change_pct,
+        "volume": record.volume,
+        "status": "정상",
+    }
+
 
 class StockCrawler:
-    """Collect validated OHLCV and latest quote data for KRX stocks."""
+    """Collect latest KRX stock price data with FinanceDataReader."""
 
     def __init__(
         self,
@@ -370,56 +512,27 @@ class StockCrawler:
         """Fetch all configured targets, returning one common-envelope document each."""
 
         results: list[StockCrawlResult] = []
-        async with httpx.AsyncClient(
-            headers=DEFAULT_HEADERS,
-            follow_redirects=True,
-            timeout=self.timeout,
-        ) as client:
-            for index, target in enumerate(self.targets):
-                if index > 0:
-                    await asyncio.sleep(self.request_delay + random.uniform(0, 0.15))
+        for index, target in enumerate(self.targets):
+            if index > 0:
+                await asyncio.sleep(self.request_delay + random.uniform(0, 0.15))
 
-                try:
-                    results.append(await self._crawl_one(client, target))
-                except Exception as exc:
-                    log.exception("stock crawl failed | ticker=%s", target.ticker)
-                    results.append(self._failed_result(target, str(exc)))
+            try:
+                results.append(await asyncio.to_thread(self._crawl_one, target))
+            except Exception as exc:
+                log.exception("stock crawl failed | ticker=%s", target.ticker)
+                results.append(self._failed_result(target, str(exc)))
 
         return results
 
-    async def _crawl_one(
-        self,
-        client: httpx.AsyncClient,
-        target: StockTarget,
-    ) -> StockCrawlResult:
-        source_url = self._chart_url(target)
-        response = await self._get_with_retry(
-            client,
-            source_url,
-            headers={"Referer": NAVER_ITEM_REFERER.format(ticker=target.ticker)},
+    def _crawl_one(self, target: StockTarget) -> StockCrawlResult:
+        source_url = NAVER_ITEM_REFERER.format(ticker=target.ticker)
+        latest, validation = _fetch_latest_price(
+            target=target,
+            start_date=self.start_date,
+            end_date=self.end_date,
         )
-        raw_rows = _parse_naver_chart_xml(response.content)
-        data, validation = _validate_and_clean_rows(
-            raw_rows,
-            self.start_date,
-            self.end_date,
-            self.missing_policy,
-        )
-
-        if not data:
-            raise DataIntegrityError(
-                f"no valid OHLCV rows for {target.ticker} in "
-                f"{self.start_date.isoformat()}~{self.end_date.isoformat()}"
-            )
-
-        realtime_quote: dict[str, Any] | None = None
-        realtime_error: str | None = None
-        if self.include_realtime:
-            try:
-                realtime_quote = await self._fetch_realtime_quote(client, target)
-            except Exception as exc:
-                realtime_error = str(exc)
-                realtime_quote = _realtime_from_last_ohlcv(data[-1])
+        data = [latest]
+        latest_price = _latest_price_payload(target, latest)
 
         extra = {
             "target": {
@@ -431,31 +544,28 @@ class StockCrawler:
                 "end_date": self.end_date.isoformat(),
             },
             "coverage": {
-                "first_date": data[0].date,
-                "last_date": data[-1].date,
+                "first_date": latest.date,
+                "last_date": latest.date,
                 "row_count": len(data),
             },
-            # run_local_crawler_once applies LinkChecker before saving. Marking the
-            # extra container as API-based lets XML/JSON endpoints skip HTML link QA.
             "source_type": "api",
             "content_type": CONTENT_TYPE,
             "missing_policy": self.missing_policy,
             "validation": validation,
+            "latest_price": latest_price,
         }
-        if realtime_quote is not None:
-            extra["realtime_quote"] = realtime_quote
-        if realtime_error:
-            extra["realtime_error"] = realtime_error
+        if self.include_realtime:
+            extra["realtime_quote"] = latest_price
 
         return StockCrawlResult(
             ticker=target.ticker,
             source=source_url,
             title=(
-                f"{target.company_name}({target.ticker}) OHLCV "
-                f"{self.start_date.isoformat()}~{self.end_date.isoformat()}"
+                f"{target.company_name}({target.ticker}) 최신 주가 "
+                f"{latest.date}"
             ),
             content=(
-                f"{target.company_name} historical OHLCV collected from Naver Finance chart data."
+                f"{target.company_name} latest KRX price collected with FinanceDataReader."
             ),
             company=[target.key],
             peer_id=target.key,
@@ -531,13 +641,12 @@ class StockCrawler:
         raise StockCrawlerError(f"GET failed after retries: {url} ({last_error})")
 
     def _failed_result(self, target: StockTarget, error_message: str) -> StockCrawlResult:
-        source_url = self._chart_url(target)
+        source_url = NAVER_ITEM_REFERER.format(ticker=target.ticker)
         return StockCrawlResult(
             ticker=target.ticker,
             source=source_url,
             title=(
-                f"{target.company_name}({target.ticker}) OHLCV "
-                f"{self.start_date.isoformat()}~{self.end_date.isoformat()}"
+                f"{target.company_name}({target.ticker}) 최신 주가 조회 실패"
             ),
             content=None,
             company=[target.key],
