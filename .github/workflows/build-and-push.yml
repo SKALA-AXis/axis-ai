@@ -1,0 +1,126 @@
+# axis-ai → Harbor 이미지 push + axis-infra 의 image tag 갱신 (GitOps).
+#
+# Trigger: ci.yml (name: CI) 가 develop branch 에서 성공한 직후 자동.
+# 결과: Harbor 에 :SHA + :develop + :buildcache 3 태그 push,
+#       axis-infra develop 에 "deploy: axis-ai → SHA" commit.
+#       이후 ArgoCD 가 3분 polling 으로 변경 감지 → cluster sync.
+#
+# 자세한 흐름: axis-infra/docs/ci-cd-plan.md §5 참조.
+name: Build and Push
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [develop]
+  workflow_dispatch:
+
+# 같은 service 의 연속 push 를 큐잉 (cancel-in-progress=false 로 image/commit 불일치 방지).
+concurrency:
+  group: build-push-${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  HARBOR_HOST: amdp-registry.skala-ai.com
+  HARBOR_PROJECT: skala26a-ai3
+  IMAGE_NAME: axis-ai
+
+jobs:
+  build-push:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      # workflow_run 은 default branch HEAD 가 기본 — head_sha 명시.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 1
+
+      # axis-ai 이미지 ~6GB — runner default disk 부족 → ~10GB 회수.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af --volumes
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.HARBOR_HOST }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Get short SHA
+        id: sha
+        run: echo "tag=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build & push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.tag }}
+            ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:develop
+          cache-from: type=registry,ref=${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      - name: Setup kustomize
+        uses: imranismail/setup-kustomize@v2
+        with:
+          kustomize-version: "5.4.3"
+
+      - name: Bump tag in axis-infra (with retry)
+        env:
+          GH_TOKEN: ${{ secrets.INFRA_DISPATCH_PAT }}
+          SHA: ${{ steps.sha.outputs.tag }}
+          SVC: ${{ env.IMAGE_NAME }}
+          HARBOR_HOST: ${{ env.HARBOR_HOST }}
+          HARBOR_PROJECT: ${{ env.HARBOR_PROJECT }}
+        run: |
+          set -e
+          for attempt in 1 2 3; do
+            rm -rf infra
+            # shallow=10 — git pull --rebase 가 base 찾을 수 있도록.
+            git clone --depth=10 -b develop \
+              https://x-access-token:$GH_TOKEN@github.com/SKALA-AXis/axis-infra.git infra
+            cd infra/k8s/overlays/skala
+
+            BASE_NAME="REPLACE_ACCOUNT.dkr.ecr.ap-northeast-2.amazonaws.com/${SVC}"
+            HARBOR_REF="${HARBOR_HOST}/${HARBOR_PROJECT}/${SVC}:${SHA}"
+            kustomize edit set image "${BASE_NAME}=${HARBOR_REF}"
+
+            cd ../../..
+            git config user.email "ci@axis.local"
+            git config user.name "axis-ci-bot"
+
+            git add k8s/overlays/skala/kustomization.yaml
+            if git diff --cached --quiet; then
+              echo "no change — image tag unchanged"
+              exit 0
+            fi
+            git commit -m "deploy: ${SVC} → ${SHA}"
+
+            if git push origin develop; then
+              echo "✓ pushed"
+              exit 0
+            fi
+            echo "push conflict — attempt $attempt/3, rebasing..."
+            # depth=10 으로도 부족하면 unshallow.
+            git fetch --unshallow origin develop 2>/dev/null || git fetch origin develop
+            git pull --rebase origin develop
+            if git push origin develop; then
+              echo "✓ pushed after rebase"
+              exit 0
+            fi
+            cd ..
+            sleep $((attempt * 5))
+          done
+          echo "✗ failed after 3 attempts"
+          exit 1
