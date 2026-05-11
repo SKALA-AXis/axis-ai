@@ -477,11 +477,7 @@ def is_obvious_non_business_candidate(article: RawArticle) -> bool:
     """본문 fetch 전에 스포츠/엔터성 소비자 캠페인 후보를 제외한다."""
 
     parsed = urlparse(article.url or "")
-    path_segments = {
-        segment.lower()
-        for segment in parsed.path.split("/")
-        if segment.strip()
-    }
+    path_segments = {segment.lower() for segment in parsed.path.split("/") if segment.strip()}
     if path_segments & _NON_BUSINESS_PATH_SEGMENTS:
         return True
 

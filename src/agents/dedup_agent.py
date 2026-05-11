@@ -400,9 +400,7 @@ def _shared_customer(left_text: str, right_text: str) -> bool:
 
 def _business_terms(text: str) -> set[str]:
     return {
-        term
-        for term in (_compact_text(term) for term in _BUSINESS_ISSUE_TERMS)
-        if term in text
+        term for term in (_compact_text(term) for term in _BUSINESS_ISSUE_TERMS) if term in text
     }
 
 

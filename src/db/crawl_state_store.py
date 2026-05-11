@@ -82,15 +82,19 @@ def ensure_backfill_state_schema() -> None:
 
 def get_or_create_cursor(config: BackfillSourceConfig, initial_cursor_date: date) -> CrawlCursor:
     with SessionLocal() as db:
-        row = db.execute(
-            text("""
+        row = (
+            db.execute(
+                text("""
                 SELECT source_name, cursor_date, until_date, window_days,
                        max_windows_per_run, enabled
                 FROM crawl_cursors
                 WHERE source_name = :source_name
             """),
-            {"source_name": config.source_name},
-        ).mappings().first()
+                {"source_name": config.source_name},
+            )
+            .mappings()
+            .first()
+        )
 
         if row:
             return _cursor_from_row(row)
@@ -201,21 +205,26 @@ def update_cursor(source_name: str, cursor_date: date) -> None:
 
 def list_cursors() -> list[dict]:
     with SessionLocal() as db:
-        rows = db.execute(
-            text("""
+        rows = (
+            db.execute(
+                text("""
                 SELECT source_name, cursor_date, until_date, window_days,
                        max_windows_per_run, enabled, updated_at
                 FROM crawl_cursors
                 ORDER BY source_name
             """)
-        ).mappings().all()
+            )
+            .mappings()
+            .all()
+        )
     return [dict(row) for row in rows]
 
 
 def list_recent_runs(limit: int = 10) -> list[dict]:
     with SessionLocal() as db:
-        rows = db.execute(
-            text("""
+        rows = (
+            db.execute(
+                text("""
                 SELECT id, run_type, source_name, window_start, window_end,
                        status, inserted_count, skipped_count, error_message,
                        started_at, finished_at
@@ -223,8 +232,11 @@ def list_recent_runs(limit: int = 10) -> list[dict]:
                 ORDER BY started_at DESC
                 LIMIT :limit
             """),
-            {"limit": limit},
-        ).mappings().all()
+                {"limit": limit},
+            )
+            .mappings()
+            .all()
+        )
     return [dict(row) for row in rows]
 
 

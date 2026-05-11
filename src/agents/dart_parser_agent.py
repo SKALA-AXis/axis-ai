@@ -17,9 +17,7 @@ from src.agents.ir_parser_agent import (
 log = logging.getLogger(__name__)
 
 _REPORT_PERIOD_PATTERN = re.compile(r"\((20\d{2})\.(0[369]|12)\)")
-_DART_STATEMENT_ANCHOR_PATTERN = re.compile(
-    r"(?:연\s*결\s*)?(?:포\s*괄\s*)?손\s*익\s*계\s*산\s*서"
-)
+_DART_STATEMENT_ANCHOR_PATTERN = re.compile(r"(?:연\s*결\s*)?(?:포\s*괄\s*)?손\s*익\s*계\s*산\s*서")
 _DART_AMOUNT_PATTERN = re.compile(r"\(?-?\d[\d,]*(?:\.\d+)?\)?")
 _DART_ROW_STOP_PATTERN = re.compile(
     r"매출원가|매출총이익|판매비와관리비|영업이익|기타수익|기타비용|금융수익|금융비용|"
@@ -125,7 +123,9 @@ def _dart_statement_unit(section: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _extract_dart_statement_amount(section: str, label: str, unit: str) -> tuple[float, str] | tuple[None, None]:
+def _extract_dart_statement_amount(
+    section: str, label: str, unit: str
+) -> tuple[float, str] | tuple[None, None]:
     label_match = re.search(label, section)
     if not label_match:
         return None, None

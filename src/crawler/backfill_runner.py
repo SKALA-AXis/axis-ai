@@ -138,9 +138,7 @@ class BackfillRunner:
                 crawl_window=crawl_window,
                 run_context=run_context,
             )
-            inserted_count = (
-                self.processor.last_inserted_count if self.persist else len(articles)
-            )
+            inserted_count = self.processor.last_inserted_count if self.persist else len(articles)
             skipped_count = max(len(articles) - inserted_count, 0)
             if self.process_after_window != "none":
                 if run_id is None:
