@@ -2,8 +2,9 @@
 
 import json
 import logging
+from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta
-from typing import Protocol
+from typing import Any, Protocol
 
 from src.config.companies import COMPANY_ALIASES, CORP_CODES
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES, GLOBAL_COMPANY_IDS
@@ -31,7 +32,7 @@ TRACK_B_SOURCES = (
 
 
 class _Crawlable(Protocol):
-    async def crawl(self) -> list[RawArticle]: ...
+    async def crawl(self) -> list[Any]: ...
 
 
 class BatchProcessor:
@@ -100,9 +101,13 @@ class BatchProcessor:
         if "naver_news" in requested:
             cutoff = crawl_window.start if crawl_window else _hours_cutoff(recent_hours)
             for peer_id, kws in domestic_keywords.items():
-                crawler = NaverNewsCrawler(peer_id=peer_id, aliases=kws, cutoff_datetime=cutoff)
+                naver_crawler = NaverNewsCrawler(
+                    peer_id=peer_id,
+                    aliases=kws,
+                    cutoff_datetime=cutoff,
+                )
                 try:
-                    articles.extend(await crawler.crawl())
+                    articles.extend(await naver_crawler.crawl())
                 except Exception as e:
                     log.error(
                         "source 크롤 오류 | source=naver_news company=%s error=%s",
@@ -164,7 +169,7 @@ class BatchProcessor:
 
             for source_name, crawler in crawlers:
                 try:
-                    articles.extend(await _normalize_articles(await crawler.crawl()))
+                    articles.extend(_normalize_articles(await crawler.crawl()))
                 except Exception as e:
                     log.error(
                         "source 크롤 오류 | source=%s company=%s crawler=%s error=%s",
@@ -218,7 +223,7 @@ class BatchProcessor:
                 (
                     "bcg",
                     BcgCrawler(
-                        days=_window_lookback_days(crawl_window),
+                        days=_window_lookback_days(crawl_window) or 7,
                         max_articles=100,
                         output_path=DEFAULT_RESULTS_DIR / "bcg_backfill.json",
                     ),
@@ -227,7 +232,7 @@ class BatchProcessor:
 
         for name, shared in shared_crawlers:
             try:
-                articles.extend(await _normalize_articles(await shared.crawl()))
+                articles.extend(_normalize_articles(await shared.crawl()))
             except Exception as e:
                 log.error("source 크롤 오류 | source=%s error=%s", name, e)
 
@@ -289,7 +294,7 @@ def _window_month(crawl_window: CrawlWindow | None) -> str:
     return target.strftime("%Y-%m")
 
 
-async def _normalize_articles(items: list[object]) -> list[RawArticle]:
+def _normalize_articles(items: Sequence[object]) -> list[RawArticle]:
     return [_to_raw_article(item) for item in items]
 
 

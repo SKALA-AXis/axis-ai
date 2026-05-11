@@ -19,6 +19,7 @@ from src.db.crawl_state_store import (
     mark_crawl_run_success,
     update_cursor,
 )
+from src.pipeline.ingestion_graph import IngestionState
 
 log = logging.getLogger(__name__)
 
@@ -182,7 +183,7 @@ class BackfillRunner:
             preprocess_route_node,
         )
 
-        state = {
+        state: IngestionState = {
             "company": list(self.keywords),
             "trigger_type": "backfill",
             "collected_since": None,
@@ -206,7 +207,8 @@ class BackfillRunner:
         }
 
         if self.process_after_window == "full":
-            result = ingestion_graph.invoke(state)
+            # LangGraph의 런타임 객체에는 invoke가 있지만 현재 타입 스텁이 좁게 잡혀 있다.
+            result = ingestion_graph.invoke(state)  # type: ignore[attr-defined]
         else:
             result = crawl_node(state)
             result = credibility_node(result)
