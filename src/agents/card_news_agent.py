@@ -78,40 +78,15 @@ class CardNewsAgent:
         summary_lines = _summary_lines(summary)
         strategic_meaning = _string_list(analysis.get("strategic_meaning"))
         insights = strategic_meaning or _string_list(summary.get("fact_summary"))
-        detail_points = strategic_meaning or summary_lines
         sources = _sources(articles)
-        first_source = sources[0] if sources else {}
         media_assets = _media_assets(articles)
         cover_image = media_assets[0]["url"] if media_assets else _DEFAULT_COVER_IMAGE_URL
-        cover_image_alt = media_assets[0]["alt"] if media_assets else _DEFAULT_COVER_IMAGE_ALT
 
         card = {
             "id": _card_id(cluster_id, created_at),
-            "category": sector,
-            "date": _display_date(published_date),
-            "title": title,
-            "coverImageUrl": cover_image,
-            "coverImageAlt": cover_image_alt,
-            "summary": summary_lines,
-            "articlePages": _article_pages(summary, analysis),
-            "insights": insights,
-            "source": str(first_source.get("source_name") or "AXIS"),
-            "sourceUrl": str(first_source.get("url") or ""),
-            "detailTitle": _first_non_empty(
-                analysis.get("analysis_summary"),
-                summary.get("main_event"),
-                "피어사 뉴스 분석",
-            ),
-            "detailDescription": _first_non_empty(
-                analysis.get("market_signal"),
-                analysis.get("impact_reason"),
-                summary.get("one_line_summary"),
-            ),
-            "detailPoints": detail_points,
-            "actionItems": _action_items(analysis),
-            "mediaAssets": media_assets,
             "peer_id": peer_id,
             "cluster_id": cluster_id,
+            "title": title,
             "subtitle": _subtitle(analysis, classification),
             "category_label": sector.upper() if sector == "ax" else sector,
             "published_date": published_date,
@@ -544,7 +519,14 @@ def _dedupe_keep_order(values: list[str]) -> list[str]:
 def _string_or_none(value: Any) -> str | None:
     if value is None:
         return None
+    if isinstance(value, datetime):
+        return value.isoformat()
     text = str(value).strip()
+    if text:
+        try:
+            return datetime.fromisoformat(text).isoformat()
+        except ValueError:
+            pass
     return text or None
 
 

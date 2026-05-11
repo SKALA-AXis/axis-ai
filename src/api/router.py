@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -76,18 +77,41 @@ async def run_delivery():
 
 
 @app.get("/api/cards")
-async def list_cards(sort: str = "exposure_desc", limit: int = 30):
+async def list_cards(sort: str = "exposure_desc", limit: int = 30, offset: int = 0):
     """프론트 CardNewsItem schema에 맞는 카드뉴스 목록을 반환한다."""
     del sort
-    items = _build_card_news_items(limit=limit, today_only=False)
-    return {"items": items}
+    fetch_limit = max(limit + offset, limit)
+    items = _build_card_news_items(limit=fetch_limit, today_only=False)
+    page_items = items[offset : offset + limit]
+    return _api_response(
+        {
+            "items": page_items,
+            "total": len(items),
+            "limit": limit,
+            "offset": offset,
+        }
+    )
 
 
 @app.get("/api/cards/today")
 async def list_today_cards(limit: int = 10):
     """최근 24시간 뉴스 기반 카드뉴스 목록을 반환한다."""
     items = _build_card_news_items(limit=limit, today_only=True)
-    return {"items": items}
+    return _api_response(
+        {
+            "date": datetime.now(UTC).date().isoformat(),
+            "items": items,
+            "total": len(items),
+        }
+    )
+
+
+def _api_response(data: dict) -> dict:
+    return {
+        "success": True,
+        "data": data,
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
 
 
 @app.post("/search", response_model=SearchResponse)
