@@ -560,13 +560,8 @@ class StockCrawler:
         return StockCrawlResult(
             ticker=target.ticker,
             source=source_url,
-            title=(
-                f"{target.company_name}({target.ticker}) 최신 주가 "
-                f"{latest.date}"
-            ),
-            content=(
-                f"{target.company_name} latest KRX price collected with FinanceDataReader."
-            ),
+            title=(f"{target.company_name}({target.ticker}) 최신 주가 {latest.date}"),
+            content=(f"{target.company_name} latest KRX price collected with FinanceDataReader."),
             company=[target.key],
             peer_id=target.key,
             data=data,
@@ -645,9 +640,7 @@ class StockCrawler:
         return StockCrawlResult(
             ticker=target.ticker,
             source=source_url,
-            title=(
-                f"{target.company_name}({target.ticker}) 최신 주가 조회 실패"
-            ),
+            title=(f"{target.company_name}({target.ticker}) 최신 주가 조회 실패"),
             content=None,
             company=[target.key],
             peer_id=target.key,
