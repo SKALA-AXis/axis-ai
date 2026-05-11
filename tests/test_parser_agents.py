@@ -78,6 +78,41 @@ def test_dart_parser_agent_parses_dart_crawler_article() -> None:
     assert parsed["financial_record"]["dart_rcept_no"] == "20260506000123"
 
 
+def test_dart_parser_agent_parses_dart_statement_table_amounts() -> None:
+    article = RawArticle(
+        url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260310002989",
+        title="사업보고서 (2025.12)",
+        content=(
+            "포 괄 손 익 계 산 서 삼성에스디에스주식회사 (단위: 원) "
+            "과 목 주석 제 41 (당) 기 제 40 (전) 기 "
+            "매출액 23,31 5,464,637,894,164 5,447,352,234,920 "
+            "영업이익 520,433,363,884 507,423,177,759 "
+            "연 결 포 괄 손 익 계 산 서 삼성에스디에스주식회사와 그 종속기업 (단위: 원) "
+            "과 목 주석 제 41 (당) 기 제 40 (전) 기 "
+            "매출액 4,25,33 13,929,868,497,711 13,828,232,033,800 "
+            "매출원가 26,33 11,849,842,590,785 11,815,899,879,484 "
+            "영업이익 4 957,102,744,609 911,096,907,001"
+        ),
+        source_name="dart",
+        published_at=datetime(2026, 3, 10),
+        peer_id="samsung_sds",
+        source_type="dart",
+        content_type="api",
+        extra={
+            "rcept_no": "20260310002989",
+            "report_name": "사업보고서 (2025.12)",
+            "document_fetched": True,
+        },
+    )
+
+    parsed = DartParserAgent().parse_article(article)
+
+    assert parsed["period"] == "2025Q4"
+    assert parsed["period_type"] == "annual"
+    assert parsed["revenue_total_krwbn"] == 139298.68497711
+    assert parsed["operating_profit_krwbn"] == 9571.02744609
+
+
 def test_parser_quality_passes_dart_document_after_parser() -> None:
     item = {
         "url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260506000123",

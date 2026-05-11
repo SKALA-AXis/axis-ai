@@ -17,6 +17,14 @@ from src.agents.ir_parser_agent import (
 log = logging.getLogger(__name__)
 
 _REPORT_PERIOD_PATTERN = re.compile(r"\((20\d{2})\.(0[369]|12)\)")
+_DART_STATEMENT_ANCHOR_PATTERN = re.compile(
+    r"(?:연\s*결\s*)?(?:포\s*괄\s*)?손\s*익\s*계\s*산\s*서"
+)
+_DART_AMOUNT_PATTERN = re.compile(r"\(?-?\d[\d,]*(?:\.\d+)?\)?")
+_DART_ROW_STOP_PATTERN = re.compile(
+    r"매출원가|매출총이익|판매비와관리비|영업이익|기타수익|기타비용|금융수익|금융비용|"
+    r"법인세|당기순이익|기타포괄손익|주당이익"
+)
 
 
 def _article_get(article: Any, key: str, default: Any = None) -> Any:
@@ -84,6 +92,104 @@ def _candidate_page(candidates: list[dict[str, Any]], metric_type: str) -> int |
     return None
 
 
+def _normalize_dart_amount_krwbn(value: str, unit: str) -> float | None:
+    amount_text = value.strip()
+    negative = amount_text.startswith("(") and amount_text.endswith(")")
+    amount_text = amount_text.strip("()").replace(",", "")
+
+    try:
+        amount = float(amount_text)
+    except ValueError:
+        return None
+
+    if negative:
+        amount = -amount
+
+    compact_unit = re.sub(r"\s+", "", unit)
+    if compact_unit == "원":
+        return amount / 100_000_000
+    if compact_unit == "천원":
+        return amount / 100_000
+    if compact_unit == "백만원":
+        return amount / 100
+    if compact_unit in {"억원", "억"}:
+        return amount
+    if compact_unit in {"조원", "조"}:
+        return amount * 10_000
+
+    return None
+
+
+def _dart_statement_unit(section: str) -> str | None:
+    match = re.search(r"단위\s*:\s*(원|천원|백만원|억원|억|조원|조)", section)
+    return match.group(1) if match else None
+
+
+def _extract_dart_statement_amount(section: str, label: str, unit: str) -> tuple[float, str] | tuple[None, None]:
+    label_match = re.search(label, section)
+    if not label_match:
+        return None, None
+
+    row = section[label_match.end() : label_match.end() + 350]
+    stop_match = _DART_ROW_STOP_PATTERN.search(row)
+    if stop_match:
+        row = row[: stop_match.start()]
+
+    for match in _DART_AMOUNT_PATTERN.finditer(row):
+        raw_amount = match.group(0)
+        normalized = _normalize_dart_amount_krwbn(raw_amount, unit)
+        if normalized is None:
+            continue
+
+        # DART rows often include footnote numbers before the actual amount.
+        if abs(normalized) < 1:
+            continue
+
+        return normalized, f"{label_match.group(0)} {raw_amount} ({unit})"
+
+    return None, None
+
+
+def _extract_dart_statement_metrics(text: str) -> dict[str, Any]:
+    best: dict[str, Any] = {}
+    anchors = list(_DART_STATEMENT_ANCHOR_PATTERN.finditer(text or ""))
+
+    for idx, anchor in enumerate(anchors):
+        next_start = anchors[idx + 1].start() if idx + 1 < len(anchors) else anchor.start() + 3000
+        section = text[anchor.start() : min(next_start, anchor.start() + 3000)]
+        if "매출액" not in section or "영업이익" not in section:
+            continue
+
+        unit = _dart_statement_unit(section)
+        if not unit:
+            continue
+
+        revenue_total, revenue_raw = _extract_dart_statement_amount(section, "매출액", unit)
+        operating_profit, operating_profit_raw = _extract_dart_statement_amount(
+            section,
+            "영업이익",
+            unit,
+        )
+        if revenue_total is None and operating_profit is None:
+            continue
+
+        score = 1
+        if re.search(r"연\s*결", section[:500]):
+            score += 10
+
+        candidate = {
+            "score": score,
+            "revenue_total": revenue_total,
+            "revenue_raw": revenue_raw,
+            "operating_profit": operating_profit,
+            "operating_profit_raw": operating_profit_raw,
+        }
+        if not best or candidate["score"] > best["score"]:
+            best = candidate
+
+    return best
+
+
 class DartParserAgent:
     """DartCrawler가 만든 RawArticle 또는 dict 결과를 파싱한다."""
 
@@ -105,7 +211,12 @@ class DartParserAgent:
         candidates: list[dict[str, Any]] = []
         document_fetched = bool(extra.get("document_fetched"))
 
-        revenue_total, revenue_raw = _first_amount(text, _REVENUE_PATTERNS)
+        statement_metrics = _extract_dart_statement_metrics(text)
+
+        revenue_total = statement_metrics.get("revenue_total")
+        revenue_raw = statement_metrics.get("revenue_raw")
+        if revenue_total is None:
+            revenue_total, revenue_raw = _first_amount(text, _REVENUE_PATTERNS)
         if revenue_total is not None:
             candidates.append(
                 {
@@ -116,10 +227,13 @@ class DartParserAgent:
                 }
             )
 
-        operating_profit, operating_profit_raw = _first_amount(
-            text,
-            _OPERATING_PROFIT_PATTERNS,
-        )
+        operating_profit = statement_metrics.get("operating_profit")
+        operating_profit_raw = statement_metrics.get("operating_profit_raw")
+        if operating_profit is None:
+            operating_profit, operating_profit_raw = _first_amount(
+                text,
+                _OPERATING_PROFIT_PATTERNS,
+            )
         if operating_profit is not None:
             candidates.append(
                 {
