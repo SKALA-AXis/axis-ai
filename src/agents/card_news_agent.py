@@ -65,7 +65,6 @@ class CardNewsAgent:
         exposure_band = _normalize_exposure_band(classification.get("exposure_band"))
         exposure_score = _optional_float(classification.get("exposure_score"))
         trust_score = _trust_score(articles)
-        source_article_ids = _source_article_ids(summary, articles)
         created_at = _now_iso()
         published_date = _published_date(articles, created_at)
 
@@ -93,7 +92,6 @@ class CardNewsAgent:
             "coverImageUrl": cover_image,
             "coverImageAlt": cover_image_alt,
             "summary": summary_lines,
-            "articlePages": _article_pages(summary, analysis),
             "insights": insights,
             "source": str(first_source.get("source_name") or "AXIS"),
             "sourceUrl": str(first_source.get("url") or ""),
@@ -109,7 +107,6 @@ class CardNewsAgent:
             ),
             "detailPoints": detail_points,
             "actionItems": _action_items(analysis),
-            "mediaAssets": media_assets,
             "peer_id": peer_id,
             "cluster_id": cluster_id,
             "subtitle": _subtitle(analysis, classification),
@@ -121,19 +118,7 @@ class CardNewsAgent:
             "exposure_band": exposure_band,
             "exposure_score": exposure_score,
             "trust_score": trust_score,
-            "implication": _implication(analysis),
-            "sources": sources,
-            "source_count": len(sources),
-            "evidence_chain": _evidence_chain(
-                summary=summary,
-                analysis=analysis,
-                sources=sources,
-                source_article_ids=source_article_ids,
-                cluster_id=cluster_id,
-                created_at=created_at,
-            ),
-            "financial_context": None,
-            "slides": _slides(title, summary_lines, insights, sources, media_assets),
+            "slides": _slides(title, summary_lines, insights, media_assets),
             "display": _display_meta(sector, cover_image),
             "validation_pass": _validation_pass(summary, analysis),
             "is_human_reviewed": False,
@@ -339,7 +324,6 @@ def _slides(
     title: str,
     summary_lines: list[str],
     insights: list[str],
-    sources: list[dict[str, Any]],
     media_assets: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     cover_image = media_assets[0]["url"] if media_assets else _DEFAULT_COVER_IMAGE_URL
@@ -353,7 +337,6 @@ def _slides(
             "body": "\n".join(summary_lines[:3]) or None,
             "image_url": cover_image,
             "image_alt": cover_image_alt,
-            "evidence_source_indexes": _source_indexes(sources),
             "layout_type": "summary",
         }
     ]
@@ -365,7 +348,6 @@ def _slides(
                 "body": "\n".join(insights[:3]),
                 "image_url": second_image,
                 "image_alt": second_image_alt,
-                "evidence_source_indexes": _source_indexes(sources),
                 "layout_type": "implication",
             }
         )
