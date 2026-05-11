@@ -46,6 +46,26 @@ _SEARCH_ALIAS_BLOCKLIST = {
     "skinc.",
     "sk주식회사",
 }
+_NON_BUSINESS_PATH_SEGMENTS = {
+    "sports",
+    "esports",
+    "entertainment",
+    "celebrity",
+    "kpop",
+    "movie",
+    "music",
+    "lifestyle",
+}
+_NON_BUSINESS_TERMS = (
+    "girl group",
+    "aespa",
+    "karina",
+    "faker",
+    "esports legend",
+    "k-pop",
+    "kpop",
+    "celebrity",
+)
 
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -153,10 +173,26 @@ class NaverNewsCrawler(BaseCrawler):
                 )
                 if article_within_cutoff(article, self.cutoff_datetime)
                 and article_mentions_target_peer(article, self.peer_id)
+                and not is_obvious_non_business_candidate(article)
             ]
 
             if self.fetch_body:
                 await enrich_with_body_text(client, articles)
+                before_refilter = len(articles)
+                articles = [
+                    article
+                    for article in articles
+                    if article_mentions_target_peer(article, self.peer_id)
+                    or not is_body_text_for_relevance(article)
+                ]
+                dropped = before_refilter - len(articles)
+                if dropped:
+                    log.info(
+                        "네이버 본문 기준 무관 기사 제외 | peer_id=%s query=%s dropped=%d",
+                        self.peer_id,
+                        query,
+                        dropped,
+                    )
 
             return articles
 
@@ -173,6 +209,8 @@ class NaverNewsCrawler(BaseCrawler):
             language="ko",
             extra={
                 "search_query": query,
+                "naver_title": strip_html(item.get("title", "")),
+                "naver_description": strip_html(item.get("description", "")),
                 **({"sector": sector} if sector else {}),
             },
         )
@@ -433,6 +471,22 @@ def article_mentions_target_peer(article: RawArticle, target_peer_id: str) -> bo
         )
         if alias_norm and alias_norm in text_norm
     )
+
+
+def is_obvious_non_business_candidate(article: RawArticle) -> bool:
+    """본문 fetch 전에 스포츠/엔터성 소비자 캠페인 후보를 제외한다."""
+
+    parsed = urlparse(article.url or "")
+    path_segments = {
+        segment.lower()
+        for segment in parsed.path.split("/")
+        if segment.strip()
+    }
+    if path_segments & _NON_BUSINESS_PATH_SEGMENTS:
+        return True
+
+    text_norm = f"{article.title or ''} {article.content or ''}".lower()
+    return any(term in text_norm for term in _NON_BUSINESS_TERMS)
 
 
 def annotate_peer_relevance(

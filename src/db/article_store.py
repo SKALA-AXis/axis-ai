@@ -9,7 +9,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 
 from src.config.company_tiers import company_tier_map
-from src.crawler.base import RawArticle
+from src.crawler.base import CrawlRunContext, RawArticle
 from src.db.postgres import SessionLocal
 
 log = logging.getLogger(__name__)
@@ -34,7 +34,10 @@ _INSERT_SQL = text("""
 """)
 
 
-def save_articles(articles: list[RawArticle]) -> int:
+def save_articles(
+    articles: list[RawArticle],
+    run_context: CrawlRunContext | None = None,
+) -> int:
     """RawArticle 목록을 raw_articles 테이블에 저장. 중복 URL은 스킵.
 
     Returns:
@@ -67,7 +70,7 @@ def save_articles(articles: list[RawArticle]) -> int:
                         "content_type": article.content_type,
                         "crawl_status": article.crawl_status,
                         "error_message": article.error_message,
-                        "metadata": _metadata_json(article, storage_company),
+                        "metadata": _metadata_json(article, storage_company, run_context),
                     },
                 )
                 if result.fetchone():
@@ -494,6 +497,7 @@ def _is_valid(article: RawArticle, storage_company: Optional[list[str]] = None) 
 def _metadata_json(
     article: RawArticle,
     storage_company: Optional[list[str]] = None,
+    run_context: CrawlRunContext | None = None,
 ) -> str:
     import json
 
@@ -508,4 +512,14 @@ def _metadata_json(
         meta["company_fallback"] = INDUSTRY_TREND_COMPANY
     elif _is_industry_trend_article(article):
         meta.setdefault("topic_scope", "industry_trend")
+    if run_context:
+        meta["collection_mode"] = run_context.collection_mode
+        if run_context.crawl_run_id:
+            meta["crawl_run_id"] = run_context.crawl_run_id
+        if run_context.source_name:
+            meta["crawl_source_name"] = run_context.source_name
+        if run_context.window_start:
+            meta["window_start"] = run_context.window_start.isoformat()
+        if run_context.window_end:
+            meta["window_end"] = run_context.window_end.isoformat()
     return json.dumps(meta, ensure_ascii=False)

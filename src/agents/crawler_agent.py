@@ -18,6 +18,7 @@ _LOAD_SQL = text("""
     WHERE processing_status = 'RAW'
       AND (:no_filter OR company ?| :company)
       AND (:collected_since IS NULL OR collected_at >= CAST(:collected_since AS timestamptz))
+      AND (:crawl_run_id IS NULL OR metadata ->> 'crawl_run_id' = :crawl_run_id)
     ORDER BY published_at DESC NULLS LAST
     LIMIT :limit
 """)
@@ -31,6 +32,7 @@ class CrawlerAgent:
         company: list[str] | None = None,
         limit: int = 500,
         collected_since: str | None = None,
+        crawl_run_id: str | None = None,
     ) -> list[int]:
         """처리 대기 중인 RAW 기사 ID를 조회한다.
 
@@ -38,6 +40,7 @@ class CrawlerAgent:
             company: 대상 기업 ID 목록. 빈 리스트 또는 None이면 전체 조회.
             limit: 최대 조회 건수.
             collected_since: 지정 시 해당 시각 이후 수집된 RAW만 조회.
+            crawl_run_id: 지정 시 해당 backfill 실행에서 수집된 RAW만 조회.
 
         Returns:
             raw_articles.id 목록.
@@ -51,15 +54,17 @@ class CrawlerAgent:
                     "company": company_filter if company_filter else [""],
                     "no_filter": len(company_filter) == 0,
                     "collected_since": collected_since,
+                    "crawl_run_id": crawl_run_id,
                     "limit": limit,
                 },
             ).fetchall()
 
         ids = [row.id for row in rows]
         log.info(
-            "RAW 기사 로드 | company=%s collected_since=%s count=%d",
+            "RAW 기사 로드 | company=%s collected_since=%s crawl_run_id=%s count=%d",
             company_filter,
             collected_since,
+            crawl_run_id,
             len(ids),
         )
         return ids

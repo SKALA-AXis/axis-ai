@@ -139,6 +139,17 @@ class CrawlWindow:
         return end is None or value <= end
 
 
+@dataclass(frozen=True)
+class CrawlRunContext:
+    """크롤 실행 메타데이터. raw_articles.metadata에 함께 저장된다."""
+
+    collection_mode: str
+    crawl_run_id: str | None = None
+    source_name: str | None = None
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+
+
 class DailyLimitGuard:
     """전역 일일 수집 건수 한도와 소스별 개별 한도를 관리한다."""
 

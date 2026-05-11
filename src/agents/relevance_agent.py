@@ -19,7 +19,7 @@ from sqlalchemy import text
 
 from src.config.companies import COMPANY_ALIASES
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES
-from src.config.sectors import match_sectors
+from src.config.sectors import SECTOR_IDS, match_sectors
 from src.db.article_store import INDUSTRY_TREND_COMPANY
 from src.db.postgres import SessionLocal
 
@@ -334,6 +334,21 @@ class RelevanceAgent:
                 reason=precheck["reason"],
             )
 
+        role_result = _core_company_role_reject_result(
+            title=title,
+            content=content,
+            source_type=row.source_type,
+            matched_companies=matched_company_candidates,
+            matched_sectors=matched_sector_candidates,
+        )
+        if role_result is not None:
+            log.info(
+                "Gate 2.5 피어사 핵심성 부족 제외 | id=%s reason=%s",
+                getattr(row, "id", None),
+                role_result["reason"],
+            )
+            return role_result
+
         fast_pass_result = _fast_pass_result(
             title=title,
             content=content,
@@ -553,6 +568,21 @@ _FAST_PASS_ACTION_KEYWORDS = [
     "플랫폼",
 ]
 _FAST_PASS_SOURCE_TYPES = {"news"}
+_LEAD_TEXT_LIMIT = 800
+_ROLE_CONTEXT_WINDOW = 100
+_LISTING_CONTEXT_KEYWORDS = [
+    "etf",
+    "펀드",
+    "포트폴리오",
+    "편입",
+    "구성종목",
+    "관련주",
+    "테마주",
+    "수익률",
+    "종목",
+    "시황",
+]
+_SUBJECT_MARKERS = ["은", "는", "이", "가"]
 
 
 def _noise_reject_result(
@@ -648,6 +678,106 @@ def _fast_pass_result(
             "LLM 없이 관련 기사로 판단"
         ),
     )
+
+
+def _core_company_role_reject_result(
+    *,
+    title: str,
+    content: str,
+    source_type: str | None,
+    matched_companies: list[str],
+    matched_sectors: list[str],
+) -> dict[str, Any] | None:
+    if str(source_type or "").strip().lower() != "news":
+        return None
+
+    if not matched_companies:
+        return None
+
+    title_compact = _compact(title)
+    lead_compact = _compact(content[:_LEAD_TEXT_LIMIT])
+    full_compact = _compact(f"{title} {content}")
+
+    for company_id in matched_companies:
+        aliases = ALL_COMPANY_ALIASES.get(company_id, [company_id])
+        if _company_has_core_role(
+            aliases=aliases,
+            title_compact=title_compact,
+            lead_compact=lead_compact,
+            full_compact=full_compact,
+            matched_sectors=matched_sectors,
+        ):
+            return None
+
+    return _result(
+        label="irrelevant",
+        score=0.25,
+        companies=matched_companies,
+        sectors=matched_sectors,
+        reason=(
+            "피어사가 제목/리드문/행위 문맥의 핵심 주체가 아니라 "
+            "단순 언급 또는 목록성 언급으로 판단"
+        ),
+    )
+
+
+def _company_has_core_role(
+    *,
+    aliases: list[str],
+    title_compact: str,
+    lead_compact: str,
+    full_compact: str,
+    matched_sectors: list[str],
+) -> bool:
+    has_sector = bool(matched_sectors and matched_sectors != ["other"])
+
+    for alias in aliases:
+        alias_compact = _compact(alias)
+        if not alias_compact:
+            continue
+
+        if alias_compact in title_compact and (
+            has_sector or _has_action_keyword_near_alias(title_compact, alias_compact)
+        ):
+            return True
+
+        if _alias_appears_as_subject(lead_compact, alias_compact):
+            return True
+
+        if lead_compact.count(alias_compact) >= 2 and has_sector:
+            return True
+
+        if _has_action_keyword_near_alias(full_compact, alias_compact):
+            return True
+
+    return False
+
+
+def _alias_appears_as_subject(text_compact: str, alias_compact: str) -> bool:
+    return any(f"{alias_compact}{marker}" in text_compact for marker in _SUBJECT_MARKERS)
+
+
+def _has_action_keyword_near_alias(text_compact: str, alias_compact: str) -> bool:
+    action_keywords = [_compact(keyword) for keyword in _STRATEGIC_ACTION_KEYWORDS]
+
+    start = 0
+    while True:
+        pos = text_compact.find(alias_compact, start)
+        if pos < 0:
+            return False
+
+        left = max(0, pos - _ROLE_CONTEXT_WINDOW)
+        right = min(len(text_compact), pos + len(alias_compact) + _ROLE_CONTEXT_WINDOW)
+        context = text_compact[left:right]
+
+        if any(keyword in context for keyword in _LISTING_CONTEXT_KEYWORDS):
+            start = pos + len(alias_compact)
+            continue
+
+        if any(keyword in context for keyword in action_keywords):
+            return True
+
+        start = pos + len(alias_compact)
 
 
 def _is_market_price_noise(text: str) -> bool:
@@ -814,9 +944,15 @@ def _result(
         "relevance_label": label,
         "relevance_score": round(float(score), 3),
         "matched_companies": _dedupe_keep_order([str(c) for c in companies if c]),
-        "matched_sectors": _dedupe_keep_order([str(s) for s in sectors if s]),
+        "matched_sectors": _normalize_sectors(sectors),
         "reason": reason,
     }
+
+
+def _normalize_sectors(sectors: list[str]) -> list[str]:
+    allowed = set(SECTOR_IDS)
+    normalized = _dedupe_keep_order([str(sector) for sector in sectors if sector in allowed])
+    return normalized or ["other"]
 
 
 def _compact(value: str) -> str:

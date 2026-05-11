@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 
+from src.config.companies import COMPANY_ALIASES
 from src.db.article_store import get_articles_by_ids, update_cluster
 
 log = logging.getLogger(__name__)
@@ -265,7 +266,10 @@ def _cluster(
 
 def _same_issue(left: dict[str, Any], right: dict[str, Any]) -> bool:
     left_key = _issue_dedup_key(left)
-    return bool(left_key and left_key == _issue_dedup_key(right))
+    if left_key and left_key == _issue_dedup_key(right):
+        return True
+
+    return _same_company_customer_business_issue(left, right)
 
 
 def _issue_dedup_key(article: dict[str, Any]) -> str | None:
@@ -319,6 +323,87 @@ def _quoted_product_key(article: dict[str, Any]) -> str | None:
         if len(compact) >= 4 and not compact.isdigit():
             return compact
     return None
+
+
+_CUSTOMER_ALIASES = {
+    "한국전력": ("한국전력", "한전", "kepco"),
+    "현대차그룹": ("현대차그룹", "현대자동차그룹", "현대차"),
+    "삼성전자": ("삼성전자",),
+    "LG전자": ("LG전자",),
+    "SK그룹": ("SK그룹",),
+}
+_BUSINESS_ISSUE_TERMS = (
+    "차세대",
+    "영업배전",
+    "전력관리",
+    "시스템",
+    "isp",
+    "컨설팅",
+    "구축",
+    "수주",
+    "재설계",
+    "전환",
+    "ai",
+    "ax",
+    "클라우드",
+    "플랫폼",
+    "로봇",
+    "휴머노이드",
+    "보안",
+)
+_MIN_SHARED_BUSINESS_TERMS = 2
+_MIN_BUSINESS_TERMS_PER_ARTICLE = 2
+
+
+def _same_company_customer_business_issue(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if _company_key(left) != _company_key(right):
+        return False
+
+    left_text = _issue_text(left)
+    right_text = _issue_text(right)
+
+    if not _shared_customer(left_text, right_text):
+        return False
+
+    left_terms = _business_terms(left_text)
+    right_terms = _business_terms(right_text)
+    if len(left_terms & right_terms) >= _MIN_SHARED_BUSINESS_TERMS:
+        return True
+
+    return (
+        bool(left_terms & right_terms)
+        and len(left_terms) >= _MIN_BUSINESS_TERMS_PER_ARTICLE
+        and len(right_terms) >= _MIN_BUSINESS_TERMS_PER_ARTICLE
+    )
+
+
+def _issue_text(article: dict[str, Any]) -> str:
+    return _compact_text(
+        " ".join(
+            [
+                str(article.get("title") or ""),
+                str(article.get("content") or "")[:1200],
+            ]
+        )
+    )
+
+
+def _shared_customer(left_text: str, right_text: str) -> bool:
+    for aliases in _CUSTOMER_ALIASES.values():
+        compact_aliases = [_compact_text(alias) for alias in aliases]
+        if any(alias in left_text for alias in compact_aliases) and any(
+            alias in right_text for alias in compact_aliases
+        ):
+            return True
+    return False
+
+
+def _business_terms(text: str) -> set[str]:
+    return {
+        term
+        for term in (_compact_text(term) for term in _BUSINESS_ISSUE_TERMS)
+        if term in text
+    }
 
 
 def _compact_text(value: str) -> str:
@@ -377,7 +462,38 @@ def _representative_score(
     content_quality = _content_quality_score(article)
     recency = _recency_score(article.get("published_at"))
 
-    return 0.40 * relevance_score + 0.35 * centrality + 0.20 * content_quality + 0.05 * recency
+    company_presence = _company_presence_score(article)
+
+    return (
+        0.35 * relevance_score
+        + 0.30 * centrality
+        + 0.20 * company_presence
+        + 0.10 * content_quality
+        + 0.05 * recency
+    )
+
+
+def _company_presence_score(article: dict[str, Any]) -> float:
+    companies = _company_key(article)
+    if not companies:
+        return 0.0
+
+    title = _compact_text(str(article.get("title") or ""))
+    lead = _compact_text(str(article.get("content") or "")[:800])
+
+    aliases = [
+        _compact_text(alias)
+        for company_id in companies
+        for alias in COMPANY_ALIASES.get(company_id, [company_id])
+    ]
+
+    if any(alias and alias in title for alias in aliases):
+        return 1.0
+
+    if any(alias and alias in lead for alias in aliases):
+        return 0.7
+
+    return 0.0
 
 
 def _cluster_centrality(

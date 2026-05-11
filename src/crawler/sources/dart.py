@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from xml.etree import ElementTree
 
 import httpx
@@ -45,6 +45,8 @@ class DartCrawler(BaseCrawler):
         peer_id: str,
         corp_code: str | None = None,
         corp_names: list[str] | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ):
         super().__init__(peer_id)
 
@@ -53,6 +55,8 @@ class DartCrawler(BaseCrawler):
         self.corp_code = corp_code or os.getenv(env_key, "")
         self.corp_names = corp_names or []
         self.api_key = os.getenv("DART_API_KEY", "")
+        self.start_date = start_date
+        self.end_date = end_date
 
         self.lookback_days = int(os.getenv("DART_LOOKBACK_DAYS", str(DEFAULT_LOOKBACK_DAYS)))
         self.page_count = int(os.getenv("DART_PAGE_COUNT", str(DEFAULT_PAGE_COUNT)))
@@ -151,8 +155,14 @@ class DartCrawler(BaseCrawler):
             return []
 
     async def _fetch_disclosures(self, corp_code: str) -> list[RawArticle]:
-        end = datetime.now(tz=timezone.utc)
-        begin = end - timedelta(days=self.lookback_days)
+        if self.start_date:
+            begin = datetime.combine(self.start_date, time.min, tzinfo=timezone.utc)
+        else:
+            begin = datetime.now(tz=timezone.utc) - timedelta(days=self.lookback_days)
+        if self.end_date:
+            end = datetime.combine(self.end_date, time.max, tzinfo=timezone.utc)
+        else:
+            end = datetime.now(tz=timezone.utc)
 
         articles: list[RawArticle] = []
         seen_receipts: set[str] = set()

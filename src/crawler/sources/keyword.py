@@ -646,7 +646,7 @@ def datalab_rows_to_articles(
 
         articles.append(
             RawArticle(
-                url=API_URL,
+                url=f"{API_URL}#{group_name}:{period}",
                 title=f"Naver DataLab 상대 검색지수 - {group_name} ({period})",
                 content=(
                     f"{group_name} 상대 검색지수: {period} 기준 ratio {ratio}. "

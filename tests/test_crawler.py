@@ -3,7 +3,11 @@
 import json
 from types import SimpleNamespace
 
-from src.agents.relevance_agent import _metadata_patch_for_relevance
+from src.agents.relevance_agent import (
+    _core_company_role_reject_result,
+    _metadata_patch_for_relevance,
+    _result,
+)
 from src.crawler.base import RawArticle
 from src.crawler.sources.bcg import match_bcg_core_sectors
 from src.crawler.sources.naver import (
@@ -135,6 +139,58 @@ def test_naver_relevance_rejects_overbroad_sk_title_match():
 
     assert result["peer_relevance"] == "reject"
     assert result["_company_peer_ids"] == []
+
+
+def test_relevance_rejects_company_listed_only_as_etf_holding():
+    result = _core_company_role_reject_result(
+        title="한투운용 ACE K휴머노이드로봇산업TOP2+ ETF, 상장 후 수익률 37%",
+        content=(
+            "이 ETF는 현대차와 로보티즈를 주요 종목으로 편입하고 있으며 "
+            "현대오토에버, 현대모비스 등을 포트폴리오에 담았다."
+        ),
+        source_type="news",
+        matched_companies=["hyundai_autoever"],
+        matched_sectors=["ax"],
+    )
+
+    assert result is not None
+    assert result["relevance_label"] == "irrelevant"
+
+
+def test_relevance_keeps_company_as_subject_with_business_action():
+    result = _core_company_role_reject_result(
+        title="현대오토에버, 로봇 플랫폼 사업 확대",
+        content="현대오토에버는 휴머노이드 로봇 플랫폼 개발과 운영을 확대한다고 밝혔다.",
+        source_type="news",
+        matched_companies=["hyundai_autoever"],
+        matched_sectors=["ax"],
+    )
+
+    assert result is None
+
+
+def test_relevance_sectors_are_limited_to_config_ids():
+    result = _result(
+        label="relevant",
+        score=0.8,
+        companies=["samsung_sds"],
+        sectors=["물류", "ax"],
+        reason="sector normalization test",
+    )
+
+    assert result["matched_sectors"] == ["ax"]
+
+
+def test_relevance_unknown_sectors_fall_back_to_other():
+    result = _result(
+        label="relevant",
+        score=0.8,
+        companies=["samsung_sds"],
+        sectors=["물류"],
+        reason="sector normalization test",
+    )
+
+    assert result["matched_sectors"] == ["other"]
 
 
 def test_bcg_core_sector_filter_keeps_sector_report():
