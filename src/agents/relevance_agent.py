@@ -802,9 +802,11 @@ def _company_has_core_role(
         ):
             return True
 
-        if _alias_appears_as_subject(full_compact, alias_compact) and (
-            has_sector or _has_action_keyword_near_alias(full_compact, alias_compact)
-        ) and not _has_listing_context_near_alias(full_compact, alias_compact):
+        if (
+            _alias_appears_as_subject(full_compact, alias_compact)
+            and (has_sector or _has_action_keyword_near_alias(full_compact, alias_compact))
+            and not _has_listing_context_near_alias(full_compact, alias_compact)
+        ):
             return True
 
         if _has_action_keyword_near_alias(full_compact, alias_compact):
