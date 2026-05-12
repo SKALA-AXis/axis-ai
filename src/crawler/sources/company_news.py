@@ -24,13 +24,14 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -67,6 +68,7 @@ HEADERS = {
 
 REQUEST_TIMEOUT = 30
 OFFICIAL_MAX_AGE_DAYS = 30
+BACKFILL_MAX_LIST_PAGES = int(os.getenv("COMPANY_NEWS_BACKFILL_MAX_LIST_PAGES", "20"))
 
 
 COMPANY_CONFIGS = [
@@ -1445,48 +1447,85 @@ class CompanyNewsCrawler(BaseCrawler):
         log.info("[%s] 목록 수집 시작: %s", company, list_url)
 
         try:
-            html, used_list_render = self._fetch_list_html_with_fallback(
-                company=company,
-                list_url=list_url,
-            )
+            candidates: list[dict] = []
+            seen_candidate_urls: set[str] = set()
+            seen_list_urls: set[str] = set()
+            pending_list_urls = self._list_url_seeds(config)
+            used_list_render = False
 
-            soup = make_soup(html)
+            while pending_list_urls and len(seen_list_urls) < self._max_list_pages():
+                page_url = pending_list_urls.pop(0)
+                normalized_page_url = normalize_url(page_url)
+                if normalized_page_url in seen_list_urls:
+                    continue
+                seen_list_urls.add(normalized_page_url)
 
-            candidates = extract_candidate_links(
-                list_url=list_url,
-                soup=soup,
-                company_name=company,
-            )
-
-            should_try_render = self.use_render or (
-                self.render_fallback
-                and len(candidates) < self.latest_limit
-                and company in {"SK AX", "현대오토에버", "포스코DX", "LG CNS"}
-            )
-
-            if should_try_render:
                 try:
-                    log.info("[%s] 후보 부족/렌더 옵션 → 추가 fallback 재시도", company)
-
-                    if company == "포스코DX":
-                        html = fetch_html_by_curl(list_url)
-                    else:
-                        html = fetch_html_by_playwright(list_url)
-
-                    soup = make_soup(html)
-
-                    rendered_candidates = extract_candidate_links(
-                        list_url=list_url,
-                        soup=soup,
-                        company_name=company,
+                    html, page_used_render = self._fetch_list_html_with_fallback(
+                        company=company,
+                        list_url=page_url,
                     )
-
-                    if len(rendered_candidates) >= len(candidates):
-                        candidates = rendered_candidates
-                        used_list_render = True
-
                 except Exception as e:
-                    log.warning("[%s] 추가 fallback 실패: %s", company, e)
+                    log.warning("[%s] 목록 페이지 수집 실패 | url=%s error=%s", company, page_url, e)
+                    continue
+
+                used_list_render = used_list_render or page_used_render
+                soup = make_soup(html)
+
+                page_candidates = extract_candidate_links(
+                    list_url=page_url,
+                    soup=soup,
+                    company_name=company,
+                )
+
+                should_try_render = self.use_render or (
+                    self.render_fallback
+                    and len(page_candidates) < self.latest_limit
+                    and company in {"SK AX", "현대오토에버", "포스코DX", "LG CNS"}
+                )
+
+                if should_try_render:
+                    try:
+                        log.info("[%s] 후보 부족/렌더 옵션 → 추가 fallback 재시도", company)
+
+                        if company == "포스코DX":
+                            html = fetch_html_by_curl(page_url)
+                        else:
+                            html = fetch_html_by_playwright(page_url)
+
+                        soup = make_soup(html)
+
+                        rendered_candidates = extract_candidate_links(
+                            list_url=page_url,
+                            soup=soup,
+                            company_name=company,
+                        )
+
+                        if len(rendered_candidates) >= len(page_candidates):
+                            page_candidates = rendered_candidates
+                            used_list_render = True
+
+                    except Exception as e:
+                        log.warning("[%s] 추가 fallback 실패: %s", company, e)
+
+                for candidate in page_candidates:
+                    if candidate["url"] in seen_candidate_urls:
+                        continue
+                    seen_candidate_urls.add(candidate["url"])
+                    candidates.append(candidate)
+
+                if self.crawl_window:
+                    discovered_urls = [
+                        discovered_url
+                        for discovered_url in _extract_pagination_urls(soup, page_url)
+                        if normalize_url(discovered_url) not in seen_list_urls
+                    ]
+                    pending_list_urls = _unique_urls(discovered_urls + pending_list_urls)
+
+                if self._page_is_older_than_window(page_candidates):
+                    break
+
+            candidates = sort_candidates(candidates)
 
             log.info("[%s] 후보 기사 수: %s", company, len(candidates))
 
@@ -1584,6 +1623,33 @@ class CompanyNewsCrawler(BaseCrawler):
             return self.crawl_window.contains(published_at)
         return _is_recent_official_article(published_at)
 
+    def _max_list_pages(self) -> int:
+        if self.crawl_window:
+            return max(1, BACKFILL_MAX_LIST_PAGES)
+        return 1
+
+    def _list_url_seeds(self, config: dict) -> list[str]:
+        list_url = config["list_url"]
+        company = company_name_ko(config["company"])
+        urls = [list_url]
+
+        if not self.crawl_window:
+            return urls
+
+        for page_no in range(2, self._max_list_pages() + 1):
+            urls.append(_company_news_page_url(list_url, company, page_no))
+
+        return _unique_urls(urls)
+
+    def _page_is_older_than_window(self, candidates: list[dict]) -> bool:
+        if not self.crawl_window or not candidates:
+            return False
+        known_dates = [item["published_at"] for item in candidates if item.get("published_at")]
+        if not known_dates:
+            return False
+        window_start = self.crawl_window.start.replace(tzinfo=None)
+        return max(value.replace(tzinfo=None) for value in known_dates) < window_start
+
     def _make_failed_article(
         self,
         config: dict,
@@ -1619,6 +1685,59 @@ def _is_recent_official_article(published_at: datetime | None) -> bool:
     now = datetime.now(published_at.tzinfo) if published_at.tzinfo else datetime.now()
     age_days = (now - published_at).days
     return age_days <= OFFICIAL_MAX_AGE_DAYS
+
+
+def _company_news_page_url(list_url: str, company: str, page_no: int) -> str:
+    parsed = urlparse(list_url)
+
+    if company == "LG CNS" and "press.page_" in parsed.path:
+        path = re.sub(r"press\.page_\d+", f"press.page_{page_no}", parsed.path)
+        return urlunparse(parsed._replace(path=path))
+
+    param = "page"
+    if company in {"현대오토에버", "포스코DX"}:
+        param = "pageIndex"
+
+    return _with_query_param(list_url, param, str(page_no))
+
+
+def _extract_pagination_urls(soup: BeautifulSoup, base_url: str) -> list[str]:
+    urls: list[str] = []
+    for link in soup.find_all("a", href=True):
+        text = clean_text(link.get_text(" ", strip=True)).lower()
+        href = str(link.get("href") or "").strip()
+        if not href or href.startswith("#") or href.startswith("javascript:"):
+            continue
+        if not (
+            text.isdigit()
+            or text in {"next", "more", "다음", "더보기", ">", "›", "»"}
+            or re.search(r"(page|pageIndex|curPage|pageNo)=\d+", href, re.IGNORECASE)
+            or re.search(r"page[_/-]?\d+", href, re.IGNORECASE)
+        ):
+            continue
+        url = normalize_url(urljoin(base_url, href))
+        if same_domain(base_url, url):
+            urls.append(url)
+    return _unique_urls(urls)
+
+
+def _with_query_param(url: str, key: str, value: str) -> str:
+    parsed = urlparse(url)
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    params[key] = value
+    return urlunparse(parsed._replace(query=urlencode(params)))
+
+
+def _unique_urls(urls: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        normalized = normalize_url(url)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(url)
+    return result
 
 
 # =========================================================

@@ -23,9 +23,9 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urljoin, urlparse
+from urllib.parse import parse_qsl, parse_qs, urlencode, unquote, urljoin, urlparse, urlunparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -50,6 +50,7 @@ BCG_SOURCES = {
     "bcg_ai": "https://www.bcg.com/capabilities/artificial-intelligence/insights",
     "bcg_digital_technology_data": "https://www.bcg.com/capabilities/digital-technology-data/insights",
 }
+BACKFILL_MAX_LIST_PAGES = int(os.getenv("BCG_BACKFILL_MAX_LIST_PAGES", "15"))
 
 BCG_CORE_SECTOR_TERMS: dict[str, tuple[str, ...]] = {
     "ax": (
@@ -285,6 +286,56 @@ def extract_article_links(list_html: str, source_url: str) -> list[str]:
         unique_urls.append(url)
 
     return unique_urls
+
+
+def extract_pagination_links(list_html: str, source_url: str) -> list[str]:
+    soup = BeautifulSoup(list_html, "html.parser")
+    urls: list[str] = []
+
+    for a in soup.find_all("a", href=True):
+        text = normalize_text(a.get_text(" ", strip=True)).lower()
+        href = str(a.get("href") or "").strip()
+        if not (
+            text.isdigit()
+            or text in {"next", "older", "more", "load more", ">", "›", "»"}
+            or re.search(r"/page/\d+", href, re.IGNORECASE)
+            or re.search(r"(page|paged|offset)=\d+", href, re.IGNORECASE)
+        ):
+            continue
+        url = normalize_listing_url(source_url, href)
+        if url:
+            urls.append(url)
+
+    return unique_preserve_order(urls)
+
+
+def normalize_listing_url(base_url: str, href: str) -> str | None:
+    if not href or href.startswith("#") or href.startswith("javascript:"):
+        return None
+    url = urljoin(base_url, href)
+    parsed = urlparse(url)
+    if not parsed.scheme.startswith("http") or not is_bcg_url(url):
+        return None
+    return parsed._replace(fragment="").geturl()
+
+
+def bcg_page_url(url: str, page_no: int) -> str:
+    parsed = urlparse(url)
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    params["page"] = str(page_no)
+    return urlunparse(parsed._replace(query=urlencode(params)))
+
+
+def unique_preserve_order(urls: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        normalized = normalize_listing_url(url, url) or url
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(url)
+    return result
 
 
 def extract_json_ld_objects(soup: BeautifulSoup) -> list[dict]:
@@ -789,6 +840,22 @@ def should_keep_by_date(published_at: datetime | None, cutoff: datetime) -> tupl
     return False, "older_than_days"
 
 
+def _is_in_bcg_window(
+    published_at: datetime | None,
+    window_start: datetime | None,
+    window_end: datetime | None,
+) -> bool:
+    published_at = ensure_aware_utc(published_at)
+    if published_at is None:
+        return False
+
+    if window_start and published_at < window_start:
+        return False
+    if window_end and published_at > window_end:
+        return False
+    return True
+
+
 def match_bcg_core_sectors(
     *,
     title: str,
@@ -927,6 +994,8 @@ class BcgCrawler(BaseCrawler):
         output_path: Path,
         translate_ko: bool = False,
         translate_model: str | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ):
         super().__init__(company=[])
         self.days = days
@@ -934,9 +1003,21 @@ class BcgCrawler(BaseCrawler):
         self.output_path = output_path
         self.translate_ko = translate_ko
         self.translate_model = translate_model or os.getenv("OPENAI_TRANSLATE_MODEL", "gpt-4o-mini")
+        self.start_date = start_date
+        self.end_date = end_date
 
     async def crawl(self) -> list[RawArticle]:
         cutoff = ensure_aware_utc(datetime.now(timezone.utc) - timedelta(days=self.days))
+        window_start = (
+            ensure_aware_utc(datetime.combine(self.start_date, time.min))
+            if self.start_date
+            else None
+        )
+        window_end = (
+            ensure_aware_utc(datetime.combine(self.end_date, time.max))
+            if self.end_date
+            else None
+        )
 
         articles: list[RawArticle] = []
         seen_detail_urls: set[str] = set()
@@ -950,31 +1031,56 @@ class BcgCrawler(BaseCrawler):
             detail_targets: list[tuple[str, str, str]] = []
 
             for source_key, source_url in BCG_SOURCES.items():
-                try:
-                    log.info("목록 페이지 수집 | source=%s url=%s", source_key, source_url)
-
-                    list_html = await fetch_text(client, source_url)
-                    links = extract_article_links(list_html, source_url)
-
-                    log.info("상세 URL 후보 | source=%s count=%d", source_key, len(links))
-
-                    for link in links:
-                        if link in seen_detail_urls:
-                            continue
-
-                        seen_detail_urls.add(link)
-                        detail_targets.append((source_key, source_url, link))
-
-                except Exception as e:
-                    # 목록 페이지 실패는 실제 산업동향 글이 아니므로 JSON에 저장하지 않는다.
-                    log.exception(
-                        "목록 페이지 수집 실패 | source=%s url=%s error_type=%s error=%r",
-                        source_key,
-                        source_url,
-                        type(e).__name__,
-                        e,
+                pending_list_urls = [source_url]
+                if window_start or window_end:
+                    pending_list_urls.extend(
+                        bcg_page_url(source_url, page_no)
+                        for page_no in range(2, BACKFILL_MAX_LIST_PAGES + 1)
                     )
-                    continue
+
+                seen_list_urls: set[str] = set()
+                while pending_list_urls and len(seen_list_urls) < BACKFILL_MAX_LIST_PAGES:
+                    list_url = pending_list_urls.pop(0)
+                    normalized_list_url = normalize_listing_url(list_url, list_url) or list_url
+                    if normalized_list_url in seen_list_urls:
+                        continue
+                    seen_list_urls.add(normalized_list_url)
+
+                    try:
+                        log.info("목록 페이지 수집 | source=%s url=%s", source_key, list_url)
+
+                        list_html = await fetch_text(client, list_url)
+                        links = extract_article_links(list_html, list_url)
+
+                        log.info("상세 URL 후보 | source=%s count=%d", source_key, len(links))
+
+                        for link in links:
+                            if link in seen_detail_urls:
+                                continue
+
+                            seen_detail_urls.add(link)
+                            detail_targets.append((source_key, list_url, link))
+
+                        if window_start or window_end:
+                            discovered_urls = [
+                                discovered_url
+                                for discovered_url in extract_pagination_links(list_html, list_url)
+                                if discovered_url not in seen_list_urls
+                            ]
+                            pending_list_urls = unique_preserve_order(
+                                discovered_urls + pending_list_urls
+                            )
+
+                    except Exception as e:
+                        # 목록 페이지 실패는 실제 산업동향 글이 아니므로 JSON에 저장하지 않는다.
+                        log.exception(
+                            "목록 페이지 수집 실패 | source=%s url=%s error_type=%s error=%r",
+                            source_key,
+                            list_url,
+                            type(e).__name__,
+                            e,
+                        )
+                        continue
 
             success_count = 0
 
@@ -996,7 +1102,11 @@ class BcgCrawler(BaseCrawler):
                     title = extract_title(soup)
                     description = extract_description(soup)
                     published_at = ensure_aware_utc(extract_published_at(soup))
-                    keep, date_filter_status = should_keep_by_date(published_at, cutoff)
+                    if window_start or window_end:
+                        keep = _is_in_bcg_window(published_at, window_start, window_end)
+                        date_filter_status = "window_match" if keep else "outside_window"
+                    else:
+                        keep, date_filter_status = should_keep_by_date(published_at, cutoff)
                     matched_sectors = match_bcg_core_sectors(
                         title=title,
                         description=description,
@@ -1005,8 +1115,10 @@ class BcgCrawler(BaseCrawler):
 
                     if not keep:
                         log.info(
-                            "최근 %d일 밖이라 제외 | date=%s title=%s",
+                            "BCG 수집 기간 제외 | days=%d start_date=%s end_date=%s date=%s title=%s",
                             self.days,
+                            self.start_date,
+                            self.end_date,
                             published_at.isoformat() if published_at else None,
                             title,
                         )

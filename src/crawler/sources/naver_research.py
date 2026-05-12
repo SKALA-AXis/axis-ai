@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta
-from urllib.parse import urljoin
+from datetime import date, datetime, time, timedelta
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -24,6 +24,7 @@ NAVER_RESEARCH_URL = (
 
 DEFAULT_LOOKBACK_DAYS = 3
 PDF_MAX_TEXT_CHARS = int(os.getenv("RESEARCH_PDF_MAX_TEXT_CHARS", "200000"))
+MAX_PAGES = int(os.getenv("NAVER_RESEARCH_MAX_PAGES", "30"))
 
 PEER_ITEM_CODES = dict(NAVER_ITEM_CODES)
 
@@ -36,12 +37,16 @@ class NaverResearchCrawler(BaseCrawler):
         peer_id: str,
         item_code: str | None = None,
         lookback_days: int | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ):
         super().__init__(peer_id)
         self.item_code = item_code or PEER_ITEM_CODES.get(peer_id, "")
         self.lookback_days = lookback_days or int(
             os.getenv("NAVER_RESEARCH_LOOKBACK_DAYS", str(DEFAULT_LOOKBACK_DAYS))
         )
+        self.start_date = start_date
+        self.end_date = end_date
 
     async def crawl(self) -> list[RawArticle]:
         if not self.item_code:
@@ -53,28 +58,45 @@ class NaverResearchCrawler(BaseCrawler):
 
     async def _fetch(self, url: str, report_type: str) -> list[RawArticle]:
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-            resp = await client.get(
-                url,
-                headers={"User-Agent": "Mozilla/5.0 AXIS-Crawler/1.0"},
-            )
-            resp.raise_for_status()
-
-            soup = BeautifulSoup(resp.text, "html.parser")
-            rows = soup.select("table.type_1 tr")
-
             articles: list[RawArticle] = []
+            seen_urls: set[str] = set()
 
-            for row in rows:
-                article = await self._parse_row(
-                    client=client,
-                    row=row,
-                    report_type=report_type,
-                    base_url=url,
+            for page_no in range(1, self._max_pages() + 1):
+                page_url = _with_query_param(url, "page", str(page_no))
+                resp = await client.get(
+                    page_url,
+                    headers={"User-Agent": "Mozilla/5.0 AXIS-Crawler/1.0"},
                 )
-                if article:
-                    articles.append(article)
+                resp.raise_for_status()
+
+                soup = BeautifulSoup(resp.text, "html.parser")
+                rows = [row for row in soup.select("table.type_1 tr") if row.select("td")]
+
+                if not rows:
+                    break
+
+                row_dates = [_row_published_at(row) for row in rows]
+
+                for row in rows:
+                    article = await self._parse_row(
+                        client=client,
+                        row=row,
+                        report_type=report_type,
+                        base_url=page_url,
+                    )
+                    if article and article.url not in seen_urls:
+                        seen_urls.add(article.url)
+                        articles.append(article)
+
+                if self._page_is_older_than_window(row_dates):
+                    break
 
             return articles
+
+    def _max_pages(self) -> int:
+        if self.start_date or self.end_date:
+            return max(1, MAX_PAGES)
+        return 1
 
     async def _parse_row(
         self,
@@ -98,7 +120,7 @@ class NaverResearchCrawler(BaseCrawler):
         report_title = strip_html(title_el.get_text(" ", strip=True))
         published_at = _parse_report_date(cells[2].get_text(" ", strip=True))
 
-        if published_at and published_at < datetime.now() - timedelta(days=self.lookback_days):
+        if published_at and not self._is_in_collection_window(published_at):
             return None
 
         pdf_url = urljoin(base_url, pdf_el.get("href", "")) if pdf_el else ""
@@ -136,8 +158,29 @@ class NaverResearchCrawler(BaseCrawler):
                 "table_parse_strategy": pdf_payload.get("table_parse_strategy"),
                 "chart_parse_strategy": pdf_payload.get("chart_parse_strategy"),
                 "lookback_days": self.lookback_days,
+                "start_date": self.start_date.isoformat() if self.start_date else None,
+                "end_date": self.end_date.isoformat() if self.end_date else None,
                 "item_code": self.item_code,
             },
+        )
+
+    def _is_in_collection_window(self, published_at: datetime) -> bool:
+        if self.start_date or self.end_date:
+            start = datetime.combine(self.start_date, time.min) if self.start_date else datetime.min
+            end = datetime.combine(self.end_date, time.max) if self.end_date else datetime.max
+            return start <= published_at.replace(tzinfo=None) <= end
+
+        return published_at >= datetime.now() - timedelta(days=self.lookback_days)
+
+    def _page_is_older_than_window(self, row_dates: list[datetime | None]) -> bool:
+        if not self.start_date:
+            return False
+        known_dates = [value for value in row_dates if value]
+        if not known_dates:
+            return False
+        return max(value.replace(tzinfo=None) for value in known_dates) < datetime.combine(
+            self.start_date,
+            time.min,
         )
 
 
@@ -190,3 +233,17 @@ def _parse_report_date(date_text: str) -> datetime | None:
             continue
 
     return None
+
+
+def _row_published_at(row) -> datetime | None:
+    cells = row.select("td")
+    if len(cells) < 3:
+        return None
+    return _parse_report_date(cells[2].get_text(" ", strip=True))
+
+
+def _with_query_param(url: str, key: str, value: str) -> str:
+    parsed = urlparse(url)
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    params[key] = value
+    return urlunparse(parsed._replace(query=urlencode(params)))

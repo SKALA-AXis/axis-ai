@@ -5,7 +5,7 @@ import logging
 import os
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import date, datetime, time as datetime_time
 from html import unescape
 
 import requests
@@ -37,13 +37,26 @@ class Work24APIError(RuntimeError):
 class JobCrawler(BaseCrawler):
     """고용24 공채속보 기반 Peer사 채용공고 크롤러"""
 
+    def __init__(
+        self,
+        peer_id: str | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        max_pages: int | None = None,
+    ):
+        super().__init__(peer_id)
+        self.start_date = start_date
+        self.end_date = end_date
+        self.max_pages = max_pages or int(os.getenv("WORK24_BACKFILL_MAX_PAGES", "20"))
+
     async def crawl(self) -> list[RawArticle]:
         if not WORK24_API_KEY:
             log.warning("WORK24_API_KEY 미설정. 채용공고 크롤링 스킵.")
             return []
 
         try:
-            jobs = crawl_peer_recruit_news(max_pages=5, display=100)
+            max_pages = self.max_pages if self.start_date or self.end_date else 5
+            jobs = crawl_peer_recruit_news(max_pages=max_pages, display=100)
         except Work24APIError as exc:
             log.warning("고용24 API 응답 오류. 채용공고 크롤링 스킵 | error=%s", exc)
             return []
@@ -54,6 +67,10 @@ class JobCrawler(BaseCrawler):
             peer_company = job.get("peer_company", "")
 
             if self.peer_id and not _matches_peer_id(self.peer_id, peer_company):
+                continue
+
+            published_at = _parse_job_date(job.get("start_date", ""))
+            if not self._is_in_collection_window(published_at):
                 continue
 
             roles = job.get("roles", [])
@@ -81,7 +98,7 @@ class JobCrawler(BaseCrawler):
                     url=job.get("url", ""),
                     title=job.get("title", ""),
                     content=content,
-                    published_at=_parse_job_date(job.get("start_date", "")),
+                    published_at=published_at,
                     source_name="work24_job",
                     peer_id=self.peer_id,
                     source_type="job",
@@ -107,6 +124,15 @@ class JobCrawler(BaseCrawler):
             )
 
         return articles
+
+    def _is_in_collection_window(self, published_at: datetime | None) -> bool:
+        if not (self.start_date or self.end_date):
+            return True
+        if published_at is None:
+            return False
+        start = datetime.combine(self.start_date, datetime_time.min) if self.start_date else datetime.min
+        end = datetime.combine(self.end_date, datetime_time.max) if self.end_date else datetime.max
+        return start <= published_at.replace(tzinfo=None) <= end
 
 
 def validate_env():

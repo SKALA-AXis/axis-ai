@@ -9,13 +9,14 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -47,6 +48,7 @@ REQUEST_TIMEOUT = 20
 MIN_CONTENT_LENGTH = 120
 MAX_CONTENT_LENGTH = 20000
 OFFICIAL_MAX_AGE_DAYS = 30
+BACKFILL_MAX_LIST_PAGES = int(os.getenv("GLOBAL_NEWSROOM_BACKFILL_MAX_LIST_PAGES", "15"))
 GLOBAL_BLOCKED_PATH_KEYWORDS = (
     "/_gallery/",
     "/wp-content/",
@@ -1050,6 +1052,94 @@ def latest_candidates(
     return candidates
 
 
+def extract_pagination_urls(soup: BeautifulSoup, base_url: str) -> list[str]:
+    urls: list[str] = []
+    for link in soup.find_all("a", href=True):
+        text = clean_text(link.get_text(" ", strip=True)).lower()
+        href = str(link.get("href") or "").strip()
+        if not href or href.startswith("#") or href.startswith("javascript:"):
+            continue
+        if not (
+            text.isdigit()
+            or text in {"next", "older", "more", "load more", ">", "›", "»"}
+            or re.search(r"/page/\d+", href, re.IGNORECASE)
+            or re.search(r"(page|paged|offset)=\d+", href, re.IGNORECASE)
+        ):
+            continue
+        url = normalize_url(urljoin(base_url, href))
+        if same_allowed_domain(base_url, url):
+            urls.append(url)
+    return unique_urls(urls)
+
+
+def newsroom_page_url(url: str, page_no: int) -> str:
+    parsed = urlparse(url)
+    path = parsed.path
+    if path.endswith("/"):
+        path = f"{path}page/{page_no}/"
+    else:
+        path = f"{path}/page/{page_no}/"
+    return urlunparse(parsed._replace(path=path))
+
+
+def newsroom_archive_urls(
+    base_url: str,
+    start_date: date | None,
+    end_date: date | None,
+) -> list[str]:
+    if not start_date or not end_date:
+        return []
+
+    parsed = urlparse(base_url)
+    urls: list[str] = []
+    cursor = start_date.replace(day=1)
+    end_month = end_date.replace(day=1)
+
+    while cursor <= end_month:
+        urls.append(
+            urlunparse(
+                parsed._replace(
+                    path=f"/{cursor.year}/{cursor.month:02d}/",
+                    query="",
+                    fragment="",
+                )
+            )
+        )
+        urls.append(_with_query_param(base_url, "date", f"{cursor.year}-{cursor.month:02d}"))
+        cursor = _next_month(cursor)
+
+    return urls
+
+
+def same_allowed_domain(left_url: str, right_url: str) -> bool:
+    return urlparse(left_url).netloc.lower() == urlparse(right_url).netloc.lower()
+
+
+def _with_query_param(url: str, key: str, value: str) -> str:
+    parsed = urlparse(url)
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    params[key] = value
+    return urlunparse(parsed._replace(query=urlencode(params)))
+
+
+def _next_month(value: date) -> date:
+    if value.month == 12:
+        return date(value.year + 1, 1, 1)
+    return date(value.year, value.month + 1, 1)
+
+
+def unique_urls(urls: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        normalized = normalize_url(url)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(url)
+    return result
+
+
 def datetime_sort_value(value: datetime | None) -> float:
     if not value:
         return 0.0
@@ -1073,11 +1163,15 @@ class _SyncGlobalNewsroomCrawler:
         max_pages: int | None = None,
         max_depth: int = 1,
         debug_links: bool = False,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ):
         self.config = config
         self.max_pages = max_pages
         self.max_depth = max_depth
         self.debug_links = debug_links
+        self.start_date = start_date
+        self.end_date = end_date
 
     def crawl(self) -> list[RawArticle]:
         articles: list[RawArticle] = []
@@ -1090,20 +1184,48 @@ class _SyncGlobalNewsroomCrawler:
 
     def crawl_source(self, source: OfficialSource) -> list[RawArticle]:
         articles: list[RawArticle] = []
+        candidates: list[LinkCandidate] = []
+        seen_candidate_urls: set[str] = set()
+        seen_listing_urls: set[str] = set()
+        pending_listing_urls = self._listing_url_seeds(source)
 
-        try:
-            listing_html = fetch_html(source.url)
-            listing_soup = make_soup(listing_html)
-            candidates = latest_candidates(listing_soup, source.url, source)
-        except Exception as e:
-            log.warning(
-                "뉴스룸 목록 수집 실패 | company=%s source=%s url=%s error=%s",
-                self.config.company,
-                source.name,
-                source.url,
-                e,
-            )
-            return articles
+        while pending_listing_urls and len(seen_listing_urls) < self._max_listing_pages():
+            listing_url = pending_listing_urls.pop(0)
+            normalized_listing_url = normalize_url(listing_url)
+            if normalized_listing_url in seen_listing_urls:
+                continue
+            seen_listing_urls.add(normalized_listing_url)
+
+            try:
+                listing_html = fetch_html(listing_url)
+                listing_soup = make_soup(listing_html)
+                page_candidates = latest_candidates(listing_soup, listing_url, source)
+            except Exception as e:
+                log.warning(
+                    "뉴스룸 목록 수집 실패 | company=%s source=%s url=%s error=%s",
+                    self.config.company,
+                    source.name,
+                    listing_url,
+                    e,
+                )
+                continue
+
+            for candidate in page_candidates:
+                if candidate.url in seen_candidate_urls:
+                    continue
+                seen_candidate_urls.add(candidate.url)
+                candidates.append(candidate)
+
+            if self.start_date or self.end_date:
+                discovered_urls = [
+                    discovered_url
+                    for discovered_url in extract_pagination_urls(listing_soup, listing_url)
+                    if normalize_url(discovered_url) not in seen_listing_urls
+                ]
+                pending_listing_urls = unique_urls(discovered_urls + pending_listing_urls)
+
+            if self._page_is_older_than_window(page_candidates):
+                break
 
         if self.debug_links:
             for candidate in candidates[:10]:
@@ -1132,9 +1254,9 @@ class _SyncGlobalNewsroomCrawler:
                 )
 
                 if article:
-                    if not is_recent_official_article(article.published_at):
+                    if not self._is_in_collection_window(article.published_at):
                         log.info(
-                            "오래된 글로벌 공식 뉴스 제외 | company=%s date=%s title=%s",
+                            "글로벌 공식 뉴스 window 제외 | company=%s date=%s title=%s",
                             self.config.company,
                             article.published_at,
                             article.title,
@@ -1158,6 +1280,43 @@ class _SyncGlobalNewsroomCrawler:
                 )
 
         return articles
+
+    def _max_listing_pages(self) -> int:
+        if self.start_date or self.end_date:
+            return max(1, BACKFILL_MAX_LIST_PAGES)
+        return 1
+
+    def _listing_url_seeds(self, source: OfficialSource) -> list[str]:
+        urls = [source.url]
+        if not (self.start_date or self.end_date):
+            return urls
+
+        urls.extend(newsroom_archive_urls(source.url, self.start_date, self.end_date))
+        for page_no in range(2, self._max_listing_pages() + 1):
+            urls.append(newsroom_page_url(source.url, page_no))
+
+        return unique_urls(urls)
+
+    def _page_is_older_than_window(self, candidates: list[LinkCandidate]) -> bool:
+        if not self.start_date or not candidates:
+            return False
+        known_dates = [candidate.published_at for candidate in candidates if candidate.published_at]
+        if not known_dates:
+            return False
+        return max(value.replace(tzinfo=None) for value in known_dates) < datetime.combine(
+            self.start_date,
+            time.min,
+        )
+
+    def _is_in_collection_window(self, published_at: datetime | None) -> bool:
+        if self.start_date or self.end_date:
+            if published_at is None:
+                return False
+            start = datetime.combine(self.start_date, time.min) if self.start_date else datetime.min
+            end = datetime.combine(self.end_date, time.max) if self.end_date else datetime.max
+            return start <= published_at.replace(tzinfo=None) <= end
+
+        return is_recent_official_article(published_at)
 
     def article_from_page(
         self,
@@ -1204,11 +1363,15 @@ class GlobalNewsroomCrawler:
         max_pages: int | None = None,
         max_depth: int = 1,
         debug_links: bool = False,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ) -> None:
         self.company = company
         self.max_pages = max_pages
         self.max_depth = max_depth
         self.debug_links = debug_links
+        self.start_date = start_date
+        self.end_date = end_date
 
     async def crawl(self) -> list[RawArticle]:
         return await asyncio.to_thread(self._crawl_sync)
@@ -1224,6 +1387,8 @@ class GlobalNewsroomCrawler:
                 max_pages=self.max_pages,
                 max_depth=self.max_depth,
                 debug_links=self.debug_links,
+                start_date=self.start_date,
+                end_date=self.end_date,
             )
             articles.extend(crawler.crawl())
 

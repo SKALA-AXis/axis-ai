@@ -156,6 +156,8 @@ class BatchProcessor:
                         IRCrawler(
                             peer_id=peer_id,
                             lookback_days=_window_lookback_days(crawl_window),
+                            start_date=_window_date(crawl_window, "start"),
+                            end_date=_window_date(crawl_window, "end"),
                         ),
                     )
                 )
@@ -166,11 +168,22 @@ class BatchProcessor:
                         NaverResearchCrawler(
                             peer_id=peer_id,
                             lookback_days=_window_lookback_days(crawl_window),
+                            start_date=_window_date(crawl_window, "start"),
+                            end_date=_window_date(crawl_window, "end"),
                         ),
                     )
                 )
             if "jobs" in requested:
-                crawlers.append(("jobs", JobCrawler(peer_id=peer_id)))
+                crawlers.append(
+                    (
+                        "jobs",
+                        JobCrawler(
+                            peer_id=peer_id,
+                            start_date=_window_date(crawl_window, "start"),
+                            end_date=_window_date(crawl_window, "end"),
+                        ),
+                    )
+                )
             if "stock" in requested:
                 from src.crawler.sources.stock import StockCrawler
 
@@ -206,7 +219,7 @@ class BatchProcessor:
                     "company_news",
                     CompanyNewsCrawler(
                         crawl_window=crawl_window,
-                        latest_limit=20 if crawl_window else 5,
+                        latest_limit=100 if crawl_window else 5,
                     ),
                 )
             )
@@ -224,12 +237,24 @@ class BatchProcessor:
             shared_crawlers.extend(
                 (
                     f"global_newsroom[{company_id}]",
-                    GlobalNewsroomCrawler(company=company_id),
+                    GlobalNewsroomCrawler(
+                        company=company_id,
+                        start_date=_window_date(crawl_window, "start"),
+                        end_date=_window_date(crawl_window, "end"),
+                    ),
                 )
                 for company_id in global_company_ids
             )
         elif "global_newsroom" in requested and not keywords:
-            shared_crawlers.append(("global_newsroom", GlobalNewsroomCrawler()))
+            shared_crawlers.append(
+                (
+                    "global_newsroom",
+                    GlobalNewsroomCrawler(
+                        start_date=_window_date(crawl_window, "start"),
+                        end_date=_window_date(crawl_window, "end"),
+                    ),
+                )
+            )
         if "spri" in requested:
             from src.crawler.sources.spri import SpriCrawler
 
@@ -253,6 +278,8 @@ class BatchProcessor:
                         days=_window_lookback_days(crawl_window) or 7,
                         max_articles=100,
                         output_path=DEFAULT_RESULTS_DIR / "bcg_backfill.json",
+                        start_date=_window_date(crawl_window, "start"),
+                        end_date=_window_date(crawl_window, "end"),
                     ),
                 )
             )

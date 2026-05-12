@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from html import unescape
 from pathlib import Path
 from urllib.parse import unquote, urljoin
@@ -36,6 +36,8 @@ class IRCrawler(BaseCrawler):
         peer_id: str,
         ir_pages: list[str] | None = None,
         lookback_days: int | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ):
         super().__init__(peer_id)
 
@@ -49,12 +51,19 @@ class IRCrawler(BaseCrawler):
         self.lookback_days = lookback_days or int(
             os.getenv("IR_LOOKBACK_DAYS", str(DEFAULT_LOOKBACK_DAYS))
         )
+        self.start_date = start_date
+        self.end_date = end_date
         self.pw = PlaywrightClient()
 
         log.info(
-            "IR 설정 확인 | peer_id=%s lookback_days=%s fetch_strategy=%s click_fallback=%s pages=%s",
+            (
+                "IR 설정 확인 | peer_id=%s lookback_days=%s start_date=%s end_date=%s "
+                "fetch_strategy=%s click_fallback=%s pages=%s"
+            ),
             self.peer_id,
             self.lookback_days,
+            self.start_date,
+            self.end_date,
             self.fetch_strategy,
             self.click_fallback,
             self.ir_pages,
@@ -75,6 +84,8 @@ class IRCrawler(BaseCrawler):
                             peer_id=self.peer_id,
                             page_url=page_url,
                             lookback_days=self.lookback_days,
+                            start_date=self.start_date,
+                            end_date=self.end_date,
                         )
                     else:
                         html = await self._fetch_page_html(client, page_url)
@@ -94,6 +105,8 @@ class IRCrawler(BaseCrawler):
                                 peer_id=self.peer_id,
                                 page_url=page_url,
                                 lookback_days=self.lookback_days,
+                                start_date=self.start_date,
+                                end_date=self.end_date,
                             )
 
                     articles.extend(page_articles)
@@ -230,6 +243,8 @@ class IRCrawler(BaseCrawler):
                 source_page=page_url,
                 detail_url=detail_url,
                 lookback_days=self.lookback_days,
+                start_date=self.start_date,
+                end_date=self.end_date,
             )
 
             if article:
@@ -254,6 +269,8 @@ async def _crawl_by_clicking_downloads(
     peer_id: str,
     page_url: str,
     lookback_days: int,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> list[RawArticle]:
     articles: list[RawArticle] = []
     seen_keys: set[str] = set()
@@ -329,6 +346,8 @@ async def _crawl_by_clicking_downloads(
                             source_page=page_url,
                             detail_url=page_url,
                             lookback_days=lookback_days,
+                            start_date=start_date,
+                            end_date=end_date,
                         )
 
                         if article:
@@ -988,6 +1007,8 @@ def _build_ir_article_from_pdf(
     source_page: str,
     detail_url: str,
     lookback_days: int,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> RawArticle | None:
     pdf_payload = _extract_pdf_payload(pdf_bytes)
     pdf_text = pdf_payload.get("text", "")
@@ -1019,12 +1040,23 @@ def _build_ir_article_from_pdf(
         )
         return None
 
-    if published_at < datetime.now() - timedelta(days=lookback_days):
+    if not _is_within_ir_window(
+        published_at,
+        lookback_days=lookback_days,
+        start_date=start_date,
+        end_date=end_date,
+    ):
         log.info(
-            "IR lookback 기간 초과로 스킵 | peer_id=%s title=%s 기준일=%s source=%s url=%s",
+            (
+                "IR 수집 window 제외 | peer_id=%s title=%s 기준일=%s "
+                "start_date=%s end_date=%s lookback_days=%s source=%s url=%s"
+            ),
             peer_id,
             strip_html(label),
             published_at.isoformat(),
+            start_date,
+            end_date,
+            lookback_days,
             date_info.get("date_source"),
             pdf_url,
         )
@@ -1053,6 +1085,8 @@ def _build_ir_article_from_pdf(
             "pdf_url": pdf_url,
             "pdf_text_chars": len(pdf_text),
             "lookback_days": lookback_days,
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
             "published_at": published_at.isoformat(),
             "date_info": _serialize_date_info(date_info),
             "raw_label": label,
@@ -1075,6 +1109,22 @@ def _build_ir_article_from_pdf(
             "collected_at": datetime.now().isoformat(timespec="seconds"),
         },
     )
+
+
+def _is_within_ir_window(
+    published_at: datetime,
+    *,
+    lookback_days: int,
+    start_date: date | None,
+    end_date: date | None,
+) -> bool:
+    if start_date or end_date:
+        start = datetime.combine(start_date, time.min) if start_date else datetime.min
+        end = datetime.combine(end_date, time.max) if end_date else datetime.max
+        value = published_at.replace(tzinfo=None)
+        return start <= value <= end
+
+    return published_at >= datetime.now() - timedelta(days=lookback_days)
 
 
 def _format_ir_title(
