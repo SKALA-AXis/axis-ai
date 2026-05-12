@@ -1,9 +1,10 @@
-"""크롤러 1회 실행 스크립트 — Track A / B 결과를 콘솔에 출력.
+"""크롤러 1회 실행 스크립트 — Track A / B / C 결과를 콘솔에 출력.
 
 사용법:
   uv run python run_crawler_once.py                       # Track A, 프로세스 env
   uv run python run_crawler_once.py --track a
   uv run python run_crawler_once.py --track b
+  uv run python run_crawler_once.py --track c
   uv run python run_crawler_once.py --track all
   uv run python run_crawler_once.py --env local           # .env.local 로드 (로컬 DB)
   uv run python run_crawler_once.py --env cloud           # .env.cloud 로드
@@ -32,7 +33,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AXIS 크롤러 1회 실행")
     parser.add_argument(
         "--track",
-        choices=["a", "b", "all"],
+        choices=["a", "b", "c", "all"],
         default="a",
         help="실행할 트랙 (기본: a)",
     )
@@ -68,17 +69,17 @@ def _parse_args() -> argparse.Namespace:
         "--lookback-days",
         type=int,
         default=None,
-        help="Track B 수집 기간. --start-date가 없을 때 오늘 기준 최근 N일.",
+        help="Track B/C 수집 기간. --start-date가 없을 때 오늘 기준 최근 N일.",
     )
     parser.add_argument(
         "--start-date",
         default=None,
-        help="Track B 수집 시작일 YYYY-MM-DD.",
+        help="Track B/C 수집 시작일 YYYY-MM-DD.",
     )
     parser.add_argument(
         "--end-date",
         default=None,
-        help="Track B 수집 종료일 YYYY-MM-DD. 미지정 시 현재 시각.",
+        help="Track B/C 수집 종료일 YYYY-MM-DD. 미지정 시 현재 시각.",
     )
     return parser.parse_args()
 
@@ -238,6 +239,18 @@ async def _run(track: str) -> None:
         )
         _summarize("Track B", articles)
         _save_local("track_b", articles)
+
+    if track in ("c", "all"):
+        company_keywords = _resolve_company_keywords(include_global=True)
+        company_labels = [_company_label(company_id) for company_id in company_keywords]
+        log.info("Track C 시작 | company=%s labels=%s", list(company_keywords), company_labels)
+        articles = await processor.run_track_c(
+            company_keywords,
+            persist=persist,
+            crawl_window=crawl_window,
+        )
+        _summarize("Track C", articles)
+        _save_local("track_c", articles)
 
 
 def main() -> None:

@@ -1,4 +1,4 @@
-"""Track A/B 크롤 오케스트레이터 — 원천 수집 + URL 중복 제거 + 저장."""
+"""Track A/B/C 크롤 오케스트레이터 — 원천 수집 + URL 중복 제거 + 저장."""
 
 import json
 import logging
@@ -16,18 +16,23 @@ from src.db.article_store import save_articles
 
 log = logging.getLogger(__name__)
 
-TRACK_A_SOURCES = ("naver_news",)
+TRACK_A_SOURCES = (
+    "naver_news",
+    "stock",
+)
 TRACK_B_SOURCES = (
-    "dart",
-    "ir",
     "naver_research",
     "jobs",
     "company_news",
     "global_newsroom",
     "naver_datalab",
-    "stock",
+)
+TRACK_C_SOURCES = (
+    "dart",
+    "ir",
     "spri",
     "bcg",
+    "sk_ax_site",
 )
 
 
@@ -48,7 +53,7 @@ class BatchProcessor:
         persist: bool = True,
         recent_hours: int = 1,
     ) -> list[RawArticle]:
-        """Track A — Naver News (1시간 간격)."""
+        """Track A — 고빈도/실시간성 수집."""
         return await self.run_sources(
             TRACK_A_SOURCES,
             keywords=keywords,
@@ -62,9 +67,23 @@ class BatchProcessor:
         persist: bool = True,
         crawl_window: CrawlWindow | None = None,
     ) -> list[RawArticle]:
-        """Track B — DART, IR, 리서치, 공식 뉴스룸, 채용공고, 검색 트렌드."""
+        """Track B — 일중/일간 신호 수집."""
         return await self.run_sources(
             TRACK_B_SOURCES,
+            keywords=keywords,
+            persist=persist,
+            crawl_window=crawl_window,
+        )
+
+    async def run_track_c(
+        self,
+        keywords: dict[str, list[str]],
+        persist: bool = True,
+        crawl_window: CrawlWindow | None = None,
+    ) -> list[RawArticle]:
+        """Track C — 저빈도/무거운 문서형 수집."""
+        return await self.run_sources(
+            TRACK_C_SOURCES,
             keywords=keywords,
             persist=persist,
             crawl_window=crawl_window,

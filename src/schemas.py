@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 class PipelineRunRequest(BaseModel):
     company: list[str]
+    track: str = "A"
     trigger_type: str = "scheduled"
 
 

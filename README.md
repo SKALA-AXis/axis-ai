@@ -286,7 +286,7 @@ axis-ai/
 │   │   ├── financial_linker_agent.py # ★ 신설: 카드 ↔ 재무 segment 매칭 + vs SK AX
 │   │   ├── parser_agent.py         # PDF/문서 payload 공통 파싱
 │   │   ├── parser_quality_agent.py # 파서 결과 품질 점검
-│   │   ├── notification_agent.py   # 이메일 발송 (Slack Webhook 폐기)
+│   │   ├── notification_agent.py   # 본문 데이터 빌더 (v4: backend SES SDK 발송)
 │   │   ├── sector_keywords.py      # 섹터 분류 키워드 사전
 │   │   └── _deprecated/            # ← v1 에이전트 보관소
 │   │       ├── implication_agent.py    # SK AX 시사점 (보류)
@@ -359,32 +359,38 @@ axis-ai/
 
 ---
 
-## 크롤러 소스 — Track A / Track B
+## 크롤러 소스 — Track A / Track B / Track C
 
-### Track A — 1시간 간격 (실시간 뉴스)
+### Track A — 고빈도 / 실시간성 모니터링
 
 | 소스 | 신뢰도 | 수집 방법 | 일일 한도 |
 |---|---|---|---|
 | 네이버 뉴스 API | 0.70 | REST API + 본문 enrichment + peer 필수 필터 | `news` 한도 |
+| 주가/시장 데이터 | 0.70 | Naver Finance/KRX 데이터 수집 | `market_data` 한도 |
 
 RSS/Google News RSS는 현재 크롤러 흐름에서 제거되었습니다. 해외 peer 공식 발표는 Track B의 `global_newsroom`에서 `source_type=official`로 수집합니다.
 
-### Track B — 매일 새벽 2시 (배치)
+### Track B — 일중 / 일간 신호 수집
 
 | 소스 | 신뢰도 | 수집 방법 | 4 peer 처리 |
 |---|---|---|---|
-| **DART** (금감원 공시) | 1.00 | OpenAPI 목록 + 원문 document XML 수집 | corp_code 등록 회사 |
 | **공식 뉴스룸** SDS | 0.90 | Playwright + URL 슬러그 패턴 | samsung_sds 전용 |
 | **공식 뉴스룸** LG CNS | 0.90 | 내부 fingerprint REST | lg_cns 전용 |
 | **공식 뉴스룸** 현대오토에버 | 0.90 | Playwright generic ★ 신규 | best-effort 셀렉터 |
 | **공식 뉴스룸** 포스코DX | 0.90 | Playwright generic ★ 신규 | 〃 |
 | **글로벌 공식 뉴스룸** | 0.90 | NVIDIA/MS/Google 등 공식 뉴스룸 HTML | overseas peer |
 | 네이버 금융 리서치 | 0.80 | PDF 링크 수집 + PDF payload 파싱 | 국내 peer |
-| IR 자료 | 1.00 | 기업 IR PDF 수집 + PDF payload 파싱 | 국내 peer |
 | 채용공고 | 0.60 | Work24/채용 API·페이지 | 국내 peer |
 | 네이버 데이터랩 | 0.55 | 검색 트렌드 API | 구조화 신호 |
-| 주가/시장 데이터 | 0.55 | 시장 데이터 API/페이지 | 구조화 신호 |
+
+### Track C — 저빈도 / 무거운 문서형 수집
+
+| 소스 | 신뢰도 | 수집 방법 | 처리 |
+|---|---|---|---|
+| **DART** (금감원 공시) | 1.00 | OpenAPI 목록 + 원문 document XML 수집 | corp_code 등록 회사 |
+| IR 자료 | 1.00 | 기업 IR PDF 수집 + PDF payload 파싱 | 국내 peer |
 | BCG/SPRi 산업 동향 | 0.70 | HTML/PDF 산업 리포트 파싱 | 산업 동향 |
+| SK AX 사이트 | 0.90 | 공식 사이트 크롤링 | `company_site` 문서 보존 |
 
 > **BigKinds, RSS, LinkedIn, 잡플래닛은 미사용** — BigKinds/RSS는 제거, LinkedIn/잡플래닛은 공식 API 미승인.
 
@@ -434,14 +440,17 @@ low      < 0.40
 ## v3 전달 파이프라인 (`delivery_graph.py`)
 
 ```
-[ BriefingAgent ] → [ NotificationAgent ]
+[ BriefingAgent ] → [ NotificationAgent (v4) ]
        ↓                     ↓
-PostgreSQL에서        SMTP/SendGrid
-이슈 카드 + Evidence   이메일 발송
-조회·본문 구성        (오전 8:30)
+PostgreSQL에서        본문 데이터 (subject/html/text/recipients) 반환
+이슈 카드 + Evidence   ↓
+조회·본문 구성        axis-backend 의 SesMailService → AWS SES V2 SDK (IRSA)
+                     → 발송 (오전 8:30)
 ```
 
-> v3 변경: Slack Webhook → 이메일.
+> v3 → v4 변경: Python smtplib SMTP 발송 폐기 → axis-backend SES SDK 통합 (IRSA + ses-mailer-sa).
+> sender: `noreply@skala-ai.com`. axis-ai 는 본문 데이터 반환만 담당.
+> v3 변경 (history): Slack Webhook → 이메일.
 
 ---
 
@@ -704,8 +713,9 @@ uv run python run_all_once.py --company samsung_sds --company nvidia
 ```bash
 uv run python run_crawler_once.py              # Track A만 (기본, 1~2분)
 uv run python run_crawler_once.py --track a    # 명시적 Track A
-uv run python run_crawler_once.py --track b    # Track B (5~10분)
-uv run python run_crawler_once.py --track all  # A + B 순차
+uv run python run_crawler_once.py --track b    # Track B
+uv run python run_crawler_once.py --track c    # Track C
+uv run python run_crawler_once.py --track all  # A + B + C 순차
 
 # DB 프로파일 전환 — 두 스크립트 모두 동일하게 지원
 uv run python run_crawler_once.py --track a              # Cloud (기본 .env)
@@ -714,17 +724,19 @@ uv run python run_crawler_once.py --track a --env local  # .env.local 로드
 
 | 트랙 | 소스 | 실행 시간 | 필요 환경 |
 | --- | --- | --- | --- |
-| **A** | 네이버 뉴스 | 1~2분 | NAVER_CLIENT_ID/SECRET |
-| **B** | DART·IR·증권사 리포트·공식뉴스룸·글로벌 뉴스룸·채용·트렌드·시장 데이터 | 5~10분+ | DART_API_KEY, Playwright(`uv run playwright install chromium`), 소스별 API 키 |
+| **A** | 네이버 뉴스·주가/시장 데이터 | 1~2분+ | NAVER_CLIENT_ID/SECRET, 시장 데이터 접근 |
+| **B** | 증권사 리포트·공식뉴스룸·글로벌 뉴스룸·채용·검색 트렌드 | 5~10분+ | Playwright(`uv run playwright install chromium`), 소스별 API 키 |
+| **C** | DART·IR·BCG·SPRi·SK AX 사이트 | 5~10분+ | DART_API_KEY, Playwright, 소스별 API 키 |
 
 출력: Peer별 / 소스별 신규 저장 건수 요약.
 
 ### 1-A. DB 크롤링 + 전처리 한 번에 실행
 
 ```bash
-uv run python run_all_once.py                 # Track A+B 수집 후 전처리 실행
+uv run python run_all_once.py                 # Track A+B+C 수집 후 전처리 실행
 uv run python run_all_once.py --env local     # 로컬 DB에 저장 후 전처리 실행
 uv run python run_all_once.py --track b       # Track B만 수집 후 전처리 실행
+uv run python run_all_once.py --track c       # Track C만 수집 후 전처리 실행
 uv run python run_all_once.py --company nvidia
 ```
 
@@ -904,5 +916,5 @@ uv run pytest tests/
 | 환각 방지 | SC 검증 (3회 생성 후 2/3 일치) | **Evidence Chain 4종 부착** + SC는 `/gen-search`에만 |
 | 시사점 | ImplicationAgent (LLM 생성) | **FinancialLinkerAgent** (재무 숫자 기반 팩트) |
 | 약한 신호 | LLM 분석 | 결정적 트렌드 분석 (W7) |
-| 알림 | Slack Webhook | 이메일 (SMTP/SendGrid) |
+| 알림 | Slack Webhook | 이메일 (v3: SMTP/SendGrid → **v4: backend SES V2 SDK + IRSA**) |
 | 비교 기준 | 없음 | **vs SK AX 결정적 4지표** |

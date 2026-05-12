@@ -3,6 +3,7 @@
 사용법:
   uv run python run_all_once.py
   uv run python run_all_once.py --track all
+  uv run python run_all_once.py --track c
   uv run python run_all_once.py --env cloud --track all
   uv run python run_all_once.py --company samsung_sds --company nvidia
 """
@@ -22,7 +23,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AXIS DB 크롤링 후 전처리까지만 1회 순차 실행")
     parser.add_argument(
         "--track",
-        choices=["a", "b", "all"],
+        choices=["a", "b", "c", "all"],
         default="all",
         help="크롤링할 트랙. 기본은 all.",
     )
@@ -51,17 +52,17 @@ def _parse_args() -> argparse.Namespace:
         "--lookback-days",
         type=int,
         default=None,
-        help="Track B 수집 기간. 지정 시 run_crawler_once.py에 전달한다.",
+        help="Track B/C 수집 기간. 지정 시 run_crawler_once.py에 전달한다.",
     )
     parser.add_argument(
         "--start-date",
         default=None,
-        help="Track B 수집 시작일 YYYY-MM-DD.",
+        help="Track B/C 수집 시작일 YYYY-MM-DD.",
     )
     parser.add_argument(
         "--end-date",
         default=None,
-        help="Track B 수집 종료일 YYYY-MM-DD.",
+        help="Track B/C 수집 종료일 YYYY-MM-DD.",
     )
     parser.add_argument(
         "--local-output",

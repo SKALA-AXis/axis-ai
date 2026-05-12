@@ -6,6 +6,7 @@ __pycache__/
 .env.local
 .env.cloud
 !.env.example
+.zshrc
 *.log
 .DS_Store
 .mypy_cache/
