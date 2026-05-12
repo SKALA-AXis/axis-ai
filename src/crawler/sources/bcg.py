@@ -25,7 +25,7 @@ import re
 import sys
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from urllib.parse import parse_qsl, parse_qs, urlencode, unquote, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -1014,9 +1014,7 @@ class BcgCrawler(BaseCrawler):
             else None
         )
         window_end = (
-            ensure_aware_utc(datetime.combine(self.end_date, time.max))
-            if self.end_date
-            else None
+            ensure_aware_utc(datetime.combine(self.end_date, time.max)) if self.end_date else None
         )
 
         articles: list[RawArticle] = []
@@ -1115,7 +1113,7 @@ class BcgCrawler(BaseCrawler):
 
                     if not keep:
                         log.info(
-                            "BCG 수집 기간 제외 | days=%d start_date=%s end_date=%s date=%s title=%s",
+                            "BCG 기간 제외 | days=%d range=%s~%s date=%s title=%s",
                             self.days,
                             self.start_date,
                             self.end_date,

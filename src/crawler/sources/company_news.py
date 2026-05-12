@@ -1466,7 +1466,9 @@ class CompanyNewsCrawler(BaseCrawler):
                         list_url=page_url,
                     )
                 except Exception as e:
-                    log.warning("[%s] 목록 페이지 수집 실패 | url=%s error=%s", company, page_url, e)
+                    log.warning(
+                        "[%s] 목록 페이지 수집 실패 | url=%s error=%s", company, page_url, e
+                    )
                     continue
 
                 used_list_render = used_list_render or page_used_render

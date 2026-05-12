@@ -1067,7 +1067,7 @@ def extract_pagination_urls(soup: BeautifulSoup, base_url: str) -> list[str]:
         ):
             continue
         url = normalize_url(urljoin(base_url, href))
-        if same_allowed_domain(base_url, url):
+        if same_url_netloc(base_url, url):
             urls.append(url)
     return unique_urls(urls)
 
@@ -1111,7 +1111,7 @@ def newsroom_archive_urls(
     return urls
 
 
-def same_allowed_domain(left_url: str, right_url: str) -> bool:
+def same_url_netloc(left_url: str, right_url: str) -> bool:
     return urlparse(left_url).netloc.lower() == urlparse(right_url).netloc.lower()
 
 

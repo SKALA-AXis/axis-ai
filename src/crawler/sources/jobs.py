@@ -5,7 +5,8 @@ import logging
 import os
 import time
 import xml.etree.ElementTree as ET
-from datetime import date, datetime, time as datetime_time
+from datetime import date, datetime
+from datetime import time as datetime_time
 from html import unescape
 
 import requests
@@ -130,7 +131,11 @@ class JobCrawler(BaseCrawler):
             return True
         if published_at is None:
             return False
-        start = datetime.combine(self.start_date, datetime_time.min) if self.start_date else datetime.min
+        start = (
+            datetime.combine(self.start_date, datetime_time.min)
+            if self.start_date
+            else datetime.min
+        )
         end = datetime.combine(self.end_date, datetime_time.max) if self.end_date else datetime.max
         return start <= published_at.replace(tzinfo=None) <= end
 
