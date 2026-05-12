@@ -226,25 +226,19 @@ def update_cluster(
 
 def update_classification(
     article_id: int,
-    importance: str,
     importance_score: float,
-    qdrant_vector_id: Optional[str] = None,
 ) -> None:
     """중요도 분류 결과를 raw_articles에 반영한다."""
     with SessionLocal() as db:
         db.execute(
             text("""
                 UPDATE raw_articles
-                SET importance_level = :importance,
-                    importance_score = :score,
-                    processing_status = 'CLASSIFIED',
-                    qdrant_vector_id = CAST(:qdrant_id AS uuid)
+                SET importance_score = :score,
+                    processing_status = 'CLASSIFIED'
                 WHERE id = :id
             """),
             {
-                "importance": importance,
                 "score": importance_score,
-                "qdrant_id": qdrant_vector_id,
                 "id": article_id,
             },
         )
@@ -327,16 +321,19 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
 # ──────────────────────────────────────────────────────────────
 
 
+# V9 (2026-05-12): card_news 테이블 rename 후에도 evidence_chain.issue_card_id 컬럼은
+# legacy 이름 유지 (deploy race 회피 — 컬럼 rename 은 V10 분리). Python 변수명은
+# card_news_id 로 의미 정렬, SQL column ref 만 issue_card_id 유지.
 _INSERT_EVIDENCE = text("""
     INSERT INTO evidence_chain (
-        card_news_id, source_links, provenance, financial_refs,
+        issue_card_id, source_links, provenance, financial_refs,
         mbb_refs, financial_link, evidence_version, pass, missing
     ) VALUES (
         :card_news_id, CAST(:source_links AS jsonb), CAST(:provenance AS jsonb),
         CAST(:financial_refs AS jsonb), CAST(:mbb_refs AS jsonb),
         CAST(:financial_link AS jsonb), :evidence_version, :passed, :missing
     )
-    ON CONFLICT (card_news_id) DO UPDATE SET
+    ON CONFLICT (issue_card_id) DO UPDATE SET
         source_links = EXCLUDED.source_links,
         provenance = EXCLUDED.provenance,
         financial_refs = EXCLUDED.financial_refs,
