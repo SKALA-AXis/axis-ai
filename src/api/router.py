@@ -7,6 +7,8 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.schemas import (
+    BriefingContent,
+    BriefingRequest,
     GenSearchRequest,
     GenSearchResult,
     HealthResponse,
@@ -78,11 +80,32 @@ async def run_pipeline(request: PipelineRunRequest, background_tasks: Background
 
 
 @app.post("/pipeline/delivery")
-async def run_delivery():
-    """전달 파이프라인 실행 (SpringBoot 스케줄러가 08:30에 호출)"""
-    log.info("전달 파이프라인 시작")
-    # TODO: delivery_graph.py 실행
-    return {"status": "accepted", "message": "전달 파이프라인 큐 등록 완료"}
+async def run_delivery(req: BriefingRequest) -> BriefingContent:
+    """전달 파이프라인 — backend Spring @Scheduled (08:30 KST MON-FRI) 가 호출.
+
+    backend 가 PostgreSQL 의 today issue cards 조회 후 cards 전달 → axis-ai 가
+    HTML/text 본문 빌더 후 BriefingContent 반환 → backend 의 SesMailService 가
+    AWS SES V2 SDK (IRSA) 로 발송.
+    """
+    from src.pipeline.delivery_graph import delivery_graph
+
+    log.info("전달 파이프라인 시작 | cards=%d", len(req.cards))
+    # by_alias=True → JSON camelCase (peerId 등) 유지 — build_briefing_node 와 정합.
+    state = delivery_graph.invoke(  # type: ignore[attr-defined]
+        {
+            "cards": [card.model_dump(by_alias=True) for card in req.cards],
+            "subject": "",
+            "html": "",
+            "text": "",
+            "errors": [],
+        }
+    )
+    return BriefingContent(
+        subject=state["subject"],
+        html=state["html"],
+        text=state["text"],
+        recipients=[],
+    )
 
 
 @app.get("/api/cards")
