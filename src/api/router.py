@@ -194,7 +194,7 @@ async def _run_collection_track(task_id: str, track: str, companies: list[str]) 
             "cluster_map": {},
             "representative_ids": [],
             "classified_clusters": [],
-            "issue_cards": [],
+            "card_news": [],
             "evidence_results": [],
             "indexed_vector_ids": [],
             "errors": [],

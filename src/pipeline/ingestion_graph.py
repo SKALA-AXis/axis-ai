@@ -47,7 +47,7 @@ class IngestionState(TypedDict):
     cluster_map: dict  # {cluster_id: [article_ids]}
     representative_ids: list[int]
     classified_clusters: list[dict]
-    issue_cards: list[dict]
+    card_news: list[dict]
     evidence_results: list[dict]  # v3: EvidenceAgent 첨부 결과
     indexed_vector_ids: list[str]  # v3: Qdrant axis_main 삽입 vector_id 목록
     errors: Annotated[list[str], operator.add]
@@ -432,9 +432,9 @@ def classify_node(state: IngestionState) -> IngestionState:
     return {**state, "classified_clusters": classified}
 
 
-@_logged_step("issue_card", "classified_clusters", "issue_cards")
-def issue_card_node(state: IngestionState) -> IngestionState:
-    """이슈 카드 생성 — 클러스터 사실 요약 결과 기반."""
+@_logged_step("card_news", "classified_clusters", "card_news")
+def card_news_node(state: IngestionState) -> IngestionState:
+    """카드 뉴스 생성 — 클러스터 사실 요약 결과 기반. (구 issue_card_node)"""
     from src.agents.issue_card_agent import IssueCardAgent
     from src.agents.news_summary_agent import PeerNewsSummaryAgent
 
@@ -468,15 +468,15 @@ def issue_card_node(state: IngestionState) -> IngestionState:
             if card:
                 cards.append(card)
 
-    log.info("이슈카드 생성 완료 | cards=%d", len(cards))
-    return {**state, "issue_cards": cards}
+    log.info("카드 뉴스 생성 완료 | cards=%d", len(cards))
+    return {**state, "card_news": cards}
 
 
-@_logged_step("evidence", "issue_cards", "evidence_results")
+@_logged_step("evidence", "card_news", "evidence_results")
 def evidence_node(state: IngestionState) -> IngestionState:
     """v3 검증 체인 첨부 + 카드 DB 저장 + evidence_chain 테이블 persist."""
     from src.agents.evidence_agent import EvidenceAgent
-    from src.db.article_store import save_evidence_chain, save_issue_card
+    from src.db.article_store import save_card_news, save_evidence_chain
 
     agent = EvidenceAgent()
     cluster_map = state["cluster_map"]
@@ -484,9 +484,9 @@ def evidence_node(state: IngestionState) -> IngestionState:
     def _attach_one(card: dict) -> dict:
         cluster_id = card.get("cluster_id")
         result = agent.attach(card, cluster_article_ids=cluster_map.get(cluster_id, []))
-        save_issue_card(card)
+        save_card_news(card)
         save_evidence_chain(
-            issue_card_id=card.get("id") or "",
+            card_news_id=card.get("id") or "",
             chain=card.get("evidence_chain", {}),
             passed=bool(result.get("pass")),
             missing=list(result.get("missing", [])),
@@ -497,7 +497,7 @@ def evidence_node(state: IngestionState) -> IngestionState:
     human_review_flags: list[int] = []
 
     with ThreadPoolExecutor(max_workers=_GPT_WORKERS) as ex:
-        futures = {ex.submit(_attach_one, card): card for card in state["issue_cards"]}
+        futures = {ex.submit(_attach_one, card): card for card in state["card_news"]}
         for future in as_completed(futures):
             result = future.result()
             results.append(result)
@@ -520,13 +520,13 @@ def evidence_node(state: IngestionState) -> IngestionState:
     }
 
 
-@_logged_step("vector_index", "issue_cards", "indexed_vector_ids")
+@_logged_step("vector_index", "card_news", "indexed_vector_ids")
 def vector_index_node(state: IngestionState) -> IngestionState:
     """검증 통과 카드를 BGE-M3로 임베딩해 Qdrant axis_main에 인덱싱."""
     from src.rag.vector_index import index_card
 
     passed_card_ids = {r["card_id"] for r in state["evidence_results"] if r.get("pass")}
-    targets = [c for c in state["issue_cards"] if c.get("id") in passed_card_ids]
+    targets = [c for c in state["card_news"] if c.get("id") in passed_card_ids]
 
     indexed: list[str] = []
     for card in targets:
@@ -557,7 +557,7 @@ def build_ingestion_graph() -> StateGraph:
     graph.add_node("preprocess_route", preprocess_route_node)
     graph.add_node("dedup", dedup_node)
     graph.add_node("classify", classify_node)
-    graph.add_node("issue_card", issue_card_node)
+    graph.add_node("card_news", card_news_node)
     graph.add_node("evidence", evidence_node)
     graph.add_node("vector_index", vector_index_node)
 
@@ -566,8 +566,8 @@ def build_ingestion_graph() -> StateGraph:
     graph.add_edge("credibility", "preprocess_route")
     graph.add_edge("preprocess_route", "dedup")
     graph.add_edge("dedup", "classify")
-    graph.add_edge("classify", "issue_card")
-    graph.add_edge("issue_card", "evidence")
+    graph.add_edge("classify", "card_news")
+    graph.add_edge("card_news", "evidence")
     graph.add_edge("evidence", "vector_index")
     graph.add_edge("vector_index", END)
 

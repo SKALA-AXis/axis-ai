@@ -74,7 +74,7 @@ class HealthResponse(BaseModel):
 
 
 class BriefingCard(BaseModel):
-    """backend 에서 받는 카드 1건 — IssueCardResponse 호환 (camelCase JSON ↔ snake_case)."""
+    """backend 에서 받는 카드 1건 — CardNewsResponse 호환 (camelCase JSON ↔ snake_case)."""
 
     model_config = ConfigDict(populate_by_name=True)
 

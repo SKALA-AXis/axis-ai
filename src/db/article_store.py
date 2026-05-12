@@ -1,4 +1,4 @@
-"""raw_articles / issue_cards 테이블 저장·조회·업데이트 레이어."""
+"""raw_articles / card_news 테이블 저장·조회·업데이트 레이어."""
 
 import json
 import logging
@@ -252,11 +252,11 @@ def update_classification(
 
 
 # ──────────────────────────────────────────────────────────────
-# 이슈카드 저장
+# 카드 뉴스 저장 (구 issue_cards → V9 에서 card_news 로 rename)
 # ──────────────────────────────────────────────────────────────
 
-_INSERT_ISSUE_CARD = text("""
-    INSERT INTO issue_cards (
+_INSERT_CARD_NEWS = text("""
+    INSERT INTO card_news (
         id, company, cluster_id, title, summary_lines,
         event_type, importance, importance_score,
         implication, sources, validation_pass, validation_sc_score
@@ -274,14 +274,14 @@ _INSERT_ISSUE_CARD = text("""
 """)
 
 
-def save_issue_card(card: dict[str, Any]) -> Optional[str]:
-    """이슈 카드를 issue_cards 테이블에 저장한다.
+def save_card_news(card: dict[str, Any]) -> Optional[str]:
+    """카드 뉴스를 card_news 테이블에 저장한다.
 
     v3: implication JSONB 컬럼은 evidence_chain + sector 메타데이터의 저장소로 재사용.
     Backend에서 evidence_chain·sector 전용 컬럼 분리 후 마이그레이션 예정.
 
     Returns:
-        저장된 issue card ID, 실패 시 None
+        저장된 card_news ID, 실패 시 None
     """
     try:
         # implication JSONB에 v3 메타데이터(섹터·노출도·검증체인) 통합 저장
@@ -296,7 +296,7 @@ def save_issue_card(card: dict[str, Any]) -> Optional[str]:
 
         with SessionLocal() as db:
             result = db.execute(
-                _INSERT_ISSUE_CARD,
+                _INSERT_CARD_NEWS,
                 {
                     "id": card["id"],
                     "company": card.get("company") or card.get("peer_id"),
@@ -315,10 +315,10 @@ def save_issue_card(card: dict[str, Any]) -> Optional[str]:
             row = result.fetchone()
             db.commit()
             if row:
-                log.info("이슈카드 저장 완료 | id=%s", card["id"])
+                log.info("카드 뉴스 저장 완료 | id=%s", card["id"])
                 return card["id"]
     except Exception as e:
-        log.error("이슈카드 저장 실패 | id=%s error=%s", card.get("id"), e)
+        log.error("카드 뉴스 저장 실패 | id=%s error=%s", card.get("id"), e)
     return None
 
 
@@ -329,14 +329,14 @@ def save_issue_card(card: dict[str, Any]) -> Optional[str]:
 
 _INSERT_EVIDENCE = text("""
     INSERT INTO evidence_chain (
-        issue_card_id, source_links, provenance, financial_refs,
+        card_news_id, source_links, provenance, financial_refs,
         mbb_refs, financial_link, evidence_version, pass, missing
     ) VALUES (
-        :issue_card_id, CAST(:source_links AS jsonb), CAST(:provenance AS jsonb),
+        :card_news_id, CAST(:source_links AS jsonb), CAST(:provenance AS jsonb),
         CAST(:financial_refs AS jsonb), CAST(:mbb_refs AS jsonb),
         CAST(:financial_link AS jsonb), :evidence_version, :passed, :missing
     )
-    ON CONFLICT (issue_card_id) DO UPDATE SET
+    ON CONFLICT (card_news_id) DO UPDATE SET
         source_links = EXCLUDED.source_links,
         provenance = EXCLUDED.provenance,
         financial_refs = EXCLUDED.financial_refs,
@@ -349,20 +349,20 @@ _INSERT_EVIDENCE = text("""
 
 
 def save_evidence_chain(
-    issue_card_id: str,
+    card_news_id: str,
     chain: dict[str, Any],
     passed: bool,
     missing: list[str],
 ) -> None:
     """evidence_chain 테이블에 검증 체인 4종을 저장한다."""
-    if not issue_card_id:
+    if not card_news_id:
         return
     try:
         with SessionLocal() as db:
             db.execute(
                 _INSERT_EVIDENCE,
                 {
-                    "issue_card_id": issue_card_id,
+                    "card_news_id": card_news_id,
                     "source_links": json.dumps(chain.get("source_links", []), ensure_ascii=False),
                     "provenance": json.dumps(chain.get("provenance", {}), ensure_ascii=False),
                     "financial_refs": json.dumps(
@@ -379,7 +379,7 @@ def save_evidence_chain(
             )
             db.commit()
     except Exception as e:
-        log.error("evidence_chain 저장 실패 | card_id=%s error=%s", issue_card_id, e)
+        log.error("evidence_chain 저장 실패 | card_id=%s error=%s", card_news_id, e)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -444,7 +444,7 @@ def _generate_card_id(company: str) -> str:
         if date_str not in _card_id_state:
             with SessionLocal() as db:
                 row = db.execute(
-                    text("SELECT COUNT(*) FROM issue_cards WHERE id LIKE :prefix"),
+                    text("SELECT COUNT(*) FROM card_news WHERE id LIKE :prefix"),
                     {"prefix": f"IC-{date_str}-%"},
                 ).fetchone()
                 _card_id_state[date_str] = row[0] if row else 0
