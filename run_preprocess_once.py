@@ -21,8 +21,8 @@ from typing import Any
 from src.agents.classification_agent import classify_preprocessed_cluster
 from src.agents.credibility_agent import analyze_credibility_article
 from src.agents.dedup_agent import deduplicate_articles
-from src.agents.parser_agent import ParserAgent
-from src.agents.parser_quality_agent import analyze_parser_quality_article
+from src.parsers.parser_quality import analyze_parser_quality_article
+from src.parsers.parser_router import DocumentParserRouter
 from src.agents.relevance_agent import analyze_relevance_article
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -270,7 +270,7 @@ def _mark_parsed_document(article: dict[str, Any]) -> dict[str, Any]:
 
 def _mark_industry_document(article: dict[str, Any]) -> dict[str, Any]:
     item = dict(article)
-    parser_result = ParserAgent().parse_article(item)
+    parser_result = DocumentParserRouter().parse_article(item)
     item["processing_status"] = "PREPROCESSED_INDUSTRY_DOCUMENT"
     item["document_scope"] = "industry_trend"
     item["parser_result"] = parser_result

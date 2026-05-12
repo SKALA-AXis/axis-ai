@@ -1,13 +1,13 @@
 from datetime import datetime
 
-from src.agents.dart_parser_agent import DartParserAgent
-from src.agents.ir_parser_agent import IRParserAgent
-from src.agents.parser_agent import ParserAgent
-from src.agents.parser_quality_agent import analyze_parser_quality_article
+from src.parsers.dart_parser import DartParser
+from src.parsers.ir_parser import IRParser
+from src.parsers.parser_quality import analyze_parser_quality_article
+from src.parsers.parser_router import DocumentParserRouter
 from src.crawler.base import RawArticle
 
 
-def test_ir_parser_agent_parses_ir_crawler_article() -> None:
+def test_ir_parser_parses_ir_crawler_article() -> None:
     article = RawArticle(
         url="https://example.com/ir.pdf",
         title="테스트사 2026년 1분기 IR Presentation",
@@ -35,7 +35,7 @@ def test_ir_parser_agent_parses_ir_crawler_article() -> None:
         },
     )
 
-    parsed = IRParserAgent().parse_article(article)
+    parsed = IRParser().parse_article(article)
 
     assert parsed["ok"] is True
     assert parsed["peer_id"] == "test_peer"
@@ -45,7 +45,7 @@ def test_ir_parser_agent_parses_ir_crawler_article() -> None:
     assert parsed["financial_record"]["ir_page"] == 1
 
 
-def test_dart_parser_agent_parses_dart_crawler_article() -> None:
+def test_dart_parser_parses_dart_crawler_article() -> None:
     article = RawArticle(
         url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260506000123",
         title="분기보고서 (2025.09)",
@@ -67,7 +67,7 @@ def test_dart_parser_agent_parses_dart_crawler_article() -> None:
         },
     )
 
-    parsed = DartParserAgent().parse_article(article)
+    parsed = DartParser().parse_article(article)
 
     assert parsed["ok"] is True
     assert parsed["period"] == "2025Q3"
@@ -78,7 +78,7 @@ def test_dart_parser_agent_parses_dart_crawler_article() -> None:
     assert parsed["financial_record"]["dart_rcept_no"] == "20260506000123"
 
 
-def test_dart_parser_agent_parses_dart_statement_table_amounts() -> None:
+def test_dart_parser_parses_dart_statement_table_amounts() -> None:
     article = RawArticle(
         url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260310002989",
         title="사업보고서 (2025.12)",
@@ -105,7 +105,7 @@ def test_dart_parser_agent_parses_dart_statement_table_amounts() -> None:
         },
     )
 
-    parsed = DartParserAgent().parse_article(article)
+    parsed = DartParser().parse_article(article)
 
     assert parsed["period"] == "2025Q4"
     assert parsed["period_type"] == "annual"
@@ -138,7 +138,7 @@ def test_parser_quality_passes_dart_document_after_parser() -> None:
     assert result["parser_result"]["period"] == "2025Q3"
 
 
-def test_common_parser_agent_routes_dart_to_dart_parser() -> None:
+def test_document_parser_router_routes_dart_to_dart_parser() -> None:
     item = {
         "url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260506000123",
         "title": "분기보고서 (2025.09)",
@@ -153,14 +153,14 @@ def test_common_parser_agent_routes_dart_to_dart_parser() -> None:
         },
     }
 
-    parsed = ParserAgent().parse_article(item)
+    parsed = DocumentParserRouter().parse_article(item)
 
     assert parsed["source"] == "dart"
     assert parsed["period"] == "2025Q3"
     assert parsed["financial_record"]["dart_rcept_no"] == "20260506000123"
 
 
-def test_common_parser_agent_preserves_industry_report_metadata() -> None:
+def test_document_parser_router_preserves_industry_report_metadata() -> None:
     item = {
         "url": "https://spri.kr/posts/view/23967",
         "title": "산업혁신을 이끄는 Vertical SaaS",
@@ -175,7 +175,7 @@ def test_common_parser_agent_preserves_industry_report_metadata() -> None:
         },
     }
 
-    parsed = ParserAgent().parse_article(item)
+    parsed = DocumentParserRouter().parse_article(item)
 
     assert parsed["ok"] is True
     assert parsed["source"] == "industry_trend"

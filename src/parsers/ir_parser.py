@@ -1,7 +1,7 @@
-"""IR PDF 크롤링 결과를 재무 후보 레코드로 변환하는 파서 에이전트.
+"""IR PDF 크롤링 결과를 재무 후보 레코드로 변환하는 deterministic parser.
 
 IRCrawler는 PDF 파일을 직접 저장하지 않고 RawArticle 형태로 본문 텍스트와
-PDF 페이지 블록을 담는다. 이 에이전트는 그 RawArticle 결과를 받아
+PDF 페이지 블록을 담는다. 이 파서는 그 RawArticle 결과를 받아
 FinancialLinkerAgent/peer_financials 적재에 사용할 수 있는 핵심 재무 후보를 만든다.
 """
 
@@ -12,6 +12,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from src.config.sectors import SECTOR_KEYWORDS
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +44,82 @@ _PERIOD_PATTERNS = [
     re.compile(r"([1-4])\s*Q\s*['’]?\s*(\d{2})", re.IGNORECASE),
 ]
 _PAGE_SPLIT_PATTERN = re.compile(r"(?:^|\n)\[PAGE\s+(\d+)\]\s*", re.IGNORECASE)
+_IR_CHUNK_MAX_CHARS = 2800
+_IR_CHUNK_OVERLAP_CHARS = 180
+_IR_SECTION_RULES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (
+        "summary",
+        "Executive Summary",
+        ("summary", "highlights", "overview", "요약", "하이라이트", "주요 내용", "경영실적 요약"),
+    ),
+    (
+        "financial",
+        "Financial Results",
+        ("financial", "results", "실적", "손익", "매출", "영업이익", "재무", "income statement"),
+    ),
+    (
+        "business",
+        "Business Segment",
+        ("business", "segment", "사업", "부문", "사업별", "사업부", "division"),
+    ),
+    (
+        "cloud",
+        "Cloud",
+        ("cloud", "클라우드", "aws", "azure", "gcp", "msp", "managed service"),
+    ),
+    (
+        "ai",
+        "AI/Data",
+        ("ai", "인공지능", "생성형", "llm", "data", "데이터", "analytics", "agentic"),
+    ),
+    (
+        "digital_transformation",
+        "Digital Transformation",
+        ("dx", "digital", "transformation", "전환", "자동화", "smart", "스마트", "erp", "mes"),
+    ),
+    (
+        "orders_pipeline",
+        "Orders/Pipeline",
+        ("order", "backlog", "pipeline", "수주", "잔고", "계약", "프로젝트", "pipeline"),
+    ),
+    (
+        "outlook",
+        "Outlook",
+        ("outlook", "guidance", "forecast", "전망", "계획", "strategy", "전략", "성장"),
+    ),
+    (
+        "shareholder",
+        "Shareholder Return",
+        ("dividend", "treasury", "shareholder", "배당", "자사주", "주주환원"),
+    ),
+)
+_IR_COMPANY_SECTION_HINTS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]] = {
+    "samsung_sds": (
+        ("cloud", "Cloud/MSP", ("msp", "cloud", "클라우드", "하이브리드", "gpu")),
+        ("ai", "AI/Data", ("fabrix", "brity", "생성형", "llm", "ai", "데이터")),
+        ("logistics", "Digital Logistics", ("첼로", "cello", "물류", "logistics", "scl")),
+    ),
+    "lg_cns": (
+        ("cloud", "Cloud/AM", ("cloudxper", "클라우드", "am", "aws", "azure", "gcp")),
+        ("ai", "AI/Data", ("dap", "ai", "data", "factova", "생성형", "agent")),
+        ("smart_factory", "Smart Factory", ("smart factory", "스마트팩토리", "mes", "factory")),
+    ),
+    "hyundai_autoever": (
+        ("vehicle_sw", "Vehicle SW", ("vehicle", "차량", "sw", "software-defined", "sdv", "내비게이션")),
+        ("enterprise_it", "Enterprise IT", ("si", "ito", "enterprise", "erp", "그룹사")),
+        ("smart_factory", "Smart Factory", ("smart factory", "스마트팩토리", "mes", "mobis")),
+    ),
+    "posco_dx": (
+        ("smart_factory", "Smart Factory", ("smart factory", "스마트팩토리", "자동화", "제철소", "철강")),
+        ("robotics", "Robotics/Automation", ("robot", "로봇", "automation", "자동화", "물류자동화")),
+        ("industrial_ai", "Industrial AI", ("ai", "산업", "vision", "예지", "품질")),
+    ),
+    "sk_ax": (
+        ("ai", "AI/Data", ("ai", "에이닷", "sapien", "data", "데이터", "생성형")),
+        ("cloud", "Cloud", ("cloud", "클라우드", "dc", "data center", "데이터센터")),
+        ("portfolio", "Portfolio", ("portfolio", "investment", "투자", "배당", "주주환원")),
+    ),
+}
 
 
 def _normalize_amount_krwbn(value: str, unit: str) -> float:
@@ -66,6 +144,19 @@ def _extract_period(text: str) -> str | None:
     return None
 
 
+def _period_parts(period: str | None) -> tuple[int | None, int | None, str | None]:
+    if not period:
+        return None, None, None
+
+    match = re.match(r"^(20\d{2})Q([1-4])$", period)
+    if not match:
+        return None, None, None
+
+    year = int(match.group(1))
+    quarter = int(match.group(2))
+    return year, quarter, "quarter"
+
+
 def _first_amount(
     text: str,
     patterns: list[re.Pattern[str]],
@@ -86,6 +177,8 @@ def _article_get(article: Any, key: str, default: Any = None) -> Any:
 
 def _article_extra(article: Any) -> dict[str, Any]:
     extra = _article_get(article, "extra", {}) or {}
+    if not extra:
+        extra = _article_get(article, "metadata", {}) or {}
     return extra if isinstance(extra, dict) else {}
 
 
@@ -179,6 +272,131 @@ def _candidate_page(candidates: list[dict[str, Any]], metric_type: str) -> int |
     return None
 
 
+def _company_section_rules(peer_id: str | None) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    return _IR_COMPANY_SECTION_HINTS.get(peer_id or "", ()) + _IR_SECTION_RULES
+
+
+def _classify_page_section(
+    text: str,
+    *,
+    peer_id: str | None,
+) -> tuple[str, str, list[str]]:
+    normalized = text.lower()
+    matches: list[str] = []
+
+    for section_key, section_title, keywords in _company_section_rules(peer_id):
+        hits = [keyword for keyword in keywords if keyword.lower() in normalized]
+        if hits:
+            return section_key, section_title, hits[:8]
+
+    return "other", "Other IR Content", matches
+
+
+def _match_topics(text: str) -> tuple[list[str], dict[str, list[str]]]:
+    lowered = text.lower()
+    topic_signals: dict[str, list[str]] = {}
+
+    for topic, keywords in SECTOR_KEYWORDS.items():
+        hits = [keyword for keyword in keywords if keyword.lower() in lowered]
+        if hits:
+            topic_signals[topic] = hits[:8]
+
+    return sorted(topic_signals), topic_signals
+
+
+def _split_text_chunks(text: str, max_chars: int = _IR_CHUNK_MAX_CHARS) -> list[str]:
+    value = text.strip()
+    if not value:
+        return []
+    if len(value) <= max_chars:
+        return [value]
+
+    chunks: list[str] = []
+    start = 0
+    while start < len(value):
+        end = min(start + max_chars, len(value))
+        boundary = value.rfind("\n", start, end)
+        if boundary <= start + max_chars // 2:
+            boundary = value.rfind(". ", start, end)
+        if boundary <= start:
+            boundary = end
+
+        chunk = value[start:boundary].strip()
+        if chunk:
+            chunks.append(chunk)
+
+        if boundary >= len(value):
+            break
+        start = max(boundary - _IR_CHUNK_OVERLAP_CHARS, start + 1)
+
+    return chunks
+
+
+def _extract_sections_and_chunks(
+    pages: list[dict[str, Any]],
+    *,
+    peer_id: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], dict[str, list[str]]]:
+    sections_by_key: dict[str, dict[str, Any]] = {}
+    document_chunks: list[dict[str, Any]] = []
+    all_topic_signals: dict[str, list[str]] = {}
+
+    for page in pages:
+        page_no = page.get("page")
+        page_text = str(page.get("text", "") or "").strip()
+        if not page_text:
+            continue
+
+        section_key, section_title, section_signals = _classify_page_section(
+            page_text,
+            peer_id=peer_id,
+        )
+        topics, topic_signals = _match_topics(page_text)
+
+        section = sections_by_key.setdefault(
+            section_key,
+            {
+                "section_key": section_key,
+                "section_title": section_title,
+                "pages": [],
+                "text_chars": 0,
+                "signals": [],
+                "topics": [],
+            },
+        )
+        if page_no not in section["pages"]:
+            section["pages"].append(page_no)
+        section["text_chars"] += len(page_text)
+        section["signals"] = sorted(set(section["signals"]) | set(section_signals))
+        section["topics"] = sorted(set(section["topics"]) | set(topics))
+
+        for topic, hits in topic_signals.items():
+            merged = set(all_topic_signals.get(topic, []))
+            merged.update(hits)
+            all_topic_signals[topic] = sorted(merged)[:12]
+
+        for local_idx, chunk_text in enumerate(_split_text_chunks(page_text), start=1):
+            document_chunks.append(
+                {
+                    "chunk_id": f"ir-p{page_no or 'x'}-{local_idx}",
+                    "page": page_no,
+                    "section_key": section_key,
+                    "section_title": section_title,
+                    "chunk_index": len(document_chunks) + 1,
+                    "text_chars": len(chunk_text),
+                    "text": chunk_text,
+                    "topics": topics,
+                    "topic_signals": topic_signals,
+                }
+            )
+
+    sections = list(sections_by_key.values())
+    for idx, section in enumerate(sections, start=1):
+        section["section_order"] = idx
+
+    return sections, document_chunks, sorted(all_topic_signals), all_topic_signals
+
+
 def _build_financial_record(
     *,
     source: str,
@@ -205,7 +423,7 @@ def _build_financial_record(
     }
 
 
-class IRParserAgent:
+class IRParser:
     """IR RawArticle에서 핵심 재무 지표 후보를 추출한다."""
 
     def parse_article(
@@ -226,6 +444,11 @@ class IRParserAgent:
         warnings: list[str] = []
         candidates: list[dict[str, Any]] = []
         period = _period_from_ir_article(article, extra, text)
+        period_year, period_quarter, period_type = _period_parts(period)
+        sections, document_chunks, topics, topic_signals = _extract_sections_and_chunks(
+            pages,
+            peer_id=peer_id,
+        )
         revenue_total: float | None = None
         operating_profit: float | None = None
 
@@ -235,6 +458,7 @@ class IRParserAgent:
 
             if not period:
                 period = _extract_period(page_text)
+                period_year, period_quarter, period_type = _period_parts(period)
 
             if revenue_total is None:
                 value, raw = _first_amount(page_text, _REVENUE_PATTERNS)
@@ -292,9 +516,16 @@ class IRParserAgent:
             "url": url,
             "published_at": published_at,
             "period": period,
+            "period_year": period_year,
+            "period_quarter": period_quarter,
+            "period_type": period_type,
             "revenue_total_krwbn": revenue_total,
             "operating_profit_krwbn": operating_profit,
             "candidates": candidates,
+            "sections": sections,
+            "document_chunks": document_chunks,
+            "topics": topics,
+            "topic_signals": topic_signals,
             "metadata": {
                 "source_page": extra.get("source_page"),
                 "detail_url": extra.get("detail_url"),
@@ -367,7 +598,7 @@ class IRParserAgent:
 
 
 __all__ = [
-    "IRParserAgent",
+    "IRParser",
     "_OPERATING_PROFIT_PATTERNS",
     "_REVENUE_PATTERNS",
     "_extract_period",

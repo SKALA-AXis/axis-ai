@@ -63,10 +63,10 @@
 |---|---|---|
 | `news` | `naver_news` | credibility → relevance → dedup/cluster → classification |
 | `official` | `company_news`, `nvidia_official` | credibility → relevance → dedup/cluster → classification |
-| `dart` | `dart` | credibility → parser_agent → parser_quality_agent → auto relevant 보존 |
-| `ir` | `ir_pdf` | credibility → parser_agent → parser_quality_agent → auto relevant 보존 |
-| `securities_report` | `naver_research` | credibility → parser_agent → parser_quality_agent → auto relevant 보존 |
-| `trend_report` | `SPRi`, `BCG` | credibility → parser_agent → 산업 동향 문서로 보존 |
+| `dart` | `dart` | credibility → parser_router → parser_quality → auto relevant 보존 |
+| `ir` | `ir_pdf` | credibility → parser_router → parser_quality → auto relevant 보존 |
+| `securities_report` | `naver_research` | credibility → parser_router → parser_quality → auto relevant 보존 |
+| `trend_report` | `SPRi`, `BCG` | credibility → parser_router → 산업 동향 문서로 보존 |
 | `job` | `work24_job` | 구조화 신호로 보존 |
 | `search_trend` | `naver_datalab` | 구조화 신호로 보존 |
 | `market_data` | `stock_market` | 구조화 신호로 보존 |
@@ -232,5 +232,5 @@ uv run python run_pipeline_once.py --company nvidia
 
 ```bash
 uv run python -m py_compile run_local_crawler_once.py run_crawler_once.py run_pipeline_once.py run_preprocess_once.py src/crawler/sources/*.py src/crawler/local/*.py
-uv run pytest tests/test_crawler.py tests/test_parser_agents.py
+uv run pytest tests/test_crawler.py tests/test_parsers.py
 ```

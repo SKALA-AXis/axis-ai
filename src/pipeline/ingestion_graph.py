@@ -205,8 +205,8 @@ def credibility_node(state: IngestionState) -> IngestionState:
 @_logged_step("preprocess_route", "credible_ids", "relevant_ids")
 def preprocess_route_node(state: IngestionState) -> IngestionState:
     """source_type별 DB 전처리 라우팅."""
-    from src.agents.parser_agent import ParserAgent
-    from src.agents.parser_quality_agent import analyze_parser_quality_article
+    from src.parsers.parser_quality import analyze_parser_quality_article
+    from src.parsers.parser_router import DocumentParserRouter
     from src.agents.relevance_agent import RelevanceAgent
     from src.db.article_store import get_articles_by_ids, update_preprocess_status
 
@@ -287,12 +287,41 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
 
         if source_type in PARSED_DOCUMENT_SOURCE_TYPES:
             item, ok, reason = analyze_parser_quality_article(agent_article)
+            parser_result = item.get("parser_result") or {}
             metadata_patch = {
-                "parser_result": item.get("parser_result"),
+                "parser_result": parser_result,
                 "parser_quality_score": item.get("parser_quality_score"),
                 "parser_quality_label": item.get("parser_quality_label"),
                 "parser_quality_reason": item.get("parser_quality_reason"),
             }
+            if source_type == "dart":
+                metadata_patch.update(
+                    {
+                        "period": parser_result.get("period"),
+                        "period_year": parser_result.get("period_year"),
+                        "period_quarter": parser_result.get("period_quarter"),
+                        "period_type": parser_result.get("period_type"),
+                        "financial_record": parser_result.get("financial_record"),
+                        "topics": parser_result.get("topics"),
+                        "topic_signals": parser_result.get("topic_signals"),
+                        "dart_sections": parser_result.get("sections"),
+                        "dart_document_chunks": parser_result.get("document_chunks"),
+                    }
+                )
+            elif source_type == "ir":
+                metadata_patch.update(
+                    {
+                        "period": parser_result.get("period"),
+                        "period_year": parser_result.get("period_year"),
+                        "period_quarter": parser_result.get("period_quarter"),
+                        "period_type": parser_result.get("period_type"),
+                        "financial_record": parser_result.get("financial_record"),
+                        "topics": parser_result.get("topics"),
+                        "topic_signals": parser_result.get("topic_signals"),
+                        "ir_sections": parser_result.get("sections"),
+                        "ir_document_chunks": parser_result.get("document_chunks"),
+                    }
+                )
             if ok:
                 parsed_document_ids.append(article_id)
                 update_preprocess_status(
@@ -318,7 +347,7 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
             continue
 
         if source_type == "trend_report":
-            parser_result = ParserAgent().parse_article(agent_article)
+            parser_result = DocumentParserRouter().parse_article(agent_article)
             industry_document_ids.append(article_id)
             update_preprocess_status(
                 article_id,

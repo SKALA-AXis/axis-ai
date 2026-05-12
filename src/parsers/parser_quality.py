@@ -1,4 +1,4 @@
-"""문서형 소스의 파싱 품질을 점검하는 에이전트.
+"""문서형 소스의 파싱 품질을 점검하는 deterministic quality checker.
 
 DART, IR, 증권사 리포트는
 수집/파싱 품질을 먼저 확인한 뒤 문서형 입력으로 통과시킨다.
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.agents.parser_agent import ParserAgent
+from src.parsers.parser_router import DocumentParserRouter
 
 MIN_CONTENT_CHARS_BY_SOURCE_TYPE = {
     "dart": 80,
@@ -22,7 +22,7 @@ def analyze_parser_quality_article(
 ) -> tuple[dict[str, Any], bool, str | None]:
     """문서형 article에 parser quality 결과를 붙인다."""
     item = dict(article)
-    parser_result = ParserAgent().parse_article(item)
+    parser_result = DocumentParserRouter().parse_article(item)
 
     quality = _quality_from_parser_result(item, parser_result)
     item["parser_result"] = parser_result

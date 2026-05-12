@@ -1,14 +1,14 @@
-"""수집된 문서형 article을 source별 parser로 라우팅하는 공통 ParserAgent."""
+"""수집된 문서형 article을 source별 deterministic parser로 라우팅한다."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from src.agents.dart_parser_agent import DartParserAgent
-from src.agents.ir_parser_agent import IRParserAgent
+from src.parsers.dart_parser import DartParser
+from src.parsers.ir_parser import IRParser
 
 
-class ParserAgent:
+class DocumentParserRouter:
     """DART, IR, 리포트/산업문서를 공통 인터페이스로 파싱한다.
 
     크롤러가 이미 추출한 본문 텍스트와 메타데이터를 표준 parsed_document로 정리한다.
@@ -20,10 +20,10 @@ class ParserAgent:
         source_name = _source_name(article)
 
         if source_type == "dart":
-            return DartParserAgent().parse_article(article)
+            return DartParser().parse_article(article)
 
         if source_type == "ir":
-            return IRParserAgent().parse_article(article)
+            return IRParser().parse_article(article)
 
         if source_type == "securities_report":
             return _parse_document_article(article, parser_name="securities_report_parser")
@@ -118,4 +118,4 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-__all__ = ["ParserAgent"]
+__all__ = ["DocumentParserRouter"]

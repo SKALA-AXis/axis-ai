@@ -31,6 +31,9 @@ DEFAULT_PAGE_COUNT = 100
 DEFAULT_FETCH_DOCUMENT = True
 DEFAULT_MAX_DOCUMENT_LENGTH = 200000
 DEFAULT_DISCLOSURE_TYPES = ("A", "B", "F")
+DEFAULT_MAX_STRUCTURED_TABLES = 80
+DEFAULT_MAX_STRUCTURED_TABLE_ROWS = 80
+DEFAULT_MAX_STRUCTURED_TABLE_COLS = 20
 
 _DISCLOSURE_TYPE_LABELS = {
     "A": "regular",
@@ -73,6 +76,9 @@ class DartCrawler(BaseCrawler):
         self.disclosure_types = _env_list(
             "DART_DISCLOSURE_TYPES",
             DEFAULT_DISCLOSURE_TYPES,
+        )
+        self.max_structured_tables = int(
+            os.getenv("DART_MAX_STRUCTURED_TABLES", str(DEFAULT_MAX_STRUCTURED_TABLES))
         )
 
     async def crawl(self) -> list[RawArticle]:
@@ -373,6 +379,8 @@ class DartCrawler(BaseCrawler):
                             "parse_strategy",
                             "text_only",
                         ),
+                        "tables": document_payload.get("tables", []),
+                        "structured_table_count": len(document_payload.get("tables", [])),
                         "contains_images": bool(document_payload.get("contains_images")),
                         "image_count": int(document_payload.get("image_count", 0)),
                         "chart_parse_strategy": "not_parsed",
@@ -438,6 +446,7 @@ def _extract_payload_from_dart_document(content: bytes, receipt_no: str) -> dict
             parsed_file_count = 0
             contains_tables = False
             table_count = 0
+            tables: list[dict] = []
             contains_images = False
             image_count = 0
 
@@ -469,6 +478,9 @@ def _extract_payload_from_dart_document(content: bytes, receipt_no: str) -> dict
                     contains_images = True
 
                 table_count += int(parsed.get("table_count", 0))
+                if len(tables) < _max_structured_tables():
+                    remaining = _max_structured_tables() - len(tables)
+                    tables.extend(parsed.get("tables", [])[:remaining])
                 image_count += int(parsed.get("image_count", 0))
 
             joined = _normalize_document_text("\n\n".join(texts))
@@ -478,6 +490,7 @@ def _extract_payload_from_dart_document(content: bytes, receipt_no: str) -> dict
                 "raw_text_length": len(joined),
                 "contains_tables": contains_tables,
                 "table_count": table_count,
+                "tables": tables,
                 "contains_images": contains_images,
                 "image_count": image_count,
                 "file_count": file_count,
@@ -500,6 +513,7 @@ def _extract_payload_from_dart_document(content: bytes, receipt_no: str) -> dict
             "raw_text_length": len(text),
             "contains_tables": bool(parsed.get("contains_tables")),
             "table_count": int(parsed.get("table_count", 0)),
+            "tables": parsed.get("tables", []),
             "contains_images": bool(parsed.get("contains_images")),
             "image_count": int(parsed.get("image_count", 0)),
             "file_count": 1,
@@ -549,6 +563,7 @@ def _extract_text_payload_from_markup(
 
     table_count = len(soup.find_all("table"))
     contains_tables = table_count > 0
+    tables = _extract_structured_tables(soup, filename=filename)
 
     image_count = len(soup.find_all("img"))
     contains_images = image_count > 0
@@ -575,6 +590,7 @@ def _extract_text_payload_from_markup(
         "text": normalized_text,
         "contains_tables": contains_tables,
         "table_count": table_count,
+        "tables": tables,
         "contains_images": contains_images,
         "image_count": image_count,
     }
@@ -587,6 +603,7 @@ def _should_use_fast_markup_parser(markup: str, filename: str) -> bool:
 def _extract_text_payload_fast(markup: str) -> dict:
     table_count = len(re.findall(r"<table\b", markup, flags=re.IGNORECASE))
     image_count = len(re.findall(r"<img\b", markup, flags=re.IGNORECASE))
+    tables = _extract_structured_tables_from_markup(markup)
 
     def table_repl(match: re.Match[str]) -> str:
         table_text = strip_html(match.group(0))
@@ -606,6 +623,7 @@ def _extract_text_payload_fast(markup: str) -> dict:
         "text": normalized_text,
         "contains_tables": table_count > 0,
         "table_count": table_count,
+        "tables": tables,
         "contains_images": image_count > 0,
         "image_count": image_count,
     }
@@ -621,6 +639,62 @@ def _replace_tables_with_text(soup: BeautifulSoup) -> None:
         table.replace_with(soup.new_string(f"\n[표 {idx}]\n{table_text}\n[/표 {idx}]\n"))
 
 
+def _extract_structured_tables_from_markup(markup: str) -> list[dict]:
+    snippets = re.findall(
+        r"<table\b[^>]*>.*?</table>",
+        markup,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    tables: list[dict] = []
+    for idx, table_markup in enumerate(snippets[: _max_structured_tables()], start=1):
+        soup = BeautifulSoup(table_markup, "html.parser")
+        table = soup.find("table")
+        if not isinstance(table, Tag):
+            continue
+        structured = _structured_table(table, idx=idx, filename="document.xml")
+        if structured:
+            tables.append(structured)
+    return tables
+
+
+def _extract_structured_tables(soup: BeautifulSoup, filename: str) -> list[dict]:
+    tables: list[dict] = []
+    for idx, table in enumerate(soup.find_all("table")[: _max_structured_tables()], start=1):
+        structured = _structured_table(table, idx=idx, filename=filename)
+        if structured:
+            tables.append(structured)
+    return tables
+
+
+def _structured_table(table: Tag, idx: int, filename: str) -> dict | None:
+    rows: list[list[str]] = []
+    max_rows = int(os.getenv("DART_MAX_STRUCTURED_TABLE_ROWS", str(DEFAULT_MAX_STRUCTURED_TABLE_ROWS)))
+    max_cols = int(os.getenv("DART_MAX_STRUCTURED_TABLE_COLS", str(DEFAULT_MAX_STRUCTURED_TABLE_COLS)))
+
+    caption = table.find("caption")
+    title = caption.get_text(" ", strip=True) if caption else ""
+
+    for tr in table.find_all("tr")[:max_rows]:
+        cells = tr.find_all(["th", "td"])[:max_cols]
+        values = [_normalize_cell_text(cell.get_text(" ", strip=True)) for cell in cells]
+        values = [value for value in values if value]
+        if values:
+            rows.append(values)
+
+    if not rows:
+        return None
+
+    return {
+        "table_index": idx,
+        "filename": filename,
+        "title": title,
+        "row_count": len(rows),
+        "column_count": max((len(row) for row in rows), default=0),
+        "rows": rows,
+        "text": "\n".join(" | ".join(row) for row in rows)[:12000],
+    }
+
+
 def _table_to_text(table: Tag) -> str:
     rows: list[str] = []
 
@@ -633,6 +707,14 @@ def _table_to_text(table: Tag) -> str:
             rows.append(" | ".join(values))
 
     return "\n".join(rows)
+
+
+def _normalize_cell_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def _max_structured_tables() -> int:
+    return int(os.getenv("DART_MAX_STRUCTURED_TABLES", str(DEFAULT_MAX_STRUCTURED_TABLES)))
 
 
 def _select_markup_parser(markup: str, filename: str) -> str:
