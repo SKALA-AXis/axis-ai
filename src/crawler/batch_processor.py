@@ -60,8 +60,7 @@ class BatchProcessor:
             keywords=keywords,
             persist=persist,
             recent_hours=recent_hours,
-            run_context=run_context
-            or CrawlRunContext(collection_mode="scheduled", track="A"),
+            run_context=run_context or CrawlRunContext(collection_mode="scheduled", track="A"),
         )
 
     async def run_track_b(
@@ -77,8 +76,7 @@ class BatchProcessor:
             keywords=keywords,
             persist=persist,
             crawl_window=crawl_window,
-            run_context=run_context
-            or CrawlRunContext(collection_mode="scheduled", track="B"),
+            run_context=run_context or CrawlRunContext(collection_mode="scheduled", track="B"),
         )
 
     async def run_track_c(
@@ -94,8 +92,7 @@ class BatchProcessor:
             keywords=keywords,
             persist=persist,
             crawl_window=crawl_window,
-            run_context=run_context
-            or CrawlRunContext(collection_mode="scheduled", track="C"),
+            run_context=run_context or CrawlRunContext(collection_mode="scheduled", track="C"),
         )
 
     async def run_sources(

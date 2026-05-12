@@ -668,8 +668,12 @@ def _extract_structured_tables(soup: BeautifulSoup, filename: str) -> list[dict]
 
 def _structured_table(table: Tag, idx: int, filename: str) -> dict | None:
     rows: list[list[str]] = []
-    max_rows = int(os.getenv("DART_MAX_STRUCTURED_TABLE_ROWS", str(DEFAULT_MAX_STRUCTURED_TABLE_ROWS)))
-    max_cols = int(os.getenv("DART_MAX_STRUCTURED_TABLE_COLS", str(DEFAULT_MAX_STRUCTURED_TABLE_COLS)))
+    max_rows = int(
+        os.getenv("DART_MAX_STRUCTURED_TABLE_ROWS", str(DEFAULT_MAX_STRUCTURED_TABLE_ROWS))
+    )
+    max_cols = int(
+        os.getenv("DART_MAX_STRUCTURED_TABLE_COLS", str(DEFAULT_MAX_STRUCTURED_TABLE_COLS))
+    )
 
     caption = table.find("caption")
     title = caption.get_text(" ", strip=True) if caption else ""

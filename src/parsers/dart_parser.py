@@ -7,13 +7,13 @@ import re
 from datetime import datetime
 from typing import Any
 
+from src.config.sectors import SECTOR_KEYWORDS
 from src.parsers.ir_parser import (
     _OPERATING_PROFIT_PATTERNS,
     _REVENUE_PATTERNS,
     _extract_period,
     _first_amount,
 )
-from src.config.sectors import SECTOR_KEYWORDS
 
 log = logging.getLogger(__name__)
 
@@ -37,10 +37,7 @@ _DART_MAJOR_SECTIONS: tuple[tuple[str, str, str], ...] = (
     ("major_shareholder", "X", "대주주 등과의 거래내용"),
     ("other", "XI", "그 밖에 투자자 보호를 위하여 필요한 사항"),
 )
-_ROMAN_TO_KEY = {
-    roman: (section_key, title)
-    for section_key, roman, title in _DART_MAJOR_SECTIONS
-}
+_ROMAN_TO_KEY = {roman: (section_key, title) for section_key, roman, title in _DART_MAJOR_SECTIONS}
 _ROMAN_VARIANTS = {
     "I": "Ⅰ",
     "II": "Ⅱ",
@@ -288,7 +285,7 @@ def _extract_table_statement_metrics(tables: list[dict[str, Any]]) -> dict[str, 
         if "손익계산서" in title_text or "포괄손익계산서" in title_text:
             score += 5
 
-        candidate = {
+        candidate: dict[str, Any] = {
             "score": score,
             "source": "structured_table",
             "table_index": table.get("table_index"),
@@ -298,7 +295,7 @@ def _extract_table_statement_metrics(tables: list[dict[str, Any]]) -> dict[str, 
             "operating_profit": operating_profit,
             "operating_profit_raw": operating_profit_raw,
         }
-        if not best or int(candidate["score"]) > int(best["score"]):
+        if not best or score > int(best.get("score") or 0):
             best = candidate
 
     return best
@@ -321,11 +318,12 @@ def _extract_metric_from_table_rows(
         if label not in row_text:
             continue
 
-        amounts = [
-            (_normalize_dart_amount_krwbn(match.group(0), unit), match.group(0))
-            for match in _DART_AMOUNT_PATTERN.finditer(row_text)
-        ]
-        amounts = [(value, raw) for value, raw in amounts if value is not None and abs(value) >= 1]
+        amounts: list[tuple[float, str]] = []
+        for match in _DART_AMOUNT_PATTERN.finditer(row_text):
+            raw = match.group(0)
+            value = _normalize_dart_amount_krwbn(raw, unit)
+            if value is not None and abs(value) >= 1:
+                amounts.append((value, raw))
         if not amounts:
             continue
 
@@ -360,7 +358,9 @@ def _compact_tables_for_parser_result(tables: list[dict[str, Any]]) -> list[dict
     return compacted
 
 
-def _extract_sections_and_chunks(text: str) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+def _extract_sections_and_chunks(
+    text: str,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     if not text:
         return {}, []
 
@@ -641,7 +641,12 @@ class DartParser:
         warnings: list[str] = []
         candidates: list[dict[str, Any]] = []
         document_fetched = bool(extra.get("document_fetched"))
-        tables = extra.get("tables") if isinstance(extra.get("tables"), list) else []
+        raw_tables = extra.get("tables")
+        tables: list[dict[str, Any]] = (
+            [table for table in raw_tables if isinstance(table, dict)]
+            if isinstance(raw_tables, list)
+            else []
+        )
 
         table_metrics = _extract_table_statement_metrics(tables)
         statement_metrics = table_metrics or _extract_dart_statement_metrics(text)

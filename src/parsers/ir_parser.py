@@ -105,13 +105,25 @@ _IR_COMPANY_SECTION_HINTS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...
         ("smart_factory", "Smart Factory", ("smart factory", "스마트팩토리", "mes", "factory")),
     ),
     "hyundai_autoever": (
-        ("vehicle_sw", "Vehicle SW", ("vehicle", "차량", "sw", "software-defined", "sdv", "내비게이션")),
+        (
+            "vehicle_sw",
+            "Vehicle SW",
+            ("vehicle", "차량", "sw", "software-defined", "sdv", "내비게이션"),
+        ),
         ("enterprise_it", "Enterprise IT", ("si", "ito", "enterprise", "erp", "그룹사")),
         ("smart_factory", "Smart Factory", ("smart factory", "스마트팩토리", "mes", "mobis")),
     ),
     "posco_dx": (
-        ("smart_factory", "Smart Factory", ("smart factory", "스마트팩토리", "자동화", "제철소", "철강")),
-        ("robotics", "Robotics/Automation", ("robot", "로봇", "automation", "자동화", "물류자동화")),
+        (
+            "smart_factory",
+            "Smart Factory",
+            ("smart factory", "스마트팩토리", "자동화", "제철소", "철강"),
+        ),
+        (
+            "robotics",
+            "Robotics/Automation",
+            ("robot", "로봇", "automation", "자동화", "물류자동화"),
+        ),
         ("industrial_ai", "Industrial AI", ("ai", "산업", "vision", "예지", "품질")),
     ),
     "sk_ax": (
