@@ -1,7 +1,9 @@
 import logging
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
+from fastapi import BackgroundTasks, HTTPException
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -54,17 +56,25 @@ async def health():
 
 
 @app.post("/pipeline/run", response_model=PipelineRunResponse, status_code=202)
-async def run_pipeline(request: PipelineRunRequest):
+async def run_pipeline(request: PipelineRunRequest, background_tasks: BackgroundTasks):
     """수집 파이프라인 비동기 실행 (SpringBoot 스케줄러가 매시간 호출)"""
-    import uuid
-
     task_id = str(uuid.uuid4())
-    log.info("수집 파이프라인 시작 | company=%s task_id=%s", request.company, task_id)
-    # TODO: ingestion_graph.py 실행 (백그라운드 태스크)
+    track = request.track.strip().lower()
+    if track not in {"a", "b", "c", "all"}:
+        raise HTTPException(status_code=400, detail=f"unsupported track: {request.track}")
+
+    log.info(
+        "수집 파이프라인 큐 등록 | track=%s company=%s trigger=%s task_id=%s",
+        track,
+        request.company,
+        request.trigger_type,
+        task_id,
+    )
+    background_tasks.add_task(_run_collection_track, task_id, track, request.company)
     return PipelineRunResponse(
         task_id=task_id,
         status="accepted",
-        message=f"파이프라인 큐 등록 완료 - company: {request.company}",
+        message=f"파이프라인 큐 등록 완료 - track: {track}, company: {request.company}",
     )
 
 
@@ -112,6 +122,76 @@ def _api_response(data: dict) -> dict:
         "data": data,
         "timestamp": datetime.now(UTC).isoformat(),
     }
+
+
+async def _run_collection_track(task_id: str, track: str, companies: list[str]) -> None:
+    from src.config.companies import COMPANY_ALIASES, COMPANY_IDS
+    from src.config.global_companies import GLOBAL_COMPANY_ALIASES, GLOBAL_COMPANY_IDS
+    from src.crawler.batch_processor import BatchProcessor
+    from src.pipeline.ingestion_graph import (
+        classify_node,
+        crawl_node,
+        credibility_node,
+        dedup_node,
+        preprocess_route_node,
+    )
+
+    all_aliases = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
+    selected = companies or [*COMPANY_IDS, *GLOBAL_COMPANY_IDS]
+    invalid = sorted({company for company in selected if company not in all_aliases})
+    if invalid:
+        log.error("수집 파이프라인 실패 | task_id=%s invalid_company=%s", task_id, invalid)
+        return
+
+    processor = BatchProcessor()
+    started_at = datetime.now(UTC).isoformat()
+
+    try:
+        if track in {"a", "all"}:
+            await processor.run_track_a(
+                {company: all_aliases[company] for company in selected if company in COMPANY_IDS}
+            )
+        if track in {"b", "all"}:
+            await processor.run_track_b({company: all_aliases[company] for company in selected})
+        if track in {"c", "all"}:
+            await processor.run_track_c({company: all_aliases[company] for company in selected})
+
+        state = {
+            "company": selected,
+            "trigger_type": "scheduled",
+            "collected_since": started_at,
+            "crawl_run_id": None,
+            "raw_article_ids": [],
+            "credible_ids": [],
+            "relevant_ids": [],
+            "official_document_ids": [],
+            "parsed_document_ids": [],
+            "industry_document_ids": [],
+            "structured_signal_ids": [],
+            "skipped_preprocess_ids": [],
+            "cluster_map": {},
+            "representative_ids": [],
+            "classified_clusters": [],
+            "issue_cards": [],
+            "evidence_results": [],
+            "indexed_vector_ids": [],
+            "errors": [],
+            "human_review_flags": [],
+        }
+        result = crawl_node(state)
+        result = credibility_node(result)
+        result = preprocess_route_node(result)
+        result = dedup_node(result)
+        result = classify_node(result)
+        log.info(
+            "수집 파이프라인 완료 | task_id=%s track=%s raw=%d classified=%d",
+            task_id,
+            track,
+            len(result.get("raw_article_ids", [])),
+            len(result.get("classified_clusters", [])),
+        )
+    except Exception:
+        log.exception("수집 파이프라인 실패 | task_id=%s track=%s", task_id, track)
 
 
 @app.post("/search", response_model=SearchResponse)
