@@ -60,7 +60,7 @@ def save_articles(
                         "source_name": article.source_name,
                         "publisher": article.publisher,
                         "title": article.title[:500],
-                        "content": article.content[:10_000] if article.content else "",
+                        "content": article.content if article.content else "",
                         "url": article.url,
                         "url_hash": article.url_hash,
                         "published_at": article.published_at or article.collected_at,
@@ -146,6 +146,7 @@ def list_card_news_cluster_candidates(
             ON a.cluster_id = r.cluster_id
            AND a.source_type = 'news'
            AND a.collected_at::date = r.collected_at::date
+           AND a.company = r.company
         WHERE r.source_type = 'news'
           AND r.is_representative = true
           AND r.cluster_id IS NOT NULL

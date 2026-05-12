@@ -55,8 +55,10 @@ _ARTICLE_FACT_EXTRACTION_PROMPT = """\
 2. 기사에 명시된 사실만 쓰고, 시사점·평가·대응 방향은 쓰지 마세요.
 3. 수주, 출시, 제휴, 투자, 적용 업무, 고객 규모, 사업 규모, 후속 본사업,
    예정·계획 정보처럼 경쟁사 동향에 필요한 사실을 우선하세요.
-4. 여러 기사에 반복되는 문장이라도 각 기사에서 확인한 사실로 기록하세요.
-5. 본문에 없는 수치, 제품명, 회사명은 만들지 마세요.
+4. 피어사의 일반적 정체성, 기존 포지셔닝, 누구나 알 수 있는 배경 설명은 핵심 사실로 쓰지 마세요.
+   기사에서 새로 확인되는 역할, 사건, 범위, 수치, 일정, 시설, 고객, 적용 업무를 우선하세요.
+5. 여러 기사에 반복되는 문장이라도 각 기사에서 확인한 사실로 기록하세요.
+6. 본문에 없는 수치, 제품명, 회사명은 만들지 마세요.
 
 기사 클러스터:
 {articles_text}
@@ -95,16 +97,20 @@ _PEER_NEWS_SUMMARY_PROMPT = """\
 2. article_fact_notes를 먼저 비교하고, 여러 기사에서 확인되는 공통 사실을 우선하세요.
    필요한 경우 기사 원문으로 표현과 수치를 검증하세요.
 3. 기사 간 표현이 다르면 더 구체적인 표현을 선택하고, 충돌하면 보수적으로 쓰거나 제외하세요.
+   대표기사에 없더라도 다른 기사에서만 확인되는 중요한 수치, 범위, 후속 단계는 반영하세요.
 4. 피어사 동향을 보여주는 실제 움직임을 우선하세요: 수주, 출시, 제휴, 투자, 인수, 채용, 조직개편 등.
 5. 사업/기술/서비스 내용은 기사에 나온 산업명, 업무명, 제품명, 기능명,
    데이터 영역을 포함해 구체적으로 쓰세요.
 6. 기사에 명시된 고객 규모, 사업 규모, 적용 범위, 후속 본사업, 예정·계획 정보는
    경쟁사 방향성을 보여주는 사실로 반영하세요.
    단, 예상·전망·향후 표현은 확정처럼 단정하지 말고 원문 수위를 유지하세요.
+   시장 반응 기사에서는 단순 등락만 쓰지 말고 거래량, 시가총액, 밸류에이션,
+   업종 대비 흐름처럼 기사에 나온 회사 상황 근거를 함께 요약하세요.
+   원문에 원인이 없으면 하락·상승 원인을 만들지 마세요.
 7. fact_summary는 정확히 3문장으로 작성하고, 역할이 겹치지 않게 나누세요.
-   - 1번째 문장: 피어사가 무엇을 했는지.
-   - 2번째 문장: 어떤 사업/기술/서비스/업무를 다루는지.
-   - 3번째 문장: 고객 규모, 적용 범위, 후속 사업 단계, 예정된 추진 범위 중 남은 중요 사실.
+   - 1번째 문장: 기사에서 새로 확인되는 피어사가 무엇을 했는지.
+   - 2번째 문장: 그 역할이 연결된 구체적 사업/기술/서비스/업무/시설/데이터 영역.
+   - 3번째 문장: 수치, 적용 범위, 후속 사업 단계, 시장 반응 중 남은 중요 사실.
 8. 3문장 안에 모두 담을 수 없으면 사업 행동, 기술·서비스 내용,
    고객/시장 규모, 후속 사업 단계 순으로 선택하세요.
    참석자, 사진 설명, 일반 배경은 제외하세요.
@@ -113,10 +119,15 @@ _PEER_NEWS_SUMMARY_PROMPT = """\
 1. 기사에 명시된 사실만 요약하세요.
 2. 본문에 없는 수치, 제품명, 회사명은 만들지 마세요.
 3. 피어사를 주어로 작성하세요.
-4. 여러 기사 내용이 충돌하면 공통으로 확인되는 사실만 쓰세요.
-5. 기사 내용이 피어사 핵심 내용이 아니면 is_valid_summary=false로 표시하세요.
-6. "목표로 한다", "강화할 수 있다" 같은 목적·평가식 표현보다 기사에 근거한 사실 표현을 우선하세요.
-7. fact_summary에는 "목표로 한다"를 쓰지 마세요. 필요한 경우 기사에 근거해
+4. headline, one_line_summary, fact_summary 중 최소 1곳에는 main_company의 회사명 또는 alias가
+   실제 문장으로 들어가야 합니다.
+5. 회사의 일반적 역할·정체성·배경만 말하는 문장은 fact_summary에 쓰지 마세요.
+   반드시 기사에서 새로 확인되는 구체 사실을 포함하세요.
+6. 여러 기사 내용이 충돌하면 공통으로 확인되는 사실만 쓰세요.
+7. 기사 내용이 피어사 핵심 내용이 아니거나, 그룹사/계열사/협력사만 핵심 주체이면
+   is_valid_summary=false로 표시하세요.
+8. "목표로 한다", "강화할 수 있다" 같은 목적·평가식 표현보다 기사에 근거한 사실 표현을 우선하세요.
+9. fact_summary에는 "목표로 한다"를 쓰지 마세요. 필요한 경우 기사에 근거해
    "설계한다", "수립한다", "마련한다", "추진한다", "선행 단계다" 같은 사실형 서술로 바꾸세요.
 
 ## 기사별 팩트 노트와 기사 원문
@@ -147,14 +158,16 @@ _FACT_SUMMARY_REPAIR_PROMPT = """\
    최소 1개가 사업/기술 설명 문장의 핵심 명사구에 들어가야 합니다.
 3. 대상 업무·데이터·산업·제품명이 빠진 일반 표현을 핵심 설명으로 쓰지 마세요.
 4. fact_summary 3문장은 각각 중복되지 않게 역할을 나누세요.
-   - 피어사가 무엇을 했는지
+   - 기사에서 새로 확인되는 피어사가 무엇을 했는지
    - 어떤 사업/기술/업무를 다루는지
    - 고객 규모, 적용 범위, 후속 사업 단계 중 중요한 사실
-5. 시사점, 전망, 대응 방향은 쓰지 말고 기사 속 사실만 쓰세요.
-6. 기사에 명시된 예정·계획·후속 본사업 정보는 원문 수위를 유지해 쓸 수 있습니다.
-7. "목표로 한다", "기대된다", "가능성이 있다"처럼 목적/평가식 표현보다
+5. 회사의 일반적 정체성, 기존 포지셔닝, 배경 설명만 담긴 문장은 반드시 기사 속
+   구체 사실이 들어간 문장으로 바꾸세요.
+6. 시사점, 전망, 대응 방향은 쓰지 말고 기사 속 사실만 쓰세요.
+7. 기사에 명시된 예정·계획·후속 본사업 정보는 원문 수위를 유지해 쓸 수 있습니다.
+8. "목표로 한다", "기대된다", "가능성이 있다"처럼 목적/평가식 표현보다
    "방안을 마련한다", "로드맵을 수립한다", "선행 단계다"처럼 기사에 근거한 사실 표현을 쓰세요.
-8. fact_summary에 "목표로 한다"가 남아 있으면 검수 실패로 보고 반드시 사실형 서술로 고치세요.
+9. fact_summary에 "목표로 한다"가 남아 있으면 검수 실패로 보고 반드시 사실형 서술로 고치세요.
 
 domain_terms:
 {domain_terms_json}
@@ -298,6 +311,8 @@ def _format_articles(
 ) -> str:
     lines = [
         f"cluster_target_peer_companies: {json.dumps(target_companies, ensure_ascii=False)}",
+        "cluster_target_peer_aliases: "
+        f"{json.dumps(_target_company_aliases(target_companies), ensure_ascii=False)}",
     ]
 
     for index, article in enumerate(articles, start=1):
@@ -437,7 +452,7 @@ def _normalize_summary_result(
         main_company = mentioned[0] if mentioned else target_companies[0]
 
     facts = _normalize_string_list(data.get("fact_summary"))[:3]
-    return {
+    result = {
         "is_valid_summary": bool(data.get("is_valid_summary", True)) and bool(facts),
         "main_company": main_company,
         "mentioned_peer_companies": mentioned or [main_company],
@@ -448,6 +463,31 @@ def _normalize_summary_result(
         "confidence": _clamp_float(data.get("confidence"), default=0.0),
         "reason": str(data.get("reason") or "").strip(),
     }
+    if result["is_valid_summary"] and not _summary_mentions_company(result, main_company):
+        result["is_valid_summary"] = False
+        result["reason"] = (
+            "요약 문장에 main_company alias가 없어 피어사 핵심 동향 요약으로 인정하지 않음"
+        )
+    return result
+
+
+def _target_company_aliases(company_ids: list[str]) -> dict[str, list[str]]:
+    return {company_id: _PEER_ALIASES.get(company_id, [company_id]) for company_id in company_ids}
+
+
+def _summary_mentions_company(summary: dict[str, Any], company_id: str) -> bool:
+    aliases = _PEER_ALIASES.get(company_id, [company_id])
+    compact_text = _compact(
+        " ".join(
+            [
+                str(summary.get("headline") or ""),
+                str(summary.get("one_line_summary") or ""),
+                str(summary.get("main_event") or ""),
+                " ".join(_normalize_string_list(summary.get("fact_summary"))),
+            ]
+        )
+    )
+    return any(_compact(alias) and _compact(alias) in compact_text for alias in aliases)
 
 
 def _repair_fact_summary_if_needed(

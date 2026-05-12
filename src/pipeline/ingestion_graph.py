@@ -205,10 +205,10 @@ def credibility_node(state: IngestionState) -> IngestionState:
 @_logged_step("preprocess_route", "credible_ids", "relevant_ids")
 def preprocess_route_node(state: IngestionState) -> IngestionState:
     """source_type별 DB 전처리 라우팅."""
-    from src.parsers.parser_quality import analyze_parser_quality_article
-    from src.parsers.parser_router import DocumentParserRouter
     from src.agents.relevance_agent import RelevanceAgent
     from src.db.article_store import get_articles_by_ids, update_preprocess_status
+    from src.parsers.parser_quality import analyze_parser_quality_article
+    from src.parsers.parser_router import DocumentParserRouter
 
     credible_ids = state.get("credible_ids", [])
     if not credible_ids:
@@ -466,12 +466,21 @@ def card_news_node(state: IngestionState) -> IngestionState:
     """카드 뉴스 생성 — 클러스터 사실 요약 결과 기반. (구 issue_card_node)"""
     from src.agents.issue_card_agent import IssueCardAgent
     from src.agents.news_summary_agent import PeerNewsSummaryAgent
+    from src.config.company_tiers import SELF_COMPANY_IDS
 
     agent = IssueCardAgent()
     summary_agent = PeerNewsSummaryAgent()
     cluster_map = state["cluster_map"]
 
     def _generate_one(cluster: dict) -> dict:
+        if cluster.get("company") in SELF_COMPANY_IDS:
+            log.info(
+                "이슈카드 생성 제외 | cluster=%s company=%s reason=self company",
+                cluster.get("cluster_id"),
+                cluster.get("company"),
+            )
+            return {}
+
         cluster_id = cluster["cluster_id"]
         article_ids = cluster_map.get(cluster_id, [])
         summary = summary_agent.summarize(
@@ -480,6 +489,14 @@ def card_news_node(state: IngestionState) -> IngestionState:
             cluster_article_ids=article_ids,
             max_cluster_articles=max(len(article_ids), 1),
         )
+        if not summary.get("is_valid_summary"):
+            log.info(
+                "이슈카드 생성 제외 | cluster=%s company=%s reason=invalid_summary:%s",
+                cluster_id,
+                cluster.get("company"),
+                summary.get("reason"),
+            )
+            return {}
         return agent.generate(
             cluster_id=cluster_id,
             representative_id=cluster["representative_id"],
