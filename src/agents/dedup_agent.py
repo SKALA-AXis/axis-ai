@@ -8,6 +8,7 @@ title/content 임베딩 유사도로 같은 이슈를 묶는다.
 import json
 import logging
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -372,7 +373,7 @@ def _list_value(value: Any) -> list[str]:
     return []
 
 
-def _matched_alias_keys(alias_map: dict[str, tuple[str, ...]], compact_text: str) -> list[str]:
+def _matched_alias_keys(alias_map: Mapping[str, tuple[str, ...]], compact_text: str) -> list[str]:
     matched: list[str] = []
     for key, aliases in alias_map.items():
         compact_aliases = [_compact_text(alias) for alias in aliases]
