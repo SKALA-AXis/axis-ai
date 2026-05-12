@@ -113,6 +113,42 @@ def test_dart_parser_parses_dart_statement_table_amounts() -> None:
     assert parsed["operating_profit_krwbn"] == 9571.02744609
 
 
+def test_dart_parser_extracts_event_disclosure_fields_for_share_buyback() -> None:
+    article = RawArticle(
+        url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20250828000123",
+        title="주요사항보고서(자기주식 취득 결정)",
+        content=(
+            "주요사항보고서(자기주식 취득 결정)\n"
+            "취득예정주식(주) 보통주식 498,494 기타주식 152,412\n"
+            "취득예정금액(원) 10,211,738,640\n"
+            "취득예상기간 2025.08.28 - 2025.11.27\n"
+            "11. 기타 투자판단에 참고할 사항\n"
+            "- 상기 1. 취득예정주식(주) 및 2. 취득예정금액(원)의 기타주식은 2우선주임\n"
+            "- 상기 4. 보유예상기간과 관련하여 자기주식 취득 완료후 소각할 예정임"
+        ),
+        source_name="dart",
+        published_at=datetime(2025, 8, 28),
+        peer_id="test_peer",
+        source_type="dart",
+        content_type="api",
+        extra={
+            "rcept_no": "20250828000123",
+            "report_name": "주요사항보고서(자기주식 취득 결정)",
+            "document_fetched": True,
+        },
+    )
+
+    parsed = DartParser().parse_article(article)
+
+    assert parsed["disclosure_category"] == "event_disclosure"
+    assert parsed["event_type"] == "share_buyback_decision"
+    assert parsed["event_fields"]["target_shares_common"] == 498494
+    assert parsed["event_fields"]["target_shares_preferred"] == 152412
+    assert parsed["event_fields"]["target_amount_krw"] == 10211738640
+    assert parsed["event_fields"]["acquisition_period"] == "2025.08.28 - 2025.11.27"
+    assert parsed["financial_record"]["event_type"] == "share_buyback_decision"
+
+
 def test_parser_quality_passes_dart_document_after_parser() -> None:
     item = {
         "url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260506000123",

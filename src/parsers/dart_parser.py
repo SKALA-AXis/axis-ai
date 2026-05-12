@@ -70,6 +70,19 @@ _DART_SUB_HEADING_PATTERN = re.compile(
 )
 _DART_CHUNK_MAX_CHARS = 3500
 _DART_CHUNK_OVERLAP_CHARS = 250
+_EVENT_DISCLOSURE_PREFIXES = ("주요사항보고서", "주요경영사항 공시")
+_SHARE_BUYBACK_EVENT_PATTERN = re.compile(r"자기\s*주식\s*취득\s*결정")
+_LINE_SPLIT_PATTERN = re.compile(r"(?:\r?\n)+")
+_BUYBACK_NUMBER_PATTERNS = {
+    "target_shares_common": re.compile(r"보통주식\s*([0-9][0-9,]*)"),
+    "target_shares_preferred": re.compile(r"기타주식\s*([0-9][0-9,]*)"),
+}
+_BUYBACK_AMOUNT_PATTERN = re.compile(
+    r"취득예정금액\s*\(원\)\s*([0-9][0-9,\s]{3,})"
+)
+_BUYBACK_PERIOD_PATTERN = re.compile(
+    r"취득예상기간\s*[:：]?\s*([0-9]{4}[.\-/][0-9]{2}[.\-/][0-9]{2}\s*[-~]\s*[0-9]{4}[.\-/][0-9]{2}[.\-/][0-9]{2})"
+)
 
 
 def _article_get(article: Any, key: str, default: Any = None) -> Any:
@@ -141,6 +154,72 @@ def _period_parts(period: str | None) -> dict[str, int | None]:
         "period_year": int(match.group(1)),
         "period_quarter": int(match.group(2)),
     }
+
+
+def _disclosure_category(report_name: str) -> str:
+    cleaned = report_name.strip()
+    if cleaned.startswith(_EVENT_DISCLOSURE_PREFIXES):
+        return "event_disclosure"
+    return "regular_disclosure"
+
+
+def _event_type(report_name: str, text: str) -> str | None:
+    joined = " ".join([report_name or "", text[:3000] if text else ""])
+    if _SHARE_BUYBACK_EVENT_PATTERN.search(joined):
+        return "share_buyback_decision"
+    return None
+
+
+def _extract_share_buyback_fields(text: str) -> dict[str, Any]:
+    normalized = re.sub(r"\s+", " ", text or "").strip()
+    result: dict[str, Any] = {}
+
+    for field, pattern in _BUYBACK_NUMBER_PATTERNS.items():
+        match = pattern.search(normalized)
+        if match:
+            result[field] = int(match.group(1).replace(",", ""))
+
+    amount_match = _BUYBACK_AMOUNT_PATTERN.search(normalized)
+    if amount_match:
+        amount_text = re.sub(r"\s+", "", amount_match.group(1))
+        try:
+            result["target_amount_krw"] = int(amount_text.replace(",", ""))
+        except ValueError:
+            pass
+
+    period_match = _BUYBACK_PERIOD_PATTERN.search(normalized)
+    if period_match:
+        result["acquisition_period"] = period_match.group(1)
+
+    stock_types: list[str] = []
+    if "보통주식" in normalized:
+        stock_types.append("common")
+    if "기타주식" in normalized:
+        stock_types.append("preferred")
+    if stock_types:
+        result["stock_types"] = stock_types
+
+    notes: list[str] = []
+    for line in _LINE_SPLIT_PATTERN.split(text or ""):
+        cleaned = _clean_section_text(line)
+        if not cleaned:
+            continue
+        if any(token in cleaned for token in ("기타 투자판단", "기타주식", "전일", "소각 예정")):
+            notes.append(cleaned)
+    if notes:
+        result["reference_notes"] = notes[:8]
+
+    return result
+
+
+def _event_disclosure_payload(
+    report_name: str,
+    text: str,
+) -> tuple[str | None, dict[str, Any]]:
+    event_type = _event_type(report_name, text)
+    if event_type == "share_buyback_decision":
+        return event_type, _extract_share_buyback_fields(text)
+    return event_type, {}
 
 
 def _candidate_page(candidates: list[dict[str, Any]], metric_type: str) -> int | None:
@@ -630,6 +709,8 @@ class DartParser:
         published_at = _article_published_at(article, extra)
 
         report_name = str(extra.get("report_name") or extra.get("report_nm") or title)
+        disclosure_category = _disclosure_category(report_name)
+        event_type, event_fields = _event_disclosure_payload(report_name, text)
         period, period_type = _period_from_report_name(report_name)
 
         if not period:
@@ -711,6 +792,9 @@ class DartParser:
             "published_at": published_at,
             "dart_rcept_no": rcept_no or None,
             "dart_report_name": report_name,
+            "disclosure_category": disclosure_category,
+            "event_type": event_type,
+            "event_fields": event_fields,
             "dart_page": _candidate_page(candidates, "revenue_total")
             or _candidate_page(candidates, "operating_profit"),
             "financial_metrics_source": (
@@ -734,6 +818,9 @@ class DartParser:
             "corp_name": extra.get("corp_name"),
             "stock_code": extra.get("stock_code"),
             "report_name": report_name,
+            "disclosure_category": disclosure_category,
+            "event_type": event_type,
+            "event_fields": event_fields,
             "disclosure_type": extra.get("disclosure_type"),
             "disclosure_type_label": extra.get("disclosure_type_label"),
             "revenue_total_krwbn": revenue_total,
