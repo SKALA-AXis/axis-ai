@@ -199,7 +199,7 @@ class BackfillRunner:
             "cluster_map": {},
             "representative_ids": [],
             "classified_clusters": [],
-            "issue_cards": [],
+            "card_news": [],
             "evidence_results": [],
             "indexed_vector_ids": [],
             "errors": [],
@@ -223,6 +223,6 @@ class BackfillRunner:
             crawl_run_id,
             len(result.get("raw_article_ids", [])),
             len(result.get("classified_clusters", [])),
-            len(result.get("issue_cards", [])),
+            len(result.get("card_news", [])),
             len(result.get("indexed_vector_ids", [])),
         )

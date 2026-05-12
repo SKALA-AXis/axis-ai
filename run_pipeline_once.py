@@ -34,7 +34,7 @@ _parser.add_argument(
 _parser.add_argument(
     "--preprocess-only",
     action="store_true",
-    help="issue_card/evidence/vector index 없이 전처리(classification)까지만 실행.",
+    help="card_news/evidence/vector index 없이 전처리(classification)까지만 실행.",
 )
 _parser.add_argument(
     "--collected-since",
@@ -114,7 +114,7 @@ def main() -> None:
         "cluster_map": {},
         "representative_ids": [],
         "classified_clusters": [],
-        "issue_cards": [],
+        "card_news": [],
         "evidence_results": [],
         "indexed_vector_ids": [],
         "errors": [],
@@ -132,7 +132,7 @@ def main() -> None:
 
     result = ingestion_graph.invoke(initial_state)
 
-    cards = result.get("issue_cards", [])
+    cards = result.get("card_news", [])
     evidence = result.get("evidence_results", [])
     pass_count = sum(1 for r in evidence if r.get("pass"))
 

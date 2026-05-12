@@ -73,7 +73,7 @@ class IssueCardAgent:
             summary: PeerNewsSummaryAgent가 만든 클러스터 사실 요약.
 
         Returns:
-            IssueCard dict (저장 전 validation 없는 상태).
+            card_news dict (저장 전 validation 없는 상태) — DB 의 card_news 테이블 row 와 1:1.
         """
         company = company or peer_id
 

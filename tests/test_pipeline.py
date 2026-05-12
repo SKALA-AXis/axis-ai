@@ -13,7 +13,7 @@ def test_ingestion_state_structure():
         "cluster_map": {},
         "representative_ids": [],
         "classified_clusters": [],
-        "issue_cards": [],
+        "card_news": [],
         "implications": [],
         "validation_results": [],
         "errors": [],
