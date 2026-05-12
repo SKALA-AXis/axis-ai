@@ -226,19 +226,25 @@ def update_cluster(
 
 def update_classification(
     article_id: int,
+    importance: str,
     importance_score: float,
+    qdrant_vector_id: Optional[str] = None,
 ) -> None:
     """중요도 분류 결과를 raw_articles에 반영한다."""
     with SessionLocal() as db:
         db.execute(
             text("""
                 UPDATE raw_articles
-                SET importance_score = :score,
-                    processing_status = 'CLASSIFIED'
+                SET importance_level = :importance,
+                    importance_score = :score,
+                    processing_status = 'CLASSIFIED',
+                    qdrant_vector_id = CAST(:qdrant_id AS uuid)
                 WHERE id = :id
             """),
             {
+                "importance": importance,
                 "score": importance_score,
+                "qdrant_id": qdrant_vector_id,
                 "id": article_id,
             },
         )
