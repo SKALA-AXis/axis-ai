@@ -181,11 +181,43 @@ def _embed(
 
 
 def _build_embedding_text(article: dict[str, Any]) -> str:
-    """유사 기사 판단용 임베딩 입력 텍스트를 만든다."""
-    title = article.get("title") or ""
-    content = article.get("content") or ""
+    """title + full content + extracted entities 기반 임베딩 입력을 만든다."""
+    title = _clean_space(str(article.get("title") or ""))
+    content = _content_text(article)
+    entities = _issue_entities(article)
 
-    return f"{title}. {title}. {title}. {content[:256]}"
+    entity_lines = [
+        _entity_line("companies", entities["companies"]),
+        _entity_line("sectors", entities["sectors"]),
+        _entity_line("customers", entities["customers"]),
+        _entity_line("issues", entities["canonical_issues"]),
+        _entity_line("products", entities["quoted_terms"]),
+        _entity_line("business_terms", entities["business_terms"]),
+    ]
+
+    return "\n".join(
+        part
+        for part in [
+            f"title: {title}",
+            f"content: {content}",
+            *entity_lines,
+        ]
+        if part.strip()
+    )
+
+
+def _entity_line(label: str, values: list[str]) -> str:
+    if not values:
+        return ""
+    return f"{label}: {', '.join(values)}"
+
+
+def _content_text(article: dict[str, Any]) -> str:
+    return _clean_space(str(article.get("content") or ""))
+
+
+def _clean_space(value: str) -> str:
+    return " ".join(value.split())
 
 
 def _embed_bge(texts: list[str]) -> np.ndarray:
@@ -273,28 +305,31 @@ def _same_issue(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 
 def _issue_dedup_key(article: dict[str, Any]) -> str | None:
-    companies = _company_key(article)
+    entities = _issue_entities(article)
+    companies = entities["companies"]
     if not companies:
         return None
 
-    text = _compact_text(
-        " ".join(
-            [
-                str(article.get("title") or ""),
-                str(article.get("content") or "")[:1200],
-            ]
-        )
-    )
+    for issue in entities["canonical_issues"]:
+        return f"{','.join(companies)}::{issue}"
 
-    for issue, aliases in _CANONICAL_ISSUE_TERMS.items():
-        if any(_compact_text(alias) in text for alias in aliases):
-            return f"{','.join(companies)}::{issue}"
-
-    quoted = _quoted_product_key(article)
-    if quoted:
+    for quoted in entities["quoted_terms"]:
         return f"{','.join(companies)}::quoted::{quoted}"
 
     return None
+
+
+def _issue_entities(article: dict[str, Any]) -> dict[str, list[str]]:
+    """클러스터링에 쓰는 가벼운 엔티티를 title/content 전체에서 추출한다."""
+    text = _issue_text(article)
+    return {
+        "companies": _company_key(article),
+        "sectors": _sector_key(article),
+        "customers": _matched_alias_keys(_CUSTOMER_ALIASES, text),
+        "canonical_issues": _matched_alias_keys(_CANONICAL_ISSUE_TERMS, text),
+        "quoted_terms": _quoted_product_terms(article),
+        "business_terms": sorted(_business_terms(text)),
+    }
 
 
 def _company_key(article: dict[str, Any]) -> list[str]:
@@ -315,14 +350,47 @@ def _company_key(article: dict[str, Any]) -> list[str]:
     return []
 
 
-def _quoted_product_key(article: dict[str, Any]) -> str | None:
+def _sector_key(article: dict[str, Any]) -> list[str]:
+    sectors = _list_value(article.get("matched_sectors"))
+    return sorted({sector for sector in sectors if sector and sector != "other"})
+
+
+def _list_value(value: Any) -> list[str]:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed if item]
+        except json.JSONDecodeError:
+            pass
+        return [stripped]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if item]
+    return []
+
+
+def _matched_alias_keys(alias_map: dict[str, tuple[str, ...]], compact_text: str) -> list[str]:
+    matched: list[str] = []
+    for key, aliases in alias_map.items():
+        compact_aliases = [_compact_text(alias) for alias in aliases]
+        if any(alias and alias in compact_text for alias in compact_aliases):
+            matched.append(key)
+    return matched
+
+
+def _quoted_product_terms(article: dict[str, Any]) -> list[str]:
     title = str(article.get("title") or "")
-    quoted_terms = re.findall(r"['‘’\"“”「」](.{2,40}?)['‘’\"“”「」]", title)
+    content = str(article.get("content") or "")
+    quoted_terms = re.findall(r"['‘’\"“”「」](.{2,40}?)['‘’\"“”「」]", f"{title} {content}")
+    terms: list[str] = []
     for term in quoted_terms:
         compact = _compact_text(term)
-        if len(compact) >= 4 and not compact.isdigit():
-            return compact
-    return None
+        if len(compact) >= 4 and not compact.isdigit() and compact not in terms:
+            terms.append(compact)
+    return terms
 
 
 _CUSTOMER_ALIASES = {
@@ -356,24 +424,35 @@ _MIN_BUSINESS_TERMS_PER_ARTICLE = 2
 
 
 def _same_company_customer_business_issue(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    if _company_key(left) != _company_key(right):
+    if not _company_key(left) or _company_key(left) != _company_key(right):
         return False
 
-    left_text = _issue_text(left)
-    right_text = _issue_text(right)
+    left_entities = _issue_entities(left)
+    right_entities = _issue_entities(right)
 
-    if not _shared_customer(left_text, right_text):
+    if _shared(left_entities["canonical_issues"], right_entities["canonical_issues"]):
+        return True
+
+    if _shared(left_entities["quoted_terms"], right_entities["quoted_terms"]):
+        return True
+
+    shared_customers = _shared(left_entities["customers"], right_entities["customers"])
+    if not shared_customers:
         return False
 
-    left_terms = _business_terms(left_text)
-    right_terms = _business_terms(right_text)
-    if len(left_terms & right_terms) >= _MIN_SHARED_BUSINESS_TERMS:
+    shared_business_terms = set(left_entities["business_terms"]) & set(
+        right_entities["business_terms"]
+    )
+    if len(shared_business_terms) >= _MIN_SHARED_BUSINESS_TERMS:
+        return True
+
+    if shared_business_terms and _shared(left_entities["sectors"], right_entities["sectors"]):
         return True
 
     return (
-        bool(left_terms & right_terms)
-        and len(left_terms) >= _MIN_BUSINESS_TERMS_PER_ARTICLE
-        and len(right_terms) >= _MIN_BUSINESS_TERMS_PER_ARTICLE
+        bool(shared_business_terms)
+        and len(left_entities["business_terms"]) >= _MIN_BUSINESS_TERMS_PER_ARTICLE
+        and len(right_entities["business_terms"]) >= _MIN_BUSINESS_TERMS_PER_ARTICLE
     )
 
 
@@ -382,20 +461,14 @@ def _issue_text(article: dict[str, Any]) -> str:
         " ".join(
             [
                 str(article.get("title") or ""),
-                str(article.get("content") or "")[:1200],
+                str(article.get("content") or ""),
             ]
         )
     )
 
 
-def _shared_customer(left_text: str, right_text: str) -> bool:
-    for aliases in _CUSTOMER_ALIASES.values():
-        compact_aliases = [_compact_text(alias) for alias in aliases]
-        if any(alias in left_text for alias in compact_aliases) and any(
-            alias in right_text for alias in compact_aliases
-        ):
-            return True
-    return False
+def _shared(left: list[str], right: list[str]) -> bool:
+    return bool(set(left) & set(right))
 
 
 def _business_terms(text: str) -> set[str]:
@@ -477,7 +550,7 @@ def _company_presence_score(article: dict[str, Any]) -> float:
         return 0.0
 
     title = _compact_text(str(article.get("title") or ""))
-    lead = _compact_text(str(article.get("content") or "")[:800])
+    content = _compact_text(str(article.get("content") or ""))
 
     aliases = [
         _compact_text(alias)
@@ -488,7 +561,7 @@ def _company_presence_score(article: dict[str, Any]) -> float:
     if any(alias and alias in title for alias in aliases):
         return 1.0
 
-    if any(alias and alias in lead for alias in aliases):
+    if any(alias and alias in content for alias in aliases):
         return 0.7
 
     return 0.0

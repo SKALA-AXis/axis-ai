@@ -540,6 +540,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SK AX 공식 사이트 페이지 크롤러")
     parser.add_argument("--max-pages", type=int, default=200)
     parser.add_argument(
+        "--env",
+        choices=["local", "cloud"],
+        default=None,
+        help="DB 저장 시 사용할 환경 프로파일(.env.local/.env.cloud).",
+    )
+    parser.add_argument(
         "--no-render", action="store_true", help="Playwright 렌더링 없이 httpx만 사용"
     )
     parser.add_argument(
@@ -547,18 +553,34 @@ def parse_args() -> argparse.Namespace:
         default=str(DEFAULT_RESULTS_DIR / "skax_site.json"),
         help="결과 JSON 저장 경로",
     )
+    parser.add_argument(
+        "--save-db",
+        action="store_true",
+        help="수집 결과를 raw_articles 테이블에도 저장",
+    )
     return parser.parse_args()
 
 
 async def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.INFO)
+    if args.save_db:
+        from src.config.env_loader import load_profile
+
+        profile = load_profile(args.env)
+        log.info("DB 저장 프로파일 로드 | profile=%s", profile)
+
     crawler = SkaxSiteCrawler(
         max_pages=args.max_pages,
         use_render=not args.no_render,
         output_path=Path(args.output),
     )
     articles = await crawler.crawl()
+    if args.save_db:
+        from src.db.article_store import save_articles
+
+        inserted = save_articles(articles)
+        print(f"DB 저장 완료: {inserted}건")
     print(f"수집 완료: {len(articles)}건")
 
 

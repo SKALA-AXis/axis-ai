@@ -26,7 +26,8 @@ from src.db.postgres import SessionLocal
 log = logging.getLogger(__name__)
 
 RELEVANCE_THRESHOLD = 0.60
-LLM_CONTENT_LIMIT = 1800
+UNCERTAIN_CANDIDATE_THRESHOLD = 0.45
+PEER_CONTEXT_LIMIT = 1800
 ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
 
 _llm: ChatOpenAI | None = None
@@ -55,6 +56,7 @@ _RELEVANCE_PROMPT = """\
 - target_companies: 수집 단계에서 모니터링 대상으로 지정된 company 목록
 - matched_company_candidates: 규칙 기반으로 본문에서 감지된 company 후보
 - matched_sector_candidates: 규칙 기반으로 본문에서 감지된 sector 후보
+- peer_context: 본문 전체에서 피어사명 주변 문장과 행위 키워드 문장을 추출한 참고 문맥
 
 ## 판단 원칙
 아래 3가지가 모두 충족되면 relevant로 판단하세요.
@@ -140,6 +142,7 @@ source_type: {source_type}
 ## 규칙 기반 감지 결과
 matched_company_candidates: {matched_company_candidates}
 matched_sector_candidates: {matched_sector_candidates}
+peer_context: {peer_context}
 
 ## JSON 출력 형식
 {{
@@ -269,6 +272,9 @@ class RelevanceAgent:
     def _analyze(self, row: Any) -> dict[str, Any]:
         title = row.title or ""
         content = row.content or ""
+        metadata = _metadata_dict(_row_value(row, "metadata", {}))
+        subtitle = _subtitle_text(metadata)
+        analysis_content = _join_text(subtitle, content)
         company = _normalize_company(row.company)
 
         if row.crawl_status == "failed":
@@ -280,7 +286,7 @@ class RelevanceAgent:
                 reason="수집 실패 상태라 관련성 판단 대상에서 제외",
             )
 
-        if not title and not content:
+        if not title and not analysis_content:
             return _result(
                 label="irrelevant",
                 score=0.0,
@@ -289,13 +295,13 @@ class RelevanceAgent:
                 reason="제목과 본문이 비어 있어 관련성 판단 불가",
             )
 
-        text_body = f"{title} {content}"
+        text_body = _join_text(title, subtitle, content)
         matched_company_candidates = _match_companies(text_body, company)
         matched_sector_candidates = match_sectors(text_body)
 
         noise_result = _noise_reject_result(
             title=title,
-            content=content,
+            content=analysis_content,
             source_type=row.source_type,
             matched_companies=matched_company_candidates,
             matched_sectors=matched_sector_candidates,
@@ -336,7 +342,7 @@ class RelevanceAgent:
 
         role_result = _core_company_role_reject_result(
             title=title,
-            content=content,
+            content=analysis_content,
             source_type=row.source_type,
             matched_companies=matched_company_candidates,
             matched_sectors=matched_sector_candidates,
@@ -351,7 +357,7 @@ class RelevanceAgent:
 
         fast_pass_result = _fast_pass_result(
             title=title,
-            content=content,
+            content=analysis_content,
             source_type=row.source_type,
             matched_companies=matched_company_candidates,
             matched_sectors=matched_sector_candidates,
@@ -366,11 +372,16 @@ class RelevanceAgent:
 
         return self._analyze_with_llm(
             title=title,
-            content=content,
+            content=analysis_content,
             source_type=row.source_type,
             company=company,
             matched_company_candidates=matched_company_candidates,
             matched_sector_candidates=matched_sector_candidates,
+            peer_context=_peer_context_snippets(
+                title=title,
+                content=analysis_content,
+                matched_companies=matched_company_candidates,
+            ),
         )
 
     def _analyze_with_llm(
@@ -381,14 +392,16 @@ class RelevanceAgent:
         company: list[str],
         matched_company_candidates: list[str],
         matched_sector_candidates: list[str],
+        peer_context: str,
     ) -> dict[str, Any]:
         prompt = _RELEVANCE_PROMPT.format(
             title=title,
-            content=content[:LLM_CONTENT_LIMIT],
+            content=content,
             source_type=source_type or "",
             company=company,
             matched_company_candidates=matched_company_candidates,
             matched_sector_candidates=matched_sector_candidates,
+            peer_context=peer_context[:PEER_CONTEXT_LIMIT],
         )
 
         try:
@@ -464,6 +477,37 @@ class _DictRow:
         self.source_type = article.get("source_type")
         self.crawl_status = article.get("crawl_status", "success")
         self.metadata = article.get("metadata") or article.get("extra") or {}
+
+
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    mapping = getattr(row, "_mapping", None)
+    if mapping is not None and key in mapping:
+        return mapping[key]
+    return getattr(row, key, default)
+
+
+def _metadata_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _subtitle_text(metadata: dict[str, Any]) -> str:
+    for key in ("subtitle", "sub_title", "description"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _join_text(*parts: str) -> str:
+    return " ".join(part.strip() for part in parts if part and part.strip())
 
 
 def _precheck(
@@ -569,7 +613,6 @@ _FAST_PASS_ACTION_KEYWORDS = [
     "플랫폼",
 ]
 _FAST_PASS_SOURCE_TYPES = {"news"}
-_LEAD_TEXT_LIMIT = 800
 _ROLE_CONTEXT_WINDOW = 100
 _LISTING_CONTEXT_KEYWORDS = [
     "etf",
@@ -582,6 +625,17 @@ _LISTING_CONTEXT_KEYWORDS = [
     "수익률",
     "종목",
     "시황",
+]
+_MARKET_LISTING_KEYWORDS = [
+    *_LISTING_CONTEXT_KEYWORDS,
+    "특징주",
+    "목표가",
+    "투자의견",
+    "시가총액",
+    "per",
+    "주가수익비율",
+    "코스피",
+    "코스닥",
 ]
 _SUBJECT_MARKERS = ["은", "는", "이", "가"]
 
@@ -615,6 +669,15 @@ def _noise_reject_result(
             reason=(
                 "주가 등락/시황 중심 기사라 뉴스 relevance 대상에서 제외하고 market_data에서 처리"
             ),
+        )
+
+    if _is_market_listing_noise(title=title, content=content):
+        return _result(
+            label="irrelevant",
+            score=0.25,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason="ETF·테마주·투자의견·종목 브리핑 중심 기사라 피어사 동향 카드 후보에서 제외",
         )
 
     if _is_event_listing_noise(
@@ -696,7 +759,6 @@ def _core_company_role_reject_result(
         return None
 
     title_compact = _compact(title)
-    lead_compact = _compact(content[:_LEAD_TEXT_LIMIT])
     full_compact = _compact(f"{title} {content}")
 
     for company_id in matched_companies:
@@ -704,7 +766,6 @@ def _core_company_role_reject_result(
         if _company_has_core_role(
             aliases=aliases,
             title_compact=title_compact,
-            lead_compact=lead_compact,
             full_compact=full_compact,
             matched_sectors=matched_sectors,
         ):
@@ -726,7 +787,6 @@ def _company_has_core_role(
     *,
     aliases: list[str],
     title_compact: str,
-    lead_compact: str,
     full_compact: str,
     matched_sectors: list[str],
 ) -> bool:
@@ -742,10 +802,9 @@ def _company_has_core_role(
         ):
             return True
 
-        if _alias_appears_as_subject(lead_compact, alias_compact):
-            return True
-
-        if lead_compact.count(alias_compact) >= 2 and has_sector:
+        if _alias_appears_as_subject(full_compact, alias_compact) and (
+            has_sector or _has_action_keyword_near_alias(full_compact, alias_compact)
+        ) and not _has_listing_context_near_alias(full_compact, alias_compact):
             return True
 
         if _has_action_keyword_near_alias(full_compact, alias_compact):
@@ -781,8 +840,38 @@ def _has_action_keyword_near_alias(text_compact: str, alias_compact: str) -> boo
         start = pos + len(alias_compact)
 
 
+def _has_listing_context_near_alias(text_compact: str, alias_compact: str) -> bool:
+    listing_keywords = [_compact(keyword) for keyword in _MARKET_LISTING_KEYWORDS]
+
+    start = 0
+    while True:
+        pos = text_compact.find(alias_compact, start)
+        if pos < 0:
+            return False
+
+        left = max(0, pos - _ROLE_CONTEXT_WINDOW)
+        right = min(len(text_compact), pos + len(alias_compact) + _ROLE_CONTEXT_WINDOW)
+        context = text_compact[left:right]
+        if any(keyword in context for keyword in listing_keywords):
+            return True
+
+        start = pos + len(alias_compact)
+
+
 def _is_market_price_noise(text: str) -> bool:
     return bool(_MARKET_PRICE_RE.search(text) and _MARKET_METRIC_RE.search(text))
+
+
+def _is_market_listing_noise(*, title: str, content: str) -> bool:
+    compact_text = _compact(f"{title} {content}")
+    title_compact = _compact(title)
+    listing_keywords = [_compact(keyword) for keyword in _MARKET_LISTING_KEYWORDS]
+
+    if any(keyword in title_compact for keyword in listing_keywords):
+        return True
+
+    listing_count = sum(1 for keyword in listing_keywords if keyword in compact_text)
+    return listing_count >= 2
 
 
 def _is_non_korean_news_title(*, title: str, source_type: str | None) -> bool:
@@ -833,8 +922,19 @@ def _is_event_listing_noise(
 def _is_relevant(result: dict[str, Any]) -> bool:
     label = result.get("relevance_label", "irrelevant")
     score = float(result.get("relevance_score", 0.0))
+    matched_companies = result.get("matched_companies") or []
+    matched_sectors = result.get("matched_sectors") or []
+    has_sector = bool(matched_sectors and matched_sectors != ["other"])
 
     if label == "relevant" and score >= RELEVANCE_THRESHOLD:
+        return True
+
+    if (
+        label == "uncertain"
+        and score >= UNCERTAIN_CANDIDATE_THRESHOLD
+        and matched_companies
+        and has_sector
+    ):
         return True
 
     return False
@@ -874,6 +974,61 @@ def _metadata_patch_for_relevance(
         patch["primary_company"] = None
 
     return patch
+
+
+def _peer_context_snippets(
+    *,
+    title: str,
+    content: str,
+    matched_companies: list[str],
+) -> str:
+    if not matched_companies:
+        return ""
+
+    aliases = [
+        _compact(alias)
+        for company_id in matched_companies
+        for alias in ALL_COMPANY_ALIASES.get(company_id, [company_id])
+        if alias
+    ]
+    sentences = _split_sentences(content)
+    snippets: list[str] = []
+
+    if _sentence_has_alias(title, aliases):
+        snippets.append(_shorten(title, 220))
+
+    for index, sentence in enumerate(sentences):
+        if not _sentence_has_alias(sentence, aliases):
+            continue
+
+        window = sentences[max(0, index - 1) : index + 2]
+        snippet = _shorten(" ".join(window), 420)
+        if snippet and snippet not in snippets:
+            snippets.append(snippet)
+
+        if len(" ".join(snippets)) >= PEER_CONTEXT_LIMIT:
+            break
+
+    return "\n".join(f"- {snippet}" for snippet in snippets)[:PEER_CONTEXT_LIMIT]
+
+
+def _split_sentences(content: str) -> list[str]:
+    normalized = " ".join((content or "").split())
+    if not normalized:
+        return []
+    return [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?。！？])\s+|\n+", normalized)
+        if sentence.strip()
+    ]
+
+
+def _sentence_has_alias(
+    sentence: str,
+    aliases: list[str],
+) -> bool:
+    compact_sentence = _compact(sentence)
+    return any(alias and alias in compact_sentence for alias in aliases)
 
 
 def _match_companies(text_body: str, company: list[str]) -> list[str]:

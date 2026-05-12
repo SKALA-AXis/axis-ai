@@ -286,7 +286,16 @@ def _filter_window(
 ) -> list[RawArticle]:
     if not crawl_window:
         return articles
-    return [article for article in articles if crawl_window.contains(article.published_at)]
+    return [
+        article
+        for article in articles
+        if (
+            article.published_at is None
+            and article.source_type == "company_site"
+            and article.extra.get("source_family") == "sk_ax_site"
+        )
+        or crawl_window.contains(article.published_at)
+    ]
 
 
 def _window_date(crawl_window: CrawlWindow | None, bound: str) -> date | None:

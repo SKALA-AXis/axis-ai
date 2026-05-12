@@ -1,4 +1,4 @@
-"""이슈 카드 생성 에이전트 — GPT-4o 호출."""
+"""이슈 카드 생성 에이전트 — 뉴스 요약 결과 기반 카드 생성."""
 
 import json
 import logging
@@ -50,7 +50,7 @@ _MAX_CLUSTER_ARTICLES = 3  # 클러스터 내 참고 기사 최대 수
 
 
 class IssueCardAgent:
-    """클러스터 상위 기사들로 이슈 카드를 생성한다."""
+    """뉴스 요약 결과를 우선 사용하고, 실패 시 기존 GPT 카드 생성으로 fallback한다."""
 
     def generate(
         self,
@@ -60,6 +60,7 @@ class IssueCardAgent:
         classification: dict[str, Any],
         cluster_article_ids: list[int] | None = None,
         peer_id: str = "",
+        summary: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """이슈 카드를 생성한다.
 
@@ -69,6 +70,7 @@ class IssueCardAgent:
             company: 회사 ID.
             classification: ClassificationAgent 결과.
             cluster_article_ids: 클러스터 내 전체 기사 ID 목록 (없으면 대표 기사만 사용).
+            summary: PeerNewsSummaryAgent가 만든 클러스터 사실 요약.
 
         Returns:
             IssueCard dict (저장 전 validation 없는 상태).
@@ -80,6 +82,25 @@ class IssueCardAgent:
         articles = get_articles_by_ids(ids_to_fetch)
         if not articles:
             return {}
+
+        summary_card = _card_from_summary(
+            summary=summary or {},
+            articles=articles,
+            company=company,
+            cluster_id=cluster_id,
+            representative_id=representative_id,
+            classification=classification,
+        )
+        if summary_card:
+            log.info(
+                "이슈카드 생성 완료(summary) | id=%s sector=%s band=%s event=%s sources=%d",
+                summary_card["id"],
+                summary_card["sector"],
+                summary_card["exposure_band"],
+                summary_card["event_type"],
+                len(articles),
+            )
+            return summary_card
 
         articles_text = _format_articles(articles)
         prompt = _ISSUE_CARD_PROMPT.replace("{articles_text}", articles_text)
@@ -133,6 +154,76 @@ def _build_fetch_ids(representative_id: int, cluster_article_ids: list[int] | No
     # 대표 기사 먼저, 나머지 중 대표 제외 후 합치기
     others = [aid for aid in cluster_article_ids if aid != representative_id]
     return [representative_id, *others][:_MAX_CLUSTER_ARTICLES]
+
+
+def _card_from_summary(
+    *,
+    summary: dict[str, Any],
+    articles: list[dict[str, Any]],
+    company: str,
+    cluster_id: int,
+    representative_id: int,
+    classification: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not summary.get("is_valid_summary"):
+        return None
+
+    summary_lines = _numbered_summary_lines(summary.get("fact_summary"))
+    if not summary_lines:
+        return None
+
+    title = _first_non_empty(
+        summary.get("headline"),
+        summary.get("one_line_summary"),
+        classification.get("title"),
+        articles[0].get("title"),
+    )
+
+    return {
+        "id": _generate_card_id(company),
+        "company": company,
+        "cluster_id": cluster_id,
+        "representative_id": representative_id,
+        "title": title[:100],
+        "summary_lines": summary_lines,
+        "event_type": classification.get("event_type", "tech"),
+        "sector": classification.get("sector", "other"),
+        "sectors": classification.get("sectors", ["other"]),
+        "exposure_score": classification.get("exposure_score", 0.0),
+        "exposure_band": classification.get("exposure_band", "low"),
+        "signals": classification.get("signals", {}),
+        "importance": classification.get("importance", "low"),
+        "importance_score": classification.get("importance_score", 0.0),
+        "sources": _default_sources(articles),
+        "news_summary": summary,
+    }
+
+
+def _numbered_summary_lines(value: Any) -> list[str]:
+    lines = [str(item).strip() for item in _list_value(value) if str(item).strip()]
+    numbered: list[str] = []
+    for index, line in enumerate(lines[:3], start=1):
+        prefix = f"{index}."
+        numbered.append(line if line.startswith(prefix) else f"{prefix} {line}")
+    return numbered
+
+
+def _list_value(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str) and value.strip():
+        return [value]
+    return []
+
+
+def _first_non_empty(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return "피어사 주요 뉴스"
 
 
 def _format_articles(articles: list[dict[str, Any]]) -> str:

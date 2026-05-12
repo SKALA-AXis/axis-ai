@@ -434,20 +434,30 @@ def classify_node(state: IngestionState) -> IngestionState:
 
 @_logged_step("issue_card", "classified_clusters", "issue_cards")
 def issue_card_node(state: IngestionState) -> IngestionState:
-    """이슈 카드 생성 — 클러스터 상위 3건 참고, 병렬 GPT-4o 호출."""
+    """이슈 카드 생성 — 클러스터 사실 요약 결과 기반."""
     from src.agents.issue_card_agent import IssueCardAgent
+    from src.agents.news_summary_agent import PeerNewsSummaryAgent
 
     agent = IssueCardAgent()
+    summary_agent = PeerNewsSummaryAgent()
     cluster_map = state["cluster_map"]
 
     def _generate_one(cluster: dict) -> dict:
         cluster_id = cluster["cluster_id"]
+        article_ids = cluster_map.get(cluster_id, [])
+        summary = summary_agent.summarize(
+            cluster_id=cluster_id,
+            representative_id=cluster["representative_id"],
+            cluster_article_ids=article_ids,
+            max_cluster_articles=max(len(article_ids), 1),
+        )
         return agent.generate(
             cluster_id=cluster_id,
             representative_id=cluster["representative_id"],
             company=cluster["company"],
             classification=cluster,
-            cluster_article_ids=cluster_map.get(cluster_id, []),
+            cluster_article_ids=article_ids,
+            summary=summary,
         )
 
     cards: list[dict] = []

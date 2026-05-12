@@ -177,7 +177,11 @@ def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
     from src.agents.news_summary_agent import PeerNewsSummaryAgent
     from src.db.article_store import get_articles_by_ids, list_card_news_cluster_candidates
 
-    candidates = list_card_news_cluster_candidates(limit=limit, today_only=today_only)
+    candidate_limit = min(max(limit * 5, limit), 30)
+    candidates = list_card_news_cluster_candidates(
+        limit=candidate_limit,
+        today_only=today_only,
+    )
     if not candidates:
         return []
 
@@ -186,9 +190,14 @@ def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
     analysis_agent = PeerNewsAnalysisAgent()
     card_agent = CardNewsAgent()
     cards: list[dict] = []
+    seen_cluster_ids: set[int] = set()
 
     for candidate in candidates:
         cluster_id = int(candidate["cluster_id"])
+        if cluster_id in seen_cluster_ids:
+            continue
+        seen_cluster_ids.add(cluster_id)
+
         representative_id = int(candidate["representative_id"])
         article_ids = [int(article_id) for article_id in candidate.get("article_ids") or []]
         if representative_id not in article_ids:
@@ -228,6 +237,8 @@ def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
                 articles=articles,
             )
         )
+        if len(cards) >= limit:
+            break
 
     return cards
 
