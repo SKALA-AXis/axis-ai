@@ -147,6 +147,7 @@ class CrawlRunContext:
     collection_mode: str
     crawl_run_id: str | None = None
     source_name: str | None = None
+    track: str | None = None
     window_start: datetime | None = None
     window_end: datetime | None = None
 

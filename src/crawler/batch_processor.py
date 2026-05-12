@@ -52,6 +52,7 @@ class BatchProcessor:
         keywords: dict[str, list[str]],
         persist: bool = True,
         recent_hours: int = 1,
+        run_context: CrawlRunContext | None = None,
     ) -> list[RawArticle]:
         """Track A — 고빈도/실시간성 수집."""
         return await self.run_sources(
@@ -59,6 +60,8 @@ class BatchProcessor:
             keywords=keywords,
             persist=persist,
             recent_hours=recent_hours,
+            run_context=run_context
+            or CrawlRunContext(collection_mode="scheduled", track="A"),
         )
 
     async def run_track_b(
@@ -66,6 +69,7 @@ class BatchProcessor:
         keywords: dict[str, list[str]],
         persist: bool = True,
         crawl_window: CrawlWindow | None = None,
+        run_context: CrawlRunContext | None = None,
     ) -> list[RawArticle]:
         """Track B — 일중/일간 신호 수집."""
         return await self.run_sources(
@@ -73,6 +77,8 @@ class BatchProcessor:
             keywords=keywords,
             persist=persist,
             crawl_window=crawl_window,
+            run_context=run_context
+            or CrawlRunContext(collection_mode="scheduled", track="B"),
         )
 
     async def run_track_c(
@@ -80,6 +86,7 @@ class BatchProcessor:
         keywords: dict[str, list[str]],
         persist: bool = True,
         crawl_window: CrawlWindow | None = None,
+        run_context: CrawlRunContext | None = None,
     ) -> list[RawArticle]:
         """Track C — 저빈도/무거운 문서형 수집."""
         return await self.run_sources(
@@ -87,6 +94,8 @@ class BatchProcessor:
             keywords=keywords,
             persist=persist,
             crawl_window=crawl_window,
+            run_context=run_context
+            or CrawlRunContext(collection_mode="scheduled", track="C"),
         )
 
     async def run_sources(

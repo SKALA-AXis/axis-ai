@@ -519,8 +519,9 @@ def _metadata_json(
         meta["collection_mode"] = run_context.collection_mode
         if run_context.crawl_run_id:
             meta["crawl_run_id"] = run_context.crawl_run_id
-        if run_context.source_name:
-            meta["crawl_source_name"] = run_context.source_name
+        meta["crawl_source_name"] = run_context.source_name or article.source_name
+        if run_context.track:
+            meta["track"] = run_context.track
         if run_context.window_start:
             meta["window_start"] = run_context.window_start.isoformat()
         if run_context.window_end:

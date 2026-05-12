@@ -12,7 +12,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from src.config.companies import COMPANY_ALIASES, CORP_CODES
-from src.crawler.base import RawArticle
+from src.crawler.base import CrawlRunContext, RawArticle
 from src.crawler.monitors.keepalive import keepalive
 from src.crawler.parsers.dedup import DedupStore
 from src.crawler.parsers.link_check import LinkChecker
@@ -332,7 +332,13 @@ async def _persist_articles(source_label: str, articles: list[RawArticle]) -> No
 
     accessible, rejected = await LinkChecker().filter_accessible(articles)
     new_articles = DedupStore().filter_new(accessible)
-    inserted = save_articles(new_articles)
+    inserted = save_articles(
+        new_articles,
+        run_context=CrawlRunContext(
+            collection_mode="realtime",
+            source_name=source_label,
+        ),
+    )
 
     log.info(
         "소스 크롤 저장 완료 | source=%s raw=%d accessible=%d rejected=%d new=%d inserted=%d",

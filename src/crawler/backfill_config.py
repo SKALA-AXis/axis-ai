@@ -15,7 +15,7 @@ class BackfillSourceConfig:
     enabled: bool = True
 
 
-DEFAULT_UNTIL_DATE = date(2025, 1, 1)
+DEFAULT_UNTIL_DATE = date(2020, 1, 1)
 
 BACKFILL_SOURCES: dict[str, BackfillSourceConfig] = {
     "naver_news": BackfillSourceConfig("naver_news", 1, 3, DEFAULT_UNTIL_DATE),
@@ -23,8 +23,8 @@ BACKFILL_SOURCES: dict[str, BackfillSourceConfig] = {
     "global_newsroom": BackfillSourceConfig("global_newsroom", 30, 2, DEFAULT_UNTIL_DATE),
     "naver_research": BackfillSourceConfig("naver_research", 30, 2, DEFAULT_UNTIL_DATE),
     "stock": BackfillSourceConfig("stock", 180, 1, DEFAULT_UNTIL_DATE),
-    "dart": BackfillSourceConfig("dart", 90, 2, DEFAULT_UNTIL_DATE),
-    "ir": BackfillSourceConfig("ir", 180, 1, DEFAULT_UNTIL_DATE),
+    "dart": BackfillSourceConfig("dart", 90, 3, DEFAULT_UNTIL_DATE),
+    "ir": BackfillSourceConfig("ir", 180, 2, DEFAULT_UNTIL_DATE),
     "jobs": BackfillSourceConfig("jobs", 30, 2, DEFAULT_UNTIL_DATE),
     "naver_datalab": BackfillSourceConfig("naver_datalab", 180, 1, DEFAULT_UNTIL_DATE),
     "spri": BackfillSourceConfig("spri", 365, 1, DEFAULT_UNTIL_DATE),
