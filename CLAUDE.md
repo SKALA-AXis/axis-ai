@@ -42,7 +42,7 @@ axis-ai/
 │   │   ├── financial_linker_agent.py   ← v3: 카드 ↔ peer_financials segment 매칭
 │   │   ├── ir_parser_agent.py          ← v3: PyMuPDF로 IR PDF 텍스트 추출 (W5)
 │   │   ├── weak_signal_agent.py
-│   │   └── email_agent.py              ← v3: 전달 파이프라인 이메일 발송 (Slack 폐기)
+│   │   └── email_agent.py              ← v4: 본문 데이터 빌더 (HTML/text 반환) — 발송은 backend SES SDK
 │   ├── pipeline/
 │   │   ├── ingestion_graph.py   ← 수집 파이프라인 (1시간마다)
 │   │   └── delivery_graph.py    ← 전달 파이프라인 (오전 8:30)
@@ -123,14 +123,21 @@ evidence    → 검증 첨부 4종 자동 부착 (source_links / provenance / fi
               → IRParserAgent: PyMuPDF로 IR PDF 텍스트 추출 (W5 활성)
 ```
 
-### 전달 파이프라인 (delivery_graph.py — v3 이메일 발송)
+### 전달 파이프라인 (delivery_graph.py — v4: backend SES 통합)
+
 ```
 BriefingAgent     PostgreSQL에서 동향 카드 + evidence_chain 조회 + 이메일 본문 구성
-EmailAgent        SMTP/SendGrid 발송 (오전 8:30)
+EmailAgent (v4)   본문 데이터 (subject / html / text / recipients) 반환 — 직접 발송 안 함
 ```
 
-> v3 변경: Slack Webhook → 이메일. SC 검증 → evidence chain 첨부 4종으로 환각 방지 강화.
-> SC 검증은 /gen-search(Generative Search)에만 잔존.
+`/pipeline/delivery` endpoint 가 본문 데이터 반환 → **axis-backend 의 SesMailService** 가
+AWS SES V2 SDK (IRSA + ses-mailer-sa) 로 발송. axis-ai 의 smtplib 발송 코드 폐기.
+
+> v3 → v4 변경: Python smtplib SMTP 발송 → backend SES SDK 통합 (IRSA 인증).
+> sender: `noreply@skala-ai.com` (매니저 SES verified domain).
+> 자세한 spec: `axis-infra/docs/SES_INTEGRATION.md`.
+> v3 변경 (history): Slack Webhook → 이메일. SC 검증 → evidence chain 첨부 4종.
+> SC 검증은 /gen-search 에만 잔존.
 
 ### 두 파이프라인은 반드시 분리
 ```python

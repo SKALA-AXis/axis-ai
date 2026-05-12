@@ -286,7 +286,7 @@ axis-ai/
 │   │   ├── financial_linker_agent.py # ★ 신설: 카드 ↔ 재무 segment 매칭 + vs SK AX
 │   │   ├── parser_agent.py         # PDF/문서 payload 공통 파싱
 │   │   ├── parser_quality_agent.py # 파서 결과 품질 점검
-│   │   ├── notification_agent.py   # 이메일 발송 (Slack Webhook 폐기)
+│   │   ├── notification_agent.py   # 본문 데이터 빌더 (v4: backend SES SDK 발송)
 │   │   ├── sector_keywords.py      # 섹터 분류 키워드 사전
 │   │   └── _deprecated/            # ← v1 에이전트 보관소
 │   │       ├── implication_agent.py    # SK AX 시사점 (보류)
@@ -440,14 +440,17 @@ low      < 0.40
 ## v3 전달 파이프라인 (`delivery_graph.py`)
 
 ```
-[ BriefingAgent ] → [ NotificationAgent ]
+[ BriefingAgent ] → [ NotificationAgent (v4) ]
        ↓                     ↓
-PostgreSQL에서        SMTP/SendGrid
-이슈 카드 + Evidence   이메일 발송
-조회·본문 구성        (오전 8:30)
+PostgreSQL에서        본문 데이터 (subject/html/text/recipients) 반환
+이슈 카드 + Evidence   ↓
+조회·본문 구성        axis-backend 의 SesMailService → AWS SES V2 SDK (IRSA)
+                     → 발송 (오전 8:30)
 ```
 
-> v3 변경: Slack Webhook → 이메일.
+> v3 → v4 변경: Python smtplib SMTP 발송 폐기 → axis-backend SES SDK 통합 (IRSA + ses-mailer-sa).
+> sender: `noreply@skala-ai.com`. axis-ai 는 본문 데이터 반환만 담당.
+> v3 변경 (history): Slack Webhook → 이메일.
 
 ---
 
@@ -913,5 +916,5 @@ uv run pytest tests/
 | 환각 방지 | SC 검증 (3회 생성 후 2/3 일치) | **Evidence Chain 4종 부착** + SC는 `/gen-search`에만 |
 | 시사점 | ImplicationAgent (LLM 생성) | **FinancialLinkerAgent** (재무 숫자 기반 팩트) |
 | 약한 신호 | LLM 분석 | 결정적 트렌드 분석 (W7) |
-| 알림 | Slack Webhook | 이메일 (SMTP/SendGrid) |
+| 알림 | Slack Webhook | 이메일 (v3: SMTP/SendGrid → **v4: backend SES V2 SDK + IRSA**) |
 | 비교 기준 | 없음 | **vs SK AX 결정적 4지표** |
