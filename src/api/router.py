@@ -155,7 +155,7 @@ async def _run_collection_track(task_id: str, track: str, companies: list[str]) 
         if track in {"c", "all"}:
             await processor.run_track_c({company: all_aliases[company] for company in selected})
 
-        state = {
+        state: dict = {
             "company": selected,
             "trigger_type": "scheduled",
             "collected_since": started_at,
