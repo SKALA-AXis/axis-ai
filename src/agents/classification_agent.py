@@ -81,6 +81,11 @@ EVENT_TYPE_KEYWORDS: dict[str, list[str]] = {
         "신기술",
         "신서비스",
         "업그레이드",
+        "적용",
+        "실증",
+        "PoC",
+        "상용화 성과",
+        "현장 점검",
     ],
     "regulation": [
         "규제",
@@ -135,7 +140,6 @@ EVENT_TYPE_KEYWORDS: dict[str, list[str]] = {
         "주주총회",
     ],
 }
-
 
 HIGH_IMPACT_KEYWORDS = [
     "대규모 수주",
@@ -510,7 +514,7 @@ def _classify_event_type_rule_based(
 
     content_matches = _event_type_matches(content)
     if content_matches:
-        event_type, count = content_matches[0]
+        event_type, count = _select_content_event_type(content_matches)
         return event_type, f"규칙 기반 본문 키워드 매칭: {event_type}({count})"
 
     return None, ""
@@ -524,8 +528,29 @@ def _event_type_matches(text: str) -> list[tuple[str, int]]:
         if count > 0:
             matched.append((event_type, count))
 
-    matched.sort(key=lambda x: (-x[1], EVENT_TYPE_PRIORITY.get(x[0], 99)))
+    matched.sort(key=lambda x: (EVENT_TYPE_PRIORITY.get(x[0], 99), -x[1]))
     return matched
+
+
+def _select_content_event_type(matches: list[tuple[str, int]]) -> tuple[str, int]:
+    strong_event_types = {"ma", "contract", "financial", "partnership", "regulation", "expansion"}
+    strong_matches = [
+        (event_type, count)
+        for event_type, count in matches
+        if event_type in strong_event_types and count >= 2
+    ]
+    if strong_matches:
+        strong_matches.sort(key=lambda x: (EVENT_TYPE_PRIORITY.get(x[0], 99), -x[1]))
+        tech_count = next(
+            (count for event_type, count in matches if event_type == "tech_release"),
+            0,
+        )
+        if tech_count >= strong_matches[0][1] + 2:
+            return "tech_release", tech_count
+        return strong_matches[0]
+
+    count_first = sorted(matches, key=lambda x: (-x[1], EVENT_TYPE_PRIORITY.get(x[0], 99)))
+    return count_first[0]
 
 
 def _to_band(score: float) -> str:

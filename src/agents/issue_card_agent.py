@@ -46,8 +46,6 @@ _ISSUE_CARD_PROMPT = """\
   ]
 }}"""
 
-_MAX_CLUSTER_ARTICLES = 3  # 클러스터 내 참고 기사 최대 수
-
 
 class IssueCardAgent:
     """뉴스 요약 결과를 우선 사용하고, 실패 시 기존 GPT 카드 생성으로 fallback한다."""
@@ -77,9 +75,9 @@ class IssueCardAgent:
         """
         company = company or peer_id
 
-        # 대표 기사 포함 최대 3건 조회 (credibility_score DESC 정렬)
-        ids_to_fetch = _build_fetch_ids(representative_id, cluster_article_ids)
-        articles = get_articles_by_ids(ids_to_fetch)
+        # 카드 요약/출처 모두 클러스터 전체 기사를 기준으로 한다.
+        article_ids = _build_cluster_fetch_ids(representative_id, cluster_article_ids)
+        articles = _order_articles(get_articles_by_ids(article_ids), article_ids)
         if not articles:
             return {}
 
@@ -129,7 +127,7 @@ class IssueCardAgent:
                 # 등급 자체는 v3에서 폐기되었으나, DB 컬럼 호환을 위해 노출도 밴드를 저장
                 "importance": classification.get("importance", "low"),
                 "importance_score": classification.get("importance_score", 0.0),
-                "sources": card_data.get("sources", _default_sources(articles)),
+                "sources": _default_sources(articles),
             }
 
             log.info(
@@ -147,13 +145,23 @@ class IssueCardAgent:
             return {}
 
 
-def _build_fetch_ids(representative_id: int, cluster_article_ids: list[int] | None) -> list[int]:
-    """대표 기사를 앞에 두고 최대 3건의 ID 목록을 만든다."""
+def _build_cluster_fetch_ids(
+    representative_id: int, cluster_article_ids: list[int] | None
+) -> list[int]:
+    """대표 기사를 앞에 두고 클러스터 전체 ID 목록을 만든다."""
     if not cluster_article_ids:
         return [representative_id]
-    # 대표 기사 먼저, 나머지 중 대표 제외 후 합치기
     others = [aid for aid in cluster_article_ids if aid != representative_id]
-    return [representative_id, *others][:_MAX_CLUSTER_ARTICLES]
+    return [representative_id, *others]
+
+
+def _order_articles(
+    articles: list[dict[str, Any]],
+    ordered_ids: list[int],
+) -> list[dict[str, Any]]:
+    """DB 조회 결과를 대표기사 우선 순서로 되돌린다."""
+    order = {article_id: index for index, article_id in enumerate(ordered_ids)}
+    return sorted(articles, key=lambda article: order.get(int(article.get("id") or 0), len(order)))
 
 
 def _card_from_summary(
@@ -168,6 +176,7 @@ def _card_from_summary(
     if not summary.get("is_valid_summary"):
         return None
 
+    effective_company = _first_non_empty(summary.get("main_company"), company)
     summary_lines = _numbered_summary_lines(summary.get("fact_summary"))
     if not summary_lines:
         return None
@@ -180,8 +189,8 @@ def _card_from_summary(
     )
 
     return {
-        "id": _generate_card_id(company),
-        "company": company,
+        "id": _generate_card_id(effective_company),
+        "company": effective_company,
         "cluster_id": cluster_id,
         "representative_id": representative_id,
         "title": title[:100],
@@ -235,7 +244,7 @@ def _format_articles(articles: list[dict[str, Any]]) -> str:
             f"[{i}] 제목: {a['title']}\n"
             f"    출처: {a['source_name']} (신뢰도: {credibility_text})"
             f" | URL: {a['url']}\n"
-            f"    내용: {(a.get('content') or '')[:600]}"
+            f"    내용: {' '.join((a.get('content') or '').split())}"
         )
     return "\n\n".join(lines)
 

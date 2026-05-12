@@ -92,9 +92,9 @@ _RELEVANCE_PROMPT = """\
   제품 홍보만 있는 기사는 동향 신호가 약하므로 irrelevant로 판단하세요.
 - 전시회/컨퍼런스/박람회/시상식/행사 일정 안내 기사에서 company가
   참가사·후원사·발표 기업 목록에만 등장하면 irrelevant로 판단하세요.
-- 주가 등락, 장중 시황, 종목별 상승·하락 마감처럼 가격 움직임만
-  설명하는 기사는 market_data로 별도 처리하므로 news relevance에서는
-  irrelevant로 판단하세요.
+- 주가 등락, 장중 시황, 종목별 상승·하락 마감 기사라도 제목과 본문이
+  특정 피어사 1곳을 직접 다루고 있으면 company 상황 신호로 relevant 판단할 수 있습니다.
+  단, 여러 종목을 묶은 시황·ETF·테마주·브리핑 기사는 irrelevant로 판단하세요.
 
 ## label 정의
 relevant:
@@ -339,6 +339,21 @@ class RelevanceAgent:
                 sectors=matched_sector_candidates,
                 reason=precheck["reason"],
             )
+
+        mention_result = _weak_company_mention_reject_result(
+            title=title,
+            content=analysis_content,
+            source_type=row.source_type,
+            matched_companies=matched_company_candidates,
+            matched_sectors=matched_sector_candidates,
+        )
+        if mention_result is not None:
+            log.info(
+                "Gate 2.5 피어사 언급 횟수 부족 제외 | id=%s reason=%s",
+                getattr(row, "id", None),
+                mention_result["reason"],
+            )
+            return mention_result
 
         role_result = _core_company_role_reject_result(
             title=title,
@@ -603,6 +618,22 @@ _STRONG_STRATEGIC_ACTION_KEYWORDS = [
     "조직개편",
     "채용",
 ]
+_DIRECT_COMPANY_ROLE_KEYWORDS = [
+    *_STRONG_STRATEGIC_ACTION_KEYWORDS,
+    "선정",
+    "참여",
+    "맡",
+    "적용",
+    "실증",
+    "운영",
+    "공급",
+    "제공",
+    "등록",
+    "할당",
+    "도입",
+    "확정",
+    "추진",
+]
 _FAST_PASS_ACTION_KEYWORDS = [
     *_STRONG_STRATEGIC_ACTION_KEYWORDS,
     "출시",
@@ -660,7 +691,45 @@ def _noise_reject_result(
             reason="한국어 뉴스 모니터링 대상에서 제외: 제목에 한글이 없는 외국어 기사",
         )
 
-    if _is_market_price_noise(text):
+    has_peer_strategy_signal = _has_peer_strategy_signal(
+        title=title,
+        content=content,
+        matched_companies=matched_companies,
+        matched_sectors=matched_sectors,
+    )
+    has_market_listing_noise = _is_market_listing_noise(title=title, content=content)
+    has_sector = bool(matched_sectors and matched_sectors != ["other"])
+    is_company_market_signal = _is_company_market_signal(
+        title=title,
+        content=content,
+        matched_companies=matched_companies,
+    )
+
+    if has_market_listing_noise and not _company_in_title(
+        title=title,
+        matched_companies=matched_companies,
+    ):
+        return _result(
+            label="irrelevant",
+            score=0.25,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason="ETF·테마주·종목 브리핑 성격의 제목에서 피어사가 핵심 주체로 드러나지 않아 제외",
+        )
+
+    if _is_market_price_noise(text) and is_company_market_signal:
+        return _result(
+            label="relevant",
+            score=0.62,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason=(
+                "특정 피어사 1곳의 주가·거래·밸류에이션을 직접 다루는 기사라 "
+                "company 상황 신호로 판단"
+            ),
+        )
+
+    if _is_market_price_noise(text) and (not has_sector or not has_peer_strategy_signal):
         return _result(
             label="irrelevant",
             score=0.20,
@@ -671,7 +740,7 @@ def _noise_reject_result(
             ),
         )
 
-    if _is_market_listing_noise(title=title, content=content):
+    if has_market_listing_noise and not has_peer_strategy_signal:
         return _result(
             label="irrelevant",
             score=0.25,
@@ -696,6 +765,63 @@ def _noise_reject_result(
         )
 
     return None
+
+
+def _company_in_title(*, title: str, matched_companies: list[str]) -> bool:
+    title_compact = _compact(title)
+    return any(
+        _compact(alias) and _compact(alias) in title_compact
+        for company_id in matched_companies
+        for alias in ALL_COMPANY_ALIASES.get(company_id, [company_id])
+    )
+
+
+def _is_company_market_signal(
+    *,
+    title: str,
+    content: str,
+    matched_companies: list[str],
+) -> bool:
+    if len(set(matched_companies)) != 1:
+        return False
+    if not _company_in_title(title=title, matched_companies=matched_companies):
+        return False
+    return _is_market_price_noise(f"{title} {content}")
+
+
+def _has_peer_strategy_signal(
+    *,
+    title: str,
+    content: str,
+    matched_companies: list[str],
+    matched_sectors: list[str],
+) -> bool:
+    """주가 기사라도 피어사 사업 이벤트가 있으면 LLM 판단으로 넘긴다."""
+    if not matched_companies:
+        return False
+
+    text_compact = _compact(f"{title} {content}")
+    has_sector = bool(matched_sectors and matched_sectors != ["other"])
+    has_action = any(_compact(keyword) in text_compact for keyword in _STRATEGIC_ACTION_KEYWORDS)
+    if not has_action:
+        return False
+
+    for company_id in matched_companies:
+        aliases = ALL_COMPANY_ALIASES.get(company_id, [company_id])
+        for alias in aliases:
+            alias_compact = _compact(alias)
+            if not alias_compact or alias_compact not in text_compact:
+                continue
+            if _has_direct_role_keyword_near_alias(text_compact, alias_compact):
+                return True
+            if (
+                has_sector
+                and _alias_appears_as_subject(text_compact, alias_compact)
+                and not _has_listing_context_near_alias(text_compact, alias_compact)
+            ):
+                return True
+
+    return False
 
 
 def _fast_pass_result(
@@ -783,6 +909,43 @@ def _core_company_role_reject_result(
     )
 
 
+def _weak_company_mention_reject_result(
+    *,
+    title: str,
+    content: str,
+    source_type: str | None,
+    matched_companies: list[str],
+    matched_sectors: list[str],
+) -> dict[str, Any] | None:
+    if str(source_type or "").strip().lower() != "news":
+        return None
+
+    if not matched_companies:
+        return None
+
+    title_compact = _compact(title)
+    content_compact = _compact(content)
+
+    for company_id in matched_companies:
+        aliases = ALL_COMPANY_ALIASES.get(company_id, [company_id])
+        company_in_title = any(
+            _compact(alias) and _compact(alias) in title_compact for alias in aliases
+        )
+        if company_in_title:
+            return None
+
+        if _alias_mention_count(content_compact, aliases) >= 2:
+            return None
+
+    return _result(
+        label="irrelevant",
+        score=0.25,
+        companies=matched_companies,
+        sectors=matched_sectors,
+        reason="제목에 피어사가 없고 본문/부제목의 피어사 언급이 2회 미만이라 단순 언급으로 판단",
+    )
+
+
 def _company_has_core_role(
     *,
     aliases: list[str],
@@ -797,19 +960,33 @@ def _company_has_core_role(
         if not alias_compact:
             continue
 
+        if (
+            alias_compact in title_compact
+            and _has_listing_context_near_alias(title_compact, alias_compact)
+            and not _has_direct_role_keyword_near_alias(title_compact, alias_compact)
+        ):
+            continue
+
         if alias_compact in title_compact and (
-            has_sector or _has_action_keyword_near_alias(title_compact, alias_compact)
+            has_sector or _has_direct_role_keyword_near_alias(title_compact, alias_compact)
         ):
             return True
 
         if (
             _alias_appears_as_subject(full_compact, alias_compact)
-            and (has_sector or _has_action_keyword_near_alias(full_compact, alias_compact))
+            and (
+                _has_direct_role_keyword_near_alias(full_compact, alias_compact)
+                or (
+                    has_sector
+                    and _alias_mention_count(full_compact, aliases) >= 2
+                    and not _has_listing_context_near_alias(full_compact, alias_compact)
+                )
+            )
             and not _has_listing_context_near_alias(full_compact, alias_compact)
         ):
             return True
 
-        if _has_action_keyword_near_alias(full_compact, alias_compact):
+        if _has_direct_role_keyword_near_alias(full_compact, alias_compact):
             return True
 
     return False
@@ -821,7 +998,31 @@ def _alias_appears_as_subject(text_compact: str, alias_compact: str) -> bool:
 
 def _has_action_keyword_near_alias(text_compact: str, alias_compact: str) -> bool:
     action_keywords = [_compact(keyword) for keyword in _STRATEGIC_ACTION_KEYWORDS]
+    return _has_keywords_near_alias(
+        text_compact,
+        alias_compact,
+        action_keywords,
+        skip_listing_context=True,
+    )
 
+
+def _has_direct_role_keyword_near_alias(text_compact: str, alias_compact: str) -> bool:
+    role_keywords = [_compact(keyword) for keyword in _DIRECT_COMPANY_ROLE_KEYWORDS]
+    return _has_keywords_near_alias(
+        text_compact,
+        alias_compact,
+        role_keywords,
+        skip_listing_context=False,
+    )
+
+
+def _has_keywords_near_alias(
+    text_compact: str,
+    alias_compact: str,
+    keywords: list[str],
+    *,
+    skip_listing_context: bool,
+) -> bool:
     start = 0
     while True:
         pos = text_compact.find(alias_compact, start)
@@ -832,14 +1033,32 @@ def _has_action_keyword_near_alias(text_compact: str, alias_compact: str) -> boo
         right = min(len(text_compact), pos + len(alias_compact) + _ROLE_CONTEXT_WINDOW)
         context = text_compact[left:right]
 
-        if any(keyword in context for keyword in _LISTING_CONTEXT_KEYWORDS):
+        if skip_listing_context and any(
+            keyword in context for keyword in _LISTING_CONTEXT_KEYWORDS
+        ):
             start = pos + len(alias_compact)
             continue
 
-        if any(keyword in context for keyword in action_keywords):
+        if any(keyword in context for keyword in keywords):
             return True
 
         start = pos + len(alias_compact)
+
+
+def _alias_mention_count(text_compact: str, aliases: list[str]) -> int:
+    positions: set[int] = set()
+    for alias in aliases:
+        alias_compact = _compact(alias)
+        if not alias_compact:
+            continue
+        start = 0
+        while True:
+            pos = text_compact.find(alias_compact, start)
+            if pos < 0:
+                break
+            positions.add(pos)
+            start = pos + len(alias_compact)
+    return len(positions)
 
 
 def _has_listing_context_near_alias(text_compact: str, alias_compact: str) -> bool:

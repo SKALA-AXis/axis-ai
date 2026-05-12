@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
@@ -277,6 +278,7 @@ def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
     from src.agents.classification_agent import ClassificationAgent
     from src.agents.news_analysis_agent import PeerNewsAnalysisAgent
     from src.agents.news_summary_agent import PeerNewsSummaryAgent
+    from src.config.company_tiers import SELF_COMPANY_IDS
     from src.db.article_store import get_articles_by_ids, list_card_news_cluster_candidates
 
     candidate_limit = min(max(limit * 5, limit), 30)
@@ -305,8 +307,11 @@ def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
         if representative_id not in article_ids:
             article_ids.insert(0, representative_id)
 
-        articles = get_articles_by_ids(article_ids[:5])
         company = _first_company(candidate.get("company"))
+        if company in SELF_COMPANY_IDS:
+            continue
+
+        articles = get_articles_by_ids(article_ids)
         classification = classifier.classify(
             cluster_id=cluster_id,
             representative_id=representative_id,
@@ -349,5 +354,11 @@ def _first_company(value: object) -> str:
     if isinstance(value, list) and value:
         return str(value[0])
     if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+        if isinstance(parsed, list) and parsed:
+            return str(parsed[0])
         return value
     return ""
