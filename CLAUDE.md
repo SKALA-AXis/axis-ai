@@ -117,7 +117,7 @@ crawl       → 뉴스·공시·채용공고 수집 (PostgreSQL 전량 보관)
 credibility → 출처 신뢰도 분류 (High/Medium/Low/Unverified)
 dedup       → 중복 제거 + 이슈 클러스터링 (BGE-M3 코사인 0.90)
 classify    → 트렌드 섹터(5종) + event_type(6종) + 결정적 노출도 산식 — LLM 호출
-issue_card  → 동향 카드 생성 (3줄 요약·시사점) — LLM 호출
+card_news   → 카드 뉴스 생성 (3줄 요약·시사점) — LLM 호출 (구 issue_card_node)
 evidence    → 검증 첨부 4종 자동 부착 (source_links / provenance / financial_refs / mbb_refs)
               → FinancialLinkerAgent: 카드 sector·event·title 키워드로 segment 매칭 → QoQ/YoY delta
               → IRParserAgent: PyMuPDF로 IR PDF 텍스트 추출 (W5 활성)
@@ -162,7 +162,7 @@ class IngestionState(TypedDict):
     cluster_map: dict               # {cluster_id: [article_ids]}
     representative_ids: List[int]
     classified_clusters: List[dict]
-    issue_cards: List[dict]
+    card_news: List[dict]
     implications: List[dict]
     validation_results: List[dict]
     errors: Annotated[List[str], operator.add]
