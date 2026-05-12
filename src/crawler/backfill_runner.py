@@ -57,13 +57,18 @@ class BackfillRunner:
         config: BackfillSourceConfig,
         *,
         max_windows_override: int | None = None,
+        run_to_end: bool = False,
     ) -> list[BackfillRunSummary]:
         cursor = self._load_cursor(config)
         if not cursor.enabled:
             log.info("backfill source 비활성화 | source=%s", cursor.source_name)
             return []
 
-        max_windows = max_windows_override or cursor.max_windows_per_run
+        max_windows = self._resolve_max_windows(
+            cursor,
+            max_windows_override=max_windows_override,
+            run_to_end=run_to_end,
+        )
         summaries: list[BackfillRunSummary] = []
 
         for _ in range(max_windows):
@@ -98,6 +103,23 @@ class BackfillRunner:
                 update_cursor(config.source_name, window_start)
 
         return summaries
+
+    def _resolve_max_windows(
+        self,
+        cursor: CrawlCursor,
+        *,
+        max_windows_override: int | None,
+        run_to_end: bool,
+    ) -> int:
+        if max_windows_override is not None:
+            return max_windows_override
+        if not run_to_end:
+            return cursor.max_windows_per_run
+        if cursor.cursor_date <= cursor.until_date:
+            return 0
+
+        remaining_days = (cursor.cursor_date - cursor.until_date).days
+        return max(1, (remaining_days + cursor.window_days - 1) // cursor.window_days)
 
     def _load_cursor(self, config: BackfillSourceConfig) -> CrawlCursor:
         if self.use_state:

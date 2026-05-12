@@ -41,6 +41,14 @@ def _parse_args() -> argparse.Namespace:
         help="source별 max_windows_per_run을 일시적으로 덮어쓴다.",
     )
     parser.add_argument(
+        "--run-to-end",
+        action="store_true",
+        help=(
+            "max_windows를 직접 주지 않아도 현재 cursor에서 until_date까지 "
+            "필요한 window 수를 자동 계산해 끝까지 실행한다."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="DB 저장과 crawl_runs/crawl_cursors 갱신 없이 window 실행 흐름만 확인한다.",
@@ -127,9 +135,14 @@ async def _main() -> None:
     print(f"profile={profile} sources={[config.source_name for config in configs]}")
     print(f"persist={not args.dry_run} use_state={not (args.dry_run or args.no_state)}")
     print(f"process_after_window={process_after_window}")
+    print(f"run_to_end={args.run_to_end} max_windows={args.max_windows}")
 
     for config in configs:
-        summaries = await runner.run_source(config, max_windows_override=args.max_windows)
+        summaries = await runner.run_source(
+            config,
+            max_windows_override=args.max_windows,
+            run_to_end=args.run_to_end,
+        )
         for summary in summaries:
             print(
                 f"{summary.status:7s} {summary.source_name:16s} "
