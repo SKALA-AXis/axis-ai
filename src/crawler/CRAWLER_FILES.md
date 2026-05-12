@@ -183,16 +183,18 @@ DB 저장용 크롤러 실행 진입점이다.
 ```bash
 uv run python run_crawler_once.py --track a
 uv run python run_crawler_once.py --track b
+uv run python run_crawler_once.py --track c
 uv run python run_crawler_once.py --track all
 uv run python run_crawler_once.py --track b --company nvidia
 ```
 
 Track 구분:
 
-- Track A: 네이버 뉴스 중심의 빠른 기사 수집.
-- Track B: DART, IR, 증권사 리포트, 공식 뉴스룸, 글로벌 뉴스룸, 채용, 트렌드/시장 데이터 등 배치성 수집.
+- Track A: 네이버 뉴스와 주가/시장 데이터 중심의 고빈도/실시간성 수집.
+- Track B: 증권사 리포트, 공식 뉴스룸, 글로벌 뉴스룸, 채용, 검색 트렌드 등 일중/일간 신호 수집.
+- Track C: DART, IR, SPRi, BCG, SK AX 사이트 등 저빈도/무거운 문서형 수집.
 
-Track B 기본 company 목록에는 국내 peer와 글로벌 peer가 모두 포함된다. 글로벌 peer는 `global_newsroom` 중심으로 수집된다.
+Track B/C 기본 company 목록에는 국내 peer와 글로벌 peer가 모두 포함된다. 글로벌 peer는 `global_newsroom` 중심으로 수집된다.
 
 ### run_preprocess_once.py
 
