@@ -10,6 +10,7 @@ from typing import Any
 import requests
 from dotenv import load_dotenv
 
+from src.config.companies import COMPANY_ALIASES, company_name_ko
 from src.crawler.base import RawArticle
 from src.crawler.base_crawler import BaseCrawler
 
@@ -37,53 +38,6 @@ NAVER_DATALAB_MAX_KEYWORDS_PER_GROUP = 20
 DEFAULT_PEAK_MIN_RATIO = 70.0
 DEFAULT_PEAK_MIN_DELTA = 25.0
 DEFAULT_PEAK_MAX_GAP_DAYS = 3
-
-SECTOR_KEYWORD_GROUPS: list[dict[str, Any]] = [
-    {
-        "groupName": "보안",
-        "keywords": [
-            "보안",
-            "정보보안",
-            "사이버보안",
-            "해킹",
-            "랜섬웨어",
-            "정보보호",
-        ],
-    },
-    {
-        "groupName": "인프라",
-        "keywords": [
-            "클라우드",
-            "데이터센터",
-            "IDC",
-            "서버",
-            "네트워크",
-            "IT 인프라",
-        ],
-    },
-    {
-        "groupName": "AX(제조)",
-        "keywords": [
-            "스마트팩토리",
-            "제조 AI",
-            "공장 자동화",
-            "제조 디지털 전환",
-            "제조 DX",
-            "산업 AI",
-        ],
-    },
-    {
-        "groupName": "수주",
-        "keywords": [
-            "수주",
-            "계약",
-            "계약 체결",
-            "MOU",
-            "업무협약",
-            "파트너십",
-        ],
-    },
-]
 
 
 def load_naver_credentials() -> tuple[str, str]:
@@ -120,30 +74,28 @@ def dedupe_texts(values: list[Any]) -> list[str]:
     return result
 
 
-def build_sector_keyword_groups(
-    sector_keyword_groups: list[dict[str, Any]] = SECTOR_KEYWORD_GROUPS,
+def build_company_keyword_groups(
+    company_aliases: dict[str, list[str]] = COMPANY_ALIASES,
 ) -> list[dict[str, Any]]:
     groups: list[dict[str, Any]] = []
 
-    for sector_group in sector_keyword_groups:
-        sector_name = str(sector_group.get("groupName") or "").strip()
-        sector_keywords = sector_group.get("keywords") or []
-
-        if not sector_name or not isinstance(sector_keywords, list):
+    for company_id, aliases in company_aliases.items():
+        group_name = company_name_ko(company_id).strip() or company_id
+        if not isinstance(aliases, list):
             continue
 
-        keywords = dedupe_texts(sector_keywords)[:NAVER_DATALAB_MAX_KEYWORDS_PER_GROUP]
-
+        keywords = dedupe_texts(aliases)[:NAVER_DATALAB_MAX_KEYWORDS_PER_GROUP]
         if not keywords:
             continue
 
         groups.append(
             {
-                "groupName": sector_name,
+                "groupName": group_name,
                 "keywords": keywords,
                 "metadata": {
-                    "sector": sector_name,
-                    "mode": "sector_only",
+                    "company_id": company_id,
+                    "company_name_ko": group_name,
+                    "mode": "company_aliases",
                 },
             }
         )
@@ -152,7 +104,7 @@ def build_sector_keyword_groups(
 
 
 def build_default_keyword_groups() -> list[dict[str, Any]]:
-    return build_sector_keyword_groups()
+    return build_company_keyword_groups()
 
 
 def chunk_keyword_groups(

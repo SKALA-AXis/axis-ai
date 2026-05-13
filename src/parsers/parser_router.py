@@ -6,6 +6,7 @@ from typing import Any
 
 from src.parsers.dart_parser import DartParser
 from src.parsers.ir_parser import IRParser
+from src.parsers.securities_report_parser import SecuritiesReportParser
 
 
 class DocumentParserRouter:
@@ -26,7 +27,7 @@ class DocumentParserRouter:
             return IRParser().parse_article(article)
 
         if source_type == "securities_report":
-            return _parse_document_article(article, parser_name="securities_report_parser")
+            return SecuritiesReportParser().parse_article(article)
 
         if source_type == "trend_report":
             return _parse_document_article(
