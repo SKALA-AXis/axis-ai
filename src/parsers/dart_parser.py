@@ -77,9 +77,7 @@ _BUYBACK_NUMBER_PATTERNS = {
     "target_shares_common": re.compile(r"보통주식\s*([0-9][0-9,]*)"),
     "target_shares_preferred": re.compile(r"기타주식\s*([0-9][0-9,]*)"),
 }
-_BUYBACK_AMOUNT_PATTERN = re.compile(
-    r"취득예정금액\s*\(원\)\s*([0-9][0-9,\s]{3,})"
-)
+_BUYBACK_AMOUNT_PATTERN = re.compile(r"취득예정금액\s*\(원\)\s*([0-9][0-9,\s]{3,})")
 _BUYBACK_PERIOD_PATTERN = re.compile(
     r"취득예상기간\s*[:：]?\s*([0-9]{4}[.\-/][0-9]{2}[.\-/][0-9]{2}\s*[-~]\s*[0-9]{4}[.\-/][0-9]{2}[.\-/][0-9]{2})"
 )

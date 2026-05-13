@@ -189,8 +189,12 @@ async def find_issue_url_with_pagination(
     year = int(month.split("-")[0])
     pending_urls = [SPRI_LIST_URL]
     pending_urls.append(spri_year_url(SPRI_LIST_URL, year, 1))
-    pending_urls.extend(spri_year_url(SPRI_LIST_URL, year, page_no) for page_no in range(2, max_pages + 1))
-    pending_urls.extend(spri_page_url(SPRI_LIST_URL, page_no) for page_no in range(2, max_pages + 1))
+    pending_urls.extend(
+        spri_year_url(SPRI_LIST_URL, year, page_no) for page_no in range(2, max_pages + 1)
+    )
+    pending_urls.extend(
+        spri_page_url(SPRI_LIST_URL, page_no) for page_no in range(2, max_pages + 1)
+    )
     seen_urls: set[str] = set()
 
     while pending_urls and len(seen_urls) < max_pages:
