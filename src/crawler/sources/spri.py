@@ -21,11 +21,12 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import fitz  # PyMuPDF
 import httpx
@@ -38,10 +39,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.crawler.base import RawArticle  # noqa: E402
 from src.crawler.base_crawler import BaseCrawler  # noqa: E402
 from src.crawler.parsers.pdf_payload import extract_pdf_payload  # noqa: E402
+from src.crawler.playwright_client import PlaywrightClient  # noqa: E402
 
 log = logging.getLogger(__name__)
 
 SPRI_LIST_URL = "https://spri.kr/posts?code=magazine"
+SPRI_BACKFILL_MAX_LIST_PAGES = int(os.getenv("SPRI_BACKFILL_MAX_LIST_PAGES", "20"))
 
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -95,6 +98,106 @@ async def fetch_bytes(client: httpx.AsyncClient, url: str) -> bytes:
     response = await client.get(url)
     response.raise_for_status()
     return response.content
+
+
+def spri_page_url(url: str, page_no: int) -> str:
+    parsed = urlparse(url)
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    params["page"] = str(page_no)
+    return urlunparse(parsed._replace(query=urlencode(params)))
+
+
+def normalize_listing_url(base_url: str, href: str) -> str | None:
+    if not href:
+        return None
+
+    url = urljoin(base_url, href.strip())
+    parsed = urlparse(url)
+
+    if parsed.netloc != urlparse(SPRI_LIST_URL).netloc:
+        return None
+
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    if params.get("code") != "magazine":
+        return None
+
+    return urlunparse(parsed._replace(fragment=""))
+
+
+def extract_pagination_links(list_html: str, list_url: str) -> list[str]:
+    soup = BeautifulSoup(list_html, "html.parser")
+    urls: list[str] = []
+
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+        if "page=" not in href and "posts" not in href:
+            continue
+
+        normalized = normalize_listing_url(list_url, href)
+        if not normalized:
+            continue
+
+        page = dict(parse_qsl(urlparse(normalized).query, keep_blank_values=True)).get("page")
+        if page is not None and not page.isdigit():
+            continue
+
+        urls.append(normalized)
+
+    seen: set[str] = set()
+    unique_urls: list[str] = []
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        unique_urls.append(url)
+    return unique_urls
+
+
+async def find_issue_url_with_pagination(
+    client: httpx.AsyncClient,
+    month: str,
+    *,
+    max_pages: int = SPRI_BACKFILL_MAX_LIST_PAGES,
+) -> str:
+    playwright = PlaywrightClient()
+    pending_urls = [SPRI_LIST_URL]
+    pending_urls.extend(spri_page_url(SPRI_LIST_URL, page_no) for page_no in range(2, max_pages + 1))
+    seen_urls: set[str] = set()
+
+    while pending_urls and len(seen_urls) < max_pages:
+        list_url = pending_urls.pop(0)
+        normalized = normalize_listing_url(SPRI_LIST_URL, list_url) or list_url
+        if normalized in seen_urls:
+            continue
+        seen_urls.add(normalized)
+
+        list_html = await fetch_text(client, list_url)
+        try:
+            issue_url = find_issue_url(list_html, month)
+            log.info("SPRi 월호 발견 | month=%s list_url=%s", month, list_url)
+            return issue_url
+        except ValueError:
+            rendered_html = await playwright.fetch_html(list_url)
+            if rendered_html:
+                try:
+                    issue_url = find_issue_url(rendered_html, month)
+                    log.info(
+                        "SPRi 월호 발견 (rendered) | month=%s list_url=%s",
+                        month,
+                        list_url,
+                    )
+                    return issue_url
+                except ValueError:
+                    list_html = rendered_html
+
+        discovered_urls = [
+            discovered_url
+            for discovered_url in extract_pagination_links(list_html, list_url)
+            if discovered_url not in seen_urls and discovered_url not in pending_urls
+        ]
+        pending_urls = discovered_urls + pending_urls
+
+    raise ValueError(f"{month} 월호 상세 페이지를 찾지 못했습니다.")
 
 
 def find_issue_url(list_html: str, month: str) -> str:
@@ -1132,8 +1235,7 @@ class SpriCrawler(BaseCrawler):
             timeout=30,
             follow_redirects=True,
         ) as client:
-            list_html = await fetch_text(client, SPRI_LIST_URL)
-            issue_url = find_issue_url(list_html, self.month)
+            issue_url = await find_issue_url_with_pagination(client, self.month)
 
             detail_html = await fetch_text(client, issue_url)
 

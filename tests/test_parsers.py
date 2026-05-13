@@ -217,3 +217,38 @@ def test_document_parser_router_preserves_industry_report_metadata() -> None:
     assert parsed["source"] == "industry_trend"
     assert parsed["source_name"] == "SPRi"
     assert parsed["metadata"]["matched_sectors"] == ["ax"]
+
+
+def test_document_parser_router_parses_securities_report() -> None:
+    item = {
+        "url": "https://example.com/report.pdf",
+        "title": "[미래에셋증권] 삼성SDS 2026Q1 Review",
+        "content": (
+            "투자의견 BUY\n"
+            "목표주가 220,000원\n"
+            "현재주가 180,000원\n"
+            "2026Q1 실적은 시장 기대치에 부합.\n"
+            "클라우드와 AI 매출 성장이 지속된다."
+        ),
+        "source_name": "naver_research",
+        "source_type": "securities_report",
+        "publisher": "미래에셋증권",
+        "company": ["samsung_sds"],
+        "extra": {
+            "firm": "미래에셋증권",
+            "pdf_url": "https://example.com/report.pdf",
+            "item_code": "018260",
+            "pdf_pages": 12,
+        },
+    }
+
+    parsed = DocumentParserRouter().parse_article(item)
+
+    assert parsed["source"] == "securities_report"
+    assert parsed["report_firm"] == "미래에셋증권"
+    assert parsed["investment_opinion"] == "BUY"
+    assert parsed["target_price_krw"] == 220000
+    assert parsed["current_price_krw"] == 180000
+    assert parsed["period"] == "2026Q1"
+    assert parsed["metadata"]["item_code"] == "018260"
+    assert len(parsed["highlights"]) >= 1
