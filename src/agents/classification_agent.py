@@ -178,6 +178,7 @@ MEDIUM_IMPACT_KEYWORDS = [
 ]
 
 _llm = ChatOpenAI(model="gpt-4o", temperature=0.1, max_completion_tokens=400)
+_PROMPT_VERSION = "classify-v3.0"
 
 _CLASSIFY_PROMPT = """\
 당신은 SK AX 전략기획팀의 AI 어시스턴트입니다.
@@ -480,7 +481,16 @@ class ClassificationAgent:
         )
 
         try:
-            response = _llm.invoke(prompt)
+            from src.observability import tracing_config
+
+            response = _llm.invoke(
+                prompt,
+                config=tracing_config(
+                    agent="ClassificationAgent",
+                    prompt_version=_PROMPT_VERSION,
+                    cluster_size=exposure["cluster_size"],
+                ),
+            )
             content = (
                 response.content if isinstance(response.content, str) else str(response.content)
             )

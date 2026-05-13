@@ -15,6 +15,7 @@ from langchain_openai import ChatOpenAI
 log = logging.getLogger(__name__)
 
 _LLM_MODEL = "gpt-4o"
+_PROMPT_VERSION = "analysis-v3.0"
 _llm: ChatOpenAI | None = None
 
 
@@ -118,7 +119,16 @@ class PeerNewsAnalysisAgent:
         )
 
         try:
-            response = _get_llm().invoke(prompt)
+            from src.observability import tracing_config
+
+            response = _get_llm().invoke(
+                prompt,
+                config=tracing_config(
+                    agent="PeerNewsAnalysisAgent",
+                    phase="analyze",
+                    prompt_version=_PROMPT_VERSION,
+                ),
+            )
             content = (
                 response.content if isinstance(response.content, str) else str(response.content)
             )

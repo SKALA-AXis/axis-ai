@@ -29,6 +29,8 @@ dependencies = [
     "matplotlib>=3.10.9",
     "finance-datareader>=0.9.96",
     "pandas>=2.0",
+    "langfuse>=2.50,<3",
+    "tiktoken>=0.7",
 ]
 
 [dependency-groups]
