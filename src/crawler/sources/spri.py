@@ -187,14 +187,10 @@ async def find_issue_url_with_pagination(
     max_pages: int = SPRI_BACKFILL_MAX_LIST_PAGES,
 ) -> str:
     year = int(month.split("-")[0])
-    pending_urls = [SPRI_LIST_URL]
-    pending_urls.append(spri_year_url(SPRI_LIST_URL, year, 1))
-    pending_urls.extend(
-        spri_year_url(SPRI_LIST_URL, year, page_no) for page_no in range(2, max_pages + 1)
-    )
-    pending_urls.extend(
-        spri_page_url(SPRI_LIST_URL, page_no) for page_no in range(2, max_pages + 1)
-    )
+    pending_urls = [spri_year_url(SPRI_LIST_URL, year, 1)]
+    pending_urls.extend(spri_year_url(SPRI_LIST_URL, year, page_no) for page_no in range(2, max_pages + 1))
+    pending_urls.append(SPRI_LIST_URL)
+    pending_urls.extend(spri_page_url(SPRI_LIST_URL, page_no) for page_no in range(2, max_pages + 1))
     seen_urls: set[str] = set()
 
     while pending_urls and len(seen_urls) < max_pages:
@@ -228,7 +224,7 @@ async def find_issue_url_with_pagination(
             for discovered_url in extract_pagination_links(list_html, list_url)
             if discovered_url not in seen_urls and discovered_url not in pending_urls
         ]
-        pending_urls = discovered_urls + pending_urls
+        pending_urls = pending_urls + discovered_urls
 
     raise ValueError(f"{month} 월호 상세 페이지를 찾지 못했습니다.")
 
