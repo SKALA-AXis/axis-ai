@@ -82,7 +82,12 @@ _enabled: bool = False
 
 
 def _init_handler() -> Any | None:
-    """Lazy init Langfuse CallbackHandler. ENV 부족 시 None."""
+    """Lazy init Langfuse CallbackHandler (v3+). ENV 부족 시 None.
+
+    langfuse v3+ (>=3.0, 4.x) 는 OTel 기반. v2 API (langfuse.callback) 폐기 →
+    `langfuse.langchain.CallbackHandler` 사용. SDK 가 env (LANGFUSE_PUBLIC_KEY /
+    SECRET_KEY / HOST) 를 자동 인식하므로 init 매개변수 X.
+    """
     global _handler, _enabled
     if _handler is not None:
         return _handler
@@ -99,18 +104,21 @@ def _init_handler() -> Any | None:
         _enabled = False
         return None
 
-    try:
-        from langfuse.callback import CallbackHandler
+    # v3+ SDK 는 LANGFUSE_HOST 가 LANGFUSE_BASE_URL 만 박혀있어도 동작하도록
+    # 양쪽 모두 환경변수에 set (둘 중 하나만 .env 에 있을 수 있음).
+    os.environ.setdefault("LANGFUSE_HOST", host)
+    os.environ.setdefault("LANGFUSE_BASE_URL", host)
 
-        _handler = CallbackHandler(
-            public_key=public_key,
-            secret_key=secret_key,
-            host=host,
-            flush_at=10,  # 10 span 마다 또는
-            flush_interval=2.0,  # 2초 마다 flush
-        )
+    try:
+        # v3+ 의 새 import path. v2 의 `langfuse.callback` 은 제거됨.
+        from langfuse.langchain import CallbackHandler
+
+        # v3+ init signature: CallbackHandler(*, public_key=None, trace_context=None).
+        # public_key / secret_key / host 는 env 에서 자동 인식. (None 전달 시 default
+        # client 사용.) flush 설정은 client-level (langfuse.get_client()) 에서 조정.
+        _handler = CallbackHandler()
         _enabled = True
-        log.info("Langfuse CallbackHandler initialized | host=%s", host)
+        log.info("Langfuse CallbackHandler v3+ initialized | host=%s", host)
     except Exception as e:
         log.warning("Langfuse handler 초기화 실패: %s — trace 송신 비활성", e)
         _enabled = False
@@ -180,33 +188,37 @@ def tracing_config(
 
 
 def get_current_trace_id() -> str | None:
-    """현재 handler 의 마지막 trace_id 반환 (EvidenceAgent 가 provenance 적재 시 사용).
+    """직전 LLM 호출의 OTel trace_id 반환 (EvidenceAgent 가 provenance 적재 시 사용).
 
-    Langfuse handler 가 trace_id 를 stateful 하게 보존하므로, 호출 직후 본 함수
-    로 read. 단, multi-threaded 또는 async 동시 호출 시 race 가능 — caller 가
-    보장해야 함 (보통 한 agent 호출 끝나면 즉시 read).
+    v3+ 의 CallbackHandler 는 `last_trace_id` 속성으로 가장 최근 trace id 노출
+    (OTel 16-byte hex). 호출 직후 read 가 안전 — multi-thread / async 동시 호출
+    시 caller 가 race 보장해야 함.
     """
     handler = get_langfuse_handler()
     if handler is None:
         return None
-    # langfuse 2.x 의 CallbackHandler 가 보존하는 trace 객체 접근
     try:
-        # langfuse 2.x API: handler.trace 가 가장 최근 trace 객체
-        trace = getattr(handler, "trace", None)
-        if trace is not None:
-            return getattr(trace, "id", None) or getattr(trace, "trace_id", None)
-        # fallback — handler.langfuse 의 thread-local 마지막 trace
+        # v3+ API: handler.last_trace_id (16-byte OTel hex string)
+        last = getattr(handler, "last_trace_id", None)
+        if last:
+            return str(last)
         return None
     except Exception:
         return None
 
 
 def flush() -> None:
-    """Pending traces 강제 flush (pod 종료 / unit test cleanup 용)."""
+    """Pending traces 강제 flush (pod 종료 / unit test cleanup 용).
+
+    v3+ 는 client-level flush. CallbackHandler 자체 .flush() 없음 → singleton
+    client 의 flush 호출.
+    """
     handler = get_langfuse_handler()
     if handler is None:
         return
     try:
-        handler.flush()
+        from langfuse import get_client
+
+        get_client().flush()
     except Exception as e:
         log.debug("Langfuse flush 실패 (무시): %s", e)
