@@ -119,7 +119,7 @@ async def fetch_spri_list_html_by_playwright(url: str) -> str:
 def spri_page_url(url: str, page_no: int) -> str:
     parsed = urlparse(url)
     params = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    params["page"] = str(page_no)
+    params["data_page"] = str(page_no)
     return urlunparse(parsed._replace(query=urlencode(params)))
 
 
@@ -140,20 +140,31 @@ def normalize_listing_url(base_url: str, href: str) -> str | None:
     return urlunparse(parsed._replace(fragment=""))
 
 
+def spri_year_url(url: str, year: int, page_no: int = 1) -> str:
+    parsed = urlparse(url)
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    params["code"] = "magazine"
+    params["s_year"] = str(year)
+    params["data_page"] = str(page_no)
+    return urlunparse(parsed._replace(path="/posts", query=urlencode(params), fragment=""))
+
+
 def extract_pagination_links(list_html: str, list_url: str) -> list[str]:
     soup = BeautifulSoup(list_html, "html.parser")
     urls: list[str] = []
 
     for a in soup.find_all("a", href=True):
         href = a.get("href", "")
-        if "page=" not in href and "posts" not in href:
+        if "data_page=" not in href and "page=" not in href and "posts" not in href:
             continue
 
         normalized = normalize_listing_url(list_url, href)
         if not normalized:
             continue
 
-        page = dict(parse_qsl(urlparse(normalized).query, keep_blank_values=True)).get("page")
+        page = dict(parse_qsl(urlparse(normalized).query, keep_blank_values=True)).get("data_page")
+        if page is None:
+            page = dict(parse_qsl(urlparse(normalized).query, keep_blank_values=True)).get("page")
         if page is not None and not page.isdigit():
             continue
 
@@ -175,7 +186,10 @@ async def find_issue_url_with_pagination(
     *,
     max_pages: int = SPRI_BACKFILL_MAX_LIST_PAGES,
 ) -> str:
+    year = int(month.split("-")[0])
     pending_urls = [SPRI_LIST_URL]
+    pending_urls.append(spri_year_url(SPRI_LIST_URL, year, 1))
+    pending_urls.extend(spri_year_url(SPRI_LIST_URL, year, page_no) for page_no in range(2, max_pages + 1))
     pending_urls.extend(spri_page_url(SPRI_LIST_URL, page_no) for page_no in range(2, max_pages + 1))
     seen_urls: set[str] = set()
 
