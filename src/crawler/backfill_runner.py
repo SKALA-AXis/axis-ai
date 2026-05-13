@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
 from src.config.companies import COMPANY_ALIASES
-from src.config.global_companies import GLOBAL_COMPANY_ALIASES
 from src.crawler.backfill_config import BackfillSourceConfig
 from src.crawler.base import CrawlRunContext, CrawlWindow
 from src.crawler.batch_processor import BatchProcessor
@@ -50,7 +49,7 @@ class BackfillRunner:
         self.persist = persist
         self.use_state = use_state
         self.process_after_window = process_after_window
-        self.keywords = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
+        self.keywords = dict(COMPANY_ALIASES)
 
     async def run_source(
         self,
