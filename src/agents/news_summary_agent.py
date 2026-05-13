@@ -20,6 +20,7 @@ from src.db.article_store import get_articles_by_ids
 log = logging.getLogger(__name__)
 
 _LLM_MODEL = "gpt-4o"
+_PROMPT_VERSION = "summary-v3.0"
 _DEFAULT_MAX_CLUSTER_ARTICLES = 5
 _PEER_ALIASES = {
     company_id: aliases
@@ -237,7 +238,16 @@ class PeerNewsSummaryAgent:
         prompt = _PEER_NEWS_SUMMARY_PROMPT.replace("{articles_text}", summary_context)
 
         try:
-            response = _get_llm().invoke(prompt)
+            from src.observability import tracing_config
+
+            response = _get_llm().invoke(
+                prompt,
+                config=tracing_config(
+                    agent="PeerNewsSummaryAgent",
+                    phase="summarize",
+                    prompt_version=_PROMPT_VERSION,
+                ),
+            )
             content = (
                 response.content if isinstance(response.content, str) else str(response.content)
             )
@@ -324,9 +334,18 @@ def _format_articles(
 
 
 def _extract_article_fact_notes(articles_text: str) -> str:
+    from src.observability import tracing_config
+
     prompt = _ARTICLE_FACT_EXTRACTION_PROMPT.replace("{articles_text}", articles_text)
     try:
-        response = _get_llm().invoke(prompt)
+        response = _get_llm().invoke(
+            prompt,
+            config=tracing_config(
+                agent="PeerNewsSummaryAgent",
+                phase="extract_facts",
+                prompt_version=_PROMPT_VERSION,
+            ),
+        )
         content = response.content if isinstance(response.content, str) else str(response.content)
         parsed = _parse_json(content)
         return json.dumps(parsed, ensure_ascii=False, indent=2)
@@ -470,7 +489,16 @@ def _repair_fact_summary_if_needed(
     )
 
     try:
-        response = _get_llm().invoke(prompt)
+        from src.observability import tracing_config
+
+        response = _get_llm().invoke(
+            prompt,
+            config=tracing_config(
+                agent="PeerNewsSummaryAgent",
+                phase="repair",
+                prompt_version=_PROMPT_VERSION,
+            ),
+        )
         content = response.content if isinstance(response.content, str) else str(response.content)
         repaired = _normalize_summary_result(_parse_json(content), target_companies)
         if repaired.get("is_valid_summary"):

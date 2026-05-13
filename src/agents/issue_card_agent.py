@@ -11,6 +11,7 @@ from src.db.article_store import _generate_card_id, get_articles_by_ids
 log = logging.getLogger(__name__)
 
 _llm = ChatOpenAI(model="gpt-4o", temperature=0.3, max_completion_tokens=1024)
+_PROMPT_VERSION = "ic-v3.0"  # evidence_agent.PROMPT_VERSION 과 통일
 
 _ISSUE_CARD_PROMPT = """\
 당신은 SK AX 전략기획팀의 AI 어시스턴트입니다.
@@ -106,7 +107,17 @@ class IssueCardAgent:
         prompt = _ISSUE_CARD_PROMPT.replace("{articles_text}", articles_text)
 
         try:
-            response = _llm.invoke(prompt)
+            from src.observability import tracing_config
+
+            response = _llm.invoke(
+                prompt,
+                config=tracing_config(
+                    agent="IssueCardAgent",
+                    prompt_version=_PROMPT_VERSION,
+                    company=company,
+                    cluster_id=cluster_id,
+                ),
+            )
             content = (
                 response.content if isinstance(response.content, str) else str(response.content)
             )

@@ -67,6 +67,21 @@ class EvidenceAgent:
             "run_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
         }
 
+        # Langfuse drill-down pointer — 직전 LLM 호출의 trace_id 가 있으면 부착.
+        # axis-infra/docs/OBSERVABILITY_LANGFUSE.md §11 spec. P10+ admin UI 의
+        # "이 카드 → trace tree" 진입점.
+        try:
+            from src.observability import git_sha
+            from src.observability.langfuse_client import get_current_trace_id
+
+            trace_id = get_current_trace_id()
+            if trace_id:
+                provenance["langfuse_trace_id"] = trace_id
+            provenance["git_sha"] = git_sha()
+        except Exception:
+            # observability module 누락 / Langfuse 비활성 — provenance 핵심 필드는 보존
+            pass
+
         # 재무 연결 (PoC) — stub JSON 기반. peer_financials 테이블 마이그레이션 후 DB로 교체.
         link_result = self.financial_linker.link(card)
         financial_refs: list[dict[str, Any]] = link_result.get("financial_refs", [])

@@ -31,6 +31,7 @@ PEER_CONTEXT_LIMIT = 1800
 ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
 
 _llm: ChatOpenAI | None = None
+_PROMPT_VERSION = "relevance-v1.0"
 
 
 def _get_llm() -> ChatOpenAI:
@@ -411,7 +412,16 @@ class RelevanceAgent:
                 matched_company_candidates,
                 matched_sector_candidates,
             )
-            response = _get_llm().invoke(prompt)
+            from src.observability import tracing_config
+
+            response = _get_llm().invoke(
+                prompt,
+                config=tracing_config(
+                    agent="RelevanceAgent",
+                    prompt_version=_PROMPT_VERSION,
+                    source_type=source_type,
+                ),
+            )
             response_text = (
                 response.content if isinstance(response.content, str) else str(response.content)
             )
