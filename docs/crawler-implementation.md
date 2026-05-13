@@ -229,7 +229,7 @@ RETURNING id
   새 항목 감지 (URL 해시 기반)
       → FastFilter (score ≥ 60: urgent)
       → GPT-4o 2차 검증 (LLM 호출은 urgent만, 하루 ~5~10건)
-      → Slack Webhook 발송 (confirmed=true인 경우)
+      → 이메일 즉시 발송 (confirmed=true인 경우 — Slack Webhook 폐기)
 ```
 
 **GPT-4o 검증 판단 기준:**
@@ -298,5 +298,5 @@ FastAPI lifespan에서 `scheduler.start()` / `scheduler.shutdown()` 호출.
 | IssueCardAgent (이슈 카드 생성) | 🟡 | `src/agents/issue_card_agent.py` |
 | Qdrant 벡터 삽입 파이프라인 | 🟡 | `src/rag/embedder.py` |
 | content.py 본문 전문 수집 연동 | 🟡 | `src/crawler/parsers/content.py` |
-| UrgentMonitor Slack Webhook 연동 | 🟢 | `src/crawler/monitors/urgent.py` |
+| UrgentMonitor 이메일 알림 연동 (Slack 폐기) | 🟢 | `src/crawler/monitors/urgent.py` |
 | 크롤러 단위 테스트 | 🟢 | `tests/test_crawler.py` |
