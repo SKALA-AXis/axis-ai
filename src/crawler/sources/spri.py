@@ -100,6 +100,22 @@ async def fetch_bytes(client: httpx.AsyncClient, url: str) -> bytes:
     return response.content
 
 
+async def fetch_spri_list_html_by_playwright(url: str) -> str:
+    try:
+        playwright = PlaywrightClient()
+        async with playwright.new_page() as page:
+            await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+            try:
+                await page.wait_for_load_state("load", timeout=10_000)
+            except Exception:
+                pass
+            await page.wait_for_timeout(2_000)
+            return await page.content()
+    except Exception as e:
+        log.warning("SPRi Playwright 목록 fetch 실패 | url=%s error=%s", url, e)
+        return ""
+
+
 def spri_page_url(url: str, page_no: int) -> str:
     parsed = urlparse(url)
     params = dict(parse_qsl(parsed.query, keep_blank_values=True))
@@ -159,7 +175,6 @@ async def find_issue_url_with_pagination(
     *,
     max_pages: int = SPRI_BACKFILL_MAX_LIST_PAGES,
 ) -> str:
-    playwright = PlaywrightClient()
     pending_urls = [SPRI_LIST_URL]
     pending_urls.extend(spri_page_url(SPRI_LIST_URL, page_no) for page_no in range(2, max_pages + 1))
     seen_urls: set[str] = set()
@@ -177,7 +192,7 @@ async def find_issue_url_with_pagination(
             log.info("SPRi 월호 발견 | month=%s list_url=%s", month, list_url)
             return issue_url
         except ValueError:
-            rendered_html = await playwright.fetch_html(list_url)
+            rendered_html = await fetch_spri_list_html_by_playwright(list_url)
             if rendered_html:
                 try:
                     issue_url = find_issue_url(rendered_html, month)
