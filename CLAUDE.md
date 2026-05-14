@@ -249,10 +249,10 @@ payload = {
 | 공식 뉴스룸 (현대오토에버/포스코DX) | 0.90 | Playwright generic | best-effort 셀렉터 |
 | 한경 컨센서스 | 0.80 | Playwright (SPA) | 4 peer 검색 |
 | 네이버 금융 리서치 | 0.75 | Playwright | itemCode 4개 등록 |
-| 사람인 | 0.50 | Saramin API | 약한 신호 감지용 |
+| 고용24 (work24.go.kr) | 0.50 | work24 OpenAPI (`WORK24_API_KEY`) | 약한 신호 감지용 — 공채속보 + 채용공고 |
 
-> BigKinds, LinkedIn, 잡플래닛은 미구현 — 의도적으로 제외.
-> Saramin이 채용공고 단일 소스. 향후 LinkedIn 공식 API 승인 받으면 추가 검토.
+> BigKinds, LinkedIn, 잡플래닛, Saramin 은 미구현 — 의도적으로 제외.
+> 고용24 (work24) 가 채용공고 단일 소스. 향후 LinkedIn 공식 API 승인 받으면 추가 검토.
 
 ### 크롤러 예외 처리 원칙
 - HTTP 403/429 → 5분 대기 후 1회 재시도, 실패 시 SKIP + 로그
