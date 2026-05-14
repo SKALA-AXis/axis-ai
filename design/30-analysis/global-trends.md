@@ -32,6 +32,12 @@
 
 ```python
 class GlobalTrendsInput(TypedDict):
+    # 25-knowledge-curation Phase K3+ 도입 후 — agent 가 in-process 6 글로벌 pack 자동 fetch.
+    # global company 도 동일 ContextPack schema (snapshot/digest/profile/canon + ledger).
+    # batch nightly 호출이라 slim_mode=False (full pack 사용).
+    _context_packs: dict[str, "PeerContextPack"] | None    # {company_id: PeerContextPack}
+
+    # 기존 필드
     company_ids: list[str] | None
     # ["nvidia", "apple", "microsoft", "google", "amazon", "meta"] — None 이면 6사 전부
     focus_themes: list[str] | None

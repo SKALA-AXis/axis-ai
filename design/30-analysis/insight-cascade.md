@@ -35,6 +35,12 @@
 class InsightCascadeInput(TypedDict):
     card_ids: list[str]          # 6 권장, 4~10 허용
     context: dict | None         # frontend 가 추가 컨텍스트 제공 (예: 사용자 관심사)
+
+    # 25-knowledge-curation 도입 후 추가 (Phase K3+)
+    # 분석 agent 가 in-process ContextPackBuilder.assemble() 호출하여 자체 채움.
+    # frontend / caller 는 채울 필요 없음 — agent 가 card_ids 의 peer_id 별 pack 자동 fetch.
+    # cold_start (모든 pack layer 결측) 면 None 처리 + fallback path (기존 retrieval)
+    _context_packs: dict[str, "PeerContextPack"] | None  # {peer_id: PeerContextPack}
 ```
 
 ## 5. 출력 스펙

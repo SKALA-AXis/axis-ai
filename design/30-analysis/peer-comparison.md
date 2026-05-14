@@ -36,6 +36,11 @@ PDF 직접 인용 (§4): *"Peer+의 경우 분기별로 다트 데이터를 참�
 
 ```python
 class PeerComparisonInput(TypedDict):
+    # 25-knowledge-curation Phase K3+ 도입 후 — agent 가 in-process 채움.
+    # Peer 분석은 단일 peer 이므로 slim_mode=False (full pack 사용 권장).
+    _context_pack: "PeerContextPack | None"
+
+    # 기존 필드
     peer_id: str
     window_days: int            # 기본 30
     focus_sector: str | None    # 옵션 (특정 sector 만 비교)

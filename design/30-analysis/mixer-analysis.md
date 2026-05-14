@@ -37,6 +37,11 @@ class MixerAnalysisInput(TypedDict):
     card_ids: list[str]        # 2~20
     ratios: dict                # {peer: {samsung_sds: 0.4, ...}, industry: {...}, keyword: [...]}
     user_context: str | None    # 추가 컨텍스트 (자유 입력)
+
+    # 25-knowledge-curation Phase K3+ 도입 후 — agent 가 in-process 채움.
+    # Mixer 가 다중 peer 분석이면 slim_mode=True 로 token 절감 (peer 5+ 일 때 자동).
+    _context_packs: dict[str, "PeerContextPack"] | None
+    _packs_slim_mode: bool          # 카드의 unique peer 수 > 3 이면 True
 ```
 
 ## 5. 출력 스펙
