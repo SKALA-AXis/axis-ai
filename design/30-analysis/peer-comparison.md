@@ -63,8 +63,17 @@ class Forecast(TypedDict):
     risk_assumptions: list[str]              # 본 시나리오가 틀릴 조건
     confidence: float                        # 0~1
 
+class ReasoningTrailItem(TypedDict):
+    """02-prompt-design-checklist.md §4 Tier 1 — 사용자 default 노출.
+    Peer 의 4 phase (Current/Trend/Forecast/Strategic) 자연 매핑 → trail 4 step 권장."""
+    seq: int
+    label: str                          # ≤ 12자 ("현재 포지션" / "추세 비교" / "전망" / "SK AX 대응" / "결론")
+    one_liner: str                      # ≤ 80자, 정량 수치 1개 우선 (QoQ +X% 등)
+    evidence_refs: list[str]            # card_id / DART id / IR ref
+    langfuse_observation_id: str | None
+
 class CoTStep(TypedDict):
-    """02-prompt-design-checklist.md §4 표준."""
+    """Tier 2 — 상세 ("더 자세히" 패널). 02-prompt-design-checklist §4 표준."""
     step_idx: int
     phase: Literal["current","trend","forecast","strategic"]
     question: str
@@ -72,29 +81,32 @@ class CoTStep(TypedDict):
     answer: str
     intermediate_conclusion: str
     confidence: float
+    langfuse_observation_id: str | None
 
 class PeerComparisonOutput(TypedDict):
     peer_id: str
     # Phase 1 — Current
     strategy_label: str                # "Aggressive Expansion" 등
-    differentiators: list[dict]        # 3~5건 [{aspect, peer_position, skax_position, opportunity}]
+    differentiators: list[dict]
     strengths_of_peer: list[str]
     weaknesses_of_peer: list[str]
     collaboration_potential: list[str]
     # Phase 2 — Trend
-    trend_deltas: list[TrendDelta]     # 매출/영업이익/마진/R&D 의 QoQ/YoY 추세
+    trend_deltas: list[TrendDelta]
     # Phase 3 — Forecast (PDF §4)
-    forecasts: list[Forecast]          # 3 horizon × 3 scenario = 9 (또는 핵심 3~5 select)
+    forecasts: list[Forecast]
     # Phase 4 — Synthesis
-    sk_ax_implication: str             # PDF §13 — 국내 IT 서비스사 관점 1~2 문장 (긍정/중립/부정)
-    final_one_liner: str               # PDF §5 — SK AX 관점 한 줄 결론 (≤ 100자)
-    follow_up_questions: list[str]     # PDF §17 — 다음 분석 제안 2~3개
-    # Meta
-    reasoning_steps: list[CoTStep]     # PDF §1 / §5 — 4 phase × 1+ step
+    sk_ax_implication: str             # PDF §13 — 1~2 문장 (긍정/중립/부정)
+    final_one_liner: str               # PDF §5 — ≤ 100자
+    follow_up_questions: list[str]     # PDF §17 — 2~3개
+    # Meta — 3-tier observability
+    reasoning_trail: list[ReasoningTrailItem]   # Tier 1 — 사용자 default (4~5)
+    reasoning_steps: list[CoTStep]              # Tier 2 — 상세 (4~8)
+    langfuse_trace_id: str | None               # Tier 3 — admin deep link
     confidence: float
     provenance: dict
-    sources: list[str]                 # 사용된 card_ids + DART ids
-    analysis_period: dict              # PDF §6 — {"since": "2026-04-15", "until": "2026-05-14", "kst_basis": true}
+    sources: list[str]
+    analysis_period: dict              # PDF §6
 ```
 
 frontend `GET /api/monitoring/{peerId}/strategy` 및 `/comparison` 응답.
@@ -218,9 +230,15 @@ SK AX 관점에서 분석하라. *추론 과정을 명시적으로 보여주라*
   "sk_ax_implication": "1~2 문장. 긍정/중립/부정 명시.",
   "final_one_liner": "≤ 100자",
   "follow_up_questions": ["...", "..."],
+  "reasoning_trail": [
+    {"seq": 1, "label": "현재 포지션", "one_liner": "...", "evidence_refs": ["CN-..."], "langfuse_observation_id": null},
+    {"seq": 2, "label": "추세 비교", "one_liner": "매출 QoQ +12% / 영업이익률 -2pp", "evidence_refs": ["DART:rcept-..."], "langfuse_observation_id": null},
+    {"seq": 3, "label": "전망", "one_liner": "...", "evidence_refs": [], "langfuse_observation_id": null},
+    {"seq": 4, "label": "SK AX 대응", "one_liner": "...", "evidence_refs": [], "langfuse_observation_id": null}
+  ],
   "reasoning_steps": [
     {"step_idx": 0, "phase": "current", "question": "...", "inputs_used": [...],
-     "answer": "...", "intermediate_conclusion": "...", "confidence": 0.0~1.0}
+     "answer": "...", "intermediate_conclusion": "...", "confidence": 0.0~1.0, "langfuse_observation_id": null}
     // phase=current / trend / forecast (3 step) / strategic = 총 6 step
   ],
   "confidence": 0.0~1.0,

@@ -143,6 +143,59 @@ PROMPT_VERSION = "ic-v3.0"     # agent + version 형태, 변경 시 +0.1
 
 Prompt 변경 + commit 시 PR template 에 `prompt_version_bump: [ic-v3.0 → ic-v3.1]` 체크박스 강제.
 
+### 6.4 LangfuseTraceLinker — 3-tier observability 의 Tier 3 → output 매핑
+
+`02-prompt-design-checklist.md` §4 의 3-tier observability 표준 (trail / steps / trace_id) 중 **Tier 3 (langfuse_trace_id)** 를 runtime 에 매핑해 출력 schema 에 박는 sub-middleware. analysis agent (Mixer / Insight / PeerComparison / GlobalTrends / Briefing) 의 출력에 `langfuse_trace_id` + `reasoning_steps[].langfuse_observation_id` 자동 채움.
+
+```python
+from langfuse import get_client
+
+def link_langfuse_trace(output: dict) -> dict:
+    """analysis agent output 에 Tier 3 trace_id + Tier 1/2 step 별 observation_id 매핑.
+    LLM call 직후 (with_provenance decorator 안에서) 호출됨.
+
+    - single LLM call agent (Mixer / Insight / Peer / Global): 모든 trail/steps 의
+      observation_id = 현재 generation_id (동일).
+    - multi LLM call agent (Briefing 의 section 별 call): linker 가 각 section
+      generation 시점에 sub-call 되어 section 별 trace_id 매핑.
+    """
+    client = get_client()
+    trace_id = client.get_current_trace_id()
+    if not trace_id:
+        return output  # Langfuse 비활성 (local dev) — silently skip
+
+    output["langfuse_trace_id"] = trace_id
+    obs_id = client.get_current_observation_id()
+
+    for step in output.get("reasoning_steps", []):
+        step.setdefault("langfuse_observation_id", obs_id)
+    for trail_step in output.get("reasoning_trail", []):
+        trail_step.setdefault("langfuse_observation_id", obs_id)
+    return output
+```
+
+`with_provenance` decorator (§6.2) 가 LLM call 종료 직후 `link_langfuse_trace(result)` 호출.
+
+### 6.5 사용자 노출 vs admin 노출 분리
+
+3-tier 중 Tier 3 (langfuse_trace_id) 는 **admin only** — 시스템 프롬프트 / 전체 응답 / token 비용이 Langfuse trace 에 보이기 때문. FastAPI response serializer 에서:
+
+```python
+def serialize_for_user(output: dict, is_admin: bool) -> dict:
+    """일반 사용자 응답에서 trace_id 제거 (시스템 프롬프트 노출 방지)."""
+    out = dict(output)
+    if not is_admin:
+        out.pop("langfuse_trace_id", None)
+        # reasoning_steps / trail 안의 langfuse_observation_id 도 strip
+        for step in out.get("reasoning_steps", []):
+            step.pop("langfuse_observation_id", None)
+        for t in out.get("reasoning_trail", []):
+            t.pop("langfuse_observation_id", None)
+    return out
+```
+
+admin 역할 판정은 BE 가 JWT claim 기반 처리 후 axis-ai 에 `X-Axis-Role: admin` 헤더 전달.
+
 ## 7. LLM 모델 + token 예산
 
 - **LLM 미사용** — pure middleware

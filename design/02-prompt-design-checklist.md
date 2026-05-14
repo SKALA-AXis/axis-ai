@@ -53,40 +53,139 @@ class AnyLLMOutput(TypedDict):
 - 좋음: `"삼성SDS 의 Palantir 파트너십은 SK AX 의 manufacturing AX 입찰 경쟁을 강화한다."`
 - 나쁨: `"의미 있는 변화로 보인다."` ← 모호
 
-## 4. CoT (Chain of Thought) reasoning_steps 표준
+## 4. CoT (Chain of Thought) — 3-tier observability 표준
 
-PDF §1, §5 의 "에이전트 간 소통 과정 가시화" 요구. multi-step LLM agent (Insight / Mixer / PeerComparison / Briefing) 의 output schema 에 추가:
+PDF §1, §5 의 "에이전트 간 소통 과정 가시화" 요구. 단, 사용자 대화형 (Mixer / Chat) 외에는 모두 **batch** 결과를 보여주는 형태이므로 raw LLM 추론 trace 를 그대로 노출하면 노이즈가 크다 (수많은 시도 / 탐색 token / 자기 반복). 따라서 **post-hoc 정제된 narrative** 가 default 이고, 상세 추적은 옵션이어야 한다.
+
+본 design 은 **3-tier observability** 로 표준화:
+
+### Tier 1 — `reasoning_trail[]` (사용자 default 노출)
+
+분석 결과 페이지 "추론 흐름" 패널에 표시될 **압축 narrative**. 동일 LLM call 내에서 self-summarize 강제 (별도 LLM call 아님 — 추가 비용 ~200 token / ~₩50).
+
+```python
+class ReasoningTrailItem(TypedDict):
+    seq: int                            # 1부터
+    label: str                          # 짧은 단계명, ≤ 12자 ("카드 비교" / "재무 매칭" / "결론")
+    one_liner: str                      # ≤ 80자 한국어 단문, 핵심만 + 가능 시 정량 수치 1개 포함
+    evidence_refs: list[str]            # card_id / DART id / 외부 근거 id (UI 클릭 시 원본 노출)
+    langfuse_observation_id: str | None # 이 step 에 대응하는 Langfuse span/generation id (admin only)
+```
+
+- **분량**: 3~5 step 강제. raw CoT 가 15 step 이라도 trail 은 4~5 로 압축
+- **언어**: 한국어 단문, 추측 / 탐색 / "고민했으나" 같은 hedging 금지
+- **정량 우선** (checklist 11): 가능하면 step 의 one_liner 에 수치 1개 (`"QoQ +12%"`)
+- **PDF §5 직접 대응**: 최종 한 줄 결론 (`final_one_liner`) 의 *어떻게* 부분을 채우는 layer
+
+### Tier 2 — `reasoning_steps[]` ("더 자세히" 접힌 패널)
+
+기존 CoT — 단계별 question / inputs / answer / conclusion / confidence. trail 이 압축본이라면 steps 는 원본 narrative.
 
 ```python
 class CoTStep(TypedDict):
     step_idx: int                       # 0부터
     agent: str                          # 어느 sub-agent 또는 phase
-    question: str                       # 이 step 의 자기 질문 (≤ 200자)
+    phase: str | None                   # ex: "per_card" / "cross_card" / "synthesis"
+    question: str                       # ≤ 200자
     inputs_used: list[str]              # card_id / DART id / 외부 근거 id
-    answer: str                         # LLM 의 raw response (≤ 500자)
-    intermediate_conclusion: str        # 다음 step 으로 넘어갈 핵심 요약 (≤ 150자)
-    confidence: float                   # 0.0 ~ 1.0
+    answer: str                         # ≤ 500자
+    intermediate_conclusion: str        # ≤ 150자
+    confidence: float                   # 0.0~1.0
+    langfuse_observation_id: str | None # 이 step 에 대응하는 Langfuse span id
 ```
 
-frontend 가 expandable panel ("추론 과정 보기") 로 렌더. 사용자가 클릭 시 step 별 input → question → answer → conclusion 체인 표시.
+- 사용자가 trail 의 step 한 줄을 클릭 → 동일 seq 에 매핑된 steps 가 expand
+- LLM 의 self-narration 이라 confabulation 위험 존재 → admin 이 Tier 3 으로 검증
+
+### Tier 3 — `langfuse_trace_id` (admin only deep link)
+
+LangChain CallbackHandler 가 자동 캡처한 *실제 실행 trace* — 원본 prompt + response + token + latency + cost. **사용자에게는 노출 X**.
+
+```python
+class LangfuseTraceRef(TypedDict):
+    trace_id: str                       # Langfuse Cloud 의 trace id
+    project: str                        # "axis-ai"
+    deep_link: str                      # https://cloud.langfuse.com/project/{project}/traces/{trace_id}
+```
+
+- frontend admin panel 만 `LangfuseTraceRef` surface
+- 일반 사용자 응답은 trace_id 미포함 (또는 비공개 prefix)
+- multi-agent orchestration (Briefing 10 section, Insight → Mixer 위임 등) 의 *진짜* 협업 흐름은 Langfuse span tree 가 ground truth
+
+### 3-tier 간 책임 분담 (요약)
+
+| 질문 | 어디서 답하나 |
+|---|---|
+| "이 시사점이 어떻게 나왔어?" (사용자) | **Tier 1** trail 3~5 step |
+| "step 3 의 근거가 뭐야?" (사용자, 클릭) | **Tier 2** steps[seq=3] expand |
+| "agent A 가 어떤 prompt 로 LLM 호출했고 token 얼마 썼어?" (admin) | **Tier 3** Langfuse 원본 |
+| "이번 분석이 실제로 어떤 카드들을 봤어?" (검증) | Tier 2 inputs_used vs Tier 3 prompt 대조 |
+
+### `AnyLLMOutput` 표준 schema
+
+multi-step LLM agent (Insight / Mixer / PeerComparison / GlobalTrends / Briefing) 의 output 은 다음 3 필드 모두 포함:
+
+```python
+class AnyLLMOutput(TypedDict):
+    ...  # agent 별 schema
+    reasoning_trail: list[ReasoningTrailItem]   # Tier 1 — 사용자 default (3~5)
+    reasoning_steps: list[CoTStep]              # Tier 2 — 상세 ("더 자세히")
+    langfuse_trace_id: str | None               # Tier 3 — admin deep link
+    final_one_liner: str                        # ≤ 100자, SK AX 관점
+```
+
+### Tier 1 생성 prompt 조각 (재사용 표준)
+
+모든 multi-step agent prompt 끝에 다음 instruction 박음:
+
+```text
+[reasoning_trail 출력]
+사용자 UI 에 표시할 추론 흐름을 정확히 3~5 step 으로 작성하라.
+raw reasoning_steps 가 더 길어도 압축할 것. 핵심 결정만 trail.
+
+각 trail step:
+- seq: 1, 2, 3, ...
+- label: ≤ 12자 명사구 ("카드 비교" / "재무 검증" / "결론")
+- one_liner: ≤ 80자 한국어 단문. 가능하면 정량 수치 1개 포함.
+               탐색/시도/hedging 표현 금지 ("~ 인 것 같다" X).
+- evidence_refs: 이 step 이 참조한 card_id / DART id / IR ref 목록
+- langfuse_observation_id: null (런타임에 자동 매핑됨)
+
+목표: 사용자가 trail 만 읽고도 "왜 이 결론에 왔는가" 가 명확히 보이도록.
+```
+
+### 적용 우선순위 (가치 큰 순)
+
+| Agent | trail 가치 | 비고 |
+|---|---|---|
+| **MixerAnalysis** | HIGH | PDF §5 직접 요구 (CoT 노출 + 한 줄 결론) |
+| **InsightCascade** | HIGH | 4 phase × 3~5 bullet = 15+ raw → 4~5 trail |
+| **PeerComparison** | HIGH | 4 phase (Current/Trend/Forecast/Strategic) 자연 매핑 |
+| **GlobalTrends** | HIGH | 5 phase 자연 매핑 + impact_matrix 의 channel 설명 |
+| **BriefingGeneration** | MEDIUM | section 별 mini-trail (10 section × 3 step) 권장 |
+| **ChatOrchestrator** | LOW | 실시간 turn 이라 streaming 으로 충분, trail 보다 follow_up_suggestions 가 효과적 |
+| Ingestion agents | NONE | 사용자 노출 안 함 |
 
 ## 5. 17 요소 ↔ agent 매핑 표
 
-| Agent | 필수 (Mandatory) | 권장 (Recommended) |
-|---|---|---|
-| **ClassificationAgent** | 1, 2, 3, 4, 6, 7, 14 | 9 |
-| **PeerNewsSummaryAgent** | 1, 2, 4, 6, 7, 11, 12, 14 | 16 |
-| **PeerNewsAnalysisAgent** | 1, 2, 4, 6, 7, 10, 11, 13, 14 | 15, 17 |
-| **IssueCardAgent** | 1, 2, 3, 4, 6, 7, 11, 12, 13, 14 | 15, 17 |
-| **EvidenceAgent** | 1, 4, 11, 12, 14 | — |
-| **InsightCascadeAgent** | 1, 2, 7, 10, 13, 14, 15, 16, 17 + CoT | 5, 8 |
-| **MixerAnalysisAgent** | 1, 2, 7, 10, 13, 14, 15, 17 + CoT | 5, 8, 16 |
-| **PeerComparisonAgent** | 1, 2, 5, 6, 8, 9, 11, 12, 13, 14, 16 + CoT | 10, 17 |
-| **GlobalTrendsAgent** *(신규)* | **17 요소 모두** + CoT + final_one_liner | — |
-| **AnswerAgent** | 1, 4, 7, 11, 12, 14 | 13, 17 |
-| **ChatOrchestratorAgent** | 1, 14, 17 (deep_dive) | — |
-| **WeakSignalAgent** | 1, 2, 5, 6, 9, 11, 14 | 13, 16 |
-| **BriefingGenerationAgent** | 1, 2, 5, 6, 7, 8, 10, 11, 12, 13, 14, 17 + CoT | 15, 16 |
+| Agent | 필수 (Mandatory) | 권장 (Recommended) | 3-tier observability |
+|---|---|---|---|
+| **ClassificationAgent** | 1, 2, 3, 4, 6, 7, 14 | 9 | trace_id only |
+| **PeerNewsSummaryAgent** | 1, 2, 4, 6, 7, 11, 12, 14 | 16 | trace_id only |
+| **PeerNewsAnalysisAgent** | 1, 2, 4, 6, 7, 10, 11, 13, 14 | 15, 17 | trace_id only |
+| **IssueCardAgent** | 1, 2, 3, 4, 6, 7, 11, 12, 13, 14 | 15, 17 | trace_id only |
+| **EvidenceAgent** | 1, 4, 11, 12, 14 | — | trace_id only |
+| **InsightCascadeAgent** | 1, 2, 7, 10, 13, 14, 15, 16, 17 + CoT | 5, 8 | **trail + steps + trace_id** |
+| **MixerAnalysisAgent** | 1, 2, 7, 10, 13, 14, 15, 17 + CoT | 5, 8, 16 | **trail + steps + trace_id** |
+| **PeerComparisonAgent** | 1, 2, 5, 6, 8, 9, 11, 12, 13, 14, 16 + CoT | 10, 17 | **trail + steps + trace_id** |
+| **GlobalTrendsAgent** *(신규)* | **17 요소 모두** + CoT + final_one_liner | — | **trail + steps + trace_id** |
+| **AnswerAgent** | 1, 4, 7, 11, 12, 14 | 13, 17 | trace_id only |
+| **ChatOrchestratorAgent** | 1, 14, 17 (deep_dive) | — | trace_id only (streaming) |
+| **WeakSignalAgent** | 1, 2, 5, 6, 9, 11, 14 | 13, 16 | trace_id only |
+| **BriefingGenerationAgent** | 1, 2, 5, 6, 7, 8, 10, 11, 12, 13, 14, 17 + CoT | 15, 16 | **trail (section 별) + steps + trace_id** |
+
+> 사용자 UI default 노출은 trail. steps 는 "더 자세히". trace_id 는 admin only deep link.
+> trace_id only 인 agent 는 사용자에 직접 결과 노출되지 않거나 (ingestion) 결과가 stream 형태 (chat) 이므로 trail 가치 낮음.
 
 ## 6. Prompt audit 진행 plan
 

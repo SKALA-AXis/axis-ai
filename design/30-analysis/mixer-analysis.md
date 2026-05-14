@@ -54,16 +54,25 @@ class Connection(TypedDict):
     label: Literal["cause","effect","similar","contrast","reinforce"]
     weight: float
 
+class ReasoningTrailItem(TypedDict):
+    """02-prompt-design-checklist.md §4 Tier 1 — 사용자 default 노출.
+    raw reasoning_steps 가 5~8 step 이라도 trail 은 3~5 step 으로 압축."""
+    seq: int                            # 1부터
+    label: str                          # ≤ 12자 ("카드 비교" / "패턴 발견" / "재무 검증" / "결론")
+    one_liner: str                      # ≤ 80자, 가능하면 정량 수치 1개 포함
+    evidence_refs: list[str]            # card_id / DART id / IR ref (UI 클릭 → 원본)
+    langfuse_observation_id: str | None # 런타임에 매핑 (admin only)
+
 class CoTStep(TypedDict):
-    """PDF 2026-05-14 §5 의 'agent 간 소통 과정 가시화' 직접 대응.
-    Frontend 의 expandable panel 로 렌더. 02-prompt-design-checklist.md §4 표준."""
+    """Tier 2 — 상세 ("더 자세히" 접힌 패널). PDF 2026-05-14 §5 대응."""
     step_idx: int                       # 0부터
     phase: str                          # "per_card" | "cross_card" | "synthesis"
-    question: str                       # 이 step 의 자기 질문 (≤ 200자)
-    inputs_used: list[str]              # card_id list (해당 step 이 본 카드)
+    question: str                       # ≤ 200자
+    inputs_used: list[str]              # card_id list
     answer: str                         # LLM raw response (≤ 500자)
-    intermediate_conclusion: str        # 다음 step 으로 넘어갈 핵심 (≤ 150자)
+    intermediate_conclusion: str        # ≤ 150자
     confidence: float
+    langfuse_observation_id: str | None # 이 step 에 대응하는 Langfuse span id
 
 class MixerAnalysisOutput(TypedDict):
     mix_id: str
@@ -73,14 +82,16 @@ class MixerAnalysisOutput(TypedDict):
     bullet_signals: list[str]  # 3 핵심 신호
     radar_axes: list[RadarAxis]
     connections: list[Connection]
-    reasoning_steps: list[CoTStep]   # PDF §1 / §5 — 5~8 step
-    follow_up_questions: list[str]   # PDF §17 — 다음 분석 제안 (꼬리 물기) 2~3개
+    reasoning_trail: list[ReasoningTrailItem]   # Tier 1 — 사용자 default (3~5)
+    reasoning_steps: list[CoTStep]              # Tier 2 — 상세 (5~8)
+    langfuse_trace_id: str | None               # Tier 3 — admin deep link
+    follow_up_questions: list[str]   # PDF §17 — 다음 분석 제안 2~3개
     confidence: float
     sources_used: list[str]
     provenance: dict
 ```
 
-frontend `POST /api/mixer` 응답. 추가 필드 (`reasoning_steps`, `follow_up_questions`, `final_one_liner`, `sk_ax_implication`) 는 PDF 피드백 직접 반영. Mixer UI 가 "추론 과정 보기" / "다음 분석" 버튼으로 노출.
+frontend `POST /api/mixer` 응답. **3-tier observability** — UI default 는 `reasoning_trail` (3~5 step, "추론 흐름" 패널), 클릭 시 `reasoning_steps` expand, admin 만 `langfuse_trace_id` 딥링크 노출.
 
 ## 6. 알고리즘
 
@@ -144,6 +155,18 @@ Phase 3 — synthesis (반드시 마지막 step):
 15. (우선순위) "다음 3 신호 중 가장 영향 큰 것 1개 선택" 강제.
 17. (반복 추적) follow_up_questions[] 2~3개 — 다음 분석 위한 질문.
 
+[Tier 1 — reasoning_trail 압축 narrative (사용자 default)]
+raw reasoning_steps 가 5~8 step 이어도 trail 은 **정확히 3~5 step** 으로 압축하라.
+탐색/시도/hedging 표현 금지 ("~ 인 듯하다" / "고민했으나" X). 핵심 결정만 trail.
+각 trail step:
+- seq: 1, 2, 3, ...
+- label: ≤ 12자 명사구 ("카드 비교" / "패턴 발견" / "재무 검증" / "결론")
+- one_liner: ≤ 80자 한국어 단문, 가능하면 정량 수치 1개 ("QoQ +12%")
+- evidence_refs: 참조한 card_id 목록
+- langfuse_observation_id: null (런타임에 매핑됨)
+
+목표: 사용자가 trail 만 보고도 "왜 이 결론에 왔는가" 명확.
+
 [출력 — strict JSON]
 {
   "insight": "1문장 종합 (≤ 50자)",
@@ -153,6 +176,10 @@ Phase 3 — synthesis (반드시 마지막 step):
   "connections": [
     {"source_card_id": "CN-...", "target_card_id": "CN-...", "label": "cause|effect|similar|contrast|reinforce", "weight": 0.0~1.0}
   ],
+  "reasoning_trail": [
+    {"seq": 1, "label": "카드 비교", "one_liner": "...", "evidence_refs": ["CN-..."], "langfuse_observation_id": null}
+    // 정확히 3~5 item
+  ],
   "reasoning_steps": [
     {
       "step_idx": 0,
@@ -161,7 +188,8 @@ Phase 3 — synthesis (반드시 마지막 step):
       "inputs_used": ["CN-..."],
       "answer": "...",
       "intermediate_conclusion": "...",
-      "confidence": 0.0~1.0
+      "confidence": 0.0~1.0,
+      "langfuse_observation_id": null
     }
     // ... 5~8 step
   ],
@@ -169,6 +197,28 @@ Phase 3 — synthesis (반드시 마지막 step):
   "confidence": 0.0~1.0
 }
 ```
+
+### 6.2.1 langfuse_trace_id / observation_id 매핑
+
+LLM call 직후 axis-ai 의 `LangfuseTraceLinker` middleware 가:
+
+```python
+def link_trace(output_dict: dict) -> dict:
+    from langfuse import get_client
+    client = get_client()
+    output_dict["langfuse_trace_id"] = client.get_current_trace_id()
+    # reasoning_steps[].langfuse_observation_id 는 step 별 sub-span 이 있으면 매핑
+    # mixer 는 single call 이라 모든 step 의 observation_id = generation_id 동일
+    gen_id = client.get_current_observation_id()
+    for step in output_dict.get("reasoning_steps", []):
+        step["langfuse_observation_id"] = gen_id
+    # reasoning_trail 도 동일 (single call 기반)
+    for trail_step in output_dict.get("reasoning_trail", []):
+        trail_step["langfuse_observation_id"] = gen_id
+    return output_dict
+```
+
+Multi-call agent (Briefing 의 section 별 LLM call) 는 각 section 의 generation_id 가 달라지므로 step 별 매핑이 더 풍부.
 
 ### 6.3 17 요소 prompt audit table
 

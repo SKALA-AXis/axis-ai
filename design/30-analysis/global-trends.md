@@ -84,8 +84,16 @@ class GlobalForecast(TypedDict):
     risk_level: Literal["low", "medium", "high"]   # checklist 16
     recommended_response: str             # ≤ 200자 — SK AX 권장 대응
 
+class ReasoningTrailItem(TypedDict):
+    """02-prompt-design-checklist §4 Tier 1 — 사용자 default."""
+    seq: int
+    label: str                            # ≤ 12자 ("글로벌 스냅샷" / "트렌드 감지" / "SK AX 영향" / "전망" / "결론")
+    one_liner: str                        # ≤ 80자, 정량 수치 1개
+    evidence_refs: list[str]              # global card_id / SEC filing / keynote ref
+    langfuse_observation_id: str | None
+
 class CoTStep(TypedDict):
-    """02-prompt-design-checklist §4 표준."""
+    """Tier 2 — 상세 ("더 자세히" 패널). 02-prompt-design-checklist §4 표준."""
     step_idx: int
     phase: Literal["snapshot", "trend_detect", "impact_map", "forecast", "synthesis"]
     question: str
@@ -93,17 +101,20 @@ class CoTStep(TypedDict):
     answer: str
     intermediate_conclusion: str
     confidence: float
+    langfuse_observation_id: str | None
 
 class GlobalTrendsOutput(TypedDict):
-    analysis_period: dict                 # input echo (UI 노출)
-    snapshots: list[GlobalSnapshot]       # 6사
-    trend_detections: list[TrendDetection]  # 5~10 theme
-    impact_matrix: list[SKAXImpactCell]   # |trends| × |sk_ax_lines|
-    forecasts: list[GlobalForecast]       # 3 horizon × 3 scenario = 9 (또는 baseline 만 3)
-    final_one_liner: str                  # checklist 18 — SK AX 관점 한 줄 결론 (≤ 100자)
-    sk_ax_implication: str                # 1~2 문장 — 국내 IT 서비스사 관점 (긍정/중립/부정 명시)
-    follow_up_questions: list[str]        # checklist 17 — 2~3 후속 질문
-    reasoning_steps: list[CoTStep]
+    analysis_period: dict
+    snapshots: list[GlobalSnapshot]
+    trend_detections: list[TrendDetection]
+    impact_matrix: list[SKAXImpactCell]
+    forecasts: list[GlobalForecast]
+    final_one_liner: str                  # SK AX 관점 한 줄 결론 (≤ 100자)
+    sk_ax_implication: str                # 1~2 문장 (긍정/중립/부정)
+    follow_up_questions: list[str]        # checklist 17 — 2~3개
+    reasoning_trail: list[ReasoningTrailItem]   # Tier 1 — 사용자 default (4~5)
+    reasoning_steps: list[CoTStep]              # Tier 2 — 상세 (5~10)
+    langfuse_trace_id: str | None               # Tier 3 — admin deep link
     risk_assumptions: list[str]           # checklist 16
     confidence: float
     provenance: dict
@@ -206,10 +217,14 @@ optimistic / pessimistic 은 baseline 가 risk_level=high 인 경우만 추가 �
   - follow_up_questions: 다음 분석 시 추가로 봐야 할 항목 2~3개
   - risk_assumptions: 본 분석이 틀릴 가정 2~3개
 
-[CoT 강제]
-reasoning_steps[] 에 각 phase 별 1+ step 으로 question / inputs_used / answer /
-intermediate_conclusion / confidence 명시. 사용자가 "global agent 가 어떻게 추론했는가" 를
-expandable panel 에서 단계 별로 확인할 수 있도록.
+[Tier 1 — reasoning_trail (사용자 default)]
+reasoning_steps 가 5~10 step 이어도 trail 은 **정확히 4~5 step** 으로 압축. label 권장:
+"글로벌 스냅샷" / "트렌드 감지" / "SK AX 영향" / "전망" / "결론".
+각 trail step 의 one_liner ≤ 80자, 정량 수치 1개 우선. langfuse_observation_id = null.
+
+[Tier 2 — reasoning_steps[]] (상세)
+각 phase 별 1+ step 으로 question / inputs_used / answer / intermediate_conclusion / confidence
+명시. 사용자가 "더 자세히" 클릭 시 노출.
 
 [정량 우선] 가능한 모든 곳에 수치 + source_marker prefix. "성장 추세" → 금지 / "AI 인프라
 지출 YoY +35% [Microsoft FY25 Q3]" → 권장.

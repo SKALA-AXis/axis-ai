@@ -55,12 +55,22 @@ class TrendItem(TypedDict):
     representative_card_id: str
     sk_ax_perspective: str           # SK AX 관점 한 문장
 
+class ReasoningTrailItem(TypedDict):
+    """02-prompt-design-checklist.md §4 Tier 1 — 사용자 default.
+    Briefing 은 section 별 mini-trail (3 step) — section 안의 LLM 호출 1회당 trail 1세트."""
+    seq: int
+    label: str                       # ≤ 12자 ("카드 선정" / "공통 신호" / "SK AX 영향")
+    one_liner: str                   # ≤ 80자
+    evidence_refs: list[str]
+    langfuse_observation_id: str | None
+
 class SectionBlock(TypedDict):
     section_id: str                  # 'peer:samsung_sds' / 'event:partnership'
     title: str
     summary: str
     card_ids: list[str]
     implication: str
+    reasoning_trail: list[ReasoningTrailItem]   # Tier 1 — section 별 3 step
 
 class BriefingReport(TypedDict):
     id: str                          # 'BR-YYYYMMDD-NNN'
@@ -69,14 +79,16 @@ class BriefingReport(TypedDict):
     date_from: str
     date_to: str
     executive_summary: str           # 3~5 문단
+    executive_reasoning_trail: list[ReasoningTrailItem]   # Tier 1 — top-level 3~5 step
     immediate_trends: list[TrendItem]
     watch_trends: list[TrendItem]
     sections: list[SectionBlock]
-    sources: list[dict]              # 사용된 card_news id + url 목록
+    sources: list[dict]
     status: Literal["queued", "running", "completed", "failed"]
-    progress: float                  # 0.0~1.0 (polling 용)
+    progress: float
     error_message: str | None
-    confidence: float                # 전체 confidence
+    confidence: float
+    langfuse_trace_id: str | None    # Tier 3 — admin deep link (briefing 전체 trace)
     provenance: dict                 # ProvenanceTrackerMiddleware
     created_at: str
     completed_at: str | None

@@ -40,10 +40,18 @@ class InsightCascadeInput(TypedDict):
 ## 5. 출력 스펙
 
 ```python
+class ReasoningTrailItem(TypedDict):
+    """02-prompt-design-checklist.md §4 Tier 1 — 사용자 default 노출.
+    Insight 의 4 phase × 3~5 bullet = 15+ raw → trail 은 4~5 step 으로 압축."""
+    seq: int
+    label: str                          # ≤ 12자 ("배경 진단" / "Peer 행동" / "SK AX 영향" / "권장 대응" / "결론")
+    one_liner: str                      # ≤ 80자, 가능 시 정량 1개
+    evidence_refs: list[str]
+    langfuse_observation_id: str | None
+
 class CoTStep(TypedDict):
-    """02-prompt-design-checklist.md §4 표준. Insight 4단계는 그 자체로 CoT 의
-    의도적 표면화 (Cause → Change → Impact → Response). 본 reasoning_steps[] 는
-    *그 위* 의 추론 흔적 (각 단계가 어떤 카드를 보고 어떤 질문 했고 결론은 무엇)"""
+    """Tier 2 — 상세 ("더 자세히" 패널). Insight 4 phase + synthesis × 1+ step.
+    PDF §1 / §5 직접 대응. confabulation 위험 있음 — admin 이 Tier 3 으로 검증."""
     step_idx: int
     phase: Literal["cause", "change", "impact", "response", "synthesis"]
     question: str
@@ -51,6 +59,7 @@ class CoTStep(TypedDict):
     answer: str
     intermediate_conclusion: str
     confidence: float
+    langfuse_observation_id: str | None
 
 class InsightCascadeOutput(TypedDict):
     cause: list[str]
@@ -59,13 +68,15 @@ class InsightCascadeOutput(TypedDict):
     response: list[str]
     final_one_liner: str                # PDF 2026-05-14 §5 — SK AX 관점 한 줄 결론 (≤ 100자)
     sk_ax_implication: str              # 국내 IT 서비스사 관점 1~2 문장 (긍정/중립/부정 명시)
-    reasoning_steps: list[CoTStep]      # PDF §1 / §5 — 5 phase × 1+ step = 5~10 step
-    follow_up_questions: list[str]      # PDF §17 — "꼬리 물기" 다음 분석 제안 2~3개
+    reasoning_trail: list[ReasoningTrailItem]   # Tier 1 — 사용자 default (4~5)
+    reasoning_steps: list[CoTStep]              # Tier 2 — 상세 (5~10)
+    langfuse_trace_id: str | None               # Tier 3 — admin deep link
+    follow_up_questions: list[str]      # PDF §17 — 다음 분석 제안 2~3개
     risk_assumptions: list[str]         # PDF §16 — 본 인사이트가 틀릴 가능성 / 가정
-    confidence: float                   # 0.0~1.0
-    sources: list[dict]                 # 사용된 카드 id 와 매핑
+    confidence: float
+    sources: list[dict]
     provenance: dict
-    warning: str | None                 # confidence < 0.6 시 표시
+    warning: str | None
 ```
 
 frontend `POST /api/insights/generate` 응답.
@@ -137,6 +148,11 @@ Phase 5 — Synthesis (final): "위 4단계 종합 → final_one_liner + risk_as
 - 출처에 없는 수치/이름 환각 금지 — 불확실하면 "[자체 추정]" prefix
 - 정성 표현 후 (정량) 수치 보강 — 예: "급성장 (QoQ +18.4%)"
 
+[Tier 1 — reasoning_trail 압축 narrative]
+4 phase × 3~5 bullet = 15+ step 의 raw 추론을 **정확히 4~5 step** 으로 압축.
+tradition: label = ["배경 진단", "Peer 행동", "SK AX 영향", "권장 대응", "결론"] 매핑 권장.
+탐색/시도/hedging 금지. 핵심만.
+
 [JSON 출력]
 {
   "cause": ["[CN-...] ...", "..."],
@@ -149,9 +165,16 @@ Phase 5 — Synthesis (final): "위 4단계 종합 → final_one_liner + risk_as
   ],
   "final_one_liner": "≤ 100자, SK AX 관점, 모호 X",
   "sk_ax_implication": "1~2 문장. 긍정/중립/부정 명시.",
+  "reasoning_trail": [
+    {"seq": 1, "label": "배경 진단", "one_liner": "...", "evidence_refs": ["CN-..."], "langfuse_observation_id": null},
+    {"seq": 2, "label": "Peer 행동", "one_liner": "...", "evidence_refs": ["CN-..."], "langfuse_observation_id": null},
+    {"seq": 3, "label": "SK AX 영향", "one_liner": "...", "evidence_refs": ["CN-..."], "langfuse_observation_id": null},
+    {"seq": 4, "label": "권장 대응", "one_liner": "...", "evidence_refs": ["CN-..."], "langfuse_observation_id": null},
+    {"seq": 5, "label": "결론", "one_liner": "...", "evidence_refs": [], "langfuse_observation_id": null}
+  ],
   "reasoning_steps": [
     {"step_idx": 0, "phase": "cause", "question": "...", "inputs_used": ["CN-..."],
-     "answer": "...", "intermediate_conclusion": "...", "confidence": 0.0~1.0}
+     "answer": "...", "intermediate_conclusion": "...", "confidence": 0.0~1.0, "langfuse_observation_id": null}
     // ... phase=change / impact / response / synthesis 각 1+ step
   ],
   "follow_up_questions": ["...", "...", "..."],
@@ -161,6 +184,8 @@ Phase 5 — Synthesis (final): "위 4단계 종합 → final_one_liner + risk_as
   "uncertainties": ["..."]
 }
 ```
+
+> Single LLM call 이라 모든 trail/step 의 `langfuse_observation_id` 는 런타임에 동일 generation_id 로 매핑됨. `LangfuseTraceLinker` middleware (mixer §6.2.1 참조) 가 자동 처리.
 
 ### 6.3 17 요소 prompt audit table
 
