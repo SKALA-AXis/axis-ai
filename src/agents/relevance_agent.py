@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from typing import Any
 
@@ -28,6 +29,12 @@ log = logging.getLogger(__name__)
 RELEVANCE_THRESHOLD = 0.60
 UNCERTAIN_CANDIDATE_THRESHOLD = 0.45
 PEER_CONTEXT_LIMIT = 1800
+
+# 본문에서 peer alias 언급 *최소 횟수* — 이 횟수 미만이면 "단순 언급" 으로 drop.
+#   default 1 (완화) — 1주 카드 누적량 ↑ 목적.
+#   과거 값은 2 였으나, cycle 마다 relevance 통과량이 적어 classify=0 이 지배적.
+#   noise 증가 시 env 로 2 또는 3 으로 상향 가능.
+_MIN_PEER_MENTIONS = int(os.getenv("RELEVANCE_MIN_PEER_MENTIONS", "1"))
 ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
 
 _llm: ChatOpenAI | None = None
@@ -944,7 +951,7 @@ def _weak_company_mention_reject_result(
         if company_in_title:
             return None
 
-        if _alias_mention_count(content_compact, aliases) >= 2:
+        if _alias_mention_count(content_compact, aliases) >= _MIN_PEER_MENTIONS:
             return None
 
     return _result(
@@ -952,7 +959,10 @@ def _weak_company_mention_reject_result(
         score=0.25,
         companies=matched_companies,
         sectors=matched_sectors,
-        reason="제목에 피어사가 없고 본문/부제목의 피어사 언급이 2회 미만이라 단순 언급으로 판단",
+        reason=(
+            f"제목에 피어사가 없고 본문/부제목의 피어사 언급이 "
+            f"{_MIN_PEER_MENTIONS}회 미만이라 단순 언급으로 판단"
+        ),
     )
 
 
