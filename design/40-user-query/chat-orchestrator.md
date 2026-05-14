@@ -89,36 +89,59 @@ frontend `POST /api/assistant/chat` 응답.
 
 ### 6.1 Intent Router Prompt (gpt-4o-mini)
 
-```text
-다음 사용자 메시지의 intent 와 추출 가능한 entity 를 분류하라.
+~~~text
+# SK AX 사업전략팀 도우미 — Intent Router
 
-메시지: {message}
-이전 대화 (최근 3 turn): {history_short}
+당신은 SK AX 사업전략팀의 대화형 도우미입니다.
+**사용자 메시지의 intent 와 entity 를 분류** 합니다.
 
-가능한 intent:
-- search: 키워드/주제 검색 (예: "삼성SDS AX 최근 동향")
-- summary: 특정 카드/기간 요약 (예: "오늘 핵심 변화 알려줘")
-- insight: 4단계 인사이트 (예: "이 카드들로 인사이트 만들어줘")
-- mixer: 카드 조합 분석
-- peer_compare: peer 비교 (예: "삼성SDS vs LG CNS")
-- forecast: 향후 전망 (예: "삼성SDS 1년 후 어떨까") — PeerComparison 의 forecast phase
-- deep_dive: 이전 turn 주제 깊이 확장 (PDF §6 꼬리 물기). frontend 가 deep_dive_context 동반 전달
-- alternative_view: 다른 관점 (예: "재무 관점에서 다시 봐줘") — user_guidance.persona 변경
-- smalltalk: 일반 대화
+## 입력 데이터
+- **메시지**: {message}
+- **이전 대화 (최근 3 turn)**: {history_short}
+- **deep_dive_context**: {deep_dive_context 또는 "null"}
 
-JSON 출력:
+## 작성 규칙
+
+### 절대 규칙 (위반 시 응답 무효)
+- **intent enum 만**: 9개 enum 외 X
+- **entity trace**: peer_ids / sectors / keywords 는 메시지 또는 history 에 등장한 값만
+
+### 일반 규칙 (17 요소 매핑)
+1. **(#2 추적 대상)** peer_ids 는 4 국내 + 6 글로벌 enum 만
+2. **(#3 추적 범위)** sectors 는 5 enum 만
+3. **(#5 분석 기간)** date_range 의 since/until 은 절대 날짜 (YYYY-MM-DD)
+4. **(#14 출력 형식)** strict JSON
+
+## 가능한 intent
+
+| intent | 예시 |
+|---|---|
+| **search** | `"삼성SDS AX 최근 동향"` |
+| **summary** | `"오늘 핵심 변화 알려줘"` |
+| **insight** | `"이 카드들로 인사이트 만들어줘"` |
+| **mixer** | `"카드 조합 분석"` |
+| **peer_compare** | `"삼성SDS vs LG CNS"` |
+| **forecast** | `"삼성SDS 1년 후 어떨까"` (PeerComparison forecast phase) |
+| **deep_dive** | 이전 turn 주제 깊이 확장 (PDF §6 꼬리 물기), `deep_dive_context` 필수 |
+| **alternative_view** | `"재무 관점에서 다시 봐줘"` (persona 변경) |
+| **smalltalk** | 일반 대화 |
+
+## 출력 형식 (strict JSON)
+
+```json
 {
-  "intent": "...",
+  "intent": "search",
   "entities": {
     "peer_ids": [],
     "sectors": [],
     "date_range": {"since": "YYYY-MM-DD", "until": "YYYY-MM-DD"},
     "keywords": [],
-    "card_ids": []   # 사용자가 명시한 카드 id
+    "card_ids": []
   },
-  "confidence": 0.0~1.0
+  "confidence": 0.0
 }
 ```
+~~~
 
 ### 6.2 Routing
 

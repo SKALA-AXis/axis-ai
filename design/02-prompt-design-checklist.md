@@ -201,6 +201,166 @@ raw reasoning_steps 가 더 길어도 압축할 것. 핵심 결정만 trail.
 
 audit 결과는 각 agent 파일의 §6 (또는 §14 Changelog) 에 audit table 으로 표시.
 
+## 6. Prompt 작성 양식 표준 (2026-05-14 추가)
+
+### 6.1 왜 양식 표준이 필요한가
+
+LLM (특히 gpt-4o) 은 입력 prompt 의 **구조적 신호** 에 강하게 반응한다. 같은 내용이라도:
+
+- `[입력]` bracket 형식 → 약한 boundary 신호 (LLM 의 attention 가중치 낮음)
+- `## 입력` markdown heading → 명확한 boundary + section recall ↑
+- `**핵심 규칙**: ...` bold → 절대 규칙 시각적 + attention 강화
+- ```` ```json ... ``` ```` code fence → strict format following ↑
+
+따라서 본 design 의 모든 LLM prompt 는 **markdown 계층 + bold + structured list + code fence** 조합으로 작성한다. `[Brackets]` style 은 deprecated.
+
+### 6.2 표준 양식
+
+모든 LLM agent 의 prompt 는 다음 5 section 구조로:
+
+```text
+# {Role}
+
+{1~2 문장 역할 정의}
+
+## 입력 데이터
+
+### {input subsection 1}
+{content with {placeholders}}
+
+### {input subsection 2}
+...
+
+## 작성 규칙
+
+### 절대 규칙 (위반 시 응답 무효)
+- **{rule label}**: 설명
+- **{rule label}**: 설명
+
+### 일반 규칙 (17 요소 매핑)
+1. (#N) 규칙 설명
+2. (#N) 규칙 설명
+
+## 추론 단계
+
+### Phase 1 — {phase name}
+- **자기 질문**: "..."
+- **입력**: ...
+- **출력**: ...
+- **intermediate_conclusion**: ...
+
+### Phase 2 — {phase name}
+...
+
+## 3-Tier Observability 출력
+
+### Tier 1 — reasoning_trail (사용자 default)
+정확히 {N}~{M} step. label ≤ 12자, one_liner ≤ 80자. 탐색/시도/hedging 금지.
+
+### Tier 2 — reasoning_steps (상세)
+{N}~{M} step. question / inputs_used / answer / intermediate_conclusion / confidence.
+
+## 출력 형식 (strict JSON)
+
+```json
+{
+  "field": "..."
+}
+```
+```
+
+### 6.3 heading hierarchy 의미
+
+| Level | 용도 | 개수 (권장) |
+|---|---|---|
+| `#` | **Agent role** — prompt 최상위, 1개만 | 1 |
+| `##` | **Major section** — 입력 / 규칙 / 추론 / 출력 등 | 4~6 |
+| `###` | **Sub-section** — Phase 별 / 규칙 카테고리 / Tier 등 | 8~15 |
+| `####` | (사용 안 함) | 0 |
+
+`#` 가 너무 많으면 LLM 이 *어떤 게 진짜 중요한지* 혼란. 1 prompt = 1 `#` 원칙.
+
+### 6.4 강조 표현 우선순위 (위로 갈수록 강함)
+
+1. **`### 절대 규칙 (위반 시 응답 무효)`** + bold label — 최강 신호
+2. **bold label**: numbered list 안의 `**규칙명**: 설명`
+3. **bold inline**: 본문 안의 `**핵심 단어**`
+4. *italic*: 부가 설명 (드물게)
+5. plain text
+
+> 너무 많은 bold 는 신호 약화 — *진짜 critical* 한 것만. prompt 당 bold 5~10 회 권장.
+
+### 6.5 List 사용 가이드
+
+| List 종류 | 용도 | 예시 |
+|---|---|---|
+| numbered (1./2./3.) | **순차** 규칙 / phase / 17 요소 매핑 | "1. (#7) 단순 요약 금지" |
+| bullet (-) | **항목 나열** (순서 무관) | "- **DART 출처**: [DART rcept_no=...]" |
+| nested bullet | sub-detail | `- **규칙**: 설명\n    - 예외 1\n    - 예외 2` |
+
+### 6.6 Code fence 사용
+
+| 용도 | fence |
+|---|---|
+| **JSON output schema** | ` ```json ` |
+| **Python sub-code** (예: 전처리 산식) | ` ```python ` |
+| **자유형 예시** | ` ```text ` |
+| **placeholder block** (input value rendering) | 들여쓰기 4 spaces 또는 plain text |
+
+JSON schema 는 *반드시* ` ```json ` fence — LLM 의 JSON-mode 신호 강화.
+
+### 6.7 Placeholder 표기
+
+| 표기 | 의미 |
+|---|---|
+| `{var_name}` | runtime 에 채워질 값 (Python f-string 호환) |
+| `{var.field}` | nested object field |
+| `{var:format}` | format spec (예: `{score:.2f}`) |
+| `<...>` | (사용 안 함 — XML tag 와 혼동) |
+| `[...]` | (placeholder 로 사용 안 함 — markdown link / 출처 marker 와 혼동) |
+
+### 6.8 17 요소 inline 매핑
+
+prompt 의 numbered rule 에 17 요소 번호 prefix:
+
+```text
+### 일반 규칙 (17 요소 매핑)
+1. **(#7 단순 요약 금지)** "기사 N개" 표현 금지 — event_type / 변화 / 시사점 패턴
+2. **(#9 변화 감지)** ±5% normal / >10% 유의 / >30% 급변 분류
+3. **(#11 정량 우선)** "성장 추세" 금지 → "QoQ +12.3%"
+4. **(#12 공식 vs 추정)** 모든 정량에 `[DART 2026-1Q]` / `[card: CN-...]` / `[자체 추정 v1]` prefix
+5. **(#13 SK AX 화자)** "삼성SDS 가 X" 금지 → "삼성SDS X 는 SK AX 의 ___ 라인에 ___ 영향"
+```
+
+각 agent 의 §6.4 prompt audit table 의 17 요소 매핑이 prompt 자체에 *명시적으로* 들어가야 LLM 이 규칙을 정확히 따른다.
+
+### 6.9 Anti-pattern (deprecated 양식)
+
+| ❌ Bad | ✅ Good | 이유 |
+|---|---|---|
+| `[입력]` `[규칙]` `[출력]` | `## 입력` `## 규칙` `## 출력` | bracket = 약한 boundary |
+| `Phase 1 — per_card:` | `### Phase 1 — per_card` | heading 으로 명시 |
+| `중요: 환각 금지` | `### 절대 규칙` + `- **환각 금지**: ...` | label + bold |
+| numbering 없는 자유 텍스트 규칙 | numbered list `1. (#N) ...` | LLM 의 enumeration recall |
+| JSON 예시를 plain text 로 | ` ```json ... ``` ` | JSON-mode 신호 |
+| `{변수명}` 와 `<var>` 혼용 | 일관 `{var_name}` | parsing 일관성 |
+
+### 6.10 양식 적용 audit (2026-05-14 신규)
+
+각 agent 의 §6.x LLM prompt 가 본 표준을 따르는지 audit. table 형식:
+
+| 양식 항목 | 충족 |
+|---|---|
+| `#` agent role 1개만 | ✅ / 🟡 / ❌ |
+| `##` 4~6 major section | ✅ / 🟡 / ❌ |
+| `###` sub-section + heading 명시 | ✅ / 🟡 / ❌ |
+| 절대 규칙 + bold label | ✅ / 🟡 / ❌ |
+| numbered rule + (#N) inline | ✅ / 🟡 / ❌ |
+| JSON code fence | ✅ / 🟡 / ❌ |
+| `[Brackets]` 폐기 | ✅ / 🟡 / ❌ |
+
+audit 결과는 agent 파일의 §6.x 마지막에 추가.
+
 ## 7. 갱신 우선순위 (PDF 직접 영향 큰 순)
 
 | # | 갱신 대상 | 영향 |

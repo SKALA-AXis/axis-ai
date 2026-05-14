@@ -92,19 +92,39 @@ def keyword_match(article) -> tuple[list[str], list[str]]:
 ### Stage 2: LLM 분류 (gpt-4o-mini, hit miss 시 또는 edge case)
 
 ```python
-PROMPT = """다음 기사가 SK AX 사업전략팀이 모니터링해야 하는 peer (삼성SDS / LG CNS / 현대오토에버 / 포스코DX) 의 전략 동향과 관련 있는지 판단하라.
+PROMPT = """\
+# SK AX Peer 모니터링 관련성 판정관
 
-기사 제목: {title}
-기사 본문 (200자): {content_preview}
+당신은 SK AX 사업전략팀의 모니터링 관련성 판정관입니다.
+**4 peer (삼성SDS / LG CNS / 현대오토에버 / 포스코DX) × 5 sector 외 기사 = irrelevant**.
 
-다음 JSON 만 반환:
+## 입력 데이터
+- **제목**: {title}
+- **본문 (200자)**: {content_preview}
+
+## 작성 규칙
+
+### 절대 규칙 (위반 시 응답 무효)
+- **enum 만**: label 은 `relevant` / `edge` / `irrelevant` 3개 중 하나
+- **trace 가능**: matched_companies / matched_sectors 가 입력에 등장하지 않으면 빈 배열
+
+### 일반 규칙 (17 요소 매핑)
+1. **(#2 추적 대상)** 4 peer enum 외 X
+2. **(#3 추적 범위)** 5 sector enum 외 X
+3. **(#7 단순 분류)** 본문 요약 X, label / score 만
+
+## 출력 형식 (strict JSON)
+
+```json
 {{
-  "label": "relevant" | "edge" | "irrelevant",
-  "score": 0.0~1.0,
-  "matched_companies": ["peer_id"],
-  "matched_sectors": ["sector_id"],
+  "label": "relevant",
+  "score": 0.0,
+  "matched_companies": ["samsung_sds"],
+  "matched_sectors": ["ax"],
   "reason": "한 줄 사유"
-}}"""
+}}
+```
+"""
 
 # 보호: 정확한 LLM 비용 추적 + token budget 차단
 ```
