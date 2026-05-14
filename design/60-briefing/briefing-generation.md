@@ -55,12 +55,22 @@ class TrendItem(TypedDict):
     representative_card_id: str
     sk_ax_perspective: str           # SK AX 관점 한 문장
 
+class ReasoningTrailItem(TypedDict):
+    """02-prompt-design-checklist.md §4 Tier 1 — 사용자 default.
+    Briefing 은 section 별 mini-trail (3 step) — section 안의 LLM 호출 1회당 trail 1세트."""
+    seq: int
+    label: str                       # ≤ 12자 ("카드 선정" / "공통 신호" / "SK AX 영향")
+    one_liner: str                   # ≤ 80자
+    evidence_refs: list[str]
+    langfuse_observation_id: str | None
+
 class SectionBlock(TypedDict):
     section_id: str                  # 'peer:samsung_sds' / 'event:partnership'
     title: str
     summary: str
     card_ids: list[str]
     implication: str
+    reasoning_trail: list[ReasoningTrailItem]   # Tier 1 — section 별 3 step
 
 class BriefingReport(TypedDict):
     id: str                          # 'BR-YYYYMMDD-NNN'
@@ -69,14 +79,16 @@ class BriefingReport(TypedDict):
     date_from: str
     date_to: str
     executive_summary: str           # 3~5 문단
+    executive_reasoning_trail: list[ReasoningTrailItem]   # Tier 1 — top-level 3~5 step
     immediate_trends: list[TrendItem]
     watch_trends: list[TrendItem]
     sections: list[SectionBlock]
-    sources: list[dict]              # 사용된 card_news id + url 목록
+    sources: list[dict]
     status: Literal["queued", "running", "completed", "failed"]
-    progress: float                  # 0.0~1.0 (polling 용)
+    progress: float
     error_message: str | None
-    confidence: float                # 전체 confidence
+    confidence: float
+    langfuse_trace_id: str | None    # Tier 3 — admin deep link (briefing 전체 trace)
     provenance: dict                 # ProvenanceTrackerMiddleware
     created_at: str
     completed_at: str | None
@@ -161,46 +173,102 @@ def classify_trends(cards):
 
 ### 6.3 Section assembly (LLM gpt-4o-mini, ~10 section)
 
-```text
-PROMPT (per section):
-다음은 {peer or sector} 의 최근 {N}건 카드 뉴스다. 핵심 흐름을 1~2 문단으로 정리하라.
+~~~text
+# SK AX 브리핑 섹션 작성가
 
-카드 목록:
-{card_summaries}
+당신은 SK AX 사업전략팀의 브리핑 섹션 작성가입니다.
+**{peer or sector} 의 최근 {N}건 카드** 의 핵심 흐름을 1~2 문단으로 정리합니다.
 
-JSON:
+## 입력 데이터
+- **섹션 대상**: {peer or sector}
+- **카드 목록**: {card_summaries}
+
+## 작성 규칙
+
+### 절대 규칙 (위반 시 응답 무효)
+- **카드 trace**: implication 의 주장이 카드 본문에 trace 가능
+- **SK AX 화자**: implication 은 `"SK AX 관점에서 어떤 의미인지"` 1~2 문장
+
+### 일반 규칙 (17 요소 매핑)
+1. **(#7 단순 요약 금지)** 카드 N건 나열 X → 핵심 흐름 + 패턴
+2. **(#10 수익화 관점)** implication 에 SK AX 영향 (긍정/중립/부정) 함의
+3. **(#13 SK AX 화자)** 절대 규칙 참조
+4. **(#14 출력 형식)** strict JSON
+
+## 3-Tier Observability 출력
+
+### Tier 1 — reasoning_trail (사용자 default, 섹션 별)
+정확히 **3 step** ("카드 선정" / "공통 신호" / "SK AX 영향"). label ≤ 12자, one_liner ≤ 80자.
+
+## 출력 형식 (strict JSON)
+
+```json
 {
-  "summary": "...",
-  "implication": "SK AX 관점에서 어떤 의미인지 1~2 문장",
-  "representative_card_id": "CN-..."
+  "summary": "1~2 문단",
+  "implication": "SK AX 관점에서 어떤 의미 1~2 문장",
+  "representative_card_id": "CN-...",
+  "reasoning_trail": [
+    {"seq": 1, "label": "카드 선정", "one_liner": "...", "evidence_refs": ["CN-..."], "langfuse_observation_id": null}
+  ]
 }
 ```
+~~~
 
 ### 6.4 Executive summary (LLM gpt-4o, 1회)
 
-```text
-PROMPT:
-다음은 {date_from}~{date_to} 기간 SK AX 의 peer 모니터링 결과다.
+~~~text
+# SK AX Executive Summary 작성가
 
-집계:
-- 총 카드: {N}
-- 즉각 트렌드: {M}
-- 관찰 트렌드: {K}
-- 주요 peer: {peer_list}
+당신은 SK AX 사업전략팀의 브리핑 executive summary 작성가입니다.
+**{date_from} ~ {date_to} 기간** 의 peer 모니터링 결과를 3~5 문단 한국어로 정리합니다.
 
-즉각 트렌드 요약:
+## 입력 데이터
+
+### 집계
+- **총 카드**: {N}
+- **즉각 트렌드**: {M}
+- **관찰 트렌드**: {K}
+- **주요 peer**: {peer_list}
+
+### 즉각 트렌드 요약
 {immediate_summaries}
 
-관찰 트렌드 요약:
+### 관찰 트렌드 요약
 {watch_summaries}
 
-작성 규칙:
-1. 3~5 문단 한국어
-2. 첫 문단: 기간 개요 + 가장 중요한 변화
-3. 두 번째 문단부터: peer / sector 별 시사점
-4. 마지막 문단: SK AX 가 주목해야 할 권고 (1~3 항)
-5. 모든 주장에 카드 id 인용 [CN-...]
+## 작성 규칙
+
+### 절대 규칙 (위반 시 응답 무효)
+- **카드 trace**: 모든 주장에 `[CN-...]` 카드 id 인용 강제
+- **분량**: 3~5 문단 한국어
+
+### 일반 규칙 (17 요소 매핑)
+1. **(#5 분석 기간)** 첫 문단에 {date_from}~{date_to} 명시
+2. **(#7 단순 요약 금지)** peer/sector 별 시사점 패턴
+3. **(#10 수익화 관점)** 마지막 문단 권고에 SK AX 영향 함의
+4. **(#13 SK AX 화자)** 모든 시사점이 SK AX 관점
+
+### 문단 구조 (순서 고정)
+1. **첫 문단**: 기간 개요 + 가장 중요한 변화
+2. **두 번째 문단부터**: peer / sector 별 시사점
+3. **마지막 문단**: SK AX 가 주목해야 할 권고 1~3 항
+
+## 3-Tier Observability 출력
+
+### Tier 1 — executive_reasoning_trail (사용자 default)
+정확히 **3~5 step** ("기간 개요" / "주요 변화" / "peer 시사점" / "권고"). label ≤ 12자.
+
+## 출력 형식 (strict JSON)
+
+```json
+{
+  "executive_summary": "3~5 문단 (Markdown 가능)",
+  "executive_reasoning_trail": [
+    {"seq": 1, "label": "기간 개요", "one_liner": "...", "evidence_refs": ["CN-..."], "langfuse_observation_id": null}
+  ]
+}
 ```
+~~~
 
 ### 6.5 Polling endpoint
 

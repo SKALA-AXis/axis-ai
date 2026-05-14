@@ -8,20 +8,23 @@
 >
 > 전체 endpoint contract → `axis-infra/docs/API_SURFACE.md` (FE↔BE↔axis-ai 3 시스템 매핑이라 인프라 레포 SoT).
 
-## 1. 5+1 Supervisor 도식
+## 1. 6+1 Supervisor 도식 (2026-05-14 — KnowledgeCuration 추가)
 
 ```text
                          AxisRouterSupervisor (entry, router-only — no design file)
                                     │
-        ┌───────────────┬───────────┼───────────┬──────────────┬──────────────┐
-        ▼               ▼           ▼           ▼              ▼              ▼
-   Ingestion       Enrichment   Analysis    UserQuery     WeakSignal     Briefing
-        │               │           │           │              │              │
-        ▼               ▼           ▼           ▼              ▼              ▼
-  매시 정각        매시 후속      user POST    user 검색      월 09:00       user POST
-  (외부 fetch)    + nightly      request     + chat         (W7+)         (async)
-        │               │           │           │              │              │
-        └───────────────┴───────────┴───────────┴──────────────┴──────────────┘
+        ┌───────────────┬──────────┬┴─────────────┬──────────┬──────────────┬──────────────┐
+        ▼               ▼          ▼              ▼          ▼              ▼              ▼
+   Ingestion      Enrichment  KnowledgeCur*   Analysis   UserQuery     WeakSignal     Briefing
+        │               │          │              │          │              │              │
+        ▼               ▼          ▼              ▼          ▼              ▼              ▼
+  매시 정각      매시 후속   daily/weekly/    user POST  user 검색      월 09:00       user POST
+  (외부 fetch)  + nightly   monthly/quart    request    + chat         (W7+)         (async)
+        │               │          │              │          │              │              │
+        └───────────────┴──────────┴──────────────┴──────────┴──────────────┴──────────────┘
+
+  * KnowledgeCuration (신규 2026-05-14) — peer 단위 narrative 압축 (L0~L4) + Analysis Ledger.
+    Analysis 의 *직접 dependency*. design/25-knowledge-curation/ 참조.
                                     │
                                     ▼
                        Cross-cutting middleware (decorator, axis-ai):
@@ -43,7 +46,8 @@
 |---|---|---|---|---|---|
 | **Ingestion** | Spring @Scheduled 매시 정각 | 30초/cycle | ~80 (relevance + classify + card_news + summary + analysis) | 외부 fetch → 정규화 → 신뢰도/관련성 → dedup → 분류 → card_news INSERT → evidence_chain → Qdrant index | 8 nodes + 3 sub |
 | **Enrichment** | Ingestion 후 + nightly 02:00 | 60초/cycle | ~4 (WordCloud 카테고리 라벨링만) | 카드 → 키워드 derivative + 그래프 + word cloud + search suggest + 집계 메트릭 | 5 |
-| **Analysis** | User POST request (axios) | 10초 timeout | 3~10 per req | Insight 4단계 / Mixer 신호 / Peer 비교 / Link verify | 4 |
+| **KnowledgeCuration** *(신규)* | daily 23:55 / 일요일 / 매월 1일 / 분기 직후 | 산식 즉시 / LLM 30~60초 | ~10/주 (weekly+monthly+quarterly compaction) | peer 단위 narrative 압축 (L0~L4) + ContextPack + Analysis Ledger | 3 |
+| **Analysis** | User POST request (axios) + nightly 04:30 (global-trends) | 10초 timeout (15초 global) | 3~10 per req | Insight 4단계 (CoT) / Mixer 신호 (CoT) / Peer 비교 + Forecast (CoT) / Global trends (CoT) / Link verify — 모두 KnowledgeCuration 의 ContextPack consume | 5 |
 | **UserQuery** | User search box + FloatingAiChat | 10초 / 5~15초 | 1~3 (SC iter) + 2~5 (chat turn) | Hybrid Search + Rerank + Generative Answer + 대화 orchestration | 4 |
 | **WeakSignal** | Spring @Scheduled 월 09:00 | 60초/cycle | ~5 | 채용/특허/MOU 패턴 매칭 + 이상 탐지 + 사용자 rule routing | 1 (통합) |
 | **Briefing** | User POST `/api/briefings/generate` (axios → BE → axis-ai async) | 30초 평균, 60초 max | ~11 (10 section + 1 exec summary) | 기간/peer/sector 필터 → 카드 종합 → BriefingReport 5-phase | 1 |
@@ -53,11 +57,13 @@
 
 axis-ai/design/ 범위 — **LangGraph agent + axis-ai 미들웨어만**:
 
-- **Top-level agents (cycle/request 마다 LLM 결정 발생)**: 8 + 5 + 4 + 4 + 1 + 1 = **23**
+- **Top-level agents (cycle/request 마다 LLM 결정 발생)**: 8 + 5 + 3 + 5 + 4 + 1 + 1 = **27**
 - **Sub-agents (Ingestion 내부 utility)**: financial-linker / ir-parser / embed-index = **3**
 - **Middleware (axis-ai decorator)**: 3 (confidence / provenance / token-budget)
-- **합계 axis-ai/design/**: 23 + 3 + 3 = **29** (+ 구조 doc 2 = **31 file**)
+- **합계 axis-ai/design/**: 27 + 3 + 3 = **33** (+ 구조 doc 3 = **36 file**)
 - v1.1 통합 design 의 "35-agent" 와 차이는 §4 의 통합 표 참조 (5 묶음).
+- **2026-05-14 PDF 반영** — Analysis 에 GlobalTrendsAgent 추가, 구조 doc 에 `02-prompt-design-checklist.md` 추가
+- **2026-05-14 KnowledgeCuration 신설** — 6+1 supervisor 로 확장. compaction-agent / context-pack-builder / analysis-ledger (3 agent). 분석 4 agent + Briefing 의 직접 dependency.
 
 axis-infra/docs/ 범위 — **인프라 + 크로스시스템 spec**:
 

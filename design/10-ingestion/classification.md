@@ -112,22 +112,59 @@ def classify_event(article):
 ```
 
 LLM fallback prompt:
-```text
-이 기사가 다음 6 event type 중 어디에 해당하는가? 정확히 하나의 type 만 반환:
-partnership | ma | personnel | tech | regulation | new_biz
 
-기사:
-제목: {title}
-본문: {content_preview}
+~~~text
+# SK AX 사업전략팀 분류 전문가
 
-JSON: {"event_type": "..."}
+당신은 SK AX 사업전략팀의 분류 전문가입니다.
+**키워드 매칭 실패 기사** 1건을 **6 event_type enum** 중 정확히 하나로 분류합니다.
+
+## 입력 데이터
+- **제목**: {title}
+- **본문 (preview)**: {content_preview}
+
+## 작성 규칙
+
+### 절대 규칙 (위반 시 응답 무효)
+- **enum 만**: 출력은 정확히 `partnership` / `ma` / `personnel` / `tech` / `regulation` / `new_biz` 6개 중 하나
+- **자유형 분류 금지**: 새 카테고리 발명 X
+
+### 일반 규칙 (17 요소 매핑)
+1. **(#3 추적 범위)** 6 event_type enum 외 출력 시 응답 무효
+2. **(#7 단순 요약 금지)** 분류만 출력, 본문 요약 X
+3. **(#14 출력 형식)** strict JSON, 단일 필드
+
+## 출력 형식 (strict JSON)
+
+```json
+{"event_type": "partnership"}
 ```
+~~~
 
 ### 6.3 sector 와 sectors[]
 
 - `sector` — primary (1개)
 - `sectors[]` — 가능 후보 (멀티)
 - Frontend 가 `sector` 1개 표시, BriefingService 가 sector-grouped 시 primary 우선
+
+### 6.4 Prompt audit — 02-prompt-design-checklist 17 요소
+
+Classification 은 fallback LLM 만 사용 (키워드 hit 시 LLM skip). 필수 1/2/3/4/6/7/14, 권장 9.
+
+| # | 요소 | 충족 위치 | 비고 |
+|---|---|---|---|
+| **1** | 역할 정의 | LLM prompt 도입부 ← 보강 필요 | 현재: "이 기사가 다음 6 event…" → "당신은 SK AX 사업전략팀의 분류 전문가. 6 event_type 중 정확히 하나만 반환." 로 추가 |
+| **2** | 추적 대상 기업 | input `company` field + companies enum (`src/config/companies.py`) | 4 peer + sk_ax_self enum 사용 |
+| **3** | 추적 범위 | 6 event × 5 sector enum (Literal) | TypedDict 강제 |
+| **4** | 출처 우선순위 | tier1_diversity 산식 (가중치 0.10) + credibility_max (0.30) | 분류 단계에서 출처 가중 적용 |
+| **5** | 분석 기간 | (해당 없음 — 단일 기사) | — |
+| **6** | 최신성 검증 | raw_articles.published_at_kst 사용 (분류 출력에 carry 안 함 ← cluster id 로 carry) | OK |
+| **7** | 단순 뉴스 요약 금지 | event_type taxonomy 강제 (자유형 분류 불가) | 6 enum |
+| **9** | 변화 감지 기준 | exposure_band high/medium/low (0.65/0.40 cutoff) | 산식 |
+| **12** | 공식 vs 추정 구분 | provenance.classification_version='v3.0' + signals dict | 산식 입력값 모두 보존 |
+| **14** | 출력 형식 | ClassifiedCluster TypedDict | 필수 충족 |
+
+→ **9/9 필수 충족**. PDF 반영 후 보강: prompt 도입부에 역할 정의 1문장 추가.
 
 ## 7. LLM 모델 + token 예산
 

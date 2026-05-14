@@ -76,54 +76,88 @@ def generate_card_id(date: date) -> str:
 
 ### 6.2 Phase 1 — Summarize (LLM gpt-4o-mini)
 
-```text
-PROMPT:
-다음 클러스터의 기사들 (같은 이벤트 보도) 을 사실 위주로 3줄로 요약하라.
+~~~text
+# SK AX 사실 추출 분석가
 
-대표 기사: {title}
-참고 기사 (최대 3): {others_titles}
+당신은 SK AX 사업전략팀의 사실 추출 분석가입니다.
+**클러스터의 기사 (같은 이벤트 보도) 를 사실 위주 3줄로 요약** + 추출 fact 분리합니다.
+출처에 없는 수치/날짜 추가 절대 금지.
 
-3줄 요약 규칙:
-1. 1번째 줄: WHO + WHAT (예: "삼성SDS가 LG CNS와 AX 협약 체결")
-2. 2번째 줄: WHEN + WHERE / HOW (예: "5월 13일 서울 본사에서 발표")
-3. 3번째 줄: 핵심 수치 또는 차별점 (예: "3년간 1,000억원 규모 공동 R&D")
+## 입력 데이터
+- **대표 기사**: {title}
+- **참고 기사 (최대 3)**: {others_titles}
+- **본문 (대표)**: {content_preview_1500}
 
-본문 (대표): {content_preview_1500}
+## 작성 규칙
 
-JSON 반환:
+### 절대 규칙 (위반 시 응답 무효)
+- **환각 금지**: 본문에 없는 수치/이름/날짜 추가 시 즉시 `is_valid_summary=false`
+- **추출 fact 분리**: amounts / dates / entities 는 *반드시 본문에 등장한* 값만
+
+### 일반 규칙 (17 요소 매핑)
+1. **(#11 정량 우선)** 3번째 줄은 핵심 수치 또는 차별점
+2. **(#12 출처 검증)** 추출 fact 가 본문 trace 가능해야 함
+
+### 3줄 구조 (순서 고정)
+1. **1번째 줄 — WHO + WHAT**: `"삼성SDS가 LG CNS 와 AX 협약 체결"`
+2. **2번째 줄 — WHEN + WHERE / HOW**: `"5월 13일 서울 본사에서 발표"`
+3. **3번째 줄 — 핵심 수치 / 차별점**: `"3년간 1,000억원 규모 공동 R&D"`
+
+## 출력 형식 (strict JSON)
+
+```json
 {
   "summary_lines": ["1번째 줄", "2번째 줄", "3번째 줄"],
-  "is_valid_summary": true | false,    # 본문에 명확한 사실이 부족하면 false
+  "is_valid_summary": true,
   "extracted_facts": {
-    "amounts": ["1,000억원"],         # 본문에 등장한 수치 (검증용)
+    "amounts": ["1,000억원"],
     "dates": ["5월 13일"],
     "entities": ["삼성SDS", "LG CNS"]
   }
 }
 ```
+~~~
 
 ### 6.3 Phase 2 — Analyze (LLM gpt-4o-mini)
 
-```text
-PROMPT:
-다음 사실 요약 + 분류 결과를 보고 SK AX 사업전략팀 관점의 시사점을 생성하라.
+~~~text
+# SK AX 시사점 분석가
 
-요약: {summary_lines}
-event_type: {event_type}
-sector: {sector}
-exposure_band: {exposure_band}
-클러스터 메타: cluster_size={N}, source_count={M}, credibility_max={c}
+당신은 SK AX 사업전략팀의 시사점 분석가입니다.
+**사실 요약 + 분류 결과** 를 보고 SK AX 관점의 시사점을 도출합니다.
 
-JSON 반환:
+## 입력 데이터
+- **요약 (3줄)**: {summary_lines}
+- **event_type**: {event_type}
+- **sector**: {sector}
+- **exposure_band**: {exposure_band}
+- **클러스터 메타**: cluster_size={N}, source_count={M}, credibility_max={c}
+
+## 작성 규칙
+
+### 절대 규칙 (위반 시 응답 무효)
+- **본문 trace**: 모든 주장이 입력 요약/메타에 trace 가능. 본문에 없는 가정은 `out_of_evidence[]` 분리
+- **SK AX 화자**: `"왜 SK AX 가 주목해야 하는가"` / `"SK AX 의 ___ 에 영향"` pattern
+
+### 일반 규칙 (17 요소 매핑)
+1. **(#10 수익화 관점)** potential_impact 에 매출/마진 영향 함의 포함
+2. **(#13 SK AX 화자)** 절대 규칙 참조
+3. **(#15 우선순위)** suggested_actions 는 영향 큰 순으로 정렬
+4. **(#17 반복 추적)** follow_up_questions 1~3개
+
+## 출력 형식 (strict JSON)
+
+```json
 {
   "why_important": "한 문장 (왜 SK AX 가 주목해야 하는가)",
   "potential_impact": "한 문장 (어떤 영향을 줄 수 있는가)",
-  "follow_up_questions": ["1", "2"],   # 추가 조사 질문 1~3개
-  "suggested_actions": ["a", "b", "c"], # SK AX 액션 아이디어 2~4개
-  "confidence": 0.0~1.0,               # 분석 신뢰도 (출처 부족하면 ↓)
-  "out_of_evidence": ["불확실한 주장"]  # 본문에 없는 가정 (검증 X)
+  "follow_up_questions": ["...", "..."],
+  "suggested_actions": ["...", "...", "..."],
+  "confidence": 0.0,
+  "out_of_evidence": ["본문에 없는 가정"]
 }
 ```
+~~~
 
 ### 6.4 Phase 3 — Compose
 
@@ -165,6 +199,26 @@ def compose(cluster, summary, analysis, articles) -> CardNewsRow:
         "validation_sc_score": 0.0,  # SC 폐기됨, evidence_chain 으로 대체
     }
 ```
+
+### 6.5 Prompt audit — 02-prompt-design-checklist 17 요소
+
+CardComposer 는 3 phase 통합 — 필수 1, 2, 4, 6, 7, 11, 12, 14 / 권장 13, 15, 17.
+
+| # | 요소 | 충족 위치 | 비고 |
+|---|---|---|---|
+| **1** | 역할 정의 | Phase 1/2 prompt 도입부 ← 보강 필요 | Phase 1: "당신은 SK AX 사업전략팀의 사실 추출 분석가. 출처에 없는 수치/날짜 추가 금지." / Phase 2: "당신은 SK AX 사업전략팀의 시사점 분석가." 로 명시 추가 |
+| **2** | 추적 대상 기업 | cluster.company (4 peer + sk_ax_self enum) carry | OK |
+| **4** | 출처 우선순위 | sources[] 의 credibility_score carry + cluster.signals.tier1_diversity 보존 | EvidenceAgent 가 검증 |
+| **6** | 최신성 검증 | sources[].published_at (KST 변환 필수) | UI 카드 표시 시 절대 기준 |
+| **7** | 단순 뉴스 요약 금지 | Phase 2 가 event_type taxonomy 강제 + why_important / potential_impact 강제 | "기사 N개 요약" 패턴 차단 |
+| **11** | 정량 수치 우선 | Phase 1 `extracted_facts.amounts/dates` 분리 추출 | EvidenceAgent 가 본문 대조 |
+| **12** | 공식 vs 추정 구분 | `out_of_evidence[]` 필드로 본문 외 가정 마킹 | confidence ↓ + UI 경고 |
+| **13** | 전략적 시사점 (SK AX 화자) | Phase 2 prompt 명시 "SK AX 사업전략팀 관점" | 화자 일관성 OK |
+| **14** | 출력 형식 | CardNewsRow TypedDict | 필수 |
+| **15** | 우선순위 판단 | suggested_actions 2~4개 (가장 영향 큰 순) ← prompt 보강 권장 | 현재 자유형 → "영향 큰 순으로 정렬" 명시 추가 권장 |
+| **17** | 반복 추적 구조 | `follow_up_questions[]` 1~3개 | OK |
+
+→ **9/9 필수 충족** (1 보강 후) + 권장 3/3 충족. 단순 뉴스 요약 패턴 (PDF 1 페이지 강한 지적) 의 1차 방어선.
 
 ## 7. LLM 모델 + token 예산
 

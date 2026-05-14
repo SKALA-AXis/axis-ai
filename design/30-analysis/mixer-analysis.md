@@ -11,15 +11,18 @@
 
 ## 2. 책임
 
-**한 줄**: 2~20 card_news 조합 + 입력 비율 (peer/industry/keyword) 로부터 **cross-card 신호** + **6축 radar 분포** + **연결 관계 (인과/유사)** 추출.
+**한 줄**: 2~20 card_news 조합 + 입력 비율 (peer/industry/keyword) 로부터 **cross-card 신호** + **6축 radar 분포** + **연결 관계 (인과/유사)** 추출 + **CoT reasoning 가시화** + **최종 한 줄 결론** (PDF 2026-05-14 §5 직접 대응).
 
-**구체적**:
+**구체적 (3-phase CoT, single-LLM-call with explicit reasoning_steps)**:
 
-1. 카드 조합 정렬 — exposure_score / event_type / sector 다양성 우선
-2. 반복 신호 추출 (LLM) — 2개 이상 카드에 공통 주제/키워드 식별
-3. 연결 관계 (LLM) — 카드 쌍 간 cause/effect, similarity, contrast 라벨링
-4. 6축 radar score 산식 — Peer Strategic Shift / Tech Investment / Market Position / Partnership Momentum / Regulatory Risk / Talent Movement
-5. 종합 인사이트 1문장 + bullet 3개
+1. **카드 조합 정렬** (산식) — exposure_score / event_type / sector 다양성 우선
+2. **6축 radar score** (산식) — Peer Strategic Shift / Tech Investment / Market Position / Partnership Momentum / Regulatory Risk / Talent Movement
+3. **3-phase CoT LLM** — single gpt-4o call 의 prompt 가 step-by-step thinking 을 명시적으로 `reasoning_steps[]` JSON 으로 출력:
+   - Phase 1: 카드별 핵심 신호 추출 (per-card mini-summary)
+   - Phase 2: cross-card 연결 (pair-wise relation 추론)
+   - Phase 3: 종합 결론 + SK AX 시사점 + **최종 한 줄 결론**
+
+> PDF 피드백 §5 직접 대응 — "에이전트들 간 협업이 어떻게 이뤄졌는지, 구축한 아키텍쳐의 일부가 UI 에 녹여지면". `reasoning_steps[]` 가 frontend 의 expandable panel 로 렌더되어 "추론 과정 보기" 클릭 시 step 별 input → question → answer → conclusion 체인 표시.
 
 ## 3. 책임 NOT
 
@@ -34,6 +37,11 @@ class MixerAnalysisInput(TypedDict):
     card_ids: list[str]        # 2~20
     ratios: dict                # {peer: {samsung_sds: 0.4, ...}, industry: {...}, keyword: [...]}
     user_context: str | None    # 추가 컨텍스트 (자유 입력)
+
+    # 25-knowledge-curation Phase K3+ 도입 후 — agent 가 in-process 채움.
+    # Mixer 가 다중 peer 분석이면 slim_mode=True 로 token 절감 (peer 5+ 일 때 자동).
+    _context_packs: dict[str, "PeerContextPack"] | None
+    _packs_slim_mode: bool          # 카드의 unique peer 수 > 3 이면 True
 ```
 
 ## 5. 출력 스펙
@@ -51,18 +59,44 @@ class Connection(TypedDict):
     label: Literal["cause","effect","similar","contrast","reinforce"]
     weight: float
 
+class ReasoningTrailItem(TypedDict):
+    """02-prompt-design-checklist.md §4 Tier 1 — 사용자 default 노출.
+    raw reasoning_steps 가 5~8 step 이라도 trail 은 3~5 step 으로 압축."""
+    seq: int                            # 1부터
+    label: str                          # ≤ 12자 ("카드 비교" / "패턴 발견" / "재무 검증" / "결론")
+    one_liner: str                      # ≤ 80자, 가능하면 정량 수치 1개 포함
+    evidence_refs: list[str]            # card_id / DART id / IR ref (UI 클릭 → 원본)
+    langfuse_observation_id: str | None # 런타임에 매핑 (admin only)
+
+class CoTStep(TypedDict):
+    """Tier 2 — 상세 ("더 자세히" 접힌 패널). PDF 2026-05-14 §5 대응."""
+    step_idx: int                       # 0부터
+    phase: str                          # "per_card" | "cross_card" | "synthesis"
+    question: str                       # ≤ 200자
+    inputs_used: list[str]              # card_id list
+    answer: str                         # LLM raw response (≤ 500자)
+    intermediate_conclusion: str        # ≤ 150자
+    confidence: float
+    langfuse_observation_id: str | None # 이 step 에 대응하는 Langfuse span id
+
 class MixerAnalysisOutput(TypedDict):
     mix_id: str
-    insight: str               # 1문장 종합
+    insight: str               # 1문장 종합 (현행 유지)
+    final_one_liner: str       # PDF §5 — SK AX 관점 한 줄 결론 (≤ 100자, 모호함 금지)
+    sk_ax_implication: str     # PDF §13 — 국내 IT 서비스사 (SK AX) 관점 1~2 문장
     bullet_signals: list[str]  # 3 핵심 신호
     radar_axes: list[RadarAxis]
     connections: list[Connection]
+    reasoning_trail: list[ReasoningTrailItem]   # Tier 1 — 사용자 default (3~5)
+    reasoning_steps: list[CoTStep]              # Tier 2 — 상세 (5~8)
+    langfuse_trace_id: str | None               # Tier 3 — admin deep link
+    follow_up_questions: list[str]   # PDF §17 — 다음 분석 제안 2~3개
     confidence: float
     sources_used: list[str]
     provenance: dict
 ```
 
-frontend `POST /api/mixer` 응답.
+frontend `POST /api/mixer` 응답. **3-tier observability** — UI default 는 `reasoning_trail` (3~5 step, "추론 흐름" 패널), 클릭 시 `reasoning_steps` expand, admin 만 `langfuse_trace_id` 딥링크 노출.
 
 ## 6. 알고리즘
 
@@ -79,34 +113,174 @@ RADAR_AXES = {
 }
 ```
 
-### 6.2 LLM Prompt (gpt-4o)
+### 6.2 LLM Prompt — 3-phase CoT (gpt-4o, single call with explicit reasoning)
 
-```text
-다음 카드 뉴스 {N}개를 함께 보고 분석하라.
+PDF 2026-05-14 §5 직접 대응. 단일 LLM call 안에서 step-by-step thinking 을 explicit 하게 출력 (비용 ↓ + UI 노출 ↑).
 
-[카드 목록]
-{cards_summary}
+~~~text
+# SK AX 멀티 카드 분석 전문가
 
-[사용자 입력 비율]
-- Peer: {ratios.peer}
-- Industry: {ratios.industry}
-- Keyword: {ratios.keyword}
+당신은 SK AX 사업전략팀의 멀티 카드 분석 전문가입니다.
+본 task 는 **단일 답 생성이 아닌 *추론 과정 자체의 명시적 노출*** — 분석가가 어떻게
+결론에 도달했는지 UI 가 사용자에게 보여줍니다.
 
-[분석 요청]
-1. **종합 인사이트** (1문장, 50자 이내): N건 카드를 관통하는 단일 주제
-2. **핵심 신호 (bullet 3)**: 반복 등장하는 패턴 / 공통점
-3. **연결 관계**: 카드 쌍 간 관계 라벨링 (cause, effect, similar, contrast, reinforce). 최대 10 쌍.
+## 입력 데이터
 
-JSON 반환:
+### 분석 카드 N건
+{cards_summary} (peer / event_type / sector / exposure_band 다양)
+
+### 사용자 분석 비율
+- **Peer 가중치**: {ratios.peer}
+- **Industry 가중치**: {ratios.industry}
+- **Keyword 가중치**: {ratios.keyword}
+
+### 사용자 컨텍스트 (자유 입력)
+{user_context}
+
+### Peer Context Packs (Phase K3+)
+{context_packs_rendered 또는 "*cold start — pack 없음, retrieval fallback*"}
+
+## 작성 규칙
+
+### 절대 규칙 (위반 시 응답 무효)
+- **출처 prefix**: 모든 정량 수치 앞에 `[DART]` / `[기사 인용]` / `[자체 추정]` 강제
+- **화자 고정**: "{peer} 가 X 했다" 금지 → "{peer} X 는 SK AX 의 ___ 에 ___ 영향" pattern
+- **환각 금지**: 카드 본문에 없는 수치/이름 추가 시 즉시 `[자체 추정]` 명시
+
+### 일반 규칙 (17 요소 매핑)
+1. **(#1 역할)** SK AX 사업전략팀 관점만 — 일반 분석가 X
+2. **(#2 추적 대상)** 카드의 peer 가 4 국내 + 6 글로벌 + SK AX 자체에 한정
+3. **(#7 단순 요약 금지)** "기사 N 개 요약" 금지 — event_type / 변화 / 시사점 패턴
+4. **(#10 수익화 관점)** sk_ax_implication 에 "SK AX 매출/마진 영향 = 긍정/중립/부정" 명시
+5. **(#11 정량 우선)** "성장 추세" 금지 → `"QoQ +12.3%"`
+6. **(#13 SK AX 화자)** 위 절대 규칙 pattern 강제
+7. **(#15 우선순위)** bullet_signals 3개 중 가장 영향 큰 1개 선택 강제 (`priority=1`)
+8. **(#17 반복 추적)** follow_up_questions 2~3개 — 다음 분석 위한 질문
+
+## 추론 단계 (Chain of Thought)
+
+### Phase 1 — per_card (각 카드 1 step)
+- **자기 질문**: `"이 카드 (CN-XXX) 의 핵심 신호는?"`
+- **입력**: 카드 1건 (`inputs_used = ["CN-XXX"]`)
+- **답변**: event_type + 핵심 사실 + 정량 수치 (출처 prefix 강제)
+- **intermediate_conclusion**: `"카드 X = {one line signal}"`
+
+### Phase 2 — cross_card (의미 있는 pair 별 1 step, 최대 8 step)
+- **자기 질문**: `"CN-A 와 CN-B 는 어떻게 연결되는가?"`
+- **입력**: 카드 2건 (`inputs_used = ["CN-A", "CN-B"]`)
+- **답변**: 두 카드 비교 + 인과 / 유사 / 대조 / 강화 관계 추론
+- **intermediate_conclusion**: `"{label}: {evidence}"`
+- **출력 매핑**: 각 cross_card step → `connections[]` 항목 1:1 대응
+
+### Phase 3 — synthesis (반드시 마지막 step)
+- **자기 질문**: `"위 단계의 결론을 종합하면 SK AX 가 주목해야 하는 단일 주제는?"`
+- **입력**: 모든 card_id
+- **답변**: 종합 reasoning (≤ 500자)
+- **intermediate_conclusion**: 최종 한 줄 결론 (= `final_one_liner` 와 일치 강제)
+
+## 3-Tier Observability 출력
+
+### Tier 1 — reasoning_trail (사용자 default)
+정확히 **3~5 step** 으로 압축. raw reasoning_steps 가 5~8 step 이어도 trail 은 압축.
+탐색/시도/hedging 표현 금지 (`"~ 인 듯하다"` / `"고민했으나"` X). 핵심 결정만 trail.
+
+각 trail step:
+- **seq**: 1, 2, 3, ...
+- **label**: ≤ 12자 명사구 (`"카드 비교"` / `"패턴 발견"` / `"재무 검증"` / `"결론"`)
+- **one_liner**: ≤ 80자 한국어 단문, 가능 시 정량 수치 1개 (`"QoQ +12%"`)
+- **evidence_refs**: 참조한 card_id 목록
+- **langfuse_observation_id**: `null` (런타임 매핑)
+
+**목표**: 사용자가 trail 만 보고도 "왜 이 결론에 왔는가" 가 명확해야 함.
+
+### Tier 2 — reasoning_steps (상세)
+**5~8 step**. Phase 1~3 의 question / inputs_used / answer / intermediate_conclusion / confidence.
+
+### Tier 3 — langfuse_trace_id
+`null` 로 출력. `LangfuseTraceLinker` 미들웨어가 자동 매핑.
+
+## 출력 형식 (strict JSON)
+
+```json
 {
-  "insight": "...",
-  "bullet_signals": ["...", "...", "..."],
+  "insight": "1문장 종합 (≤ 50자)",
+  "final_one_liner": "최종 한 줄 결론, SK AX 관점, 모호 X (≤ 100자)",
+  "sk_ax_implication": "국내 IT 서비스사 (SK AX) 관점 1~2 문장. 긍정/중립/부정 명시",
+  "bullet_signals": ["신호 1 (priority=1)", "신호 2", "신호 3"],
   "connections": [
-    {"source_card_id": "CN-...", "target_card_id": "CN-...", "label": "cause", "weight": 0.0~1.0}
+    {"source_card_id": "CN-...", "target_card_id": "CN-...", "label": "cause|effect|similar|contrast|reinforce", "weight": 0.0}
   ],
-  "confidence": 0.0~1.0
+  "reasoning_trail": [
+    {"seq": 1, "label": "카드 비교", "one_liner": "...", "evidence_refs": ["CN-..."], "langfuse_observation_id": null}
+  ],
+  "reasoning_steps": [
+    {
+      "step_idx": 0,
+      "phase": "per_card|cross_card|synthesis",
+      "question": "...",
+      "inputs_used": ["CN-..."],
+      "answer": "...",
+      "intermediate_conclusion": "...",
+      "confidence": 0.0,
+      "langfuse_observation_id": null
+    }
+  ],
+  "follow_up_questions": ["...", "...", "..."],
+  "confidence": 0.0
 }
 ```
+~~~
+
+### 6.2.2 Prompt 양식 audit — 02-prompt-design-checklist §6
+
+| 양식 항목 | 충족 |
+|---|---|
+| `#` agent role 1개만 | ✅ |
+| `##` 5 major section | ✅ |
+| `###` sub-section heading | ✅ |
+| 절대 규칙 + bold label | ✅ |
+| numbered rule + (#N) inline | ✅ |
+| JSON code fence | ✅ |
+| `[Brackets]` 폐기 | ✅ |
+
+### 6.2.1 langfuse_trace_id / observation_id 매핑
+
+LLM call 직후 axis-ai 의 `LangfuseTraceLinker` middleware 가:
+
+```python
+def link_trace(output_dict: dict) -> dict:
+    from langfuse import get_client
+    client = get_client()
+    output_dict["langfuse_trace_id"] = client.get_current_trace_id()
+    # reasoning_steps[].langfuse_observation_id 는 step 별 sub-span 이 있으면 매핑
+    # mixer 는 single call 이라 모든 step 의 observation_id = generation_id 동일
+    gen_id = client.get_current_observation_id()
+    for step in output_dict.get("reasoning_steps", []):
+        step["langfuse_observation_id"] = gen_id
+    # reasoning_trail 도 동일 (single call 기반)
+    for trail_step in output_dict.get("reasoning_trail", []):
+        trail_step["langfuse_observation_id"] = gen_id
+    return output_dict
+```
+
+Multi-call agent (Briefing 의 section 별 LLM call) 는 각 section 의 generation_id 가 달라지므로 step 별 매핑이 더 풍부.
+
+### 6.3 17 요소 prompt audit table
+
+| # | 요소 | 충족 | 위치 |
+|---|---|---|---|
+| 1 | 역할 정의 | ✅ | "SK AX 사업전략팀의 멀티 카드 분석 전문가" |
+| 2 | 추적 대상 | ✅ | "4 peer + 6 글로벌 + SK AX 자체" |
+| 7 | 단순 요약 금지 | ✅ | event_type / 변화 / 시사점 패턴 |
+| 10 | 수익화 관점 | ✅ | sk_ax_implication 의 긍정/중립/부정 |
+| 11 | 정량 우선 | ✅ | "QoQ +X%" 형태 강제 |
+| 12 | 공식 vs 추정 | ✅ | prefix 강제 |
+| 13 | 전략 시사점 | ✅ | "SK AX 의 ___ 에 영향" pattern |
+| 14 | 출력 형식 | ✅ | strict JSON schema |
+| 15 | 우선순위 | ✅ | "다음 3 중 가장 영향" 명시 |
+| 17 | 반복 추적 | ✅ | follow_up_questions |
+| 5, 6, 8, 9 | (적용 권장이나 mixer 는 cross-card 분석이라 시계열 KPI 직접 X) | ⚪ | per-card 카드 본문이 가지고 옴 |
+| 16 | 리스크 분석 | 🟡 | sk_ax_implication 에 "단 X 가정이 틀리면" 포함 권장 |
 
 ## 7. LLM 모델 + token 예산
 
@@ -161,3 +335,7 @@ AnalysisState 에서 `request_type='mixer'` 로 라우팅.
 ### Changelog
 
 - **v1 (제안, P7)** — LLM cross-card + 6축 산식 + connection 라벨링
+- **v2 (2026-05-14, 사업전략팀 추가 질의 회신 반영)** — CoT `reasoning_steps[]` 가시화,
+  `final_one_liner` / `sk_ax_implication` / `follow_up_questions` 추가, 17 요소
+  prompt audit. PDF §1 / §5 / §13 / §15 / §17 직접 대응. 비용 영향 ≤ 10%
+  (single LLM call 내 explicit reasoning, out token ~500 증가).
