@@ -80,7 +80,7 @@ sources_track_b = [
     OfficialNewsroomGeneric(hyundai_autoever, posco_dx),  # 0.90 best-effort
     HankyungConsensus(peer_codes),      # 0.80 Playwright
     NaverFinanceResearch(item_codes),   # 0.75 Playwright
-    SaraminJobs(applicant_names),       # 0.50 약신호 input
+    Work24Jobs(applicant_names),        # 0.50 약신호 input (work24.go.kr OpenAPI)
 ]
 ```
 
@@ -126,7 +126,7 @@ for source in sources:
 
 - **DB**: `raw_articles` 테이블 (INSERT)
 - **DB**: `pipeline_logs` 테이블 (metric trace via `_logged_step`)
-- **외부 API**: Naver Search API · DART OpenAPI · KIPRIS · Saramin (각각 API key 필요 — env `NAVER_*`, `DART_API_KEY`, `KIPRIS_API_KEY`, `SARAMIN_API_KEY`)
+- **외부 API**: Naver Search API · DART OpenAPI · KIPRIS · 고용24 work24.go.kr OpenAPI (각각 API key 필요 — env `NAVER_*`, `DART_API_KEY`, `KIPRIS_API_KEY`, `WORK24_API_KEY` + `WORK24_RETURN_TYPE`)
 - **외부 RSS**: ETnews · ZDNet · Bloter · Yonhap · Google News
 - **Playwright**: 공식 뉴스룸 (헤드리스 Chromium) — Pod 에 `playwright install` 필요
 
@@ -163,7 +163,7 @@ for source in sources:
 - **pipeline_logs.step**: `crawl`
 - **KPI**:
   - 일일 수집 raw 건수 ≥ 400
-  - source 별 성공률 ≥ 95% (DART 100%, Saramin 80%, Playwright 75%)
+  - source 별 성공률 ≥ 95% (DART 100%, work24 80%, Playwright 75%)
   - 평균 latency 매시 cycle ≤ 5분
 - **알람** (P3): 시간당 수집 0건 = source 전체 fail = 즉시 alert
 - **token 예산**: 해당 없음 (LLM 미사용)
@@ -190,6 +190,6 @@ sqlalchemy = ">=2.0"
 ### Changelog
 
 - **v1 (2026-04-W1)** — Track A 만 (naver + google news + ETnews)
-- **v2 (2026-04-W2)** — DART/KIPRIS/Saramin 추가 (Track B)
+- **v2 (2026-04-W2)** — DART/KIPRIS/고용24 (work24) 추가 (Track B)
 - **v3 (2026-04-W3)** — Track C (BCG/McKinsey) 분리 + Playwright newsroom + IR PDF
 - **v4 (2026-05-12)** — 044ac12 commit 후 backfill_runner 분리, retry 정책 강화

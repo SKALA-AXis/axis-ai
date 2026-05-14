@@ -172,7 +172,7 @@ def matches_rule(sig, rule):
 
 | 시나리오 | 대응 |
 |---|---|
-| 채용 데이터 0건 (Saramin fail) | hiring_surge skip + log |
+| 채용 데이터 0건 (고용24 work24 API fail) | hiring_surge skip + log |
 | z-score 계산 시 std=0 (단조 톤) | z=0 처리, anomaly 없음 |
 | LLM 해석 fail | "(해석 실패)" stub |
 | Alert rule 매칭 0 | alerts_dispatched=0, log only |
