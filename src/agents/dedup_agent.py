@@ -7,6 +7,7 @@ title/content 임베딩 유사도로 같은 이슈를 묶는다.
 
 import json
 import logging
+import os
 import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -27,6 +28,14 @@ _MAX_BRIDGE_TOPIC_TERMS = 1
 _MIN_RELATED_TERM_LENGTH = 6
 _TERM_NGRAM_SIMILARITY = 0.45
 _ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
+
+# 단독(singleton) 클러스터 처리 정책.
+#   - bridge risk(제목에 주제어 없음 + 본문 주제어 다수) 가 의심되어도 cluster 를 유지한다.
+#   - 이전: ambiguous singleton 은 drop → cycle 마다 clusters=0 으로 떨어져
+#     classify 이후 (card_news / evidence / vector_index) 가 entirely skip 되는 문제.
+#   - 이 토글은 production 의 cycle 단위 cluster 형성률을 회복하기 위한 것.
+#   - default true (singleton 유지). 과거 동작 복원이 필요하면 env 로 false.
+_KEEP_AMBIGUOUS_SINGLETONS = os.getenv("DEDUP_KEEP_AMBIGUOUS_SINGLETONS", "true").lower() == "true"
 
 _CANONICAL_ISSUE_TERMS: Mapping[str, tuple[str, ...]] = {}
 
@@ -373,6 +382,10 @@ def _support_only_singleton(
     article_ids: list[int],
     id_to_article: dict[int, dict[str, Any]],
 ) -> bool:
+    if _KEEP_AMBIGUOUS_SINGLETONS:
+        # singleton 은 항상 cluster 로 유지. bridge risk 는 multi-article merge 시점에서만 의미.
+        return False
+
     if len(article_ids) != 1:
         return False
 
