@@ -40,15 +40,32 @@ class InsightCascadeInput(TypedDict):
 ## 5. 출력 스펙
 
 ```python
+class CoTStep(TypedDict):
+    """02-prompt-design-checklist.md §4 표준. Insight 4단계는 그 자체로 CoT 의
+    의도적 표면화 (Cause → Change → Impact → Response). 본 reasoning_steps[] 는
+    *그 위* 의 추론 흔적 (각 단계가 어떤 카드를 보고 어떤 질문 했고 결론은 무엇)"""
+    step_idx: int
+    phase: Literal["cause", "change", "impact", "response", "synthesis"]
+    question: str
+    inputs_used: list[str]              # card_id
+    answer: str
+    intermediate_conclusion: str
+    confidence: float
+
 class InsightCascadeOutput(TypedDict):
     cause: list[str]
     change: list[str]
     impact: list[str]
     response: list[str]
-    confidence: float            # 0.0~1.0
-    sources: list[dict]          # 사용된 카드 id 와 매핑
+    final_one_liner: str                # PDF 2026-05-14 §5 — SK AX 관점 한 줄 결론 (≤ 100자)
+    sk_ax_implication: str              # 국내 IT 서비스사 관점 1~2 문장 (긍정/중립/부정 명시)
+    reasoning_steps: list[CoTStep]      # PDF §1 / §5 — 5 phase × 1+ step = 5~10 step
+    follow_up_questions: list[str]      # PDF §17 — "꼬리 물기" 다음 분석 제안 2~3개
+    risk_assumptions: list[str]         # PDF §16 — 본 인사이트가 틀릴 가능성 / 가정
+    confidence: float                   # 0.0~1.0
+    sources: list[dict]                 # 사용된 카드 id 와 매핑
     provenance: dict
-    warning: str | None          # confidence < 0.6 시 표시
+    warning: str | None                 # confidence < 0.6 시 표시
 ```
 
 frontend `POST /api/insights/generate` 응답.
@@ -73,38 +90,96 @@ def build_context(card_ids):
     return "\n".join(context_parts)
 ```
 
-### 6.2 LLM Prompt (gpt-4o, chain-of-thought)
+### 6.2 LLM Prompt (gpt-4o, 4-step CoT with explicit reasoning_steps)
+
+PDF 2026-05-14 §1 / §5 직접 대응. 4단계 인사이트가 *그 자체로* CoT 흐름이지만,
+사용자가 "agent 들 간 협업이 어떻게 이뤄졌는지" 확인하려면 단계 별 *추론 흔적*
+이 별도 필요. single LLM call 안에서 4 phase 의 question / inputs / answer /
+intermediate_conclusion 을 explicit 하게 출력.
 
 ```text
-당신은 SK AX 사업전략팀의 인텔리전스 분석가다. 다음 카드 뉴스 {N}개를 보고 4단계 인사이트를 도출하라.
+당신은 SK AX 사업전략팀의 인텔리전스 분석가다. 본 task 는 단순 답 생성이 아니라
+*추론 과정 자체를 명시적으로 보여주는 것* — 사용자가 어떻게 결론에 도달했는지
+UI 가 노출한다.
 
 [카드 뉴스]
 {context}
 
-[4단계 분석]
-다음 순서로 사고하라. 각 단계는 3~5 bullet 로 간결하게.
+[4단계 인사이트 + reasoning_steps]
 
-1. **Cause (원인)**: 이 카드들이 발생한 배경 / 시장 환경 / Peer 의 전략적 motivation 은?
-2. **Change (변화)**: Peer 가 실제로 어떤 행동/투자/제품을 했는가? (사실 위주)
-3. **Impact (영향)**: SK AX 의 현재 사업·고객·경쟁 환경에 어떤 영향?
-4. **Response (대응)**: SK AX 가 취할 수 있는 구체적 액션 (사업/기술/조직 방향)?
+각 단계마다:
+  reasoning_step.question = "이 단계가 답하려는 질문"
+  reasoning_step.inputs_used = ["CN-..."]  ← 본 단계에서 본 카드
+  reasoning_step.answer = 카드 분석 raw response (≤ 500자)
+  reasoning_step.intermediate_conclusion = 다음 단계로 넘어갈 핵심 (≤ 150자)
 
-**제약**:
-- 각 단계 답변은 [카드 ID] 로 근거 인용 (예: "[CN-20260513-001]")
-- 출처에 없는 수치/이름 만들지 마라 (환각 금지)
-- 불확실하면 "추정" 표시
+Phase 1 — Cause: "이 카드들이 발생한 배경 / 시장 환경 / Peer 의 전략적 motivation 은?"
+Phase 2 — Change: "Peer 가 실제로 어떤 행동/투자/제품을 했는가? (사실 위주 — 수치 / 날짜 / 제품명)"
+Phase 3 — Impact: "SK AX 의 사업·고객·경쟁 환경에 어떤 영향? (긍정/중립/부정 명시)"
+Phase 4 — Response: "SK AX 가 취할 구체적 액션 (사업/기술/조직)? 우선순위 3 중 최고 1개 명시"
+Phase 5 — Synthesis (final): "위 4단계 종합 → final_one_liner + risk_assumptions"
+
+[작성 규칙 — 02-prompt-design-checklist.md 의 17 요소]
+1. (역할) SK AX 사업전략팀 분석가만 사용.
+2. (추적 대상) 카드 안의 4 peer + 6 글로벌 + SK AX 한정.
+4. (정보 출처 우선순위) Tier1 (DART/IR) > Tier2 (대형 미디어) > Tier3 (Naver/RSS).
+7. (단순 요약 금지) "기사 X 개 요약" X — event_type / 변화 / 시사점 패턴.
+10. (수익화 관점) Impact bullet 에 "SK AX 매출/마진 영향: 긍정/중립/부정" 강제.
+11. (정량 우선) Change bullet 에 수치 / 날짜 / 제품명 우선.
+12. (공식 vs 추정) [공식 DART] / [기사 인용] / [자체 추정] prefix.
+13. (전략 시사점) Impact + Response 모두 "SK AX 의 ___ 에 영향 / SK AX 의 ___ 행동" pattern.
+15. (우선순위) Response 의 3 액션 중 가장 영향 큰 1개를 `priority=1` 로 명시.
+16. (리스크) `risk_assumptions[]` 에 "본 인사이트가 틀릴 가능성: ___" 1~3개.
+17. (반복 추적) `follow_up_questions[]` 2~3개.
+
+[제약]
+- 모든 bullet 은 [CN-...] 카드 ID 로 근거 인용
+- 출처에 없는 수치/이름 환각 금지 — 불확실하면 "[자체 추정]" prefix
+- 정성 표현 후 (정량) 수치 보강 — 예: "급성장 (QoQ +18.4%)"
 
 [JSON 출력]
 {
-  "cause": ["...", "..."],
-  "change": ["...", "..."],
-  "impact": ["...", "..."],
-  "response": ["...", "..."],
+  "cause": ["[CN-...] ...", "..."],
+  "change": ["[공식 DART] [CN-...] ...", "..."],
+  "impact": ["긍정: [CN-...] ...", "중립: ...", "부정: ..."],
+  "response": [
+    {"action": "...", "priority": 1, "rationale": "[CN-...]"},
+    {"action": "...", "priority": 2, "rationale": "..."},
+    {"action": "...", "priority": 3, "rationale": "..."}
+  ],
+  "final_one_liner": "≤ 100자, SK AX 관점, 모호 X",
+  "sk_ax_implication": "1~2 문장. 긍정/중립/부정 명시.",
+  "reasoning_steps": [
+    {"step_idx": 0, "phase": "cause", "question": "...", "inputs_used": ["CN-..."],
+     "answer": "...", "intermediate_conclusion": "...", "confidence": 0.0~1.0}
+    // ... phase=change / impact / response / synthesis 각 1+ step
+  ],
+  "follow_up_questions": ["...", "...", "..."],
+  "risk_assumptions": ["본 인사이트가 ___ 가정에 의존. 그 가정이 틀리면 ___"],
   "confidence": 0.0~1.0,
-  "sources_used": ["CN-..." card_ids],
+  "sources_used": ["CN-..."],
   "uncertainties": ["..."]
 }
 ```
+
+### 6.3 17 요소 prompt audit table
+
+| # | 요소 | 충족 | 위치 |
+|---|---|---|---|
+| 1 | 역할 정의 | ✅ | "SK AX 사업전략팀 인텔리전스 분석가" |
+| 2 | 추적 대상 | ✅ | 4 peer + 6 글로벌 + SK AX |
+| 4 | 정보 출처 우선순위 | ✅ | Tier1 > Tier2 > Tier3 명시 |
+| 7 | 단순 요약 금지 | ✅ | 4-phase pattern + event 분류 |
+| 10 | 수익화 관점 | ✅ | Impact bullet 의 긍정/중립/부정 |
+| 11 | 정량 우선 | ✅ | Change 의 수치 / 날짜 / 제품명 |
+| 12 | 공식 vs 추정 | ✅ | prefix 강제 |
+| 13 | 전략 시사점 | ✅ | Impact / Response 의 "SK AX ___" pattern |
+| 14 | 출력 형식 | ✅ | strict JSON schema |
+| 15 | 우선순위 | ✅ | Response 의 priority=1 강제 |
+| 16 | 리스크 분석 | ✅ | `risk_assumptions[]` 필수 |
+| 17 | 반복 추적 | ✅ | `follow_up_questions[]` 필수 |
+| 5, 6 | 분석 기간 / 최신성 | 🟡 | 카드의 published_at 가 가지고 옴 — prompt 에 명시 권장 |
+| 8, 9 | 회사별 비교 / 변화 감지 | ⚪ | Insight 는 cross-card 추론 — 별도 카드 직접 비교 X |
 
 ### 6.3 Confidence 산출
 
@@ -190,3 +265,7 @@ class AnalysisState(TypedDict):
 ### Changelog
 
 - **v1 (제안, P7)** — 4-step CoT + cache + confidence
+- **v2 (2026-05-14, 사업전략팀 추가 질의 회신 반영)** — `reasoning_steps[]` 가시화,
+  `final_one_liner` / `sk_ax_implication` / `follow_up_questions` /
+  `risk_assumptions` 추가, Response 의 priority=1 강제, 17 요소 prompt audit
+  (12/17 충족). PDF §1 / §5 / §10 / §13 / §15 / §16 / §17 직접 대응.

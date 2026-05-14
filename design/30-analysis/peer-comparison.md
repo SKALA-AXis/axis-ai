@@ -11,15 +11,20 @@
 
 ## 2. 책임
 
-**한 줄**: 선택 peer 의 최근 카드 + IR + 키워드 vs **SK AX (자사)** 의 카드/포지션을 비교하여 **차별 시사점 3~5건** + 전략 라벨 자동 추출.
+**한 줄**: 선택 peer 의 최근 카드 + IR + 키워드 vs **SK AX (자사)** 의 카드/포지션을 비교하여 **차별 시사점 + 전략 라벨 + 향후 forecast (1Q / 반기 / 1년)** 자동 추출.
 
-**구체적**:
+**구체적 (4-phase, PDF 2026-05-14 §4 직접 대응)**:
 
-1. peer 의 최근 30일 card_news + 재무 IR pack 수집
-2. SK AX (sk_ax 자사) 의 동일 영역 카드 + 컨텍스트 수집
-3. LLM 비교 분석 — 차별점 / 강점 / 약점 / 협력 가능성
-4. 전략 라벨 (LLM, 5종 중 1) — "Aggressive Expansion" / "Defensive Hold" / "Tech Pivot" / "Customer Lock-in" / "Cost Leadership"
-5. 결과 cache (peer_id × week 키, 7일 TTL)
+1. **Phase 1 — Current state** (산식 + LLM): peer 의 최근 30일 card_news + 재무 IR pack + word cloud 종합. SK AX 자사 동일 영역 카드 비교.
+2. **Phase 2 — Trend** (산식): QoQ / YoY 매출·영업이익·R&D 추세 + 카드 빈도 변화 (Tech vs Partnership vs M&A 비중). 변화 감지 기준 (PDF §9): ±5% normal / >10% 유의 / >30% 급변.
+3. **Phase 3 — Forecast** (LLM, **PDF §4 신규**): 분기 재무 + 최근 동향 → **1Q 후 / 반기 후 / 1년 후** 의 3 시나리오 (낙관 / 기준 / 비관) + driver 명시 + 가정의 신뢰도.
+4. **Phase 4 — Strategic implication + CoT** (LLM): SK AX 가 어떤 행동 / 어떤 대응 / 어떤 협력 — `final_one_liner` 강제.
+
+PDF 직접 인용 (§4): *"Peer+의 경우 분기별로 다트 데이터를 참고하여 실적을 정리해준다고 한다면, 차라리, 그 실적과 최근 기사와 동향을 파악하여 향후 전망을 보여주는 형태 (1분기 후, 반기 후, 1년 후 등) 로 Insight 를 담아주면 좋을 것 같습니다."*
+
+전략 라벨 (LLM, 5종 중 1) — "Aggressive Expansion" / "Defensive Hold" / "Tech Pivot" / "Customer Lock-in" / "Cost Leadership".
+
+결과 cache (peer_id × week 키, 7일 TTL).
 
 ## 3. 책임 NOT
 
@@ -39,16 +44,57 @@ class PeerComparisonInput(TypedDict):
 ## 5. 출력 스펙
 
 ```python
+class TrendDelta(TypedDict):
+    """Phase 2 — 정량 변화 지표."""
+    metric: str                              # "revenue_krwbn" / "op_income_krwbn" / "op_margin_pct" / ...
+    qoq_pct: float | None                    # 전기 대비
+    yoy_pct: float | None                    # 전년 동기 대비
+    band: Literal["normal","유의","급변"]    # PDF §9 임계값 (±5% / >10% / >30%)
+    direction: Literal["up","down","flat"]
+    source: str                              # "[공식 DART 2026-1Q]" 등
+
+class Forecast(TypedDict):
+    """Phase 3 — PDF §4 직접 대응. 1Q / 반기 / 1년 후 시나리오."""
+    horizon: Literal["1Q","6M","1Y"]
+    scenario: Literal["optimistic","baseline","pessimistic"]
+    summary: str                             # 1 문장 (≤ 100자)
+    drivers: list[str]                       # 2~4 driver
+    quantitative_estimate: str | None        # "매출 +12~18% YoY" 같은 정량 범위 (가능 시)
+    risk_assumptions: list[str]              # 본 시나리오가 틀릴 조건
+    confidence: float                        # 0~1
+
+class CoTStep(TypedDict):
+    """02-prompt-design-checklist.md §4 표준."""
+    step_idx: int
+    phase: Literal["current","trend","forecast","strategic"]
+    question: str
+    inputs_used: list[str]
+    answer: str
+    intermediate_conclusion: str
+    confidence: float
+
 class PeerComparisonOutput(TypedDict):
     peer_id: str
+    # Phase 1 — Current
     strategy_label: str                # "Aggressive Expansion" 등
     differentiators: list[dict]        # 3~5건 [{aspect, peer_position, skax_position, opportunity}]
     strengths_of_peer: list[str]
     weaknesses_of_peer: list[str]
-    collaboration_potential: list[str]  # 협력 가능 영역
+    collaboration_potential: list[str]
+    # Phase 2 — Trend
+    trend_deltas: list[TrendDelta]     # 매출/영업이익/마진/R&D 의 QoQ/YoY 추세
+    # Phase 3 — Forecast (PDF §4)
+    forecasts: list[Forecast]          # 3 horizon × 3 scenario = 9 (또는 핵심 3~5 select)
+    # Phase 4 — Synthesis
+    sk_ax_implication: str             # PDF §13 — 국내 IT 서비스사 관점 1~2 문장 (긍정/중립/부정)
+    final_one_liner: str               # PDF §5 — SK AX 관점 한 줄 결론 (≤ 100자)
+    follow_up_questions: list[str]     # PDF §17 — 다음 분석 제안 2~3개
+    # Meta
+    reasoning_steps: list[CoTStep]     # PDF §1 / §5 — 4 phase × 1+ step
     confidence: float
     provenance: dict
-    sources: list[str]                  # 사용된 card_ids
+    sources: list[str]                 # 사용된 card_ids + DART ids
+    analysis_period: dict              # PDF §6 — {"since": "2026-04-15", "until": "2026-05-14", "kst_basis": true}
 ```
 
 frontend `GET /api/monitoring/{peerId}/strategy` 및 `/comparison` 응답.
@@ -69,43 +115,140 @@ def build_context(peer_id, window_days, focus_sector):
     }
 ```
 
-### 6.2 LLM Prompt (gpt-4o, 구조화 출력)
+### 6.2 Phase 2 — Trend deltas (산식, LLM 없음)
+
+QoQ / YoY 추세는 재무 segment 데이터에서 deterministic 계산:
+
+```python
+def compute_trend_deltas(peer_ir):
+    deltas = []
+    for metric in ("revenue_krwbn", "op_income_krwbn", "op_margin_pct", "rd_investment_krwbn"):
+        latest = peer_ir.series[-1][metric]
+        prev_q = peer_ir.series[-2][metric] if len(peer_ir.series) >= 2 else None
+        prev_y = peer_ir.series[-5][metric] if len(peer_ir.series) >= 5 else None
+        qoq = (latest - prev_q) / prev_q * 100 if prev_q else None
+        yoy = (latest - prev_y) / prev_y * 100 if prev_y else None
+        band = _band(qoq, yoy)  # ±5% normal / >10% 유의 / >30% 급변 (PDF §9)
+        deltas.append({
+            "metric": metric,
+            "qoq_pct": qoq,
+            "yoy_pct": yoy,
+            "band": band,
+            "direction": _direction(qoq or yoy),
+            "source": f"[공식 DART {peer_ir.latest_period}]",
+        })
+    return deltas
+```
+
+### 6.3 Phase 3 — Forecast (LLM, PDF §4 직접 대응)
+
+분기 재무 추세 + 최근 동향 카드 → 3 horizon × 3 scenario = **9 forecast** (또는 핵심 3~5 select).
+
+### 6.4 LLM Prompt (gpt-4o, 4-phase CoT)
 
 ```text
-당신은 SK AX 사업전략팀의 경쟁사 분석가다. {peer_id} 와 SK AX 의 최근 30일 동향을 비교하라.
+당신은 SK AX 사업전략팀의 경쟁사 분석가다. {peer_id} 의 현재 / 추세 / 향후 전망을
+SK AX 관점에서 분석하라. *추론 과정을 명시적으로 보여주라* — 사용자가 어떻게
+결론에 도달했는지 UI 가 노출한다.
 
-[{peer_id} 동향 — N건]
-{peer_cards_summary}
-[{peer_id} 재무 segment (분기)]
-{peer_ir}
+[입력]
+- analysis_period: {since} ~ {until} (KST 기준)
+- {peer_id} 카드 (최근 30일 N건): {peer_cards_summary}
+- {peer_id} 재무 IR (분기 5기): {peer_ir_pack}
+- {peer_id} 트렌드 deltas (산식 자동): {trend_deltas}
+- SK AX 자사 카드: {skax_cards_summary}
+- SK AX 베이스라인: {skax_baseline}
 
-[SK AX 동향 (자사)]
-{skax_cards_summary}
+[Phase 1 — Current state]
+  question: "현재 {peer_id} 의 포지션과 SK AX 와의 차별점은?"
+  → strategy_label (5종 중 1), differentiators, strengths/weaknesses, collaboration_potential
+  → reasoning_step 1: "본 phase 의 추론 흔적"
 
-[분석 요청]
-1. **전략 라벨**: peer 의 전략 방향을 5종 중 하나로 분류
-   - Aggressive Expansion | Defensive Hold | Tech Pivot | Customer Lock-in | Cost Leadership
-2. **차별점 3~5건**: 동일 영역에서 peer 와 SK AX 의 포지션 차이
-3. **Peer 의 강점**: 본받을 / 위협 받을 영역
-4. **Peer 의 약점**: SK AX 가 공략할 수 있는 영역
-5. **협력 가능성**: 경쟁이 아닌 협력 영역
+[Phase 2 — Trend interpretation]
+  question: "trend_deltas 의 의미는? 어떤 사업 방향 전환?"
+  → 정량 (QoQ +X%) 후 정성 해석 (PDF §11)
+  → reasoning_step 2
 
-JSON 출력:
+[Phase 3 — Forecast — PDF §4 직접 대응]
+  question: "1Q 후 / 반기 후 / 1년 후 {peer_id} 의 시나리오는?"
+  → 각 horizon 마다 (낙관 / 기준 / 비관) 3 scenario.
+  → drivers 명시 + risk_assumptions (PDF §16) + quantitative_estimate (가능 시)
+  → reasoning_step 3~5
+
+[Phase 4 — Strategic implication + final]
+  question: "SK AX 는 어떤 행동? 우선순위 1개?"
+  → sk_ax_implication (1~2 문장, 긍정/중립/부정), final_one_liner (≤ 100자)
+  → reasoning_step 6
+
+[작성 규칙 — 02-prompt-design-checklist.md 17 요소]
+1. 역할: SK AX 경쟁사 분석가
+2. 추적 대상: 4 peer / 6 글로벌 (cross-comparison 가능)
+5. 분석 기간: analysis_period 명시 ("2026-04-15 ~ 2026-05-14 KST")
+6. 최신성: published_at 의 KST 변환 + 분기 boundary
+8. 회사별 비교 기준: 매출 / 영업이익 / 영업이익률 / R&D / Captive 비중
+9. 변화 감지 기준: ±5% normal / >10% 유의 / >30% 급변
+10. 수익화 관점: sk_ax_implication 의 긍정/중립/부정 명시
+11. 정량 우선: trend_deltas + forecasts.quantitative_estimate
+12. 공식 vs 추정: source = "[공식 DART YYYY-NQ]" / "[기사 인용 CN-...]" / "[자체 추정]"
+13. 전략 시사점: 모든 phase 의 결론이 "SK AX ___" 화자 강제
+14. 출력 형식: strict JSON
+16. 리스크: forecasts.risk_assumptions 필수
+17. 반복 추적: follow_up_questions[]
+
+[JSON 출력]
 {
-  "strategy_label": "Aggressive Expansion",
-  "differentiators": [
-    {"aspect": "AI 플랫폼 차별점",
-     "peer_position": "...",
-     "skax_position": "...",
-     "opportunity": "..."}
-  ],
+  "strategy_label": "Aggressive Expansion | ... | Cost Leadership",
+  "differentiators": [{"aspect": "...", "peer_position": "...", "skax_position": "...", "opportunity": "..."}],
   "strengths_of_peer": ["..."],
   "weaknesses_of_peer": ["..."],
   "collaboration_potential": ["..."],
+  "trend_deltas": [...],  // §6.2 의 산식 결과 그대로 반영
+  "forecasts": [
+    {
+      "horizon": "1Q|6M|1Y",
+      "scenario": "optimistic|baseline|pessimistic",
+      "summary": "...",
+      "drivers": ["...","..."],
+      "quantitative_estimate": "매출 +12~18% YoY",
+      "risk_assumptions": ["..."],
+      "confidence": 0.0~1.0
+    }
+    // 3~5 개
+  ],
+  "sk_ax_implication": "1~2 문장. 긍정/중립/부정 명시.",
+  "final_one_liner": "≤ 100자",
+  "follow_up_questions": ["...", "..."],
+  "reasoning_steps": [
+    {"step_idx": 0, "phase": "current", "question": "...", "inputs_used": [...],
+     "answer": "...", "intermediate_conclusion": "...", "confidence": 0.0~1.0}
+    // phase=current / trend / forecast (3 step) / strategic = 총 6 step
+  ],
   "confidence": 0.0~1.0,
-  "sources_used": ["CN-..."]
+  "sources_used": ["CN-...", "DART:rcept-..."]
 }
 ```
+
+### 6.5 17 요소 prompt audit table
+
+| # | 요소 | 충족 | 위치 |
+|---|---|---|---|
+| 1 | 역할 정의 | ✅ | "SK AX 경쟁사 분석가" |
+| 2 | 추적 대상 | ✅ | peer_id + SK AX |
+| 5 | 분석 기간 | ✅ | analysis_period strict |
+| 6 | 최신성 | ✅ | KST + 분기 boundary |
+| 8 | 회사별 비교 기준 | ✅ | 매출/영업이익/마진/R&D/Captive |
+| 9 | 변화 감지 기준 | ✅ | ±5/10/30% band |
+| 10 | 수익화 관점 | ✅ | sk_ax_implication 긍정/중립/부정 |
+| 11 | 정량 우선 | ✅ | trend_deltas + forecasts |
+| 12 | 공식 vs 추정 | ✅ | source prefix 강제 |
+| 13 | 전략 시사점 | ✅ | "SK AX ___" 화자 |
+| 14 | 출력 형식 | ✅ | strict JSON schema |
+| 16 | 리스크 분석 | ✅ | forecasts.risk_assumptions |
+| 17 | 반복 추적 | ✅ | follow_up_questions |
+| 3 | 추적 범위 | ⚪ | event_type taxonomy 는 카드가 가지고 옴 |
+| 4 | 정보 출처 우선순위 | 🟡 | Tier1 (DART/IR) > Tier2 명시 권장 |
+| 7 | 단순 요약 금지 | ✅ | 4-phase pattern |
+| 15 | 우선순위 | 🟡 | sk_ax_implication 의 "우선 1 행동" 명시 권장 |
 
 ## 7. LLM 모델 + token 예산
 
@@ -157,3 +300,8 @@ AnalysisState `request_type='peer_compare'` 라우팅.
 ### Changelog
 
 - **v1 (제안, P7)** — LLM 비교 + 5-strategy 라벨
+- **v2 (2026-05-14, 사업전략팀 추가 질의 회신 §4 반영)** — Forecast phase 추가
+  (1Q / 6M / 1Y × 낙관/기준/비관), Trend deltas (산식 자동), CoT
+  reasoning_steps, final_one_liner / sk_ax_implication / follow_up_questions /
+  risk_assumptions / analysis_period. PDF §4 직접 인용 충실 + §5/§6/§8/§9/
+  §11/§13/§16/§17 적용. 17 요소 prompt audit (14/17 충족, 3 권장).

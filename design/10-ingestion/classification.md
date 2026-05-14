@@ -129,6 +129,25 @@ JSON: {"event_type": "..."}
 - `sectors[]` — 가능 후보 (멀티)
 - Frontend 가 `sector` 1개 표시, BriefingService 가 sector-grouped 시 primary 우선
 
+### 6.4 Prompt audit — 02-prompt-design-checklist 17 요소
+
+Classification 은 fallback LLM 만 사용 (키워드 hit 시 LLM skip). 필수 1/2/3/4/6/7/14, 권장 9.
+
+| # | 요소 | 충족 위치 | 비고 |
+|---|---|---|---|
+| **1** | 역할 정의 | LLM prompt 도입부 ← 보강 필요 | 현재: "이 기사가 다음 6 event…" → "당신은 SK AX 사업전략팀의 분류 전문가. 6 event_type 중 정확히 하나만 반환." 로 추가 |
+| **2** | 추적 대상 기업 | input `company` field + companies enum (`src/config/companies.py`) | 4 peer + sk_ax_self enum 사용 |
+| **3** | 추적 범위 | 6 event × 5 sector enum (Literal) | TypedDict 강제 |
+| **4** | 출처 우선순위 | tier1_diversity 산식 (가중치 0.10) + credibility_max (0.30) | 분류 단계에서 출처 가중 적용 |
+| **5** | 분석 기간 | (해당 없음 — 단일 기사) | — |
+| **6** | 최신성 검증 | raw_articles.published_at_kst 사용 (분류 출력에 carry 안 함 ← cluster id 로 carry) | OK |
+| **7** | 단순 뉴스 요약 금지 | event_type taxonomy 강제 (자유형 분류 불가) | 6 enum |
+| **9** | 변화 감지 기준 | exposure_band high/medium/low (0.65/0.40 cutoff) | 산식 |
+| **12** | 공식 vs 추정 구분 | provenance.classification_version='v3.0' + signals dict | 산식 입력값 모두 보존 |
+| **14** | 출력 형식 | ClassifiedCluster TypedDict | 필수 충족 |
+
+→ **9/9 필수 충족**. PDF 반영 후 보강: prompt 도입부에 역할 정의 1문장 추가.
+
 ## 7. LLM 모델 + token 예산
 
 - **모델**: gpt-4o-mini (fallback only — 키워드 매칭 hit 시 skip)

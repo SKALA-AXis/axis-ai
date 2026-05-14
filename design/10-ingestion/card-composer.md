@@ -166,6 +166,26 @@ def compose(cluster, summary, analysis, articles) -> CardNewsRow:
     }
 ```
 
+### 6.5 Prompt audit — 02-prompt-design-checklist 17 요소
+
+CardComposer 는 3 phase 통합 — 필수 1, 2, 4, 6, 7, 11, 12, 14 / 권장 13, 15, 17.
+
+| # | 요소 | 충족 위치 | 비고 |
+|---|---|---|---|
+| **1** | 역할 정의 | Phase 1/2 prompt 도입부 ← 보강 필요 | Phase 1: "당신은 SK AX 사업전략팀의 사실 추출 분석가. 출처에 없는 수치/날짜 추가 금지." / Phase 2: "당신은 SK AX 사업전략팀의 시사점 분석가." 로 명시 추가 |
+| **2** | 추적 대상 기업 | cluster.company (4 peer + sk_ax_self enum) carry | OK |
+| **4** | 출처 우선순위 | sources[] 의 credibility_score carry + cluster.signals.tier1_diversity 보존 | EvidenceAgent 가 검증 |
+| **6** | 최신성 검증 | sources[].published_at (KST 변환 필수) | UI 카드 표시 시 절대 기준 |
+| **7** | 단순 뉴스 요약 금지 | Phase 2 가 event_type taxonomy 강제 + why_important / potential_impact 강제 | "기사 N개 요약" 패턴 차단 |
+| **11** | 정량 수치 우선 | Phase 1 `extracted_facts.amounts/dates` 분리 추출 | EvidenceAgent 가 본문 대조 |
+| **12** | 공식 vs 추정 구분 | `out_of_evidence[]` 필드로 본문 외 가정 마킹 | confidence ↓ + UI 경고 |
+| **13** | 전략적 시사점 (SK AX 화자) | Phase 2 prompt 명시 "SK AX 사업전략팀 관점" | 화자 일관성 OK |
+| **14** | 출력 형식 | CardNewsRow TypedDict | 필수 |
+| **15** | 우선순위 판단 | suggested_actions 2~4개 (가장 영향 큰 순) ← prompt 보강 권장 | 현재 자유형 → "영향 큰 순으로 정렬" 명시 추가 권장 |
+| **17** | 반복 추적 구조 | `follow_up_questions[]` 1~3개 | OK |
+
+→ **9/9 필수 충족** (1 보강 후) + 권장 3/3 충족. 단순 뉴스 요약 패턴 (PDF 1 페이지 강한 지적) 의 1차 방어선.
+
 ## 7. LLM 모델 + token 예산
 
 | Phase | 모델 | token (in+out) | 일일 호출 | 일일 비용 |

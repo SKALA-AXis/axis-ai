@@ -12,6 +12,7 @@
 design/
 ├── README.md                          ← 본 파일 (index)
 ├── 00-supervisor-topology.md          ← 5+1 supervisor 전체 흐름
+├── 02-prompt-design-checklist.md      ← PDF 2026-05-14 17 요소 + CoT 표준 (모든 LLM agent 의 prompt audit 기준)
 │
 ├── 10-ingestion/                      ← @Scheduled 매시간 batch
 │   ├── crawler.md                     ← #1 외부 fetch
@@ -31,12 +32,13 @@ design/
 │   ├── keyword-graph-builder.md       ← Graph nodes/edges
 │   ├── peer-word-cloud.md             ← Peer 별 카테고리 라벨링
 │   ├── search-suggest.md              ← 자동완성 추천
-│   └── derived-metrics.md             ← TopInsight + Trend + MonitoringOverview 통합
+│   └── derived-metrics.md             ← TopInsight + Trend + MonitoringOverview + PeerOverview (4-mode)
 │
 ├── 30-analysis/                       ← user POST request, on-demand
-│   ├── insight-cascade.md             ← 4단계 Cause→Change→Impact→Response
-│   ├── mixer-analysis.md              ← 2~20 카드 cross-card 신호
-│   ├── peer-comparison.md             ← SK AX vs Peer 차별 시사점
+│   ├── insight-cascade.md             ← 4단계 Cause→Change→Impact→Response + CoT
+│   ├── mixer-analysis.md              ← 2~20 카드 cross-card 신호 + CoT
+│   ├── peer-comparison.md             ← SK AX vs Peer 차별 + Forecast (1Q/6M/1Y) + CoT
+│   ├── global-trends.md               ← (신규 2026-05-14) 글로벌 6사 트렌드 → SK AX 영향 매트릭스 + Forecast + CoT
 │   └── link-verification.md           ← URL liveness + diff
 │
 ├── 40-user-query/                     ← user 검색 + chat
@@ -79,21 +81,21 @@ axis-ai agent 설계 *외부* 의 spec 은 `axis-infra/docs/` 가 owner:
 |---|---|---|
 | Ingestion | 11 | 8 top-level node + 3 sub-agent |
 | Enrichment | 5 | 모두 P6 우선순위 |
-| Analysis | 4 | 모두 P7 우선순위 |
+| Analysis | 5 | P7 + global-trends (신규 2026-05-14) |
 | UserQuery | 4 | Search 3 + Dialogue 1 통합 |
 | WeakSignal | 1 | 3-phase 통합 (W7+) |
 | Briefing | 1 | async user-triggered (P7+, V12 briefing_reports) |
 | Cross-cutting (axis-ai 미들웨어만) | 3 | confidence / provenance / token-budget |
-| 구조 / 통합 | 2 | README + topology |
-| **합계 (axis-ai/design/)** | **31** | LangGraph agent 설계 + axis-ai decorator |
+| 구조 / 통합 | 3 | README + topology + prompt-design-checklist (신규 2026-05-14) |
+| **합계 (axis-ai/design/)** | **33** | LangGraph agent 설계 + axis-ai decorator + PDF 17-요소 표준 |
 | (참고) axis-infra/docs 이동분 | +7 | API_SURFACE + AUDIT_LOG + OBSERVABILITY_LANGFUSE + admin/ × 4 |
 
 ### Agent 카운트 (파일 ≠ agent)
 
-- **Top-level agents (production-tier)**: 8 (ingestion) + 5 (enrichment) + 4 (analysis) + 4 (userquery) + 1 (weak-signal) + 1 (briefing) = **23 agent**
+- **Top-level agents (production-tier)**: 8 (ingestion) + 5 (enrichment) + 5 (analysis, +global-trends) + 4 (userquery) + 1 (weak-signal) + 1 (briefing) = **24 agent**
 - **Sub-agents (ingestion 내부)**: financial-linker, ir-parser, embed-index = 3
-- **Middleware (cross-cutting)**: 4 (agent 아님, decorator)
-- 총 25 agent file + 4 middleware file = **29 design 대상 + 4 구조 doc = 33 file**
+- **Middleware (cross-cutting)**: 3 (agent 아님, decorator)
+- 총 27 agent file + 3 middleware file = **30 design 대상 + 3 구조 doc = 33 file**
 
 ## 설계 원칙
 
@@ -132,3 +134,11 @@ axis-ai agent 설계 *외부* 의 spec 은 `axis-infra/docs/` 가 owner:
 - agent 책임 변경 시 해당 agent 파일의 §2 책임 + Changelog 갱신
 - LLM 모델 / token 예산 변경 시 모든 영향받는 agent 파일의 §7 갱신
 - `axis-infra/docs/AI_AGENT_DESIGN.md` 통합 design 과 동기화 — 본 디렉토리가 SoT 가 아니라 상세 design 보강
+- **LLM agent 추가 시** — `02-prompt-design-checklist.md` 17 요소 audit table 을 §6 에 추가 (필수)
+
+## Changelog
+
+- **2026-05-13** — v1 초기 설계 (8 ingestion + 5 enrichment + 4 analysis + 4 userquery + 1 weak + 1 briefing + 3 cross-cutting + 2 구조)
+- **2026-05-14** — PDF 사업전략팀 추가 질의 회신 반영
+  - 신규: `02-prompt-design-checklist.md` (17 요소 + CoT 표준), `30-analysis/global-trends.md` (글로벌 6사 → SK AX 영향)
+  - 갱신: mixer-analysis / insight-cascade / peer-comparison (CoT + final_one_liner + 17 audit) · chat-orchestrator (deep_dive + forecast intent) · derived-metrics (peer_overview mode) · classification / card-composer / relevance / evidence (§6 audit table)

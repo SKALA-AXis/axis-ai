@@ -132,6 +132,20 @@ def attach(card: CardNewsRow, cluster_article_ids: list[int]) -> EvidenceResult:
 - "확실하다 / 반드시 / 분명히" 단정 표현 포함 시 warning flag (현재 manual review 만, 자동 거부 X)
 - 동일 cluster_id 가 이전 cycle 에 이미 evidence_chain row 가지면 UPDATE (ON CONFLICT)
 
+### 6.3 Prompt audit — 02-prompt-design-checklist 17 요소
+
+Evidence 는 LLM 미사용 (산식 + sub-agent 위임). 필수 1, 4, 11, 12, 14.
+
+| # | 요소 | 충족 위치 | 비고 |
+|---|---|---|---|
+| **1** | 역할 정의 | (LLM 미사용) | sub-agent (FinancialLinker/IRParser) 가 자기 prompt 에서 충족 |
+| **4** | 출처 우선순위 | source_links[].credibility_score + tier1_diversity carry | Tier1>Tier2>Tier3 우선 |
+| **11** | 정량 수치 우선 | financial_refs[] segment QoQ/YoY delta + headcount_delta | DART/IR 수치만 carry |
+| **12** | 공식 vs 추정 구분 | provenance.evidence_version='v3.0' + source_links[].source_name 마킹 | DART = 공식, 자체 산식 = 추정 |
+| **14** | 출력 형식 | EvidenceChain TypedDict + pass/missing 필드 | 4종 missing 강제 표면화 |
+
+→ **5/5 필수 충족** (LLM 미사용이라 1번은 sub-agent 가 책임). 환각 방지의 v3 핵심 — checklist 11/12 의 "정량 + 공식 vs 추정" 강제 적용 지점.
+
 ## 7. LLM 모델 + token 예산
 
 - **본 agent: LLM 미사용** — 산식 + sub-agent 위임

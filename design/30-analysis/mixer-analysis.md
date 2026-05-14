@@ -11,15 +11,18 @@
 
 ## 2. 책임
 
-**한 줄**: 2~20 card_news 조합 + 입력 비율 (peer/industry/keyword) 로부터 **cross-card 신호** + **6축 radar 분포** + **연결 관계 (인과/유사)** 추출.
+**한 줄**: 2~20 card_news 조합 + 입력 비율 (peer/industry/keyword) 로부터 **cross-card 신호** + **6축 radar 분포** + **연결 관계 (인과/유사)** 추출 + **CoT reasoning 가시화** + **최종 한 줄 결론** (PDF 2026-05-14 §5 직접 대응).
 
-**구체적**:
+**구체적 (3-phase CoT, single-LLM-call with explicit reasoning_steps)**:
 
-1. 카드 조합 정렬 — exposure_score / event_type / sector 다양성 우선
-2. 반복 신호 추출 (LLM) — 2개 이상 카드에 공통 주제/키워드 식별
-3. 연결 관계 (LLM) — 카드 쌍 간 cause/effect, similarity, contrast 라벨링
-4. 6축 radar score 산식 — Peer Strategic Shift / Tech Investment / Market Position / Partnership Momentum / Regulatory Risk / Talent Movement
-5. 종합 인사이트 1문장 + bullet 3개
+1. **카드 조합 정렬** (산식) — exposure_score / event_type / sector 다양성 우선
+2. **6축 radar score** (산식) — Peer Strategic Shift / Tech Investment / Market Position / Partnership Momentum / Regulatory Risk / Talent Movement
+3. **3-phase CoT LLM** — single gpt-4o call 의 prompt 가 step-by-step thinking 을 명시적으로 `reasoning_steps[]` JSON 으로 출력:
+   - Phase 1: 카드별 핵심 신호 추출 (per-card mini-summary)
+   - Phase 2: cross-card 연결 (pair-wise relation 추론)
+   - Phase 3: 종합 결론 + SK AX 시사점 + **최종 한 줄 결론**
+
+> PDF 피드백 §5 직접 대응 — "에이전트들 간 협업이 어떻게 이뤄졌는지, 구축한 아키텍쳐의 일부가 UI 에 녹여지면". `reasoning_steps[]` 가 frontend 의 expandable panel 로 렌더되어 "추론 과정 보기" 클릭 시 step 별 input → question → answer → conclusion 체인 표시.
 
 ## 3. 책임 NOT
 
@@ -51,18 +54,33 @@ class Connection(TypedDict):
     label: Literal["cause","effect","similar","contrast","reinforce"]
     weight: float
 
+class CoTStep(TypedDict):
+    """PDF 2026-05-14 §5 의 'agent 간 소통 과정 가시화' 직접 대응.
+    Frontend 의 expandable panel 로 렌더. 02-prompt-design-checklist.md §4 표준."""
+    step_idx: int                       # 0부터
+    phase: str                          # "per_card" | "cross_card" | "synthesis"
+    question: str                       # 이 step 의 자기 질문 (≤ 200자)
+    inputs_used: list[str]              # card_id list (해당 step 이 본 카드)
+    answer: str                         # LLM raw response (≤ 500자)
+    intermediate_conclusion: str        # 다음 step 으로 넘어갈 핵심 (≤ 150자)
+    confidence: float
+
 class MixerAnalysisOutput(TypedDict):
     mix_id: str
-    insight: str               # 1문장 종합
+    insight: str               # 1문장 종합 (현행 유지)
+    final_one_liner: str       # PDF §5 — SK AX 관점 한 줄 결론 (≤ 100자, 모호함 금지)
+    sk_ax_implication: str     # PDF §13 — 국내 IT 서비스사 (SK AX) 관점 1~2 문장
     bullet_signals: list[str]  # 3 핵심 신호
     radar_axes: list[RadarAxis]
     connections: list[Connection]
+    reasoning_steps: list[CoTStep]   # PDF §1 / §5 — 5~8 step
+    follow_up_questions: list[str]   # PDF §17 — 다음 분석 제안 (꼬리 물기) 2~3개
     confidence: float
     sources_used: list[str]
     provenance: dict
 ```
 
-frontend `POST /api/mixer` 응답.
+frontend `POST /api/mixer` 응답. 추가 필드 (`reasoning_steps`, `follow_up_questions`, `final_one_liner`, `sk_ax_implication`) 는 PDF 피드백 직접 반영. Mixer UI 가 "추론 과정 보기" / "다음 분석" 버튼으로 노출.
 
 ## 6. 알고리즘
 
@@ -79,34 +97,95 @@ RADAR_AXES = {
 }
 ```
 
-### 6.2 LLM Prompt (gpt-4o)
+### 6.2 LLM Prompt — 3-phase CoT (gpt-4o, single call with explicit reasoning)
+
+PDF 2026-05-14 §5 직접 대응. 단일 LLM call 안에서 step-by-step thinking 을 explicit 하게 출력 (비용 ↓ + UI 노출 ↑).
 
 ```text
-다음 카드 뉴스 {N}개를 함께 보고 분석하라.
+당신은 SK AX 사업전략팀의 멀티 카드 분석 전문가다. 본 task 는 단일 답 생성이 아니라
+*추론 과정 자체를 명시적으로 보여주는 것* — 분석가가 어떻게 결론에 도달했는지 UI 가
+사용자에게 노출한다. 따라서 각 단계의 question / inputs / answer / intermediate_conclusion
+을 정확히 채워라.
 
-[카드 목록]
-{cards_summary}
+[입력]
+- 카드 N건 (peer / event / sector / exposure 다양): {cards_summary}
+- 사용자 비율 (Peer / Industry / Keyword): {ratios}
+- 사용자 컨텍스트: {user_context}
 
-[사용자 입력 비율]
-- Peer: {ratios.peer}
-- Industry: {ratios.industry}
-- Keyword: {ratios.keyword}
+[추론 단계]
 
-[분석 요청]
-1. **종합 인사이트** (1문장, 50자 이내): N건 카드를 관통하는 단일 주제
-2. **핵심 신호 (bullet 3)**: 반복 등장하는 패턴 / 공통점
-3. **연결 관계**: 카드 쌍 간 관계 라벨링 (cause, effect, similar, contrast, reinforce). 최대 10 쌍.
+Phase 1 — per_card (각 카드 1 step):
+  step.question = "이 카드 (CN-XXX) 의 핵심 신호는?"
+  step.inputs_used = ["CN-XXX"]
+  step.answer = 카드의 event_type + 핵심 사실 + 정량 수치 (있으면 "[공식 DART]" 또는 "[기사 인용]" prefix)
+  step.intermediate_conclusion = "카드 X = {one line signal}"
 
-JSON 반환:
+Phase 2 — cross_card (의미 있는 pair 별 1 step, 최대 8 step):
+  step.question = "CN-A 와 CN-B 는 어떻게 연결되는가?"
+  step.inputs_used = ["CN-A", "CN-B"]
+  step.answer = 두 카드의 비교 + 인과 / 유사 / 대조 / 강화 관계 추론
+  step.intermediate_conclusion = "{label}: {evidence}"
+  → connections[] 항목과 1:1 대응
+
+Phase 3 — synthesis (반드시 마지막 step):
+  step.question = "위 단계의 결론을 종합하면 SK AX 가 주목해야 하는 단일 주제는?"
+  step.inputs_used = 모든 card_id
+  step.answer = 종합 reasoning (≤ 500자)
+  step.intermediate_conclusion = 최종 한 줄 결론 (← final_one_liner 와 동일해야 함)
+
+[작성 규칙 — 02-prompt-design-checklist.md 의 17 요소 적용]
+1. (역할) SK AX 사업전략팀 관점만 사용. 일반 분석가 X.
+2. (추적 대상) 카드의 peer 가 4 + 6 글로벌 + SK AX 자체에 한정.
+7. (단순 요약 금지) "기사 X 개 요약" X — event_type / 변화 / 시사점 패턴.
+10. (수익화 관점) "SK AX 매출/마진 영향 = 긍정/중립/부정" 명시.
+11. (정량 수치 우선) "성장 추세" X → "QoQ +12.3%" 형태.
+12. (공식 vs 추정 구분) [공식 DART] / [기사 인용] / [자체 추정] prefix.
+13. (전략 시사점) "삼성SDS 가 X" X → "삼성SDS X 는 SK AX Y 에 ___ 영향".
+15. (우선순위) "다음 3 신호 중 가장 영향 큰 것 1개 선택" 강제.
+17. (반복 추적) follow_up_questions[] 2~3개 — 다음 분석 위한 질문.
+
+[출력 — strict JSON]
 {
-  "insight": "...",
-  "bullet_signals": ["...", "...", "..."],
+  "insight": "1문장 종합 (≤ 50자)",
+  "final_one_liner": "최종 한 줄 결론, SK AX 관점, 모호함 금지 (≤ 100자)",
+  "sk_ax_implication": "국내 IT 서비스사 (SK AX) 관점 1~2 문장. '긍정/중립/부정' 명시",
+  "bullet_signals": ["신호 1", "신호 2", "신호 3"],
   "connections": [
-    {"source_card_id": "CN-...", "target_card_id": "CN-...", "label": "cause", "weight": 0.0~1.0}
+    {"source_card_id": "CN-...", "target_card_id": "CN-...", "label": "cause|effect|similar|contrast|reinforce", "weight": 0.0~1.0}
   ],
+  "reasoning_steps": [
+    {
+      "step_idx": 0,
+      "phase": "per_card|cross_card|synthesis",
+      "question": "...",
+      "inputs_used": ["CN-..."],
+      "answer": "...",
+      "intermediate_conclusion": "...",
+      "confidence": 0.0~1.0
+    }
+    // ... 5~8 step
+  ],
+  "follow_up_questions": ["...", "...", "..."],
   "confidence": 0.0~1.0
 }
 ```
+
+### 6.3 17 요소 prompt audit table
+
+| # | 요소 | 충족 | 위치 |
+|---|---|---|---|
+| 1 | 역할 정의 | ✅ | "SK AX 사업전략팀의 멀티 카드 분석 전문가" |
+| 2 | 추적 대상 | ✅ | "4 peer + 6 글로벌 + SK AX 자체" |
+| 7 | 단순 요약 금지 | ✅ | event_type / 변화 / 시사점 패턴 |
+| 10 | 수익화 관점 | ✅ | sk_ax_implication 의 긍정/중립/부정 |
+| 11 | 정량 우선 | ✅ | "QoQ +X%" 형태 강제 |
+| 12 | 공식 vs 추정 | ✅ | prefix 강제 |
+| 13 | 전략 시사점 | ✅ | "SK AX 의 ___ 에 영향" pattern |
+| 14 | 출력 형식 | ✅ | strict JSON schema |
+| 15 | 우선순위 | ✅ | "다음 3 중 가장 영향" 명시 |
+| 17 | 반복 추적 | ✅ | follow_up_questions |
+| 5, 6, 8, 9 | (적용 권장이나 mixer 는 cross-card 분석이라 시계열 KPI 직접 X) | ⚪ | per-card 카드 본문이 가지고 옴 |
+| 16 | 리스크 분석 | 🟡 | sk_ax_implication 에 "단 X 가정이 틀리면" 포함 권장 |
 
 ## 7. LLM 모델 + token 예산
 
@@ -161,3 +240,7 @@ AnalysisState 에서 `request_type='mixer'` 로 라우팅.
 ### Changelog
 
 - **v1 (제안, P7)** — LLM cross-card + 6축 산식 + connection 라벨링
+- **v2 (2026-05-14, 사업전략팀 추가 질의 회신 반영)** — CoT `reasoning_steps[]` 가시화,
+  `final_one_liner` / `sk_ax_implication` / `follow_up_questions` 추가, 17 요소
+  prompt audit. PDF §1 / §5 / §13 / §15 / §17 직접 대응. 비용 영향 ≤ 10%
+  (single LLM call 내 explicit reasoning, out token ~500 증가).

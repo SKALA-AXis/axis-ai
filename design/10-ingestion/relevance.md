@@ -126,6 +126,21 @@ def route(article, label, score, peers, sectors):
     return "relevant_ids"   # 기본 (news)
 ```
 
+### Stage 4: Prompt audit — 02-prompt-design-checklist 17 요소
+
+Relevance 는 fallback LLM 만 사용 (키워드 hit 시 LLM skip). 필수 1, 2, 4, 7, 14.
+
+| # | 요소 | 충족 위치 | 비고 |
+|---|---|---|---|
+| **1** | 역할 정의 | LLM prompt 도입부 ← 보강 필요 | "당신은 SK AX 사업전략팀의 모니터링 관련성 판정관. 4 peer × 5 sector 기준 외 기사 = irrelevant." 추가 |
+| **2** | 추적 대상 기업 | peer 키워드 사전 + companies enum 4 peer | OK |
+| **3** | 추적 범위 | sector 키워드 사전 5종 | OK |
+| **4** | 출처 우선순위 | (Credibility 가 이미 통과한 row 만 input) | 이전 노드에서 보장 |
+| **7** | 단순 뉴스 요약 금지 | 분류는 enum 3-class (relevant/edge/irrelevant) | 자유형 분류 X |
+| **14** | 출력 형식 | RelevanceOutput TypedDict + relevance_label enum | 필수 |
+
+→ **6/6 필수 충족** (1 보강 후). Edge case → ClassificationAgent 가 receive 후 정밀 분류.
+
 ## 7. LLM 모델 + token 예산
 
 - **모델**: gpt-4o-mini (zero-shot classification 충분)
