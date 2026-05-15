@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
 from src.api.mixer_schemas import MixerAnalysisRequest, MixerAnalysisResponse
+from src.api.peer_comparison_schemas import PeerComparisonRequest, PeerComparisonResponse
 from src.schemas import (
     BriefingContent,
     BriefingRequest,
@@ -290,6 +291,25 @@ async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
         user_context=request.user_context,
     )
     return MixerAnalysisResponse.model_validate(result)
+
+
+@app.post("/peer/compare", response_model=PeerComparisonResponse)
+async def compare_peer(request: PeerComparisonRequest) -> PeerComparisonResponse:
+    """PeerComparison — Phase 1 (Current) + Phase 2 (Trend) + Phase 4 (Strategic).
+
+    design: ``axis-ai/design/30-analysis/peer-comparison.md``. Walking Skeleton
+    phase 2 prototype — Phase 3 (Forecast) 는 Day 90+ deferred. trend_deltas 는
+    peer_financials 기반 deterministic 계산, current/strategic 만 LLM 단일 호출.
+    """
+    from src.agents.peer_comparison_agent import PeerComparisonAgent
+
+    log.info("PeerCompare 요청 | peer_id=%s window=%d", request.peer_id, request.window_days)
+    result = await PeerComparisonAgent().compare(
+        peer_id=request.peer_id,
+        window_days=request.window_days,
+        focus_sector=request.focus_sector,
+    )
+    return PeerComparisonResponse.model_validate(result)
 
 
 @app.post("/weak-signal/run")
