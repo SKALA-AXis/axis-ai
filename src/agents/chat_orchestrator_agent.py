@@ -35,7 +35,7 @@ from typing import Any
 
 from langchain_openai import ChatOpenAI
 
-from src.observability.langfuse_client import tracing_config
+from src.observability.langfuse_client import tracing_config, with_session
 
 log = logging.getLogger(__name__)
 
@@ -241,16 +241,19 @@ class ChatOrchestratorAgent:
         history = history or []
         trace = TraceBuilder()
 
-        # ── Phase 1: Intent classification
-        intent_result = await self._classify(message, history, trace)
-        intent = intent_result.get("intent", "smalltalk")
-        entities = intent_result.get("entities") or {}
+        # Langfuse Sessions — 같은 contextvar scope 안의 모든 LLM trace (sub-agent
+        # 포함) 가 같은 session_id 로 grouped. asyncio.gather 도 contextvar 전파.
+        with with_session(session_id):
+            # ── Phase 1: Intent classification
+            intent_result = await self._classify(message, history, trace)
+            intent = intent_result.get("intent", "smalltalk")
+            entities = intent_result.get("entities") or {}
 
-        # ── Phase 2: Sub-agent dispatch (single or multi)
-        sub_result = await self._dispatch(intent, message, entities, trace)
+            # ── Phase 2: Sub-agent dispatch (single or multi)
+            sub_result = await self._dispatch(intent, message, entities, trace)
 
-        # ── Phase 3: Compose
-        reply = await self._compose(message, intent, sub_result, trace)
+            # ── Phase 3: Compose
+            reply = await self._compose(message, intent, sub_result, trace)
 
         follow_ups = _generate_follow_ups(intent, sub_result)
         confidence = float(intent_result.get("confidence") or 0.0)

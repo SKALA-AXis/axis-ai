@@ -39,10 +39,18 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
+
+# Langfuse Sessions / Users — ChatOrchestrator 등에서 set 하면 같은 contextvar 안의
+# 모든 tracing_config() 호출 (sub-agent 포함) 이 자동 pickup. asyncio task 도
+# contextvar 를 그대로 전파.
+_session_id_var: ContextVar[str | None] = ContextVar("axis_session_id", default=None)
+_user_id_var: ContextVar[str | None] = ContextVar("axis_user_id", default=None)
 
 log = logging.getLogger(__name__)
 
@@ -143,6 +151,8 @@ def tracing_config(
     phase: str | None = None,
     prompt_version: str | None = None,
     request_id: str | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
     **extra_metadata: Any,
 ) -> RunnableConfig:
     """LangChain config builder — callbacks + metadata + tags.
@@ -152,6 +162,9 @@ def tracing_config(
         phase: multi-phase agent 의 step (예: "summarize" / "analyze" / "compose")
         prompt_version: prompt_version 상수 (각 agent 가 보유)
         request_id: BE 가 X-Request-Id 헤더로 전달한 UUID (있으면)
+        session_id: Langfuse Sessions — 같은 session_id 의 trace 들을 한 묶음으로
+            grouping (ChatOrchestrator 의 conversation session 등).
+        user_id: Langfuse Users — 사용자별 token spend / latency 추적용.
         **extra_metadata: cluster_id / peer_id / card_id 등 자유 metadata
 
     Returns:
@@ -168,6 +181,15 @@ def tracing_config(
         metadata["prompt_version"] = prompt_version
     if request_id:
         metadata["request_id"] = request_id
+    # contextvar fallback — chat orchestrator 등에서 with_session() 으로 set 했으면
+    # 같은 task 안의 sub-agent tracing_config 도 자동으로 같은 session_id 사용
+    session_id = session_id or _session_id_var.get()
+    user_id = user_id or _user_id_var.get()
+    # Langfuse 의 magic prefix — session_id / user_id 는 trace 의 top-level field 로 hoist
+    if session_id:
+        metadata["langfuse_session_id"] = session_id
+    if user_id:
+        metadata["langfuse_user_id"] = user_id
     metadata.update(extra_metadata)
 
     handler = get_langfuse_handler()
@@ -222,3 +244,36 @@ def flush() -> None:
         get_client().flush()
     except Exception as e:
         log.debug("Langfuse flush 실패 (무시): %s", e)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sessions / Users — contextvar 기반 propagation
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@contextmanager
+def with_session(session_id: str | None, user_id: str | None = None):
+    """ChatOrchestrator 등에서 conversation 시작 시 wrap.
+
+    같은 contextvar scope 안의 모든 ``tracing_config()`` 호출 (sub-agent 포함) 이
+    자동으로 같은 session_id / user_id 를 Langfuse trace 의 top-level field 로 hoist.
+
+    Example::
+
+        async def chat(self, message, session_id, user_id=None):
+            with with_session(session_id, user_id):
+                # 여기서부터 IntentRouter / 5 sub-agent / Compose 모든 LLM 호출이
+                # 같은 session 으로 grouped
+                intent = await self._classify(...)
+                sub = await self._dispatch(...)
+                reply = await self._compose(...)
+    """
+    session_token = _session_id_var.set(session_id) if session_id else None
+    user_token = _user_id_var.set(user_id) if user_id else None
+    try:
+        yield
+    finally:
+        if session_token is not None:
+            _session_id_var.reset(session_token)
+        if user_token is not None:
+            _user_id_var.reset(user_token)
