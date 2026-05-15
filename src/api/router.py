@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
 from src.schemas import (
     BriefingContent,
     BriefingRequest,
@@ -247,6 +248,26 @@ async def gen_search(request: GenSearchRequest):
         sc_passed=False,
         sc_score=0.0,
     )
+
+
+@app.post("/insight/generate", response_model=InsightGenerateResponse)
+async def generate_insight(request: InsightGenerateRequest) -> InsightGenerateResponse:
+    """InsightCascade — 4-phase + Synthesis CoT 분석.
+
+    design: ``axis-ai/design/30-analysis/insight-cascade.md``. Walking Skeleton
+    phase 2 prototype — cold-start fallback 만 활성 (ContextPack 미주입).
+
+    LLM ~1 호출 (gpt-4o, ~3K tokens). 분석 결과는 ``@with_ledger_writeback`` 으로
+    ``analysis_ledger`` 에 자동 INSERT — 다음 분석 호출 시 carry-over.
+    """
+    from src.agents.insight_cascade_agent import InsightCascadeAgent
+
+    log.info("Insight 요청 | card_ids=%s", request.card_ids)
+    result = await InsightCascadeAgent().generate(
+        card_ids=request.card_ids,
+        context=request.context,
+    )
+    return InsightGenerateResponse.model_validate(result)
 
 
 @app.post("/weak-signal/run")
