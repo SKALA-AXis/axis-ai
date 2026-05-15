@@ -51,6 +51,28 @@ class Connection(BaseModel):
     target_card_id: str = ""
     label: Literal["cause", "effect", "similar", "contrast", "reinforce"] = "similar"
     weight: float = 1.0
+    reason: str = ""  # v2: 왜 이 연결이 non-obvious 인지 (≤ 60자)
+
+
+class CrossCardFinding(BaseModel):
+    """v2 신규 — 카드들을 함께 봐야 보이는 비명백한 발견.
+
+    bullet_signals 와 분리: bullet_signals 가 cross-card 'signal' 이라면 본 필드는
+    'finding' (의미 해석). pattern_type 으로 발견의 성격 분류.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    finding: str = ""
+    evidence_card_ids: list[str] = Field(default_factory=list)
+    pattern_type: Literal[
+        "convergent_strategy",
+        "divergent_strategy",
+        "gap_in_market",
+        "acceleration_signal",
+        "timing_mismatch",
+        "market_baseline",
+    ] = "convergent_strategy"
 
 
 class ReasoningTrailItem(BaseModel):
@@ -88,6 +110,7 @@ class MixerAnalysisResponse(BaseModel):
     bullet_signals: list[str] = Field(default_factory=list)
     radar_axes: list[RadarAxis] = Field(default_factory=list)
     connections: list[Connection] = Field(default_factory=list)
+    cross_card_findings: list[CrossCardFinding] = Field(default_factory=list)
 
     reasoning_trail: list[ReasoningTrailItem] = Field(default_factory=list)
     reasoning_steps: list[CoTStep] = Field(default_factory=list)
