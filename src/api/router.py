@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.global_trends_schemas import GlobalTrendsRequest, GlobalTrendsResponse
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
+from src.api.link_verification_schemas import LinkVerificationRequest, LinkVerificationResponse
 from src.api.mixer_schemas import MixerAnalysisRequest, MixerAnalysisResponse
 from src.api.peer_comparison_schemas import PeerComparisonRequest, PeerComparisonResponse
 from src.schemas import (
@@ -335,6 +336,21 @@ async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsRespons
         sk_ax_business_lines=request.sk_ax_business_lines,
     )
     return GlobalTrendsResponse.model_validate(result)
+
+
+@app.post("/link/verify", response_model=LinkVerificationResponse)
+async def verify_link(request: LinkVerificationRequest) -> LinkVerificationResponse:
+    """LinkVerification — 카드 source URL 들의 HTTP HEAD 검증 + 옵션 GET hash diff.
+
+    design: ``axis-ai/design/30-analysis/link-verification.md``. Walking Skeleton
+    phase 2 prototype — deterministic, LLM 미사용. ``link_verification_logs``
+    테이블 저장은 Day 90+ 후속 작업.
+    """
+    from src.agents.link_verification_agent import LinkVerificationAgent
+
+    log.info("LinkVerify 요청 | card_id=%s", request.card_id)
+    result = await LinkVerificationAgent().verify(card_id=request.card_id)
+    return LinkVerificationResponse.model_validate(result)
 
 
 @app.post("/weak-signal/run")
