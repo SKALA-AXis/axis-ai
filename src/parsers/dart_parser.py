@@ -792,7 +792,9 @@ def _build_subsection_tree(raw_section_text: str, section_title: str) -> list[di
 
 
 def _same_heading(left: str, right: str) -> bool:
-    normalize = lambda value: re.sub(r"\s+", "", value or "")
+    def normalize(value: str) -> str:
+        return re.sub(r"\s+", "", value or "")
+
     return normalize(left) == normalize(right)
 
 
