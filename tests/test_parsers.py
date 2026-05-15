@@ -113,6 +113,102 @@ def test_dart_parser_parses_dart_statement_table_amounts() -> None:
     assert parsed["operating_profit_krwbn"] == 9571.02744609
 
 
+def test_dart_parser_builds_section_tree_for_late_sections() -> None:
+    article = RawArticle(
+        url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260310000001",
+        title="사업보고서 (2025.12)",
+        content=(
+            "I. 회사의 개요\n"
+            "1. 회사의 개요\n"
+            "가. 회사의 법적ㆍ상업적 명칭\n"
+            "회사의 명칭은 테스트 주식회사입니다.\n"
+            "II. 사업의 내용\n"
+            "1. 사업의 개요\n"
+            "클라우드와 AI 사업을 영위합니다.\n"
+            "XII. 상세표\n"
+            "1. 연결대상 종속회사 현황(상세)\n"
+            "상세표 본문입니다.\n"
+            "전문가의 확인\n"
+            "1. 전문가의 확인\n"
+            "전문가 확인 본문입니다."
+        ),
+        source_name="dart",
+        published_at=datetime(2026, 3, 10),
+        peer_id="test_peer",
+        source_type="dart",
+        content_type="api",
+        extra={
+            "rcept_no": "20260310000001",
+            "report_name": "사업보고서 (2025.12)",
+            "document_fetched": True,
+        },
+    )
+
+    parsed = DartParser().parse_article(article)
+
+    assert "detailed_tables" in parsed["sections"]
+    assert "expert_confirmation" in parsed["sections"]
+    section_keys = [node["section_key"] for node in parsed["section_tree"]]
+    assert section_keys == [
+        "company_overview",
+        "business",
+        "detailed_tables",
+        "expert_confirmation",
+    ]
+    assert parsed["section_tree"][0]["children"][0]["children"][0]["title"] == (
+        "회사의 법적ㆍ상업적 명칭"
+    )
+
+
+def test_dart_parser_classifies_and_normalizes_financial_statement_tables() -> None:
+    article = RawArticle(
+        url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260310000002",
+        title="사업보고서 (2025.12)",
+        content="III. 재무에 관한 사항\n1. 요약재무정보\n연결 포괄손익계산서",
+        source_name="dart",
+        published_at=datetime(2026, 3, 10),
+        peer_id="test_peer",
+        source_type="dart",
+        content_type="api",
+        extra={
+            "rcept_no": "20260310000002",
+            "report_name": "사업보고서 (2025.12)",
+            "document_fetched": True,
+            "tables": [
+                {
+                    "table_index": 3,
+                    "title": "연결 포괄손익계산서",
+                    "row_count": 4,
+                    "column_count": 3,
+                    "rows": [
+                        ["과 목", "제 41 (당) 기", "제 40 (전) 기"],
+                        ["매출액", "13,929,868", "13,828,232"],
+                        ["영업이익", "957,102", "911,096"],
+                        ["당기순이익", "730,000", "700,000"],
+                    ],
+                    "text": (
+                        "연결 포괄손익계산서 (단위: 백만원)\n"
+                        "매출액 | 13,929,868 | 13,828,232\n"
+                        "영업이익 | 957,102 | 911,096\n"
+                        "당기순이익 | 730,000 | 700,000"
+                    ),
+                }
+            ],
+        },
+    )
+
+    parsed = DartParser().parse_article(article)
+
+    assert parsed["classified_tables"][0]["table_type"] == "income_statement"
+    assert parsed["classified_tables"][0]["statement_scope"] == "consolidated"
+    statement = parsed["financial_statements"][0]
+    assert statement["table_type"] == "income_statement"
+    assert statement["unit"] == "백만원"
+    rows_by_metric = {row["metric_key"]: row for row in statement["rows"]}
+    assert rows_by_metric["revenue_total"]["current_value_krwbn"] == 139298.68
+    assert rows_by_metric["operating_profit"]["current_value_krwbn"] == 9571.02
+
+
 def test_dart_parser_extracts_event_disclosure_fields_for_share_buyback() -> None:
     article = RawArticle(
         url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20250828000123",
