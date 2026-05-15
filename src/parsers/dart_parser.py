@@ -716,18 +716,22 @@ def _extract_section_tree(text: str) -> list[dict[str, Any]]:
     anchors = _major_section_anchors(text)
     if not anchors:
         cleaned = _clean_section_text(text)
-        return [
-            {
-                "section_key": "unclassified",
-                "section_title": "분류되지 않은 본문",
-                "section_order": 0,
-                "label": None,
-                "level": 0,
-                "text_chars": len(cleaned),
-                "snippet": cleaned[:1200],
-                "children": [],
-            }
-        ] if cleaned else []
+        return (
+            [
+                {
+                    "section_key": "unclassified",
+                    "section_title": "분류되지 않은 본문",
+                    "section_order": 0,
+                    "label": None,
+                    "level": 0,
+                    "text_chars": len(cleaned),
+                    "snippet": cleaned[:1200],
+                    "children": [],
+                }
+            ]
+            if cleaned
+            else []
+        )
 
     tree: list[dict[str, Any]] = []
     for index, anchor in enumerate(anchors):
