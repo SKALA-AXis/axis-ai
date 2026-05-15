@@ -5,6 +5,7 @@ from src.parsers.ir_parser import IRParser
 from src.parsers.parser_quality import analyze_parser_quality_article
 from src.parsers.parser_router import DocumentParserRouter
 from src.crawler.base import RawArticle
+from src.crawler.sources.dart import _infer_header_rows
 
 
 def test_ir_parser_parses_ir_crawler_article() -> None:
@@ -207,6 +208,63 @@ def test_dart_parser_classifies_and_normalizes_financial_statement_tables() -> N
     rows_by_metric = {row["metric_key"]: row for row in statement["rows"]}
     assert rows_by_metric["revenue_total"]["current_value_krwbn"] == 139298.68
     assert rows_by_metric["operating_profit"]["current_value_krwbn"] == 9571.02
+    revenue_candidate = {
+        candidate["type"]: candidate for candidate in parsed["candidates"]
+    }["revenue_total"]
+    assert revenue_candidate["source"] == "structured_table"
+    assert revenue_candidate["unit"] == "백만원"
+    assert revenue_candidate["value_krw"] == 13929868000000.0
+    assert revenue_candidate["confidence"] >= 0.9
+    assert parsed["financial_record"]["metric_details"]["revenue_total"]["table_index"] == 3
+    assert any(
+        fact["fact_type"] == "financial_metric" and fact["metric"] == "revenue_total"
+        for fact in parsed["analysis_facts"]
+    )
+
+
+def test_dart_parser_enriches_topic_chunks_for_agent_analysis() -> None:
+    article = RawArticle(
+        url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260310000003",
+        title="사업보고서 (2025.12)",
+        content=(
+            "II. 사업의 내용\n"
+            "1. 사업의 개요\n"
+            "회사는 클라우드, 생성형 AI, AI 플랫폼 기반의 AX 사업을 확대하고 있습니다. "
+            "제조 AX와 스마트팩토리 고객 사례를 중심으로 서비스를 고도화합니다. "
+            "반복 업무 자동화와 보안 운영 최적화도 추진합니다."
+        ),
+        source_name="dart",
+        published_at=datetime(2026, 3, 10),
+        peer_id="test_peer",
+        source_type="dart",
+        content_type="api",
+        extra={
+            "rcept_no": "20260310000003",
+            "report_name": "사업보고서 (2025.12)",
+            "document_fetched": True,
+        },
+    )
+
+    parsed = DartParser().parse_article(article)
+
+    chunk = parsed["document_chunks"][0]
+    assert chunk["peer_id"] == "test_peer"
+    assert chunk["period"] == "2025Q4"
+    assert chunk["rcept_no"] == "20260310000003"
+    assert "생성형 AI" in chunk["matched_keywords"]
+    assert any(
+        fact["fact_type"] == "business_context" and fact["topic"] == "ax"
+        for fact in parsed["analysis_facts"]
+    )
+
+
+def test_dart_structured_table_header_inference_keeps_period_headers() -> None:
+    rows = [
+        ["과 목", "제 41 (당) 기", "제 40 (전) 기"],
+        ["매출액", "13,929,868", "13,828,232"],
+    ]
+
+    assert _infer_header_rows(rows) == [["과 목", "제 41 (당) 기", "제 40 (전) 기"]]
 
 
 def test_dart_parser_extracts_event_disclosure_fields_for_share_buyback() -> None:

@@ -699,6 +699,7 @@ def _looks_like_structured_table_candidate(table_markup: str) -> bool:
 
 def _structured_table(table: Tag, idx: int, filename: str) -> dict | None:
     rows: list[list[str]] = []
+    cells: list[dict] = []
     max_rows = int(
         os.getenv("DART_MAX_STRUCTURED_TABLE_ROWS", str(DEFAULT_MAX_STRUCTURED_TABLE_ROWS))
     )
@@ -709,15 +710,32 @@ def _structured_table(table: Tag, idx: int, filename: str) -> dict | None:
     caption = table.find("caption")
     title = caption.get_text(" ", strip=True) if caption else ""
 
-    for tr in table.find_all("tr")[:max_rows]:
-        cells = tr.find_all(["th", "td"])[:max_cols]
-        values = [_normalize_cell_text(cell.get_text(" ", strip=True)) for cell in cells]
+    for row_index, tr in enumerate(table.find_all("tr")[:max_rows]):
+        row_cells = tr.find_all(["th", "td"])[:max_cols]
+        values = [_normalize_cell_text(cell.get_text(" ", strip=True)) for cell in row_cells]
         values = [value for value in values if value]
         if values:
             rows.append(values)
+        for col_index, cell in enumerate(row_cells):
+            text = _normalize_cell_text(cell.get_text(" ", strip=True))
+            if not text:
+                continue
+            cells.append(
+                {
+                    "row_index": row_index,
+                    "column_index": col_index,
+                    "tag": cell.name,
+                    "text": text,
+                    "rowspan": _safe_int(cell.get("rowspan"), default=1),
+                    "colspan": _safe_int(cell.get("colspan"), default=1),
+                }
+            )
 
     if not rows:
         return None
+
+    header_rows = _infer_header_rows(rows)
+    column_headers = _infer_column_headers(header_rows, max((len(row) for row in rows), default=0))
 
     return {
         "table_index": idx,
@@ -725,7 +743,10 @@ def _structured_table(table: Tag, idx: int, filename: str) -> dict | None:
         "title": title,
         "row_count": len(rows),
         "column_count": max((len(row) for row in rows), default=0),
+        "header_rows": header_rows,
+        "column_headers": column_headers,
         "rows": rows,
+        "cells": cells[: max_rows * max_cols],
         "text": "\n".join(" | ".join(row) for row in rows)[:12000],
     }
 
@@ -746,6 +767,50 @@ def _table_to_text(table: Tag) -> str:
 
 def _normalize_cell_text(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
+
+
+def _safe_int(value: object, default: int = 1) -> int:
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _infer_header_rows(rows: list[list[str]]) -> list[list[str]]:
+    header_rows: list[list[str]] = []
+    for row in rows[:3]:
+        joined = " ".join(row)
+        has_amount = bool(re.search(r"(?:\d{1,3}(?:,\d{3})+|\d{5,})(?:\.\d+)?", joined))
+        has_header_token = any(
+            token in joined
+            for token in ("과목", "구분", "계정", "제 ", "당기", "전기", "분기", "누적", "연결")
+        )
+        if has_header_token and not has_amount:
+            header_rows.append(row)
+            continue
+        if header_rows and has_header_token:
+            header_rows.append(row)
+            continue
+        break
+    return header_rows
+
+
+def _infer_column_headers(header_rows: list[list[str]], column_count: int) -> list[str]:
+    if not header_rows or column_count <= 0:
+        return []
+
+    headers: list[str] = []
+    for column_index in range(column_count):
+        parts: list[str] = []
+        for row in header_rows:
+            if column_index >= len(row):
+                continue
+            value = row[column_index]
+            if value and value not in parts:
+                parts.append(value)
+        headers.append(" / ".join(parts))
+    return headers
 
 
 def _max_structured_tables() -> int:
