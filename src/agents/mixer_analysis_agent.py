@@ -22,6 +22,15 @@ import uuid
 from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
+from src.agents._validation_helpers import (
+    cap_reasoning_steps,
+    cap_reasoning_trail,
+    clip_final_one_liner,
+    clip_implication,
+    clip_string,
+    confidence_in_range,
+    dedup_and_cap,
+)
 from src.db.postgres import SessionLocal
 from src.middleware.analysis_ledger import with_ledger_writeback
 from src.observability.langfuse_client import tracing_config
@@ -427,17 +436,19 @@ def _parse_and_validate(
     if not isinstance(data, dict):
         return _error_response("응답 형식 오류", "JSON object 가 아님", card_ids, confidence=0.0)
 
-    data.setdefault("insight", "")
-    data.setdefault("final_one_liner", "")
-    data.setdefault("sk_ax_implication", "")
     data.setdefault("bullet_signals", [])
     data.setdefault("connections", [])
-    data.setdefault("reasoning_trail", [])
-    data.setdefault("reasoning_steps", [])
     data.setdefault("follow_up_questions", [])
-    data.setdefault("confidence", 0.0)
-    data.setdefault("sources_used", [c["id"] for c in cards])
     data.setdefault("radar_axes", [])
+
+    # design 제약 강제
+    data["insight"] = clip_string(data.get("insight", ""), 200)
+    data["final_one_liner"] = clip_final_one_liner(data.get("final_one_liner", ""))
+    data["sk_ax_implication"] = clip_implication(data.get("sk_ax_implication", ""))
+    data["reasoning_trail"] = cap_reasoning_trail(data.get("reasoning_trail", []))
+    data["reasoning_steps"] = cap_reasoning_steps(data.get("reasoning_steps", []))
+    data["confidence"] = confidence_in_range(data.get("confidence", 0.0))
+    data["sources_used"] = dedup_and_cap(data.get("sources_used") or [c["id"] for c in cards])
 
     peer_set: list[str] = []
     seen: set[str] = set()
