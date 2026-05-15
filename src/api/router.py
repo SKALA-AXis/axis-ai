@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.global_trends_schemas import GlobalTrendsRequest, GlobalTrendsResponse
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
 from src.api.mixer_schemas import MixerAnalysisRequest, MixerAnalysisResponse
 from src.api.peer_comparison_schemas import PeerComparisonRequest, PeerComparisonResponse
@@ -310,6 +311,30 @@ async def compare_peer(request: PeerComparisonRequest) -> PeerComparisonResponse
         focus_sector=request.focus_sector,
     )
     return PeerComparisonResponse.model_validate(result)
+
+
+@app.post("/global/trends/run", response_model=GlobalTrendsResponse)
+async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsResponse:
+    """GlobalTrends — Phase 1+2 (산식) + Phase 3+4+5 (LLM 단일 호출).
+
+    design: ``axis-ai/design/30-analysis/global-trends.md``. Walking Skeleton
+    phase 2 prototype — 글로벌 카드 부재 시 (현재 ingestion 4 Korean peer only)
+    graceful 빈 응답 + warning 반환.
+    """
+    from src.agents.global_trends_agent import GlobalTrendsAgent
+
+    log.info(
+        "GlobalTrends 요청 | companies=%s window=%d",
+        request.company_ids,
+        request.window_days,
+    )
+    result = await GlobalTrendsAgent().run(
+        company_ids=request.company_ids,
+        focus_themes=request.focus_themes,
+        window_days=request.window_days,
+        sk_ax_business_lines=request.sk_ax_business_lines,
+    )
+    return GlobalTrendsResponse.model_validate(result)
 
 
 @app.post("/weak-signal/run")
