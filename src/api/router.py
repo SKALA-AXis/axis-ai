@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.chat_orchestrator_schemas import ChatTurnRequest, ChatTurnResponse
 from src.api.global_trends_schemas import GlobalTrendsRequest, GlobalTrendsResponse
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
 from src.api.link_verification_schemas import LinkVerificationRequest, LinkVerificationResponse
@@ -351,6 +352,25 @@ async def verify_link(request: LinkVerificationRequest) -> LinkVerificationRespo
     log.info("LinkVerify 요청 | card_id=%s", request.card_id)
     result = await LinkVerificationAgent().verify(card_id=request.card_id)
     return LinkVerificationResponse.model_validate(result)
+
+
+@app.post("/chat", response_model=ChatTurnResponse)
+async def chat_turn(request: ChatTurnRequest) -> ChatTurnResponse:
+    """ChatOrchestrator — intent 분류 + 분석 agent 라우팅 + compose.
+
+    design: ``axis-ai/design/40-user-query/chat-orchestrator.md``. Walking Skeleton
+    phase 2 prototype — Intent Router (gpt-4o-mini) → sub-agent (insight/mixer/peer/
+    global/link) → Compose (gpt-4o-mini). deep_dive / search / summary 는 Day 90+ deferred.
+    """
+    from src.agents.chat_orchestrator_agent import ChatOrchestratorAgent
+
+    log.info("Chat 요청 | session=%s message=%s", request.session_id, request.message[:80])
+    result = await ChatOrchestratorAgent().chat(
+        message=request.message,
+        session_id=request.session_id,
+        history=request.history,
+    )
+    return ChatTurnResponse.model_validate(result)
 
 
 @app.post("/weak-signal/run")
