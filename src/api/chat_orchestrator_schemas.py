@@ -54,8 +54,8 @@ class FollowUpSuggestion(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    label: str
-    intent: IntentEnum
+    label: str = ""
+    intent: IntentEnum = "insight"
     deep_dive: bool = False
     topic_anchor: Optional[str] = None
     lens: Optional[Literal["technical", "financial", "competitive", "regulatory", "customer"]] = (
@@ -72,9 +72,9 @@ class AgentTraceStep(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    step_idx: int
-    agent: str  # "IntentRouter" | "PeerComparisonAgent" | "ChatOrchestrator" | ...
-    phase: str  # "classify" | "fetch_cards" | "compute_deltas" | "llm_analyze" | ...
+    step_idx: int = 0
+    agent: str = ""  # "IntentRouter" | "PeerComparisonAgent" | "ChatOrchestrator" | ...
+    phase: str = ""  # "classify" | "fetch_cards" | "compute_deltas" | "llm_analyze" | ...
     status: Literal["pending", "running", "completed", "failed", "skipped"] = "completed"
     started_at: Optional[str] = None  # ISO8601
     ended_at: Optional[str] = None
