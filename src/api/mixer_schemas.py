@@ -39,26 +39,26 @@ class RadarAxis(BaseModel):
         "partnership_momentum",
         "regulatory_risk",
         "talent_movement",
-    ]
-    score: float
+    ] = "peer_strategic_shift"
+    score: float = 0.0
     explanation: str = ""
 
 
 class Connection(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    source_card_id: str
-    target_card_id: str
-    label: Literal["cause", "effect", "similar", "contrast", "reinforce"]
+    source_card_id: str = ""
+    target_card_id: str = ""
+    label: Literal["cause", "effect", "similar", "contrast", "reinforce"] = "similar"
     weight: float = 1.0
 
 
 class ReasoningTrailItem(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    seq: int
-    label: str
-    one_liner: str
+    seq: int = 0
+    label: str = ""
+    one_liner: str = ""
     evidence_refs: list[str] = Field(default_factory=list)
     langfuse_observation_id: Optional[str] = None
 
@@ -66,13 +66,13 @@ class ReasoningTrailItem(BaseModel):
 class CoTStep(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    step_idx: int
-    phase: Literal["per_card", "cross_card", "synthesis"]
-    question: str
+    step_idx: int = 0
+    phase: Literal["per_card", "cross_card", "synthesis"] = "synthesis"
+    question: str = ""
     inputs_used: list[str] = Field(default_factory=list)
-    answer: str
-    intermediate_conclusion: str
-    confidence: float
+    answer: str = ""
+    intermediate_conclusion: str = ""
+    confidence: float = 0.0
     langfuse_observation_id: Optional[str] = None
 
 

@@ -28,6 +28,15 @@ from typing import Any
 from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
+from src.agents._validation_helpers import (
+    cap_reasoning_steps,
+    cap_reasoning_trail,
+    clip_final_one_liner,
+    clip_implication,
+    confidence_in_range,
+    dedup_and_cap,
+    normalize_strategy_label,
+)
 from src.db.postgres import SessionLocal
 from src.middleware.analysis_ledger import with_ledger_writeback
 from src.observability.langfuse_client import tracing_config
@@ -487,18 +496,20 @@ def _parse_and_validate(content: str, cards: list[dict], peer_id: str) -> dict:
             peer_id, "응답 형식 오류", "JSON object 가 아님", [c["id"] for c in cards]
         )
 
-    data.setdefault("strategy_label", "")
     data.setdefault("differentiators", [])
     data.setdefault("strengths_of_peer", [])
     data.setdefault("weaknesses_of_peer", [])
     data.setdefault("collaboration_potential", [])
-    data.setdefault("sk_ax_implication", "")
-    data.setdefault("final_one_liner", "")
     data.setdefault("follow_up_questions", [])
-    data.setdefault("reasoning_trail", [])
-    data.setdefault("reasoning_steps", [])
-    data.setdefault("confidence", 0.0)
-    data.setdefault("sources_used", [c["id"] for c in cards])
+
+    # design 제약 강제 — strategy_label 5종 enum + 길이 / step / confidence
+    data["strategy_label"] = normalize_strategy_label(data.get("strategy_label", ""))
+    data["final_one_liner"] = clip_final_one_liner(data.get("final_one_liner", ""))
+    data["sk_ax_implication"] = clip_implication(data.get("sk_ax_implication", ""))
+    data["reasoning_trail"] = cap_reasoning_trail(data.get("reasoning_trail", []))
+    data["reasoning_steps"] = cap_reasoning_steps(data.get("reasoning_steps", []))
+    data["confidence"] = confidence_in_range(data.get("confidence", 0.0))
+    data["sources_used"] = dedup_and_cap(data.get("sources_used") or [c["id"] for c in cards])
     data["peer_id"] = peer_id
     data["peer_ids"] = [peer_id]
 

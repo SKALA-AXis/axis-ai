@@ -24,6 +24,14 @@ from datetime import UTC, datetime, timedelta
 from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
+from src.agents._validation_helpers import (
+    cap_reasoning_steps,
+    cap_reasoning_trail,
+    clip_final_one_liner,
+    clip_implication,
+    confidence_in_range,
+    dedup_and_cap,
+)
 from src.db.postgres import SessionLocal
 from src.middleware.analysis_ledger import with_ledger_writeback
 from src.observability.langfuse_client import tracing_config
@@ -519,14 +527,16 @@ def _parse_and_validate(content: str, all_cards: list[dict], companies: list[str
 
     data.setdefault("impact_matrix", [])
     data.setdefault("forecasts", [])
-    data.setdefault("final_one_liner", "")
-    data.setdefault("sk_ax_implication", "")
     data.setdefault("follow_up_questions", [])
     data.setdefault("risk_assumptions", [])
-    data.setdefault("reasoning_trail", [])
-    data.setdefault("reasoning_steps", [])
-    data.setdefault("confidence", 0.0)
-    data.setdefault("sources_used", [c["id"] for c in all_cards])
+
+    # design 제약 강제
+    data["final_one_liner"] = clip_final_one_liner(data.get("final_one_liner", ""))
+    data["sk_ax_implication"] = clip_implication(data.get("sk_ax_implication", ""))
+    data["reasoning_trail"] = cap_reasoning_trail(data.get("reasoning_trail", []))
+    data["reasoning_steps"] = cap_reasoning_steps(data.get("reasoning_steps", []))
+    data["confidence"] = confidence_in_range(data.get("confidence", 0.0))
+    data["sources_used"] = dedup_and_cap(data.get("sources_used") or [c["id"] for c in all_cards])
 
     # peer_ids — for analysis_ledger carry-over
     data["peer_ids"] = companies

@@ -31,7 +31,7 @@ class GlobalTrendsRequest(BaseModel):
 class GlobalSnapshot(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    company_id: str
+    company_id: str = ""
     card_count: int = 0
     top_themes: list[str] = Field(default_factory=list)
     headline_announcements: list[dict[str, Any]] = Field(default_factory=list)
@@ -41,8 +41,8 @@ class GlobalSnapshot(BaseModel):
 class TrendDetection(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    theme: str
-    frequency_delta_pct: float
+    theme: str = ""
+    frequency_delta_pct: float = 0.0
     intensity: Literal["weak", "moderate", "strong"] = "weak"
     leading_companies: list[str] = Field(default_factory=list)
     evidence_card_ids: list[str] = Field(default_factory=list)
@@ -51,8 +51,8 @@ class TrendDetection(BaseModel):
 class SKAXImpactCell(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    trend_theme: str
-    sk_ax_line: str
+    trend_theme: str = ""
+    sk_ax_line: str = ""
     direction: Literal["positive", "neutral", "negative"] = "neutral"
     magnitude: Literal["low", "medium", "high"] = "low"
     channel: str = ""
@@ -63,7 +63,7 @@ class SKAXImpactCell(BaseModel):
 class GlobalForecast(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    horizon: Literal["1Q", "6M", "1Y"]
+    horizon: Literal["1Q", "6M", "1Y"] = "1Q"
     scenario: Literal["optimistic", "baseline", "pessimistic"] = "baseline"
     narrative: str = ""
     sk_ax_impact: str = ""
@@ -75,9 +75,9 @@ class GlobalForecast(BaseModel):
 class ReasoningTrailItem(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    seq: int
-    label: str
-    one_liner: str
+    seq: int = 0
+    label: str = ""
+    one_liner: str = ""
     evidence_refs: list[str] = Field(default_factory=list)
     langfuse_observation_id: Optional[str] = None
 
@@ -85,13 +85,13 @@ class ReasoningTrailItem(BaseModel):
 class CoTStep(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    step_idx: int
-    phase: Literal["snapshot", "trend_detect", "impact_map", "forecast", "synthesis"]
-    question: str
+    step_idx: int = 0
+    phase: Literal["snapshot", "trend_detect", "impact_map", "forecast", "synthesis"] = "synthesis"
+    question: str = ""
     inputs_used: list[str] = Field(default_factory=list)
-    answer: str
-    intermediate_conclusion: str
-    confidence: float
+    answer: str = ""
+    intermediate_conclusion: str = ""
+    confidence: float = 0.0
     langfuse_observation_id: Optional[str] = None
 
 

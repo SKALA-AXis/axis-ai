@@ -29,7 +29,7 @@ class TrendDelta(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    metric: str
+    metric: str = ""
     qoq_pct: Optional[float] = None
     yoy_pct: Optional[float] = None
     band: Literal["normal", "유의", "급변"] = "normal"
@@ -40,7 +40,7 @@ class TrendDelta(BaseModel):
 class Differentiator(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    aspect: str
+    aspect: str = ""
     peer_position: str = ""
     skax_position: str = ""
     opportunity: str = ""
@@ -51,8 +51,8 @@ class Forecast(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    horizon: Literal["1Q", "6M", "1Y"]
-    scenario: Literal["optimistic", "baseline", "pessimistic"]
+    horizon: Literal["1Q", "6M", "1Y"] = "1Q"
+    scenario: Literal["optimistic", "baseline", "pessimistic"] = "baseline"
     summary: str = ""
     drivers: list[str] = Field(default_factory=list)
     quantitative_estimate: Optional[str] = None
@@ -63,9 +63,9 @@ class Forecast(BaseModel):
 class ReasoningTrailItem(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    seq: int
-    label: str
-    one_liner: str
+    seq: int = 0
+    label: str = ""
+    one_liner: str = ""
     evidence_refs: list[str] = Field(default_factory=list)
     langfuse_observation_id: Optional[str] = None
 
@@ -73,13 +73,13 @@ class ReasoningTrailItem(BaseModel):
 class CoTStep(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    step_idx: int
-    phase: Literal["current", "trend", "forecast", "strategic"]
-    question: str
+    step_idx: int = 0
+    phase: Literal["current", "trend", "forecast", "strategic"] = "current"
+    question: str = ""
     inputs_used: list[str] = Field(default_factory=list)
-    answer: str
-    intermediate_conclusion: str
-    confidence: float
+    answer: str = ""
+    intermediate_conclusion: str = ""
+    confidence: float = 0.0
     langfuse_observation_id: Optional[str] = None
 
 

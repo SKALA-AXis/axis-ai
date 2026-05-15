@@ -27,6 +27,14 @@ import os
 from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
+from src.agents._validation_helpers import (
+    cap_reasoning_steps,
+    cap_reasoning_trail,
+    clip_final_one_liner,
+    clip_implication,
+    confidence_in_range,
+    dedup_and_cap,
+)
 from src.db.postgres import SessionLocal
 from src.middleware.analysis_ledger import with_ledger_writeback
 from src.observability.langfuse_client import tracing_config
@@ -322,14 +330,16 @@ def _parse_and_validate(
     data.setdefault("change", [])
     data.setdefault("impact", [])
     data.setdefault("response", [])
-    data.setdefault("final_one_liner", "")
-    data.setdefault("sk_ax_implication", "")
-    data.setdefault("reasoning_trail", [])
-    data.setdefault("reasoning_steps", [])
     data.setdefault("follow_up_questions", [])
     data.setdefault("risk_assumptions", [])
-    data.setdefault("confidence", 0.0)
-    data.setdefault("sources_used", [c["id"] for c in cards])
+
+    # design 제약 강제 (medium-priority validation gap 보정)
+    data["final_one_liner"] = clip_final_one_liner(data.get("final_one_liner", ""))
+    data["sk_ax_implication"] = clip_implication(data.get("sk_ax_implication", ""))
+    data["reasoning_trail"] = cap_reasoning_trail(data.get("reasoning_trail", []))
+    data["reasoning_steps"] = cap_reasoning_steps(data.get("reasoning_steps", []))
+    data["confidence"] = confidence_in_range(data.get("confidence", 0.0))
+    data["sources_used"] = dedup_and_cap(data.get("sources_used") or [c["id"] for c in cards])
 
     # peer_ids — input cards 의 unique peer (analysis_ledger 의 carry-over 용)
     peer_set: list[str] = []

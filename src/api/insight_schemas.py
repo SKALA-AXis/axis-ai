@@ -33,9 +33,9 @@ class ReasoningTrailItem(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    seq: int
-    label: str
-    one_liner: str
+    seq: int = 0
+    label: str = ""
+    one_liner: str = ""
     evidence_refs: list[str] = Field(default_factory=list)
     langfuse_observation_id: Optional[str] = None
 
@@ -45,21 +45,21 @@ class CoTStep(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    step_idx: int
-    phase: str
-    question: str
+    step_idx: int = 0
+    phase: str = ""
+    question: str = ""
     inputs_used: list[str] = Field(default_factory=list)
-    answer: str
-    intermediate_conclusion: str
-    confidence: float
+    answer: str = ""
+    intermediate_conclusion: str = ""
+    confidence: float = 0.0
     langfuse_observation_id: Optional[str] = None
 
 
 class InsightResponseAction(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    action: str
-    priority: int
+    action: str = ""
+    priority: int = 99
     rationale: str = ""
 
 
