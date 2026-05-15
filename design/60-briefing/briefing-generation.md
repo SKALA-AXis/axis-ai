@@ -117,6 +117,19 @@ CREATE INDEX idx_briefing_status ON briefing_reports(status, created_at DESC);
 CREATE INDEX idx_briefing_user ON briefing_reports(requested_by_user_id, created_at DESC);
 ```
 
+관계 정규화 테이블 (V21):
+
+```sql
+briefing_reports.id
+  ├── briefing_report_cards.briefing_report_id -> card_news.id
+  ├── briefing_report_articles.briefing_report_id -> raw_articles.id
+  ├── briefing_recipients.briefing_report_id -> recipients.id
+  └── briefing_history.briefing_report_id
+
+briefing_history.id
+  └── briefing_history_cards.briefing_history_id -> card_news.id
+```
+
 ## 6. 알고리즘
 
 ### 6.1 비동기 실행
@@ -315,7 +328,8 @@ async def get_briefing(briefing_id: str):
 
 ## 9. 외부 의존성
 
-- **DB**: card_news (READ), `briefing_reports` (V12 신규 INSERT/UPDATE)
+- **DB**: card_news (READ), `briefing_reports` (V12 INSERT/UPDATE)
+- **DB**: `briefing_report_cards`, `briefing_report_articles`, `briefing_recipients`, `briefing_history_cards` (V21 관계 정규화)
 - **외부 API**: OpenAI gpt-4o + gpt-4o-mini
 - **Middleware**: ProvenanceTracker, TokenBudget, AuditLog (`@audit("briefing_generate", "briefing_report")`)
 
@@ -325,7 +339,7 @@ LangGraph 가 아닌 *async function chain* (BackgroundTasks). state 없음. 진
 
 ## 11. Provenance + Confidence
 
-- **Provenance**: `briefing_reports.provenance = { llm_model_section, llm_model_summary, prompt_versions, run_at, source_card_ids, git_sha, agent }`
+- **Provenance**: `briefing_reports.provenance = { llm_model_section, llm_model_summary, prompt_versions, run_at, source_card_ids, git_sha, agent }` + V21 mapping tables
 - **Confidence**: average(section.confidence) × executive_summary.confidence × (cards_used / cards_requested ratio)
 
 ## 12. 테스트 시나리오
@@ -363,6 +377,7 @@ LangGraph 가 아닌 *async function chain* (BackgroundTasks). state 없음. 진
 ### 신규 마이그레이션
 
 - **V12** — `briefing_reports` 테이블 (위 §5 schema)
+- **V21** — `briefing_report_cards`, `briefing_report_articles`, `briefing_recipients`, `briefing_history_cards`, `briefing_history.briefing_report_id`
 
 ### Backend 연동
 
@@ -383,3 +398,4 @@ LangGraph 가 아닌 *async function chain* (BackgroundTasks). state 없음. 진
 ### Changelog
 
 - **v1 (제안, P7+)** — 5-phase async 신설 + V12 + endpoint 3종
+- **v1.1 (2026-05-15)** — V21 관계 정규화 반영: briefing report ↔ card/article/recipient, daily history ↔ card mapping

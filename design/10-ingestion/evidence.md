@@ -58,7 +58,8 @@ class EvidenceOutput(TypedDict):
 
 DB 영속:
 - `card_news` row INSERT (card_news 테이블)
-- `evidence_chain` row INSERT/UPDATE (PK = issue_card_id (legacy column 명), card 1:1)
+- `evidence_chain` row INSERT/UPDATE (PK = issue_card_id legacy column 명, `card_news_id` nullable alias, card 1:1)
+- `card_news_articles` row UPSERT (V20, provenance.raw_article_ids 를 정규화)
 
 ## 6. 알고리즘
 
@@ -163,6 +164,7 @@ Evidence 는 LLM 미사용 (산식 + sub-agent 위임). 필수 1, 4, 11, 12, 14.
 ## 9. 외부 의존성
 
 - **DB**: `card_news` (INSERT), `evidence_chain` (UPSERT), `raw_articles` (READ)
+- **DB**: `card_news_articles` (V20, evidence_chain.provenance.raw_article_ids 백필/신규 upsert 대상)
 - **Sub-agent**: FinancialLinkerAgent (`src/agents/financial_linker_agent.py`)
 - **Sub-agent (W5+)**: MbbMatcherAgent / IRParserAgent
 
@@ -173,7 +175,7 @@ Evidence 는 LLM 미사용 (산식 + sub-agent 위임). 필수 1, 4, 11, 12, 14.
 
 ## 11. Provenance + Confidence
 
-- **Provenance**: 본 agent 가 provenance 자체를 채움 (evidence_chain.provenance jsonb)
+- **Provenance**: 본 agent 가 provenance 자체를 채움 (`evidence_chain.provenance` jsonb + V20 `evidence_chain.card_news_id` alias + `card_news_articles`)
 - **Confidence**: `pass: bool` 이 거시 confidence. UI 가 `pass=false` 시 ⚠️ 인 human_review 마킹.
 
 ## 12. 테스트 시나리오
@@ -210,3 +212,4 @@ Evidence 는 LLM 미사용 (산식 + sub-agent 위임). 필수 1, 4, 11, 12, 14.
 - **v2 (2026-04-W3)** — financial_refs + financial_link 추가 (FinancialLinkerAgent 분리)
 - **v3 (2026-05-W1)** — mbb_refs 추가 (W5)
 - **v3.1 (2026-05-12)** — V9 column rename 후에도 evidence_chain.issue_card_id 컬럼 유지 (V10 분리). Python SQL 의 column 이름 그대로 (placeholder 만 :card_news_id 로 변경)
+- **v3.2 (2026-05-15)** — V20 관계 정비 반영: `evidence_chain.card_news_id` alias, `card_news_articles` mapping. legacy `issue_card_id` 는 후속 writer 전환 전까지 유지

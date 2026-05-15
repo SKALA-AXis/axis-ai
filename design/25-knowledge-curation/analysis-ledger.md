@@ -253,14 +253,15 @@ async def analyze(card_ids, **kwargs): ...
 
 ## 9. 외부 의존성
 
-- **DB (PG)**: `analysis_ledger` (INSERT / SELECT / UPDATE — V22 신규)
+- **DB (PG)**: `analysis_ledger` (INSERT / SELECT / UPDATE — V19)
+- **DB (PG)**: `analysis_ledger_card_news`, `analysis_ledger_peer_companies` (V21 관계 정규화. JSONB 배열은 legacy/compat 유지)
 - **외부 API**: 없음
 - **Cross-agent**: 분석 4 agent + Briefing 의 decorator 통합
 
-### Flyway V22 schema
+### Flyway V19 schema + V21 mappings
 
 ```sql
--- V22
+-- V19
 CREATE TABLE analysis_ledger (
     id                   BIGSERIAL PRIMARY KEY,
     analysis_type        VARCHAR(20)  NOT NULL,   -- insight | mixer | peer | global | briefing
@@ -288,6 +289,11 @@ CREATE INDEX idx_ledger_active_recent ON analysis_ledger (created_at DESC)
 
 CREATE INDEX idx_ledger_supersede ON analysis_ledger (superseded_by)
     WHERE superseded_by IS NOT NULL;
+
+-- V21
+analysis_ledger.id
+  ├── analysis_ledger_card_news.analysis_ledger_id -> card_news.id
+  └── analysis_ledger_peer_companies.analysis_ledger_id -> peer_companies.id
 ```
 
 ## 10. State 흐름
@@ -296,7 +302,7 @@ CREATE INDEX idx_ledger_supersede ON analysis_ledger (superseded_by)
 
 ## 11. Provenance + Confidence
 
-- **Provenance**: ledger 자체가 provenance 의 일종. `analysis_id` + `langfuse_trace_id` + `prompt_version` + `git_sha` 모두 trace.
+- **Provenance**: ledger 자체가 provenance 의 일종. `analysis_id` + `langfuse_trace_id` + `prompt_version` + `git_sha` 모두 trace. V21 이후 `source_card_ids`/`peer_ids` 는 mapping table 에도 동시 저장.
 - **Confidence**: 분석 agent 가 제공한 값 그대로 carry. ledger 가 별도 confidence 계산 X.
 
 ## 12. 테스트 시나리오
@@ -342,8 +348,9 @@ CREATE INDEX idx_ledger_supersede ON analysis_ledger (superseded_by)
 
 ### Phase K1 — 단독 도입 가능
 
-본 agent + V22 Flyway 만으로 K1 완성. K2/K3 (compaction / context pack) 없이도 *분석 결과가 다음 분석에 보이는 효과* 달성. K1 → K2/K3 → K4/K5 점진 진행.
+본 agent + V19 Flyway 만으로 K1 완성. V21 mapping 은 FK 기반 조회/정합성 검증을 위한 보강이다. K2/K3 (compaction / context pack) 없이도 *분석 결과가 다음 분석에 보이는 효과* 달성. K1 → K2/K3 → K4/K5 점진 진행.
 
 ### Changelog
 
 - **v1 (2026-05-14)** — 신설. 5 계층 아키텍처의 carry-over backbone. Phase K1 우선 도입 권장.
+- **v1.1 (2026-05-15)** — 실제 Flyway 번호 정정: `analysis_ledger` 는 V19, FK 정규화 mapping 은 V21. `source_card_ids`/`peer_ids` JSONB 유지 + mapping table 동시 저장 정책 추가.

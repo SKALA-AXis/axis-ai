@@ -52,6 +52,8 @@ class DetectedSignal(TypedDict):
     confidence: float
     detected_at: datetime
     evidence: list[dict]       # raw_article_ids + 산식 값
+    source_raw_article_id: int | None
+    card_news_id: str | None
     interpretation: str         # LLM 1줄 해석
 
 class WeakSignalOutput(TypedDict):
@@ -180,7 +182,8 @@ def matches_rule(sig, rule):
 
 ## 9. 외부 의존성
 
-- **DB**: `raw_articles` (Track B의 job postings), `card_news` (발표 톤), `weak_signal_cards` (신규 **V11** migration), `alerts` (INSERT), `alert_rules` (READ)
+- **DB**: `raw_articles` (Track B의 job postings), `card_news` (발표 톤), `weak_signal_cards` (**V11** + V20/V21 관계 컬럼), `alerts` (INSERT), `alert_rules` (READ)
+- **DB**: `weak_signal_cards.peer_company_id`, `weak_signal_cards.source_raw_article_id`, `weak_signal_cards.card_news_id`, `weak_signal_card_articles` (V20/V21, legacy `peer_id`/`evidence` JSON 유지)
 - **외부 API**: OpenAI gpt-4o-mini (해석)
 - **재사용**: SesMailService (BE Java, REST 호출 또는 직접 DB INSERT)
 
@@ -200,7 +203,7 @@ class WeakSignalState(TypedDict):
 
 ## 11. Provenance + Confidence
 
-- **Provenance**: `weak_signal_cards.metadata.detection_version='v1', phase_versions={...}`
+- **Provenance**: `weak_signal_cards.metadata.detection_version='v1', phase_versions={...}` + typed FK (`peer_company_id`, `source_raw_article_id`, `card_news_id`) + `weak_signal_card_articles`
 - **Confidence**: signal_type 별 산식 + LLM 신뢰도
 
 ## 12. 테스트 시나리오
@@ -222,9 +225,11 @@ class WeakSignalState(TypedDict):
 ## 14. 구현 메모 + Changelog
 
 - 핵심 파일: `src/agents/weak_signal_agent.py` (신규 P8) — `src/agents/_deprecated/weak_signal_agent.py` 의 패턴 매칭 로직 재활용
-- 신규 테이블: `weak_signal_cards` (**V11** migration — 현재 master V9 → V10 chat_sessions → V11), `alert_rules` (이미 backend spec 존재)
+- 신규 테이블: `weak_signal_cards` (**V11** migration), `weak_signal_card_articles` (V21), `alert_rules` (이미 backend spec 존재)
+- 신규 컬럼: `weak_signal_cards.peer_company_id` (V20), `source_raw_article_id` / `card_news_id` (V21)
 
 ### Changelog
 
 - **v1 (구, _deprecated/)** — 단순 키워드 기반 패턴 (2026-04-W2 폐기)
 - **v2 (제안, P8)** — 3-phase (Pattern + Anomaly + Routing) 통합 + LLM 해석 + AlertRule 매칭
+- **v2.1 (2026-05-15)** — V20/V21 DB 관계 정비 반영: peer/card/raw article typed FK와 raw article mapping table 추가

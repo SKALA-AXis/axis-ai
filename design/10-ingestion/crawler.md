@@ -21,7 +21,7 @@
 1. peer 별 검색 키워드로 외부 API/RSS/Playwright 크롤
 2. 응답 데이터 → `RawArticle` dataclass (url, title, content, source_name, published_at, ...)
 3. 중복 URL 은 `INSERT ... ON CONFLICT (url) DO NOTHING` 으로 idempotent 보장
-4. `crawl_run_id` UUID 발급 + `pipeline_logs` 에 메트릭 (수집 건수 / 실패율 / latency) 기록
+4. `crawl_run_id` UUID 발급 + `raw_articles.crawl_run_id` / `metadata.crawl_run_id` / `pipeline_logs` 에 메트릭 (수집 건수 / 실패율 / latency) 기록
 
 ## 3. 책임 NOT (out of scope)
 
@@ -53,6 +53,7 @@ class CrawlOutput(TypedDict):
 **post-conditions**:
 
 - 모든 raw_articles row 는 `source_type`, `source_name`, `url_hash` 채워짐
+- 가능하면 `crawl_run_id` nullable FK 채움. 과거 row 또는 출처를 확정할 수 없는 row 는 null 허용
 - 동일 url 중복은 skip (ON CONFLICT)
 - `processing_status = 'RAW'` 초기값
 
@@ -124,8 +125,9 @@ for source in sources:
 
 ## 9. 외부 의존성
 
-- **DB**: `raw_articles` 테이블 (INSERT)
-- **DB**: `pipeline_logs` 테이블 (metric trace via `_logged_step`)
+- **DB**: `raw_articles` 테이블 (INSERT, V20 이후 `crawl_run_id -> crawl_runs.id` nullable FK)
+- **DB**: `crawl_runs`, `crawl_cursors` (backfill 실행 단위/커서)
+- **DB**: `pipeline_logs` 테이블 (metric trace via `_logged_step`, V21 이후 `crawl_run_id` nullable FK)
 - **외부 API**: Naver Search API · DART OpenAPI · KIPRIS · 고용24 work24.go.kr OpenAPI (각각 API key 필요 — env `NAVER_*`, `DART_API_KEY`, `KIPRIS_API_KEY`, `WORK24_API_KEY` + `WORK24_RETURN_TYPE`)
 - **외부 RSS**: ETnews · ZDNet · Bloter · Yonhap · Google News
 - **Playwright**: 공식 뉴스룸 (헤드리스 Chromium) — Pod 에 `playwright install` 필요
@@ -144,7 +146,7 @@ for source in sources:
 
 ## 11. Provenance + Confidence
 
-- **Provenance**: `raw_articles.metadata` jsonb 에 source-specific 메타 (api_endpoint, query_keywords, fetch_timestamp, retry_count)
+- **Provenance**: `raw_articles.crawl_run_id` 와 `raw_articles.metadata` jsonb 에 source-specific 메타 (api_endpoint, query_keywords, fetch_timestamp, retry_count, crawl_run_id)
 - **Confidence**: N/A (raw 데이터 수집 단계, 신뢰도는 CredibilityAgent 가 부여)
 
 ## 12. 테스트 시나리오
@@ -193,3 +195,4 @@ sqlalchemy = ">=2.0"
 - **v2 (2026-04-W2)** — DART/KIPRIS/고용24 (work24) 추가 (Track B)
 - **v3 (2026-04-W3)** — Track C (BCG/McKinsey) 분리 + Playwright newsroom + IR PDF
 - **v4 (2026-05-12)** — 044ac12 commit 후 backfill_runner 분리, retry 정책 강화
+- **v5 (2026-05-15)** — DB 관계 정비 반영: `crawl_runs` Flyway ownership, `raw_articles.crawl_run_id`, `pipeline_logs.crawl_run_id` 기준 추가

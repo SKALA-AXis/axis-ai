@@ -124,19 +124,21 @@ final_one_liner + confidence → AnalysisLedger.insert()
 | L2 갱신 | dirty flag clear + L3 dirty mark |
 | L4 갱신 | DART 공시 fetch 성공 시 trigger (분기 평균 50일 후) |
 
-## 6. 신규 DB 테이블 (Flyway V19+)
+## 6. 신규 DB 테이블 (Flyway slot 정정)
 
-기존 deployed: V1-V9 + V15-V18. 예약 슬롯: V10-V14 (chat_sessions / weak_signal / global_company_cards / briefing_reports / usage_logs / audit_logs). **V19+ 가 안전한 신규 슬롯**.
+기존 제안은 V19+ 를 knowledge-curation 전용 슬롯으로 가정했지만, 실제 backend Flyway 기준은 V19=`analysis_ledger`, V20/V21=`raw_articles` 중심 DB 관계 정비다. L1~L4 compaction 테이블은 다음 빈 migration slot 에서 재배치한다.
 
 | Version | 테이블 | 용도 |
 |---|---|---|
-| V19 | `peer_daily_snapshot` | L1 (PK: peer_id + snapshot_date) |
-| V19 | `peer_dirty_flags` | dirty tracking (PK: peer_id) |
-| V20 | `peer_weekly_digest` | L2 (PK: peer_id + week_iso) |
-| V20 | `peer_monthly_profile` | L3 (PK: peer_id + year_month) |
-| V21 | `peer_quarterly_canon` | L4 (PK: peer_id + fiscal_quarter) |
-| V21 | `peer_canonical_facts` | 불변 fact (PK: peer_id + fact_key) |
-| V22 | `analysis_ledger` | 분석 결과 carry-over (BIGSERIAL) |
+| V19 | `analysis_ledger` | 분석 결과 carry-over (BIGSERIAL) |
+| V21 | `analysis_ledger_card_news` | ledger ↔ card_news FK mapping |
+| V21 | `analysis_ledger_peer_companies` | ledger ↔ peer_companies FK mapping |
+| TBD | `peer_daily_snapshot` | L1 (PK: peer_id + snapshot_date) |
+| TBD | `peer_dirty_flags` | dirty tracking (PK: peer_id) |
+| TBD | `peer_weekly_digest` | L2 (PK: peer_id + week_iso) |
+| TBD | `peer_monthly_profile` | L3 (PK: peer_id + year_month) |
+| TBD | `peer_quarterly_canon` | L4 (PK: peer_id + fiscal_quarter) |
+| TBD | `peer_canonical_facts` | 불변 fact (PK: peer_id + fact_key) |
 
 자세한 schema 는 각 agent design 파일의 §9 외부 의존성 절 참조.
 

@@ -61,6 +61,7 @@ design/
 │
 └── 90-cross-cutting/                  ← 모든 axis-ai agent 에 주입 (middleware)
     ├── confidence-score.md            ← 0~1 점수 산출/전파 표준
+    ├── db-relations.md                ← raw_articles 중심 FK/매핑 테이블 표준 (V20/V21)
     ├── provenance-tracker.md          ← llm_model+prompt_version+git_sha+langfuse_trace_id 자동 부착
     └── token-budget.md                ← daily envelope + circuit breaker
 ```
@@ -92,9 +93,9 @@ axis-ai agent 설계 *외부* 의 spec 은 `axis-infra/docs/` 가 owner:
 | UserQuery | 4 | Search 3 + Dialogue 1 통합 |
 | WeakSignal | 1 | 3-phase 통합 (W7+) |
 | Briefing | 1 | async user-triggered (P7+, V12 briefing_reports) |
-| Cross-cutting (axis-ai 미들웨어만) | 3 | confidence / provenance / token-budget |
+| Cross-cutting (axis-ai 미들웨어만 + DB 관계) | 4 | confidence / db-relations / provenance / token-budget |
 | 구조 / 통합 | 3 | README + topology + prompt-design-checklist (신규 2026-05-14) |
-| **합계 (axis-ai/design/)** | **37** | LangGraph agent 설계 + axis-ai decorator + PDF 17-요소 + 5 계층 knowledge |
+| **합계 (axis-ai/design/)** | **38** | LangGraph agent 설계 + axis-ai decorator + DB 관계 표준 + PDF 17-요소 + 5 계층 knowledge |
 | (참고) axis-infra/docs 이동분 | +7 | API_SURFACE + AUDIT_LOG + OBSERVABILITY_LANGFUSE + admin/ × 4 |
 
 ### Agent 카운트 (파일 ≠ agent)
@@ -154,5 +155,8 @@ axis-ai agent 설계 *외부* 의 spec 은 `axis-infra/docs/` 가 owner:
   - 신규 디렉토리 `25-knowledge-curation/`: README + compaction-agent + context-pack-builder + analysis-ledger
   - peer 단위 narrative 의 5 계층 (L0 raw → L1 daily → L2 weekly → L3 monthly → L4 quarterly canon) + Analysis Ledger 의 carry-over
   - 분석 4 agent 입력에 `_context_packs` 필드 추가 (in-process auto-fetch + cold_start fallback)
-  - Flyway 신규 마이그레이션 슬롯: V19 (daily_snapshot + dirty_flags) / V20 (weekly + monthly) / V21 (quarterly + canonical_facts) / V22 (analysis_ledger)
+  - 초기 제안 Flyway 슬롯은 후속 정정 필요: 실제 적용 기준은 V19 (`analysis_ledger`), V20/V21 (`raw_articles` 중심 DB 관계 정비). daily/weekly/monthly/quarterly canon 은 다음 빈 슬롯에서 재배치
   - 도입 단계 K1 (ledger) → K2 (weekly) → K3 (context pack) → K4 (monthly) → K5 (quarterly) → K6 (Qdrant axis_knowledge)
+- **2026-05-15** — DB 관계 표준 추가
+  - 신규: `90-cross-cutting/db-relations.md`
+  - backend Flyway `V20`/`V21` 기준으로 `raw_articles` 중심 FK/매핑 테이블, legacy 컬럼 유지 정책, application writer 전환 순서 문서화

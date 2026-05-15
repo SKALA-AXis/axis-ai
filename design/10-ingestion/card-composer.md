@@ -21,7 +21,7 @@
 2. **Phase 2 — Analyze** (`NewsAnalysisAgent.analyze`) — summary + classification + cluster metadata → SK AX 관점 가설/영향도 평가.
 3. **Phase 3 — Compose** (`IssueCardAgent.generate`) — 위 결과를 frontend display schema (`CardNewsItem`) 로 조립.
 
-산출물 = `card_news` row + 이후 EvidenceAgent 가 evidence_chain 부착.
+산출물 = `card_news` row + `card_news_articles` 후보 관계 + 이후 EvidenceAgent 가 evidence_chain 부착.
 
 ## 3. 책임 NOT
 
@@ -47,6 +47,7 @@ class CardComposerInput(TypedDict):
 class CardNewsRow(TypedDict):
     id: str                          # 'IC-YYYYMMDD-NNN' 또는 'CN-YYYYMMDD-NNN'
     cluster_id: int
+    raw_article_ids: list[int]        # V20: card_news_articles 로 정규화
     company: str                     # peer_id (jsonb varchar)
     title: str                       # ≤ 500 chars
     summary_lines: list[str]         # 정확히 3줄
@@ -242,13 +243,15 @@ CardComposer 는 3 phase 통합 — 필수 1, 2, 4, 6, 7, 11, 12, 14 / 권장 13
 ## 9. 외부 의존성
 
 - **DB**: `raw_articles` (READ), `card_news` (INSERT — EvidenceAgent 가 호출)
+- **DB**: `card_news_articles` (V20, card_news ↔ raw_articles N:M. evidence provenance 로 백필되며 신규 writer 는 직접 upsert)
+- **DB**: `card_news.peer_company_id` (V20 nullable alias. 기존 `company` writer 컬럼은 후속 전환 전까지 유지)
 - **외부 API**: OpenAI gpt-4o-mini
 - **lib**: `openai`, `langchain_openai`
 
 ## 10. State 흐름 (LangGraph)
 
 **소비**: `classified_clusters`, `cluster_map`
-**생산**: `card_news: list[CardNewsRow]` (다음 노드 EvidenceAgent 가 evidence_chain 부착 + DB INSERT)
+**생산**: `card_news: list[CardNewsRow]` (다음 노드 EvidenceAgent 가 evidence_chain 부착 + DB INSERT + `card_news_articles` upsert)
 
 ```python
 @_logged_step("card_news", "classified_clusters", "card_news")
@@ -324,4 +327,5 @@ langchain-openai = ">=1.1"
 - **v1 (2026-04-W2)** — 3-phase 분리 구현
 - **v2 (2026-04-W3)** — v3 메타데이터 (implication jsonb 통합)
 - **v3 (2026-05-12)** — DB 테이블 `issue_cards` → `card_news` rename (V9). **클래스 명 `IssueCardAgent` 는 function-named 라 유지**, `card_news_agent.py` (frontend display 생성기) 와 collision 회피
+- **v3.1 (2026-05-15)** — DB 관계 정비 반영: 다중 기사 기반 카드뉴스는 `card_news_articles` 로 정규화, `card_news.peer_company_id` nullable alias 추가
 - **v4 (proposed, P9)** — 3 파일 → 1 CardComposerAgent 통합
