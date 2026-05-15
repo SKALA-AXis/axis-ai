@@ -14,7 +14,7 @@ import logging
 import operator
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Annotated, Callable, TypedDict
+from typing import Annotated, Any, Callable, TypedDict
 
 from langgraph.graph import END, StateGraph
 
@@ -29,6 +29,7 @@ OFFICIAL_DOCUMENT_SOURCE_TYPES = {"official"}
 COMPANY_SITE_DOCUMENT_SOURCE_TYPES = {"company_site"}
 PARSED_DOCUMENT_SOURCE_TYPES = {"dart", "ir", "securities_report"}
 STRUCTURED_SIGNAL_SOURCE_TYPES = {"job", "market_data", "search_trend", "social"}
+_METADATA_CHUNK_TEXT_CHARS = 1200
 
 
 class IngestionState(TypedDict):
@@ -52,6 +53,34 @@ class IngestionState(TypedDict):
     indexed_vector_ids: list[str]  # v3: Qdrant axis_main 삽입 vector_id 목록
     errors: Annotated[list[str], operator.add]
     human_review_flags: list[int]
+
+
+def _compact_parser_result_for_metadata(parser_result: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(parser_result)
+    if "document_chunks" in compact:
+        compact["document_chunks"] = _compact_document_chunks(
+            compact.get("document_chunks"),
+        )
+    return compact
+
+
+def _compact_document_chunks(chunks: Any) -> list[dict[str, Any]]:
+    if not isinstance(chunks, list):
+        return []
+
+    compacted: list[dict[str, Any]] = []
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        text = str(chunk.get("text") or "")
+        compacted.append(
+            {
+                **chunk,
+                "text": text[:_METADATA_CHUNK_TEXT_CHARS],
+                "text_is_truncated_for_metadata": len(text) > _METADATA_CHUNK_TEXT_CHARS,
+            }
+        )
+    return compacted
 
 
 # ── 단계별 통계 헬퍼 ────────────────────────────────────────────
@@ -288,8 +317,9 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
         if source_type in PARSED_DOCUMENT_SOURCE_TYPES:
             item, ok, reason = analyze_parser_quality_article(agent_article)
             parser_result = item.get("parser_result") or {}
+            compact_parser_result = _compact_parser_result_for_metadata(parser_result)
             metadata_patch = {
-                "parser_result": parser_result,
+                "parser_result": compact_parser_result,
                 "parser_quality_score": item.get("parser_quality_score"),
                 "parser_quality_label": item.get("parser_quality_label"),
                 "parser_quality_reason": item.get("parser_quality_reason"),
@@ -305,7 +335,10 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
                         "topics": parser_result.get("topics"),
                         "topic_signals": parser_result.get("topic_signals"),
                         "dart_sections": parser_result.get("sections"),
-                        "dart_document_chunks": parser_result.get("document_chunks"),
+                        "dart_section_tree": parser_result.get("section_tree"),
+                        "dart_document_chunks": compact_parser_result.get("document_chunks"),
+                        "dart_classified_tables": parser_result.get("classified_tables"),
+                        "dart_financial_statements": parser_result.get("financial_statements"),
                     }
                 )
             elif source_type == "ir":
@@ -319,7 +352,7 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
                         "topics": parser_result.get("topics"),
                         "topic_signals": parser_result.get("topic_signals"),
                         "ir_sections": parser_result.get("sections"),
-                        "ir_document_chunks": parser_result.get("document_chunks"),
+                        "ir_document_chunks": compact_parser_result.get("document_chunks"),
                     }
                 )
             if ok:

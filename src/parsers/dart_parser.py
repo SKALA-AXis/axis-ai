@@ -36,6 +36,7 @@ _DART_MAJOR_SECTIONS: tuple[tuple[str, str, str], ...] = (
     ("affiliates", "IX", "계열회사 등에 관한 사항"),
     ("major_shareholder", "X", "대주주 등과의 거래내용"),
     ("other", "XI", "그 밖에 투자자 보호를 위하여 필요한 사항"),
+    ("detailed_tables", "XII", "상세표"),
 )
 _ROMAN_TO_KEY = {roman: (section_key, title) for section_key, roman, title in _DART_MAJOR_SECTIONS}
 _ROMAN_VARIANTS = {
@@ -50,18 +51,24 @@ _ROMAN_VARIANTS = {
     "IX": "Ⅸ",
     "X": "Ⅹ",
     "XI": "Ⅺ",
+    "XII": "Ⅻ",
 }
 _DART_MAJOR_HEADING_PATTERN = re.compile(
     r"(?:(?<=\n)|^)\s*"
-    r"(?P<roman>XI|IX|VIII|VII|VI|IV|III|II|X|V|I|Ⅺ|Ⅸ|Ⅷ|Ⅶ|Ⅵ|Ⅳ|Ⅲ|Ⅱ|Ⅹ|Ⅴ|Ⅰ)"
+    r"(?P<roman>XII|XI|IX|VIII|VII|VI|IV|III|II|X|V|I|Ⅻ|Ⅺ|Ⅸ|Ⅷ|Ⅶ|Ⅵ|Ⅳ|Ⅲ|Ⅱ|Ⅹ|Ⅴ|Ⅰ)"
     r"\s*[.\)]?\s*"
     r"(?P<title>"
     r"회사의\s*개요|사업의\s*내용|재무에\s*관한\s*사항|"
     r"이사의\s*경영진단\s*및\s*분석의견|회계감사인의\s*감사의견|"
     r"이사회\s*등\s*회사의\s*기관에\s*관한\s*사항|주주에\s*관한\s*사항|"
     r"임원\s*및\s*직원\s*등에\s*관한\s*사항|계열회사\s*등에\s*관한\s*사항|"
-    r"대주주\s*등과의\s*거래내용|그\s*밖에\s*투자자\s*보호를\s*위하여\s*필요한\s*사항"
+    r"대주주\s*등과의\s*거래내용|그\s*밖에\s*투자자\s*보호를\s*위하여\s*필요한\s*사항|"
+    r"상세표"
     r")",
+    re.MULTILINE,
+)
+_DART_EXPERT_HEADING_PATTERN = re.compile(
+    r"(?:(?<=\n)|^)\s*(?:【\s*)?(?P<title>전문가의\s*확인)(?:\s*】)?",
     re.MULTILINE,
 )
 _DART_SUB_HEADING_PATTERN = re.compile(
@@ -80,6 +87,27 @@ _BUYBACK_NUMBER_PATTERNS = {
 _BUYBACK_AMOUNT_PATTERN = re.compile(r"취득예정금액\s*\(원\)\s*([0-9][0-9,\s]{3,})")
 _BUYBACK_PERIOD_PATTERN = re.compile(
     r"취득예상기간\s*[:：]?\s*([0-9]{4}[.\-/][0-9]{2}[.\-/][0-9]{2}\s*[-~]\s*[0-9]{4}[.\-/][0-9]{2}[.\-/][0-9]{2})"
+)
+_FINANCIAL_TABLE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("income_statement", ("손익계산서", "포괄손익계산서", "매출액", "영업이익")),
+    ("balance_sheet", ("재무상태표", "자산총계", "부채총계", "자본총계")),
+    ("cash_flow_statement", ("현금흐름표", "영업활동현금흐름", "투자활동현금흐름")),
+    ("equity_statement", ("자본변동표", "소유주지분", "비지배지분")),
+)
+_FINANCIAL_METRIC_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("revenue_total", ("매출액", "영업수익")),
+    ("cost_of_sales", ("매출원가",)),
+    ("gross_profit", ("매출총이익",)),
+    ("operating_profit", ("영업이익",)),
+    ("profit_before_tax", ("법인세비용차감전순이익", "법인세비용차감전계속사업이익")),
+    ("net_income", ("당기순이익", "분기순이익", "반기순이익")),
+    ("total_assets", ("자산총계",)),
+    ("total_liabilities", ("부채총계",)),
+    ("total_equity", ("자본총계",)),
+    ("operating_cash_flow", ("영업활동현금흐름", "영업활동으로 인한 현금흐름")),
+    ("investing_cash_flow", ("투자활동현금흐름", "투자활동으로 인한 현금흐름")),
+    ("financing_cash_flow", ("재무활동현금흐름", "재무활동으로 인한 현금흐름")),
+    ("cash_and_cash_equivalents", ("현금및현금성자산", "기말현금및현금성자산")),
 )
 
 
@@ -420,6 +448,151 @@ def _infer_table_unit(table: dict[str, Any]) -> str | None:
     return _dart_statement_unit(text)
 
 
+def _classify_table(table: dict[str, Any]) -> dict[str, Any]:
+    table_text = str(table.get("text") or "")
+    title = str(table.get("title") or "")
+    combined = _clean_section_text(" ".join([title, table_text[:3000]]))
+    table_type = "unclassified"
+
+    for candidate_type, keywords in _FINANCIAL_TABLE_RULES:
+        hits = sum(1 for keyword in keywords if keyword in combined)
+        if candidate_type == "income_statement":
+            if "손익계산서" in combined or "포괄손익계산서" in combined:
+                table_type = candidate_type
+                break
+            if "매출액" in combined and "영업이익" in combined:
+                table_type = candidate_type
+                break
+        elif hits >= 2 or keywords[0] in combined:
+            table_type = candidate_type
+            break
+
+    scope = _statement_scope(combined)
+    unit = _dart_statement_unit(combined) or _infer_table_unit(table)
+
+    return {
+        "table_index": table.get("table_index"),
+        "title": title,
+        "table_type": table_type,
+        "statement_scope": scope,
+        "unit": unit,
+        "row_count": table.get("row_count"),
+        "column_count": table.get("column_count"),
+        "text": table_text[:2000],
+    }
+
+
+def _statement_scope(text: str) -> str | None:
+    if re.search(r"연\s*결", text or ""):
+        return "consolidated"
+    if "별도" in (text or ""):
+        return "separate"
+    return None
+
+
+def _normalize_metric_label(label: str) -> str | None:
+    compact = re.sub(r"[\sㆍ·\[\]\(\)]", "", label or "")
+    for metric_key, aliases in _FINANCIAL_METRIC_ALIASES:
+        if any(alias.replace(" ", "") in compact for alias in aliases):
+            return metric_key
+    return None
+
+
+def _clean_metric_label(row: list[Any]) -> str:
+    for cell in row:
+        text = _clean_section_text(str(cell or ""))
+        if not text:
+            continue
+        if re.search(r"[가-힣A-Za-z]", text):
+            return text
+    return _clean_section_text(str(row[0] if row else ""))
+
+
+def _amount_values_from_row(row: list[Any], unit: str) -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    for position, cell in enumerate(row[1:], start=1):
+        cell_text = str(cell or "")
+        for match in _DART_AMOUNT_PATTERN.finditer(cell_text):
+            raw = match.group(0)
+            value = _normalize_dart_amount_krwbn(raw, unit)
+            if value is None or abs(value) < 1:
+                continue
+            values.append(
+                {
+                    "column_index": position,
+                    "raw": raw,
+                    "value_krwbn": value,
+                }
+            )
+            break
+    return values
+
+
+def _normalized_statement_rows(table: dict[str, Any], unit: str | None) -> list[dict[str, Any]]:
+    rows = table.get("rows")
+    if not isinstance(rows, list) or not unit:
+        return []
+
+    normalized_rows: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        row_values = [str(value) for value in row if value is not None]
+        if len(row_values) < 2:
+            continue
+
+        label = _clean_metric_label(row_values)
+        metric_key = _normalize_metric_label(label)
+        if not metric_key:
+            continue
+
+        values = _amount_values_from_row(row_values, unit)
+        if not values:
+            continue
+
+        normalized_rows.append(
+            {
+                "metric_key": metric_key,
+                "label": label,
+                "values": values,
+                "current_value_krwbn": values[0]["value_krwbn"],
+                "raw_row": row_values,
+            }
+        )
+
+    return normalized_rows
+
+
+def _classify_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [_classify_table(table) for table in tables]
+
+
+def _extract_financial_statements(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    statements: list[dict[str, Any]] = []
+
+    for table in tables:
+        classified = _classify_table(table)
+        if classified["table_type"] == "unclassified":
+            continue
+
+        normalized_rows = _normalized_statement_rows(table, classified.get("unit"))
+        if not normalized_rows:
+            continue
+
+        statements.append(
+            {
+                "table_index": classified["table_index"],
+                "title": classified["title"],
+                "table_type": classified["table_type"],
+                "statement_scope": classified["statement_scope"],
+                "unit": classified["unit"],
+                "rows": normalized_rows,
+            }
+        )
+
+    return statements
+
+
 def _compact_tables_for_parser_result(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
     for table in tables[:20]:
@@ -514,6 +687,19 @@ def _major_section_anchors(text: str) -> list[dict[str, Any]]:
             }
         )
 
+    if "expert_confirmation" not in seen_keys:
+        expert_match = _DART_EXPERT_HEADING_PATTERN.search(text)
+        if expert_match:
+            anchors.append(
+                {
+                    "key": "expert_confirmation",
+                    "roman": None,
+                    "title": "전문가의 확인",
+                    "matched_title": _clean_section_text(expert_match.group(0)),
+                    "start": expert_match.start(),
+                }
+            )
+
     anchors.sort(key=lambda item: int(item["start"]))
     return anchors
 
@@ -524,6 +710,99 @@ def _normalize_roman(value: str) -> str:
         if value == unicode_roman:
             return ascii_roman
     return value
+
+
+def _extract_section_tree(text: str) -> list[dict[str, Any]]:
+    anchors = _major_section_anchors(text)
+    if not anchors:
+        cleaned = _clean_section_text(text)
+        return [
+            {
+                "section_key": "unclassified",
+                "section_title": "분류되지 않은 본문",
+                "section_order": 0,
+                "label": None,
+                "level": 0,
+                "text_chars": len(cleaned),
+                "snippet": cleaned[:1200],
+                "children": [],
+            }
+        ] if cleaned else []
+
+    tree: list[dict[str, Any]] = []
+    for index, anchor in enumerate(anchors):
+        end = anchors[index + 1]["start"] if index + 1 < len(anchors) else len(text)
+        raw_section_text = text[anchor["start"] : end]
+        section_text = _clean_section_text(raw_section_text)
+        tree.append(
+            {
+                "section_key": anchor["key"],
+                "section_title": anchor["title"],
+                "section_order": index + 1,
+                "label": anchor.get("roman"),
+                "matched_title": anchor.get("matched_title"),
+                "level": 0,
+                "text_chars": len(section_text),
+                "snippet": section_text[:1200],
+                "children": _build_subsection_tree(raw_section_text, anchor["title"]),
+            }
+        )
+
+    return tree
+
+
+def _build_subsection_tree(raw_section_text: str, section_title: str) -> list[dict[str, Any]]:
+    anchors = _subsection_anchors(raw_section_text)
+    if anchors and _same_heading(anchors[0]["title"], section_title):
+        anchors = anchors[1:]
+    if not anchors:
+        return []
+
+    roots: list[dict[str, Any]] = []
+    stack: list[dict[str, Any]] = []
+
+    for index, anchor in enumerate(anchors):
+        end = anchors[index + 1]["start"] if index + 1 < len(anchors) else len(raw_section_text)
+        subsection_text = _clean_section_text(raw_section_text[anchor["start"] : end])
+        level = _heading_level(anchor["label"])
+        node = {
+            "label": anchor["label"],
+            "title": anchor["title"],
+            "level": level,
+            "text_chars": len(subsection_text),
+            "snippet": subsection_text[:800],
+            "children": [],
+        }
+
+        while stack and int(stack[-1]["level"]) >= level:
+            stack.pop()
+
+        if stack:
+            stack[-1]["children"].append(node)
+        else:
+            roots.append(node)
+
+        stack.append(node)
+
+    return roots
+
+
+def _same_heading(left: str, right: str) -> bool:
+    normalize = lambda value: re.sub(r"\s+", "", value or "")
+    return normalize(left) == normalize(right)
+
+
+def _heading_level(label: str) -> int:
+    compact = re.sub(r"\s+", "", label or "")
+    if re.match(r"^\d{1,2}[\.)]$", compact):
+        return 1
+    if re.match(r"^[가-힣][\.)]$", compact):
+        return 2
+    if re.match(r"^\(\d{1,2}\)$", compact):
+        return 3
+    if re.match(r"^[A-Z][\.)]$", compact):
+        return 2
+    return 1
 
 
 def _split_section_into_chunks(
@@ -716,6 +995,7 @@ class DartParser:
 
         period_parts = _period_parts(period)
         sections, document_chunks = _extract_sections_and_chunks(text)
+        section_tree = _extract_section_tree(text)
         topic_signals = _extract_topic_signals(text)
         warnings: list[str] = []
         candidates: list[dict[str, Any]] = []
@@ -726,6 +1006,8 @@ class DartParser:
             if isinstance(raw_tables, list)
             else []
         )
+        classified_tables = _classify_tables(tables)
+        financial_statements = _extract_financial_statements(tables)
 
         table_metrics = _extract_table_statement_metrics(tables)
         statement_metrics = table_metrics or _extract_dart_statement_metrics(text)
@@ -795,6 +1077,7 @@ class DartParser:
             "event_fields": event_fields,
             "dart_page": _candidate_page(candidates, "revenue_total")
             or _candidate_page(candidates, "operating_profit"),
+            "financial_statement_count": len(financial_statements),
             "financial_metrics_source": (
                 statement_metrics.get("source")
                 or ("dart_document_text" if document_fetched else "not_available_without_document")
@@ -839,7 +1122,10 @@ class DartParser:
                 "image_count": extra.get("image_count"),
             },
             "sections": sections,
+            "section_tree": section_tree,
             "document_chunks": document_chunks,
+            "classified_tables": classified_tables,
+            "financial_statements": financial_statements,
             "topic_signals": topic_signals,
             "topics": [signal["topic"] for signal in topic_signals],
             "financial_record": financial_record,

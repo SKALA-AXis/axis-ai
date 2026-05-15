@@ -29,11 +29,24 @@ _DART_STATUS_BLOCKED = {"010", "011", "012", "020"}
 DEFAULT_LOOKBACK_DAYS = 365
 DEFAULT_PAGE_COUNT = 100
 DEFAULT_FETCH_DOCUMENT = True
-DEFAULT_MAX_DOCUMENT_LENGTH = 200000
+DEFAULT_MAX_DOCUMENT_LENGTH = 0
 DEFAULT_DISCLOSURE_TYPES = ("A", "B", "F")
 DEFAULT_MAX_STRUCTURED_TABLES = 80
 DEFAULT_MAX_STRUCTURED_TABLE_ROWS = 80
 DEFAULT_MAX_STRUCTURED_TABLE_COLS = 20
+_STRUCTURED_TABLE_KEYWORDS = (
+    "손익계산서",
+    "포괄손익계산서",
+    "재무상태표",
+    "현금흐름표",
+    "자본변동표",
+    "매출액",
+    "영업이익",
+    "자산총계",
+    "부채총계",
+    "자본총계",
+    "영업활동현금흐름",
+)
 
 _DISCLOSURE_TYPE_LABELS = {
     "A": "regular",
@@ -640,13 +653,21 @@ def _replace_tables_with_text(soup: BeautifulSoup) -> None:
 
 
 def _extract_structured_tables_from_markup(markup: str) -> list[dict]:
-    snippets = re.findall(
-        r"<table\b[^>]*>.*?</table>",
-        markup,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
     tables: list[dict] = []
-    for idx, table_markup in enumerate(snippets[: _max_structured_tables()], start=1):
+    max_tables = _max_structured_tables()
+    for idx, match in enumerate(
+        re.finditer(
+            r"<table\b[^>]*>.*?</table>",
+            markup,
+            flags=re.IGNORECASE | re.DOTALL,
+        ),
+        start=1,
+    ):
+        if len(tables) >= max_tables:
+            break
+        table_markup = match.group(0)
+        if not _looks_like_structured_table_candidate(table_markup):
+            continue
         soup = BeautifulSoup(table_markup, "html.parser")
         table = soup.find("table")
         if not isinstance(table, Tag):
@@ -659,11 +680,21 @@ def _extract_structured_tables_from_markup(markup: str) -> list[dict]:
 
 def _extract_structured_tables(soup: BeautifulSoup, filename: str) -> list[dict]:
     tables: list[dict] = []
-    for idx, table in enumerate(soup.find_all("table")[: _max_structured_tables()], start=1):
+    max_tables = _max_structured_tables()
+    for idx, table in enumerate(soup.find_all("table"), start=1):
+        if len(tables) >= max_tables:
+            break
+        if not _looks_like_structured_table_candidate(str(table)):
+            continue
         structured = _structured_table(table, idx=idx, filename=filename)
         if structured:
             tables.append(structured)
     return tables
+
+
+def _looks_like_structured_table_candidate(table_markup: str) -> bool:
+    head = re.sub(r"\s+", "", table_markup[:80_000])
+    return any(keyword in head for keyword in _STRUCTURED_TABLE_KEYWORDS)
 
 
 def _structured_table(table: Tag, idx: int, filename: str) -> dict | None:
