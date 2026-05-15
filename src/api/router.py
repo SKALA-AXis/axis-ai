@@ -8,6 +8,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
+from src.api.mixer_schemas import MixerAnalysisRequest, MixerAnalysisResponse
 from src.schemas import (
     BriefingContent,
     BriefingRequest,
@@ -268,6 +269,27 @@ async def generate_insight(request: InsightGenerateRequest) -> InsightGenerateRe
         context=request.context,
     )
     return InsightGenerateResponse.model_validate(result)
+
+
+@app.post("/mixer/analyze", response_model=MixerAnalysisResponse)
+async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
+    """MixerAnalysis — 3-phase per_card / cross_card / synthesis CoT.
+
+    design: ``axis-ai/design/30-analysis/mixer-analysis.md``. Walking Skeleton
+    phase 2 prototype — 6축 radar 는 결정적 산식, reasoning 만 LLM 단일 호출.
+
+    cold-start fallback (ContextPack 미주입). ``@with_ledger_writeback`` 으로
+    분석 ledger 에 carry-over.
+    """
+    from src.agents.mixer_analysis_agent import MixerAnalysisAgent
+
+    log.info("Mixer 요청 | card_ids=%s", request.card_ids)
+    result = await MixerAnalysisAgent().analyze(
+        card_ids=request.card_ids,
+        ratios=request.ratios,
+        user_context=request.user_context,
+    )
+    return MixerAnalysisResponse.model_validate(result)
 
 
 @app.post("/weak-signal/run")
