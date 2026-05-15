@@ -63,8 +63,30 @@ class FollowUpSuggestion(BaseModel):
     )
 
 
+class AgentTraceStep(BaseModel):
+    """Supervisor pattern 가시화 — orchestration 의 step 별 timeline 기록.
+
+    각 sub-agent 호출 / phase / LLM call 단위로 1 step. parent_step_idx 로 nested
+    /parallel fan-out 표현.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    step_idx: int
+    agent: str  # "IntentRouter" | "PeerComparisonAgent" | "ChatOrchestrator" | ...
+    phase: str  # "classify" | "fetch_cards" | "compute_deltas" | "llm_analyze" | ...
+    status: Literal["pending", "running", "completed", "failed", "skipped"] = "completed"
+    started_at: Optional[str] = None  # ISO8601
+    ended_at: Optional[str] = None
+    duration_ms: Optional[int] = None
+    input_summary: str = ""
+    output_summary: str = ""
+    model: Optional[str] = None  # gpt-4o / gpt-4o-mini / None (산식 only)
+    parent_step_idx: Optional[int] = None  # 같은 parent 면 parallel fan-out
+
+
 class ChatTurnResponse(BaseModel):
-    """``POST /chat`` 응답. design §5 ChatTurnOutput schema."""
+    """``POST /chat`` 응답. design §5 ChatTurnOutput schema + agent_trace 확장."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -77,6 +99,10 @@ class ChatTurnResponse(BaseModel):
     sk_ax_implication: Optional[str] = None
     deep_dive_depth: int = 1
     reasoning_steps: Optional[list[dict[str, Any]]] = None
+    agent_trace: list[AgentTraceStep] = Field(
+        default_factory=list,
+        description="Supervisor pattern 가시화 — agent 간 협업 timeline.",
+    )
     confidence: float = 0.0
     session_id: str
     provenance: dict[str, Any] = Field(default_factory=dict)
