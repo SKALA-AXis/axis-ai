@@ -1268,7 +1268,8 @@ def _build_analysis_facts(
     topic_chunks = [
         chunk
         for chunk in document_chunks
-        if chunk.get("topic_signals") or chunk.get("section_key") in {"business", "management_discussion"}
+        if chunk.get("topic_signals")
+        or chunk.get("section_key") in {"business", "management_discussion"}
     ]
     for chunk in topic_chunks[:_ANALYSIS_FACT_MAX_CHUNKS]:
         topics = chunk.get("topics") or ["business"]
