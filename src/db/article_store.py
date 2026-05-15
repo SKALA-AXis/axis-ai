@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import threading
 from datetime import datetime
 from typing import Any, Optional
@@ -53,14 +54,16 @@ def save_articles(
             if not _is_valid(article, storage_company):
                 continue
             try:
+                sanitized_title = _sanitize_text(article.title)[:500]
+                sanitized_content = _sanitize_text(article.content if article.content else "")
                 result = db.execute(
                     _INSERT_SQL,
                     {
                         "source_type": article.source_type,
                         "source_name": article.source_name,
                         "publisher": article.publisher,
-                        "title": article.title[:500],
-                        "content": article.content if article.content else "",
+                        "title": sanitized_title,
+                        "content": sanitized_content,
                         "url": article.url,
                         "url_hash": article.url_hash,
                         "published_at": article.published_at or article.collected_at,
@@ -503,13 +506,11 @@ def _metadata_json(
     storage_company: Optional[list[str]] = None,
     run_context: CrawlRunContext | None = None,
 ) -> str:
-    import json
-
-    meta = dict(article.extra)
+    meta = _sanitize_jsonish(dict(article.extra))
     meta["url_hash"] = article.url_hash
     meta["company_tier"] = company_tier_map(storage_company or article.company)
     if article.peer_id and "peer_id" not in meta:
-        meta["peer_id"] = article.peer_id
+        meta["peer_id"] = _sanitize_text(article.peer_id)
     if not article.company and storage_company and INDUSTRY_TREND_COMPANY in storage_company:
         meta["topic_scope"] = "industry_trend"
         meta["company_scope"] = "industry"
@@ -528,3 +529,27 @@ def _metadata_json(
         if run_context.window_end:
             meta["window_end"] = run_context.window_end.isoformat()
     return json.dumps(meta, ensure_ascii=False)
+
+
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _sanitize_text(value: Any) -> str:
+    text = str(value or "")
+    text = _CONTROL_CHAR_RE.sub(" ", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{4,}", "\n\n\n", text)
+    return text.strip()
+
+
+def _sanitize_jsonish(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _sanitize_jsonish(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_jsonish(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_jsonish(item) for item in value]
+    if isinstance(value, str):
+        return _sanitize_text(value)
+    return value

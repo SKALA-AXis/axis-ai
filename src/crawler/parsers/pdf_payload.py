@@ -81,6 +81,7 @@ def extract_pdf_payload(pdf_bytes: bytes, *, max_text_chars: int = 200_000) -> d
 
 
 def _clean_pdf_text(text: str) -> str:
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", text or "")
     text = text.replace("\\n", "\n")
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{4,}", "\n\n\n", text)
@@ -101,6 +102,7 @@ def _extract_pdf_page_blocks(page) -> list[dict[str, Any]]:
             continue
 
         x0, y0, x1, y1, text = block[:5]
+        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", text or "")
         text = re.sub(r"\s+", " ", text or "").strip()
         if not text:
             continue
