@@ -1,4 +1,4 @@
-"""Track A/B/C 크롤 오케스트레이터 — 원천 수집 + URL 중복 제거 + 저장."""
+"""Track A/B/C/D 크롤 오케스트레이터 — 원천 수집 + URL 중복 제거 + 저장."""
 
 import json
 import logging
@@ -18,21 +18,23 @@ log = logging.getLogger(__name__)
 
 TRACK_A_SOURCES = (
     "naver_news",
-    "stock",
+    "global_newsroom",
 )
 TRACK_B_SOURCES = (
+    "stock",
     "naver_research",
-    "jobs",
-    "company_news",
-    "global_newsroom",
-    "naver_datalab",
 )
 TRACK_C_SOURCES = (
+    "jobs",
+    "company_news",
+)
+TRACK_D_SOURCES = (
     "dart",
     "ir",
+    "sk_ax_site",
+    "naver_datalab",
     "spri",
     "bcg",
-    "sk_ax_site",
 )
 
 
@@ -54,7 +56,7 @@ class BatchProcessor:
         recent_hours: int = 1,
         run_context: CrawlRunContext | None = None,
     ) -> list[RawArticle]:
-        """Track A — 고빈도/실시간성 수집."""
+        """Track A — 뉴스성 고빈도 수집."""
         return await self.run_sources(
             TRACK_A_SOURCES,
             keywords=keywords,
@@ -70,7 +72,7 @@ class BatchProcessor:
         crawl_window: CrawlWindow | None = None,
         run_context: CrawlRunContext | None = None,
     ) -> list[RawArticle]:
-        """Track B — 일중/일간 신호 수집."""
+        """Track B — 마켓/증권 리포트 수집."""
         return await self.run_sources(
             TRACK_B_SOURCES,
             keywords=keywords,
@@ -86,13 +88,29 @@ class BatchProcessor:
         crawl_window: CrawlWindow | None = None,
         run_context: CrawlRunContext | None = None,
     ) -> list[RawArticle]:
-        """Track C — 저빈도/무거운 문서형 수집."""
+        """Track C — 업무시간성 채용/기업 뉴스 수집."""
         return await self.run_sources(
             TRACK_C_SOURCES,
             keywords=keywords,
             persist=persist,
             crawl_window=crawl_window,
             run_context=run_context or CrawlRunContext(collection_mode="scheduled", track="C"),
+        )
+
+    async def run_track_d(
+        self,
+        keywords: dict[str, list[str]],
+        persist: bool = True,
+        crawl_window: CrawlWindow | None = None,
+        run_context: CrawlRunContext | None = None,
+    ) -> list[RawArticle]:
+        """Track D — 문서/리포트/자사 사이트 저빈도 수집."""
+        return await self.run_sources(
+            TRACK_D_SOURCES,
+            keywords=keywords,
+            persist=persist,
+            crawl_window=crawl_window,
+            run_context=run_context or CrawlRunContext(collection_mode="scheduled", track="D"),
         )
 
     async def run_sources(
