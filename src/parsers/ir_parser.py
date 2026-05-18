@@ -37,6 +37,73 @@ _OPERATING_PROFIT_PATTERNS = [
         re.IGNORECASE,
     ),
 ]
+_NET_INCOME_PATTERNS = [
+    re.compile(
+        r"(?:당기순이익|순이익|Net\s*Income|Net\s*Profit)\s*[:：]?\s*"
+        r"([\d,]+(?:\.\d+)?)\s*(억원|조원|억|조)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"([\d,]+(?:\.\d+)?)[ \t]*(억원|조원|억|조)[ \t]*"
+        r"(?:당기순이익|순이익|net\s*income|net\s*profit)",
+        re.IGNORECASE,
+    ),
+]
+_EBITDA_PATTERNS = [
+    re.compile(
+        r"(?:EBITDA|상각전\s*영업이익)\s*[:：]?\s*([\d,]+(?:\.\d+)?)\s*(억원|조원|억|조)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"([\d,]+(?:\.\d+)?)[ \t]*(억원|조원|억|조)[ \t]*(?:EBITDA|상각전\s*영업이익)",
+        re.IGNORECASE,
+    ),
+]
+_BACKLOG_PATTERNS = [
+    re.compile(
+        r"(?:수주잔고|수주\s*잔고|Backlog|잔여\s*수주|계약\s*잔액)\s*[:：]?\s*"
+        r"([\d,]+(?:\.\d+)?)\s*(억원|조원|억|조)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"([\d,]+(?:\.\d+)?)[ \t]*(억원|조원|억|조)[ \t]*"
+        r"(?:수주잔고|수주\s*잔고|backlog|잔여\s*수주|계약\s*잔액)",
+        re.IGNORECASE,
+    ),
+]
+_CAPEX_PATTERNS = [
+    re.compile(
+        r"(?:CAPEX|CapEx|설비투자|투자금액|투자\s*집행|자본적\s*지출)\s*[:：]?\s*"
+        r"([\d,]+(?:\.\d+)?)\s*(억원|조원|억|조)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"([\d,]+(?:\.\d+)?)[ \t]*(억원|조원|억|조)[ \t]*"
+        r"(?:CAPEX|CapEx|설비투자|투자금액|투자\s*집행|자본적\s*지출)",
+        re.IGNORECASE,
+    ),
+]
+_OPERATING_MARGIN_PATTERNS = [
+    re.compile(
+        r"(?:영업이익률|OPM|Operating\s*Margin)\s*[:：]?\s*"
+        r"([\d,]+(?:\.\d+)?)\s*(%|퍼센트|pct|p)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"([\d,]+(?:\.\d+)?)\s*(%|퍼센트|pct|p)\s*"
+        r"(?:영업이익률|OPM|operating\s*margin)",
+        re.IGNORECASE,
+    ),
+]
+_IR_FINANCIAL_METRIC_RULES: tuple[tuple[str, list[re.Pattern[str]], str], ...] = (
+    ("revenue_total", _REVENUE_PATTERNS, "amount_krwbn"),
+    ("operating_profit", _OPERATING_PROFIT_PATTERNS, "amount_krwbn"),
+    ("net_income", _NET_INCOME_PATTERNS, "amount_krwbn"),
+    ("ebitda", _EBITDA_PATTERNS, "amount_krwbn"),
+    ("backlog", _BACKLOG_PATTERNS, "amount_krwbn"),
+    ("capex", _CAPEX_PATTERNS, "amount_krwbn"),
+    ("operating_margin", _OPERATING_MARGIN_PATTERNS, "percentage"),
+)
 _PERIOD_PATTERNS = [
     re.compile(r"(20\d{2})\s*년?\s*([1-4])\s*분기"),
     re.compile(r"(20\d{2})\s*Q\s*([1-4])", re.IGNORECASE),
@@ -44,8 +111,47 @@ _PERIOD_PATTERNS = [
     re.compile(r"([1-4])\s*Q\s*['’]?\s*(\d{2})", re.IGNORECASE),
 ]
 _PAGE_SPLIT_PATTERN = re.compile(r"(?:^|\n)\[PAGE\s+(\d+)\]\s*", re.IGNORECASE)
-_IR_CHUNK_MAX_CHARS = 2800
-_IR_CHUNK_OVERLAP_CHARS = 180
+_IR_CHUNK_MIN_CHARS = 120
+_IR_CHUNK_TARGET_CHARS = 650
+_IR_CHUNK_MAX_CHARS = 950
+_IR_CHUNK_OVERLAP_CHARS = 120
+_IR_LOW_VALUE_PATTERNS = (
+    re.compile(r"\bdisclaimer\b", re.IGNORECASE),
+    re.compile(r"forward[-\s]?looking", re.IGNORECASE),
+    re.compile(r"본\s*자료는\s*투자자", re.IGNORECASE),
+    re.compile(r"무단\s*(복제|배포|전재)", re.IGNORECASE),
+    re.compile(r"confidential", re.IGNORECASE),
+)
+_IR_SIGNAL_TERMS = (
+    "매출",
+    "영업이익",
+    "순이익",
+    "이익률",
+    "revenue",
+    "sales",
+    "operating profit",
+    "op",
+    "net income",
+    "cloud",
+    "클라우드",
+    "ai",
+    "생성형",
+    "ax",
+    "dx",
+    "erp",
+    "scm",
+    "스마트",
+    "factory",
+    "수주",
+    "backlog",
+    "투자",
+    "capex",
+    "전망",
+    "strategy",
+    "성장",
+    "risk",
+    "리스크",
+)
 _IR_SECTION_RULES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "summary",
@@ -132,6 +238,85 @@ _IR_COMPANY_SECTION_HINTS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...
         ("portfolio", "Portfolio", ("portfolio", "investment", "투자", "배당", "주주환원")),
     ),
 }
+_IR_COMPANY_TOTAL_TERMS = (
+    "financial results",
+    "경영실적 종합",
+    "경영실적",
+    "실적 요약",
+    "consolidated",
+    "연결",
+    "company total",
+    "overall",
+    "income statement",
+    "손익계산서",
+    "손익",
+    "전사",
+    "전체",
+)
+_IR_PORTFOLIO_TERMS = (
+    "portfolio",
+    "post-rebalancing",
+    "investment",
+    "subsidiar",
+    "affiliate",
+    "sk inc. at a glance",
+    "투자회사",
+    "투자 포트폴리오",
+    "자회사",
+    "관계사",
+    "포트폴리오",
+    "에스케이이노베이션",
+    "sk이노베이션",
+    "sk innovation",
+    "sk스퀘어",
+    "sk square",
+    "sk바이오팜",
+    "sk biopharmaceuticals",
+    "sk텔레콤",
+    "sk telecom",
+    "sk하이닉스",
+    "sk hynix",
+    "sk e&s",
+)
+_IR_SEGMENT_CONTEXT_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "cloud",
+        (
+            "cloud",
+            "클라우드",
+            "msp",
+            "csp",
+            "aws",
+            "azure",
+            "gcp",
+            "data center",
+            "데이터센터",
+            "dc",
+        ),
+    ),
+    (
+        "ai_ax",
+        (
+            "ai",
+            "생성형",
+            "genai",
+            "llm",
+            "agent",
+            "fabrix",
+            "brity",
+            "enterprise ai",
+            "제조 ax",
+            "공공 ax",
+            "erp ai",
+            "scm",
+        ),
+    ),
+    ("logistics", ("logistics", "물류", "cello", "scl")),
+    ("smart_factory", ("smart factory", "스마트팩토리", "mes", "factory", "제조")),
+    ("vehicle_sw", ("vehicle", "차량", "sdv", "내비게이션", "navigation")),
+    ("enterprise_it", ("enterprise", "erp", "ito", "si", "그룹사", "it서비스")),
+    ("robotics", ("robot", "로봇", "automation", "자동화")),
+)
 
 
 def _normalize_amount_krwbn(value: str, unit: str) -> float:
@@ -179,6 +364,189 @@ def _first_amount(
             return _normalize_amount_krwbn(match.group(1), match.group(2)), match.group(0)
 
     return None, None
+
+
+def _normalize_percentage(value: str) -> float:
+    return float(value.replace(",", ""))
+
+
+def _metric_values(
+    text: str,
+    patterns: list[re.Pattern[str]],
+    value_kind: str,
+) -> list[tuple[float, str]]:
+    values: list[tuple[float, str]] = []
+    seen: set[tuple[str, float]] = set()
+    for pattern in patterns:
+        for match in pattern.finditer(text or ""):
+            if value_kind == "percentage":
+                value = _normalize_percentage(match.group(1))
+            else:
+                value = _normalize_amount_krwbn(match.group(1), match.group(2))
+            raw = match.group(0)
+            dedupe_key = (raw, value)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            values.append((value, raw))
+
+    return values
+
+
+def _first_metric_value(
+    text: str,
+    patterns: list[re.Pattern[str]],
+    value_kind: str,
+) -> tuple[float, str] | tuple[None, None]:
+    values = _metric_values(text, patterns, value_kind)
+    if not values:
+        return None, None
+    return values[0]
+
+
+def _candidate_value_key(value_kind: str) -> str:
+    if value_kind == "percentage":
+        return "value_pct"
+    return "value_krwbn"
+
+
+def _classify_metric_context(
+    page_text: str,
+    *,
+    peer_id: str | None,
+    raw_match: str | None = None,
+) -> dict[str, Any]:
+    text = " ".join((page_text or "").split()).lower()
+    metric_window = _metric_context_window(page_text, raw_match)
+    current_line_text = _metric_current_line_text(page_text, raw_match)
+    metric_text = _metric_context_text(page_text, raw_match)
+    has_total = any(term.lower() in text for term in _IR_COMPANY_TOTAL_TERMS)
+    portfolio_entity = (
+        _detect_portfolio_entity(metric_window)
+        or _detect_portfolio_entity(current_line_text)
+        or _detect_portfolio_entity(metric_text)
+    )
+    metric_segment_area = (
+        _detect_business_area(current_line_text)
+        or _detect_business_area(metric_window)
+        or _detect_business_area(metric_text)
+    )
+    segment_area = metric_segment_area or _detect_business_area(text)
+
+    if portfolio_entity:
+        return {
+            "metric_scope": "portfolio_company",
+            "business_area": "portfolio",
+            "entity_name": portfolio_entity,
+            "confidence": 0.78,
+        }
+
+    if metric_segment_area:
+        return {
+            "metric_scope": "segment",
+            "business_area": metric_segment_area,
+            "entity_name": peer_id,
+            "confidence": 0.78,
+        }
+
+    if segment_area and not has_total:
+        return {
+            "metric_scope": "segment",
+            "business_area": segment_area,
+            "entity_name": peer_id,
+            "confidence": 0.72,
+        }
+
+    if has_total:
+        return {
+            "metric_scope": "company_total",
+            "business_area": None,
+            "entity_name": peer_id,
+            "confidence": 0.85,
+        }
+
+    return {
+        "metric_scope": "unknown",
+        "business_area": segment_area,
+        "entity_name": peer_id,
+        "confidence": 0.55,
+    }
+
+
+def _metric_context_text(page_text: str, raw_match: str | None) -> str:
+    line_context = _metric_line_context(page_text, raw_match)
+    if line_context:
+        return line_context
+    return _metric_context_window(page_text, raw_match)
+
+
+def _metric_current_line_text(page_text: str, raw_match: str | None) -> str:
+    if not raw_match:
+        return ""
+
+    raw_lower = raw_match.lower()
+    for line in str(page_text or "").splitlines():
+        line = re.sub(r"\s+", " ", line).strip()
+        if raw_lower in line.lower():
+            return line.lower()
+    return ""
+
+
+def _metric_line_context(page_text: str, raw_match: str | None) -> str | None:
+    if not raw_match:
+        return None
+
+    lines = [re.sub(r"\s+", " ", line).strip() for line in str(page_text or "").splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return None
+
+    raw_lower = raw_match.lower()
+    for index, line in enumerate(lines):
+        if raw_lower not in line.lower():
+            continue
+
+        start = max(0, index - 3)
+        context_lines = lines[start : index + 1]
+        return " ".join(context_lines).lower()
+
+    return None
+
+
+def _metric_context_window(page_text: str, raw_match: str | None) -> str:
+    compact_text = " ".join((page_text or "").split())
+    if not raw_match:
+        return compact_text.lower()
+
+    match_index = compact_text.lower().find(raw_match.lower())
+    if match_index < 0:
+        return compact_text.lower()
+
+    start = max(0, match_index - 35)
+    end = min(len(compact_text), match_index + len(raw_match))
+    return compact_text[start:end].lower()
+
+
+def _detect_business_area(text: str) -> str | None:
+    for business_area, terms in _IR_SEGMENT_CONTEXT_RULES:
+        if any(term.lower() in text for term in terms):
+            return business_area
+    return None
+
+
+def _detect_portfolio_entity(text: str) -> str | None:
+    entity_terms = (
+        ("sk_innovation", ("sk이노베이션", "sk innovation", "에스케이이노베이션")),
+        ("sk_square", ("sk스퀘어", "sk square")),
+        ("sk_biopharmaceuticals", ("sk바이오팜", "sk biopharmaceuticals")),
+        ("sk_telecom", ("sk텔레콤", "sk telecom")),
+        ("sk_hynix", ("sk하이닉스", "sk hynix")),
+        ("sk_e_and_s", ("sk e&s", "에스케이 e&s")),
+    )
+    for entity_name, terms in entity_terms:
+        if any(term.lower() in text for term in terms):
+            return entity_name
+    return None
 
 
 def _article_get(article: Any, key: str, default: Any = None) -> Any:
@@ -317,6 +685,84 @@ def _match_topics(text: str) -> tuple[list[str], dict[str, list[str]]]:
 
 
 def _split_text_chunks(text: str, max_chars: int = _IR_CHUNK_MAX_CHARS) -> list[str]:
+    value = _normalize_ir_chunk_text(text)
+    if not value:
+        return []
+    if len(value) <= max_chars:
+        return [value] if _is_informative_ir_chunk(value) else []
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    for paragraph in _ir_paragraphs(value):
+        if len(paragraph) > max_chars:
+            if current:
+                _append_ir_chunk(chunks, "\n".join(current))
+                current = []
+                current_len = 0
+            for split in _split_long_ir_paragraph(paragraph, max_chars=max_chars):
+                _append_ir_chunk(chunks, split)
+            continue
+
+        next_len = current_len + len(paragraph) + (1 if current else 0)
+        if current and next_len > max_chars:
+            _append_ir_chunk(chunks, "\n".join(current))
+            current = []
+            current_len = 0
+
+        current.append(paragraph)
+        current_len += len(paragraph) + (1 if current_len else 0)
+
+        if current_len >= _IR_CHUNK_TARGET_CHARS:
+            _append_ir_chunk(chunks, "\n".join(current))
+            current = []
+            current_len = 0
+
+    if current:
+        _append_ir_chunk(chunks, "\n".join(current))
+
+    return chunks
+
+
+def _normalize_ir_chunk_text(text: str) -> str:
+    lines = []
+    for raw_line in str(text or "").splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line:
+            continue
+        if re.fullmatch(r"[-–—]?\s*\d+\s*[-–—]?", line):
+            continue
+        lines.append(line)
+
+    return "\n".join(lines).strip()
+
+
+def _ir_paragraphs(text: str) -> list[str]:
+    paragraphs = [line.strip() for line in text.splitlines() if line.strip()]
+    if not paragraphs:
+        return []
+
+    merged: list[str] = []
+    buffer: list[str] = []
+    buffer_len = 0
+
+    for paragraph in paragraphs:
+        if buffer and buffer_len + len(paragraph) > _IR_CHUNK_TARGET_CHARS:
+            merged.append("\n".join(buffer))
+            buffer = []
+            buffer_len = 0
+
+        buffer.append(paragraph)
+        buffer_len += len(paragraph)
+
+    if buffer:
+        merged.append("\n".join(buffer))
+
+    return merged
+
+
+def _split_long_ir_paragraph(text: str, *, max_chars: int) -> list[str]:
     value = text.strip()
     if not value:
         return []
@@ -342,6 +788,48 @@ def _split_text_chunks(text: str, max_chars: int = _IR_CHUNK_MAX_CHARS) -> list[
         start = max(boundary - _IR_CHUNK_OVERLAP_CHARS, start + 1)
 
     return chunks
+
+
+def _append_ir_chunk(chunks: list[str], text: str) -> None:
+    value = text.strip()
+    if _is_informative_ir_chunk(value):
+        chunks.append(value)
+
+
+def _is_informative_ir_chunk(text: str) -> bool:
+    value = text.strip()
+    if not value:
+        return False
+
+    lowered = value.lower()
+    has_signal = _has_ir_signal(value)
+    has_metric = _has_financial_metric_text(value)
+
+    if any(pattern.search(value) for pattern in _IR_LOW_VALUE_PATTERNS) and not has_metric:
+        return False
+
+    if len(value) < _IR_CHUNK_MIN_CHARS and not has_signal and not has_metric:
+        return False
+
+    alpha_numeric_count = len(re.findall(r"[0-9A-Za-z가-힣]", value))
+    if alpha_numeric_count < 30 and not has_metric:
+        return False
+
+    if lowered in {"disclaimer", "contents", "목차"}:
+        return False
+
+    return True
+
+
+def _has_ir_signal(text: str) -> bool:
+    lowered = text.lower()
+    return any(term.lower() in lowered for term in _IR_SIGNAL_TERMS)
+
+
+def _has_financial_metric_text(text: str) -> bool:
+    return any(
+        pattern.search(text) for pattern in (*_REVENUE_PATTERNS, *_OPERATING_PROFIT_PATTERNS)
+    )
 
 
 def _extract_sections_and_chunks(
@@ -388,17 +876,22 @@ def _extract_sections_and_chunks(
             all_topic_signals[topic] = sorted(merged)[:12]
 
         for local_idx, chunk_text in enumerate(_split_text_chunks(page_text), start=1):
+            chunk_section_key, chunk_section_title, chunk_section_signals = _classify_page_section(
+                chunk_text, peer_id=peer_id
+            )
+            chunk_topics, chunk_topic_signals = _match_topics(chunk_text)
             document_chunks.append(
                 {
                     "chunk_id": f"ir-p{page_no or 'x'}-{local_idx}",
                     "page": page_no,
-                    "section_key": section_key,
-                    "section_title": section_title,
+                    "section_key": chunk_section_key,
+                    "section_title": chunk_section_title,
+                    "section_signals": chunk_section_signals,
                     "chunk_index": len(document_chunks) + 1,
                     "text_chars": len(chunk_text),
                     "text": chunk_text,
-                    "topics": topics,
-                    "topic_signals": topic_signals,
+                    "topics": chunk_topics,
+                    "topic_signals": chunk_topic_signals,
                 }
             )
 
@@ -414,18 +907,80 @@ def _build_financial_record(
     source: str,
     peer_id: str | None,
     period: str | None,
-    revenue_total: float | None,
-    operating_profit: float | None,
     title: str,
     url: str,
     published_at: str | None,
     candidates: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    metric_details = {
+        str(candidate["type"]): {
+            key: value
+            for key, value in candidate.items()
+            if key
+            in {
+                "page",
+                "raw",
+                "value_krwbn",
+                "value_pct",
+                "value_kind",
+                "metric_scope",
+                "business_area",
+                "entity_name",
+                "confidence",
+            }
+        }
+        for candidate in candidates
+        if candidate.get("type")
+    }
+    accepted_scopes = {"company_total", "segment"}
+    revenue_total = _candidate_value(
+        candidates,
+        "revenue_total",
+        "value_krwbn",
+        allowed_scopes=accepted_scopes,
+    )
+    operating_profit = _candidate_value(
+        candidates,
+        "operating_profit",
+        "value_krwbn",
+        allowed_scopes=accepted_scopes,
+    )
     return {
         "peer_id": peer_id,
         "period": period,
         "revenue_total_krwbn": revenue_total,
         "operating_profit_krwbn": operating_profit,
+        "net_income_krwbn": _candidate_value(
+            candidates,
+            "net_income",
+            "value_krwbn",
+            allowed_scopes=accepted_scopes,
+        ),
+        "ebitda_krwbn": _candidate_value(
+            candidates,
+            "ebitda",
+            "value_krwbn",
+            allowed_scopes=accepted_scopes,
+        ),
+        "backlog_krwbn": _candidate_value(
+            candidates,
+            "backlog",
+            "value_krwbn",
+            allowed_scopes=accepted_scopes,
+        ),
+        "capex_krwbn": _candidate_value(
+            candidates,
+            "capex",
+            "value_krwbn",
+            allowed_scopes=accepted_scopes,
+        ),
+        "operating_margin_pct": _candidate_value(
+            candidates,
+            "operating_margin",
+            "value_pct",
+            allowed_scopes=accepted_scopes,
+        ),
+        "metric_details": metric_details,
         "source": source,
         "title": title,
         "url": url,
@@ -433,6 +988,23 @@ def _build_financial_record(
         "ir_page": _candidate_page(candidates, "revenue_total")
         or _candidate_page(candidates, "operating_profit"),
     }
+
+
+def _candidate_value(
+    candidates: list[dict[str, Any]],
+    metric_type: str,
+    value_key: str,
+    *,
+    allowed_scopes: set[str] | None = None,
+) -> float | None:
+    for candidate in candidates:
+        if candidate.get("type") != metric_type:
+            continue
+        if allowed_scopes is not None and candidate.get("metric_scope") not in allowed_scopes:
+            continue
+        value = candidate.get(value_key)
+        return float(value) if isinstance(value, int | float) else None
+    return None
 
 
 class IRParser:
@@ -461,8 +1033,7 @@ class IRParser:
             pages,
             peer_id=peer_id,
         )
-        revenue_total: float | None = None
-        operating_profit: float | None = None
+        seen_metric_candidates: set[tuple[str, int | None, str]] = set()
 
         for page in pages:
             page_no = page.get("page")
@@ -472,34 +1043,40 @@ class IRParser:
                 period = _extract_period(page_text)
                 period_year, period_quarter, period_type = _period_parts(period)
 
-            if revenue_total is None:
-                value, raw = _first_amount(page_text, _REVENUE_PATTERNS)
-                if value is not None:
-                    revenue_total = value
+            for metric_type, patterns, value_kind in _IR_FINANCIAL_METRIC_RULES:
+                for value, raw in _metric_values(page_text, patterns, value_kind):
+                    dedupe_key = (metric_type, page_no if isinstance(page_no, int) else None, raw)
+                    if dedupe_key in seen_metric_candidates:
+                        continue
+                    seen_metric_candidates.add(dedupe_key)
+                    metric_context = _classify_metric_context(
+                        page_text,
+                        peer_id=peer_id,
+                        raw_match=raw,
+                    )
                     candidates.append(
                         {
                             "page": page_no,
-                            "type": "revenue_total",
-                            "value_krwbn": value,
+                            "type": metric_type,
+                            "value_kind": value_kind,
+                            _candidate_value_key(value_kind): value,
                             "raw": raw,
+                            **metric_context,
                         }
                     )
 
-            if operating_profit is None:
-                value, raw = _first_amount(page_text, _OPERATING_PROFIT_PATTERNS)
-                if value is not None:
-                    operating_profit = value
-                    candidates.append(
-                        {
-                            "page": page_no,
-                            "type": "operating_profit",
-                            "value_krwbn": value,
-                            "raw": raw,
-                        }
-                    )
-
-            if revenue_total is not None and operating_profit is not None and period:
-                break
+        revenue_total = _candidate_value(
+            candidates,
+            "revenue_total",
+            "value_krwbn",
+            allowed_scopes={"company_total", "segment"},
+        )
+        operating_profit = _candidate_value(
+            candidates,
+            "operating_profit",
+            "value_krwbn",
+            allowed_scopes={"company_total", "segment"},
+        )
 
         if not period:
             warnings.append("period 추출 실패")
@@ -512,8 +1089,6 @@ class IRParser:
             source="ir",
             peer_id=peer_id,
             period=period,
-            revenue_total=revenue_total,
-            operating_profit=operating_profit,
             title=title,
             url=url,
             published_at=published_at,
@@ -533,6 +1108,11 @@ class IRParser:
             "period_type": period_type,
             "revenue_total_krwbn": revenue_total,
             "operating_profit_krwbn": operating_profit,
+            "net_income_krwbn": financial_record.get("net_income_krwbn"),
+            "ebitda_krwbn": financial_record.get("ebitda_krwbn"),
+            "backlog_krwbn": financial_record.get("backlog_krwbn"),
+            "capex_krwbn": financial_record.get("capex_krwbn"),
+            "operating_margin_pct": financial_record.get("operating_margin_pct"),
             "candidates": candidates,
             "sections": sections,
             "document_chunks": document_chunks,

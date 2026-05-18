@@ -38,7 +38,6 @@ class IngestionState(TypedDict):
     collected_since: str | None
     crawl_run_id: str | None
     raw_article_ids: list[int]
-    credible_ids: list[int]
     relevant_ids: list[int]
     official_document_ids: list[int]
     parsed_document_ids: list[int]
@@ -221,17 +220,7 @@ def crawl_node(state: IngestionState) -> IngestionState:
     return {**state, "raw_article_ids": raw_ids}
 
 
-@_logged_step("credibility", "raw_article_ids", "credible_ids")
-def credibility_node(state: IngestionState) -> IngestionState:
-    """Gate 2: credibility_score 기준 신뢰도 필터."""
-    from src.agents.credibility_agent import CredibilityAgent
-
-    credible_ids, skipped = CredibilityAgent().filter(state["raw_article_ids"])
-    log.info("Gate 2 완료 | credible=%d skipped=%d", len(credible_ids), len(skipped))
-    return {**state, "credible_ids": credible_ids}
-
-
-@_logged_step("preprocess_route", "credible_ids", "relevant_ids")
+@_logged_step("preprocess_route", "raw_article_ids", "relevant_ids")
 def preprocess_route_node(state: IngestionState) -> IngestionState:
     """source_type별 DB 전처리 라우팅."""
     from src.agents.relevance_agent import RelevanceAgent
@@ -239,8 +228,8 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
     from src.parsers.parser_quality import analyze_parser_quality_article
     from src.parsers.parser_router import DocumentParserRouter
 
-    credible_ids = state.get("credible_ids", [])
-    if not credible_ids:
+    raw_article_ids = state.get("raw_article_ids", [])
+    if not raw_article_ids:
         return {
             **state,
             "relevant_ids": [],
@@ -251,7 +240,7 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
             "skipped_preprocess_ids": [],
         }
 
-    articles = get_articles_by_ids(credible_ids)
+    articles = get_articles_by_ids(raw_article_ids)
     by_source: dict[str, list[int]] = {}
     for article in articles:
         by_source.setdefault(_source_type(article), []).append(int(article["id"]))
@@ -632,7 +621,6 @@ def build_ingestion_graph() -> StateGraph:
     graph = StateGraph(IngestionState)
 
     graph.add_node("crawl", crawl_node)
-    graph.add_node("credibility", credibility_node)
     graph.add_node("preprocess_route", preprocess_route_node)
     graph.add_node("dedup", dedup_node)
     graph.add_node("classify", classify_node)
@@ -641,8 +629,7 @@ def build_ingestion_graph() -> StateGraph:
     graph.add_node("vector_index", vector_index_node)
 
     graph.set_entry_point("crawl")
-    graph.add_edge("crawl", "credibility")
-    graph.add_edge("credibility", "preprocess_route")
+    graph.add_edge("crawl", "preprocess_route")
     graph.add_edge("preprocess_route", "dedup")
     graph.add_edge("dedup", "classify")
     graph.add_edge("classify", "card_news")

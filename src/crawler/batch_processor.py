@@ -142,6 +142,7 @@ class BatchProcessor:
         global_company_ids = [peer_id for peer_id in keywords if peer_id in GLOBAL_COMPANY_IDS]
 
         if "naver_news" in requested:
+            naver_errors: list[str] = []
             cutoff = crawl_window.start if crawl_window else _hours_cutoff(recent_hours)
             for peer_id, kws in domestic_keywords.items():
                 naver_crawler = NaverNewsCrawler(
@@ -153,11 +154,17 @@ class BatchProcessor:
                 try:
                     articles.extend(await naver_crawler.crawl())
                 except Exception as e:
+                    naver_errors.append(f"{peer_id}: {type(e).__name__}: {e}")
                     log.error(
                         "source 크롤 오류 | source=naver_news company=%s error=%s",
                         peer_id,
                         e,
                     )
+            if crawl_window and naver_errors:
+                raise RuntimeError(
+                    "naver_news backfill failed; cursor not advanced. "
+                    + "; ".join(naver_errors[:5])
+                )
 
         for peer_id, kws in domestic_keywords.items():
             crawlers: list[tuple[str, _Crawlable]] = []

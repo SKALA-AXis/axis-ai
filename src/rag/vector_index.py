@@ -74,7 +74,6 @@ def index_card(card: dict[str, Any]) -> Optional[str]:
         "sector": card.get("sector"),
         "exposure_score": card.get("exposure_score", 0.0),
         "exposure_band": card.get("exposure_band"),
-        "credibility_score": rep.get("credibility_score", 0.0),
         "published_at": _published_at_ts(rep.get("published_at")),
         "cluster_id": card.get("cluster_id"),
         "source_name": rep.get("source_name"),

@@ -43,7 +43,7 @@ _ISSUE_CARD_PROMPT = """\
   "summary_lines": ["1. ...", "2. ...", "3. ..."],
   "event_type": "tech",
   "sources": [
-    {{"index": 1, "title": "...", "source_name": "...", "url": "...", "credibility_score": 0.0}}
+    {{"index": 1, "title": "...", "source_name": "...", "url": "..."}}
   ]
 }}"""
 
@@ -249,12 +249,9 @@ def _first_non_empty(*values: Any) -> str:
 def _format_articles(articles: list[dict[str, Any]]) -> str:
     lines = []
     for i, a in enumerate(articles, 1):
-        credibility_score = a.get("credibility_score")
-        credibility_text = f"{credibility_score:.2f}" if credibility_score is not None else "미계산"
         lines.append(
             f"[{i}] 제목: {a['title']}\n"
-            f"    출처: {a['source_name']} (신뢰도: {credibility_text})"
-            f" | URL: {a['url']}\n"
+            f"    출처: {a['source_name']} | URL: {a['url']}\n"
             f"    내용: {' '.join((a.get('content') or '').split())}"
         )
     return "\n\n".join(lines)
@@ -276,7 +273,6 @@ def _default_sources(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "title": a["title"],
             "source_name": a["source_name"],
             "url": a["url"],
-            "credibility_score": a.get("credibility_score"),
         }
         for i, a in enumerate(articles)
     ]

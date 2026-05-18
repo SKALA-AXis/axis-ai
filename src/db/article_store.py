@@ -80,6 +80,95 @@ _SOURCE_METADATA_EXCLUDED_KEYS = {
     "matched_sectors",
 }
 
+_UPSERT_FINANCIAL_METRIC_SQL = text("""
+    INSERT INTO raw_article_financial_metrics (
+        raw_article_id, metric_uid, source_type, source_name, peer_id,
+        period, period_year, period_quarter, period_type,
+        metric_name, metric_label, metric_scope, business_area,
+        value_numeric, value_krwbn, value_krw, unit, currency,
+        source_page, source_table_uid, source_chunk_uid,
+        confidence, extraction_method, evidence_text, payload
+    ) VALUES (
+        :raw_article_id, :metric_uid, :source_type, :source_name, :peer_id,
+        :period, :period_year, :period_quarter, :period_type,
+        :metric_name, :metric_label, :metric_scope, :business_area,
+        :value_numeric, :value_krwbn, :value_krw, :unit, :currency,
+        :source_page, :source_table_uid, :source_chunk_uid,
+        :confidence, :extraction_method, :evidence_text, CAST(:payload AS jsonb)
+    )
+    ON CONFLICT (raw_article_id, metric_uid) DO UPDATE SET
+        source_type = EXCLUDED.source_type,
+        source_name = EXCLUDED.source_name,
+        peer_id = EXCLUDED.peer_id,
+        period = EXCLUDED.period,
+        period_year = EXCLUDED.period_year,
+        period_quarter = EXCLUDED.period_quarter,
+        period_type = EXCLUDED.period_type,
+        metric_name = EXCLUDED.metric_name,
+        metric_label = EXCLUDED.metric_label,
+        metric_scope = EXCLUDED.metric_scope,
+        business_area = EXCLUDED.business_area,
+        value_numeric = EXCLUDED.value_numeric,
+        value_krwbn = EXCLUDED.value_krwbn,
+        value_krw = EXCLUDED.value_krw,
+        unit = EXCLUDED.unit,
+        currency = EXCLUDED.currency,
+        source_page = EXCLUDED.source_page,
+        source_table_uid = EXCLUDED.source_table_uid,
+        source_chunk_uid = EXCLUDED.source_chunk_uid,
+        confidence = EXCLUDED.confidence,
+        extraction_method = EXCLUDED.extraction_method,
+        evidence_text = EXCLUDED.evidence_text,
+        payload = EXCLUDED.payload
+""")
+
+_UPSERT_BUSINESS_SIGNAL_SQL = text("""
+    INSERT INTO raw_article_business_signals (
+        raw_article_id, signal_uid, source_type, source_name, peer_id,
+        period, period_year, period_quarter, period_type,
+        business_area, signal_type, sentiment, summary, evidence_text,
+        source_page, source_chunk_uid, confidence, extraction_method, payload
+    ) VALUES (
+        :raw_article_id, :signal_uid, :source_type, :source_name, :peer_id,
+        :period, :period_year, :period_quarter, :period_type,
+        :business_area, :signal_type, :sentiment, :summary, :evidence_text,
+        :source_page, :source_chunk_uid, :confidence, :extraction_method,
+        CAST(:payload AS jsonb)
+    )
+    ON CONFLICT (raw_article_id, signal_uid) DO UPDATE SET
+        source_type = EXCLUDED.source_type,
+        source_name = EXCLUDED.source_name,
+        peer_id = EXCLUDED.peer_id,
+        period = EXCLUDED.period,
+        period_year = EXCLUDED.period_year,
+        period_quarter = EXCLUDED.period_quarter,
+        period_type = EXCLUDED.period_type,
+        business_area = EXCLUDED.business_area,
+        signal_type = EXCLUDED.signal_type,
+        sentiment = EXCLUDED.sentiment,
+        summary = EXCLUDED.summary,
+        evidence_text = EXCLUDED.evidence_text,
+        source_page = EXCLUDED.source_page,
+        source_chunk_uid = EXCLUDED.source_chunk_uid,
+        confidence = EXCLUDED.confidence,
+        extraction_method = EXCLUDED.extraction_method,
+        payload = EXCLUDED.payload
+""")
+
+_DELETE_FINANCIAL_METRICS_SQL = text("""
+    DELETE FROM raw_article_financial_metrics
+    WHERE raw_article_id = ANY(:raw_article_ids)
+      AND (:source_type IS NULL OR source_type = :source_type)
+    RETURNING 1
+""")
+
+_DELETE_BUSINESS_SIGNALS_SQL = text("""
+    DELETE FROM raw_article_business_signals
+    WHERE raw_article_id = ANY(:raw_article_ids)
+      AND (:source_type IS NULL OR source_type = :source_type)
+    RETURNING 1
+""")
+
 
 def save_articles(
     articles: list[RawArticle],
@@ -179,7 +268,6 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
                        raw_articles.content, raw_articles.url,
                        raw_articles.source_type, raw_articles.content_type,
                        raw_articles.publisher, raw_articles.language,
-                       raw_articles.credibility_score, raw_articles.credibility_grade,
                        raw_articles.relevance_score, raw_articles.relevance_label,
                        raw_articles.relevance_reason,
                        raw_articles.matched_companies, raw_articles.matched_sectors,
@@ -190,7 +278,9 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
                 LEFT JOIN raw_article_metadata_unified mu
                     ON mu.raw_article_id = raw_articles.id
                 WHERE raw_articles.id = ANY(:ids)
-                ORDER BY raw_articles.credibility_score DESC NULLS LAST
+                ORDER BY raw_articles.published_at DESC NULLS LAST,
+                         raw_articles.collected_at DESC NULLS LAST,
+                         raw_articles.id DESC
             """),
             {"ids": ids},
         ).fetchall()
@@ -370,11 +460,16 @@ def list_card_news_cluster_candidates(
             r.url,
             r.importance_level,
             r.importance_score,
-            r.credibility_score,
             r.published_at,
             r.collected_at,
             COALESCE(
-                array_agg(a.id ORDER BY a.credibility_score DESC NULLS LAST, a.published_at DESC)
+                array_agg(
+                    a.id
+                    ORDER BY
+                        a.published_at DESC NULLS LAST,
+                        a.collected_at DESC NULLS LAST,
+                        a.id DESC
+                )
                     FILTER (WHERE a.id IS NOT NULL),
                 ARRAY[]::bigint[]
             ) AS article_ids,
@@ -392,7 +487,7 @@ def list_card_news_cluster_candidates(
           {where_today}
         GROUP BY
             r.cluster_id, r.id, r.company, r.title, r.url,
-            r.importance_level, r.importance_score, r.credibility_score,
+            r.importance_level, r.importance_score,
             r.published_at, r.collected_at
         ORDER BY
             COALESCE(r.importance_score, 0) DESC,
@@ -442,6 +537,142 @@ def update_preprocess_status(
                     ),
                 )
         db.commit()
+
+
+def upsert_raw_article_financial_metrics(
+    metrics: list[dict[str, Any]],
+) -> int:
+    """IR/DART 분석에서 추출한 숫자형 fact를 upsert한다."""
+    if not metrics:
+        return 0
+
+    with SessionLocal() as db:
+        for metric in metrics:
+            db.execute(_UPSERT_FINANCIAL_METRIC_SQL, _financial_metric_params(metric))
+        db.commit()
+
+    return len(metrics)
+
+
+def delete_raw_article_financial_metrics(
+    raw_article_ids: list[int],
+    *,
+    source_type: str | None = None,
+) -> int:
+    """선택한 원문 기사에 연결된 숫자형 fact를 삭제한다."""
+    if not raw_article_ids:
+        return 0
+
+    with SessionLocal() as db:
+        result = db.execute(
+            _DELETE_FINANCIAL_METRICS_SQL,
+            {
+                "raw_article_ids": raw_article_ids,
+                "source_type": source_type,
+            },
+        )
+        deleted_rows = result.fetchall()
+        db.commit()
+
+    return len(deleted_rows)
+
+
+def upsert_raw_article_business_signals(
+    signals: list[dict[str, Any]],
+) -> int:
+    """IR/DART 분석에서 추출한 사업/전략/리스크 신호를 upsert한다."""
+    if not signals:
+        return 0
+
+    with SessionLocal() as db:
+        for signal in signals:
+            db.execute(_UPSERT_BUSINESS_SIGNAL_SQL, _business_signal_params(signal))
+        db.commit()
+
+    return len(signals)
+
+
+def delete_raw_article_business_signals(
+    raw_article_ids: list[int],
+    *,
+    source_type: str | None = None,
+) -> int:
+    """선택한 원문 기사에 연결된 사업/전략/리스크 신호를 삭제한다."""
+    if not raw_article_ids:
+        return 0
+
+    with SessionLocal() as db:
+        result = db.execute(
+            _DELETE_BUSINESS_SIGNALS_SQL,
+            {
+                "raw_article_ids": raw_article_ids,
+                "source_type": source_type,
+            },
+        )
+        deleted_rows = result.fetchall()
+        db.commit()
+
+    return len(deleted_rows)
+
+
+def _financial_metric_params(metric: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "raw_article_id": metric["raw_article_id"],
+        "metric_uid": metric["metric_uid"],
+        "source_type": metric["source_type"],
+        "source_name": metric.get("source_name"),
+        "peer_id": metric.get("peer_id"),
+        "period": metric.get("period"),
+        "period_year": metric.get("period_year"),
+        "period_quarter": metric.get("period_quarter"),
+        "period_type": metric.get("period_type"),
+        "metric_name": metric["metric_name"],
+        "metric_label": metric.get("metric_label"),
+        "metric_scope": metric.get("metric_scope"),
+        "business_area": metric.get("business_area"),
+        "value_numeric": metric.get("value_numeric"),
+        "value_krwbn": metric.get("value_krwbn"),
+        "value_krw": metric.get("value_krw"),
+        "unit": metric.get("unit"),
+        "currency": metric.get("currency", "KRW"),
+        "source_page": metric.get("source_page"),
+        "source_table_uid": metric.get("source_table_uid"),
+        "source_chunk_uid": metric.get("source_chunk_uid"),
+        "confidence": metric.get("confidence"),
+        "extraction_method": metric.get("extraction_method"),
+        "evidence_text": metric.get("evidence_text"),
+        "payload": json.dumps(
+            _sanitize_jsonish(metric.get("payload") or {}),
+            ensure_ascii=False,
+        ),
+    }
+
+
+def _business_signal_params(signal: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "raw_article_id": signal["raw_article_id"],
+        "signal_uid": signal["signal_uid"],
+        "source_type": signal["source_type"],
+        "source_name": signal.get("source_name"),
+        "peer_id": signal.get("peer_id"),
+        "period": signal.get("period"),
+        "period_year": signal.get("period_year"),
+        "period_quarter": signal.get("period_quarter"),
+        "period_type": signal.get("period_type"),
+        "business_area": signal["business_area"],
+        "signal_type": signal["signal_type"],
+        "sentiment": signal.get("sentiment"),
+        "summary": signal["summary"],
+        "evidence_text": signal.get("evidence_text"),
+        "source_page": signal.get("source_page"),
+        "source_chunk_uid": signal.get("source_chunk_uid"),
+        "confidence": signal.get("confidence"),
+        "extraction_method": signal.get("extraction_method"),
+        "payload": json.dumps(
+            _sanitize_jsonish(signal.get("payload") or {}),
+            ensure_ascii=False,
+        ),
+    }
 
 
 # ──────────────────────────────────────────────────────────────

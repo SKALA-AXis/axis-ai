@@ -64,7 +64,6 @@ def _to_dict(article: Any) -> dict[str, Any]:
         "crawl_status": getattr(article, "crawl_status", "success"),
         "error_message": getattr(article, "error_message", None),
         "source_tier": getattr(article, "source_tier", None),
-        "credibility_score": getattr(article, "credibility_score", None),
         "extra": extra,
     }
 

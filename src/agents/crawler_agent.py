@@ -17,6 +17,7 @@ _LOAD_SQL = text("""
     SELECT ra.id
     FROM raw_articles ra
     WHERE ra.processing_status = 'RAW'
+      AND ra.crawl_status = 'success'
       AND (:no_filter OR ra.company ?| :company)
       AND (:collected_since IS NULL OR ra.collected_at >= CAST(:collected_since AS timestamptz))
       AND (

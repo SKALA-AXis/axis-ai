@@ -64,7 +64,6 @@ class CardNewsAgent:
         event_type = _normalize_event_type(classification.get("event_type"))
         exposure_band = _normalize_exposure_band(classification.get("exposure_band"))
         exposure_score = _optional_float(classification.get("exposure_score"))
-        trust_score = _trust_score(articles)
         source_article_ids = _source_article_ids(summary, articles)
         created_at = _now_iso()
         published_date = _published_date(articles, created_at)
@@ -95,7 +94,6 @@ class CardNewsAgent:
             "sector": sector,
             "exposure_band": exposure_band,
             "exposure_score": exposure_score,
-            "trust_score": trust_score,
             "implication": _implication(analysis),
             "sources": sources,
             "source_count": len(sources),
@@ -192,8 +190,6 @@ def _sources(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "archive_url": article.get("archive_url"),
                 "source_name": str(article.get("source_name") or article.get("publisher") or ""),
                 "published_at": _string_or_none(article.get("published_at")),
-                "credibility_grade": _credibility_grade(article.get("credibility_score")),
-                "credibility_score": _optional_float(article.get("credibility_score")),
                 "link_status": "ok",
             }
         )
@@ -290,7 +286,6 @@ def _evidence_chain(
                 "title": source.get("title"),
                 "source_name": source.get("source_name"),
                 "url": source.get("url"),
-                "credibility_score": source.get("credibility_score"),
             }
             for source in sources
         ],
@@ -396,26 +391,6 @@ def _subtitle(analysis: dict[str, Any], classification: dict[str, Any]) -> str:
     impact = str(analysis.get("impact_level") or "").strip()
     event_type = _normalize_event_type(classification.get("event_type"))
     return impact.upper() if impact else event_type
-
-
-def _trust_score(articles: list[dict[str, Any]]) -> float | None:
-    scores = [
-        score
-        for score in (_optional_float(article.get("credibility_score")) for article in articles)
-        if score is not None
-    ]
-    return max(scores) if scores else None
-
-
-def _credibility_grade(value: Any) -> str:
-    score = _optional_float(value)
-    if score is None:
-        return "Unverified"
-    if score >= 0.8:
-        return "High"
-    if score >= 0.6:
-        return "Medium"
-    return "Low"
 
 
 def _validation_pass(summary: dict[str, Any], analysis: dict[str, Any]) -> bool:

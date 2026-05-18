@@ -4,20 +4,29 @@ import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from src.agents.credibility_agent import compute_credibility_score
 from src.agents.relevance_agent import (
     _core_company_role_reject_result,
     _metadata_patch_for_relevance,
     _result,
 )
-from src.crawler.base import CrawlWindow, RawArticle
 from src.crawler.backfill_runner import BackfillRunner
+from src.crawler.base import CrawlWindow, RawArticle
 from src.crawler.batch_processor import _window_months
 from src.crawler.sources.bcg import match_bcg_core_sectors
+from src.crawler.sources.keyword import (
+    load_naver_credential_pairs as load_datalab_credentials,
+)
+from src.crawler.sources.keyword import (
+    request_datalab_api,
+)
 from src.crawler.sources.naver import (
+    NaverApiCredentialExhaustedError,
+    NaverCredential,
+    NaverNewsCrawler,
     article_mentions_target_peer,
     classify_peer_relevance,
     get_search_aliases,
+    load_naver_credentials,
 )
 from src.crawler.sources.skax_crawler import (
     classify_page_kind,
@@ -45,6 +54,148 @@ def test_raw_article_fields():
     )
     assert article.url
     assert article.company == ["samsung_sds"]
+
+
+def test_naver_credentials_support_multiple_keys(monkeypatch):
+    monkeypatch.delenv("NAVER_CLIENT_ID_1", raising=False)
+    monkeypatch.delenv("NAVER_CLIENT_SECRET_1", raising=False)
+    monkeypatch.delenv("NAVER_CLIENT_ID_2", raising=False)
+    monkeypatch.delenv("NAVER_CLIENT_SECRET_2", raising=False)
+    monkeypatch.setenv("NAVER_CLIENT_IDS", "id1, id2")
+    monkeypatch.setenv("NAVER_CLIENT_SECRETS", "secret1, secret2")
+    monkeypatch.setenv("NAVER_CLIENT_ID", "id2")
+    monkeypatch.setenv("NAVER_CLIENT_SECRET", "secret2")
+
+    credentials = load_naver_credentials()
+
+    assert [credential.client_id for credential in credentials] == ["id1", "id2"]
+    assert [credential.client_secret for credential in credentials] == ["secret1", "secret2"]
+
+
+def test_naver_credentials_support_numbered_keys(monkeypatch):
+    monkeypatch.delenv("NAVER_CLIENT_IDS", raising=False)
+    monkeypatch.delenv("NAVER_CLIENT_SECRETS", raising=False)
+    monkeypatch.setenv("NAVER_CLIENT_ID", "default_id")
+    monkeypatch.setenv("NAVER_CLIENT_SECRET", "default_secret")
+    monkeypatch.setenv("NAVER_CLIENT_ID_2", "id2")
+    monkeypatch.setenv("NAVER_CLIENT_SECRET_2", "secret2")
+    monkeypatch.setenv("NAVER_CLIENT_ID_1", "id1")
+    monkeypatch.setenv("NAVER_CLIENT_SECRET_1", "secret1")
+
+    credentials = load_naver_credentials()
+
+    assert [credential.client_id for credential in credentials] == [
+        "id1",
+        "id2",
+        "default_id",
+    ]
+    assert [credential.client_secret for credential in credentials] == [
+        "secret1",
+        "secret2",
+        "default_secret",
+    ]
+
+
+async def test_naver_news_retries_next_key_on_401(monkeypatch):
+    monkeypatch.setenv("NAVER_CLIENT_IDS", "")
+    monkeypatch.setenv("NAVER_CLIENT_SECRETS", "")
+    monkeypatch.setenv("NAVER_CLIENT_ID", "")
+    monkeypatch.setenv("NAVER_CLIENT_SECRET", "")
+
+    class FakeClient:
+        def __init__(self):
+            self.headers: list[dict[str, str]] = []
+
+        async def get(self, _url, params, headers):  # noqa: ANN001
+            self.headers.append(headers)
+            status_code = 401 if len(self.headers) == 1 else 200
+            return SimpleNamespace(status_code=status_code)
+
+    crawler = NaverNewsCrawler(peer_id="samsung_sds", aliases=[], fetch_body=False)
+    crawler.credentials = [
+        NaverCredential("blocked_id", "blocked_secret"),
+        NaverCredential("ok_id", "ok_secret"),
+    ]
+    client = FakeClient()
+
+    response = await crawler._request_api(client, params={"query": "삼성SDS"})
+
+    assert response.status_code == 200
+    assert [headers["X-Naver-Client-Id"] for headers in client.headers] == [
+        "blocked_id",
+        "ok_id",
+    ]
+
+
+async def test_naver_news_raises_when_all_keys_blocked(monkeypatch):
+    monkeypatch.setenv("NAVER_CLIENT_IDS", "")
+    monkeypatch.setenv("NAVER_CLIENT_SECRETS", "")
+    monkeypatch.setenv("NAVER_CLIENT_ID", "")
+    monkeypatch.setenv("NAVER_CLIENT_SECRET", "")
+
+    crawler = NaverNewsCrawler(peer_id="samsung_sds", aliases=[], fetch_body=False)
+    crawler.credentials = [NaverCredential("blocked_id", "blocked_secret")]
+
+    async def fake_request_api(_client, params):  # noqa: ANN001
+        return SimpleNamespace(status_code=429)
+
+    monkeypatch.setattr(crawler, "_request_api", fake_request_api)
+
+    try:
+        await crawler._fetch(query="삼성SDS", sector="")
+    except NaverApiCredentialExhaustedError as exc:
+        assert "HTTP 429" in str(exc)
+    else:
+        raise AssertionError("Expected NaverApiCredentialExhaustedError")
+
+
+def test_datalab_credentials_support_multiple_keys(monkeypatch):
+    monkeypatch.setattr("src.crawler.sources.keyword.load_dotenv", lambda override=True: None)
+    monkeypatch.delenv("NAVER_CLIENT_ID_1", raising=False)
+    monkeypatch.delenv("NAVER_CLIENT_SECRET_1", raising=False)
+    monkeypatch.delenv("NAVER_CLIENT_ID_2", raising=False)
+    monkeypatch.delenv("NAVER_CLIENT_SECRET_2", raising=False)
+    monkeypatch.setenv("NAVER_CLIENT_IDS", "id1, id2")
+    monkeypatch.setenv("NAVER_CLIENT_SECRETS", "secret1, secret2")
+    monkeypatch.setenv("NAVER_CLIENT_ID", "id2")
+    monkeypatch.setenv("NAVER_CLIENT_SECRET", "secret2")
+
+    credentials = load_datalab_credentials()
+
+    assert [credential.client_id for credential in credentials] == ["id1", "id2"]
+    assert [credential.client_secret for credential in credentials] == ["secret1", "secret2"]
+
+
+def test_datalab_request_retries_next_key_on_403(monkeypatch):
+    monkeypatch.setattr("src.crawler.sources.keyword.load_dotenv", lambda override=True: None)
+    monkeypatch.setenv("NAVER_CLIENT_IDS", "blocked_id, ok_id")
+    monkeypatch.setenv("NAVER_CLIENT_SECRETS", "blocked_secret, ok_secret")
+    monkeypatch.setenv("NAVER_CLIENT_ID", "")
+    monkeypatch.setenv("NAVER_CLIENT_SECRET", "")
+
+    calls: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+            self.text = f"HTTP {status_code}"
+
+        def json(self):
+            return {"results": []}
+
+        def raise_for_status(self):
+            raise AssertionError("raise_for_status should not be called")
+
+    def fake_post(_url, headers, json, timeout):  # noqa: ANN001
+        calls.append(headers["X-Naver-Client-Id"])
+        return FakeResponse(403 if len(calls) == 1 else 200)
+
+    monkeypatch.setattr("src.crawler.sources.keyword.requests.post", fake_post)
+
+    response = request_datalab_api(payload={"keywordGroups": []}, retry_count=1)
+
+    assert response == {"results": []}
+    assert calls == ["blocked_id", "ok_id"]
 
 
 def test_window_months_includes_all_months_crossing_backfill_window():
@@ -149,10 +300,6 @@ def test_skax_internal_links_are_deduped_and_filtered():
     assert extract_internal_links(html, "https://www.skax.co.kr/") == [
         "https://www.skax.co.kr/company/about"
     ]
-
-
-def test_company_site_source_type_has_official_level_credibility():
-    assert compute_credibility_score("company_site") == 0.90
 
 
 def test_companyless_trend_report_is_stored_as_industry_trend():
