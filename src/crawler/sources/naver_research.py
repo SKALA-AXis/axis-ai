@@ -24,7 +24,7 @@ NAVER_RESEARCH_URL = (
 
 DEFAULT_LOOKBACK_DAYS = 3
 PDF_MAX_TEXT_CHARS = int(os.getenv("RESEARCH_PDF_MAX_TEXT_CHARS", "200000"))
-MAX_PAGES = int(os.getenv("NAVER_RESEARCH_MAX_PAGES", "30"))
+MAX_PAGES = int(os.getenv("NAVER_RESEARCH_MAX_PAGES", "1000"))
 
 PEER_ITEM_CODES = dict(NAVER_ITEM_CODES)
 
@@ -60,6 +60,7 @@ class NaverResearchCrawler(BaseCrawler):
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             articles: list[RawArticle] = []
             seen_urls: set[str] = set()
+            seen_page_keys: set[tuple[str, ...]] = set()
 
             for page_no in range(1, self._max_pages() + 1):
                 page_url = _with_query_param(url, "page", str(page_no))
@@ -74,6 +75,16 @@ class NaverResearchCrawler(BaseCrawler):
 
                 if not rows:
                     break
+
+                page_key = tuple(_row_key(row) for row in rows)
+                if page_key in seen_page_keys:
+                    log.info(
+                        "네이버 기업 리포트 반복 페이지 감지, 수집 중단 | peer_id=%s page=%s",
+                        self.peer_id,
+                        page_no,
+                    )
+                    break
+                seen_page_keys.add(page_key)
 
                 row_dates = [_row_published_at(row) for row in rows]
 
@@ -240,6 +251,14 @@ def _row_published_at(row) -> datetime | None:
     if len(cells) < 3:
         return None
     return _parse_report_date(cells[2].get_text(" ", strip=True))
+
+
+def _row_key(row) -> str:
+    cells = row.select("td")
+    text_parts = [cell.get_text(" ", strip=True) for cell in cells[:3]]
+    pdf_el = row.select_one("a[href*='.pdf']")
+    pdf_href = pdf_el.get("href", "") if pdf_el else ""
+    return "|".join([*text_parts, pdf_href])
 
 
 def _with_query_param(url: str, key: str, value: str) -> str:
