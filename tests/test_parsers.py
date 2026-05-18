@@ -1,18 +1,18 @@
 from datetime import datetime
 
+from src.crawler.base import RawArticle
+from src.crawler.sources.dart import _infer_header_rows
 from src.parsers.dart_parser import DartParser
 from src.parsers.ir_parser import IRParser
 from src.parsers.parser_quality import analyze_parser_quality_article
 from src.parsers.parser_router import DocumentParserRouter
-from src.crawler.base import RawArticle
-from src.crawler.sources.dart import _infer_header_rows
 
 
 def test_ir_parser_parses_ir_crawler_article() -> None:
     article = RawArticle(
         url="https://example.com/ir.pdf",
         title="테스트사 2026년 1분기 IR Presentation",
-        content="[PAGE 1]\n2026년 1분기\n매출액 9,365억원\n영업이익 300억원",
+        content="[PAGE 1]\n2026년 1분기 경영실적\n매출액 9,365억원\n영업이익 300억원",
         source_name="ir_pdf",
         published_at=datetime(2026, 4, 30),
         peer_id="test_peer",
@@ -27,7 +27,7 @@ def test_ir_parser_parses_ir_crawler_article() -> None:
                 {
                     "page": 1,
                     "blocks": [
-                        {"text": "2026년 1분기"},
+                        {"text": "2026년 1분기 경영실적"},
                         {"text": "매출액 9,365억원"},
                         {"text": "영업이익 300억원"},
                     ],
@@ -44,6 +44,233 @@ def test_ir_parser_parses_ir_crawler_article() -> None:
     assert parsed["revenue_total_krwbn"] == 9365
     assert parsed["operating_profit_krwbn"] == 300
     assert parsed["financial_record"]["ir_page"] == 1
+
+
+def test_ir_parser_filters_low_value_chunks_and_keeps_business_evidence() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="삼성SDS 2026년 1분기 실적발표",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="samsung_sds",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 1,
+                    "blocks": [
+                        {"text": "Samsung SDS 2026년 1분기 실적발표"},
+                    ],
+                },
+                {
+                    "page": 2,
+                    "blocks": [
+                        {
+                            "text": (
+                                "DISCLAIMER This presentation includes forward-looking "
+                                "statements and should not be distributed without permission."
+                            )
+                        },
+                    ],
+                },
+                {
+                    "page": 3,
+                    "blocks": [
+                        {
+                            "text": (
+                                "Cloud 사업은 MSP와 생성형 AI 수요 확대를 기반으로 성장했습니다. "
+                                "GPU 기반 클라우드 전환 프로젝트와 기업 데이터 플랫폼 고도화가 "
+                                "동시에 진행되며 매출액 9,365억원, 영업이익 300억원을 기록했습니다."
+                            )
+                        },
+                        {
+                            "text": (
+                                "Brity Copilot과 FabriX 중심의 AI 사업은 제조, 금융 고객의 "
+                                "업무 자동화 프로젝트로 확대되고 있습니다."
+                            )
+                        },
+                    ],
+                },
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    chunk_text = "\n".join(chunk["text"] for chunk in parsed["document_chunks"])
+
+    assert "DISCLAIMER" not in chunk_text
+    assert "Cloud 사업" in chunk_text
+    assert parsed["document_chunks"][0]["section_key"] == "cloud"
+    assert parsed["revenue_total_krwbn"] == 9365
+    assert parsed["operating_profit_krwbn"] == 300
+
+
+def test_ir_parser_extracts_additional_financial_metric_candidates() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="테스트사 2026년 1분기 IR Presentation",
+        content=(
+            "[PAGE 1]\n"
+            "2026년 1분기 경영실적 종합\n"
+            "매출액 9,365억원\n"
+            "영업이익 300억원\n"
+            "당기순이익 210억원\n"
+            "EBITDA 450억원\n"
+            "수주잔고 1.2조원\n"
+            "CAPEX 80억원\n"
+            "영업이익률 3.2%"
+        ),
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="test_peer",
+        source_type="ir",
+        content_type="pdf",
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates_by_type = {candidate["type"]: candidate for candidate in parsed["candidates"]}
+
+    assert parsed["financial_record"]["net_income_krwbn"] == 210
+    assert parsed["financial_record"]["ebitda_krwbn"] == 450
+    assert parsed["financial_record"]["backlog_krwbn"] == 12000
+    assert parsed["financial_record"]["capex_krwbn"] == 80
+    assert parsed["financial_record"]["operating_margin_pct"] == 3.2
+    assert candidates_by_type["operating_margin"]["value_pct"] == 3.2
+    assert candidates_by_type["backlog"]["value_krwbn"] == 12000
+
+
+def test_ir_parser_marks_business_segment_metrics() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="삼성SDS 2026년 1분기 실적발표",
+        content=(
+            "[PAGE 1]\n"
+            "2026년 1분기\n"
+            "Cloud 사업은 MSP와 GPU 수요 확대에 따라 매출액 1,200억원을 기록했습니다."
+        ),
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="samsung_sds",
+        source_type="ir",
+        content_type="pdf",
+    )
+
+    parsed = IRParser().parse_article(article)
+    revenue_candidate = {candidate["type"]: candidate for candidate in parsed["candidates"]}[
+        "revenue_total"
+    ]
+
+    assert revenue_candidate["metric_scope"] == "segment"
+    assert revenue_candidate["business_area"] == "cloud"
+
+
+def test_ir_parser_keeps_multiple_metric_candidates() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="삼성SDS 2026년 1분기 실적발표",
+        content=(
+            "[PAGE 1]\n"
+            "2026년 1분기 Financial Results\n"
+            "Cloud 사업 매출액 1,200억원 영업이익률 12.5%\n"
+            "물류 사업 매출액 900억원 영업이익률 4.1%"
+        ),
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="samsung_sds",
+        source_type="ir",
+        content_type="pdf",
+    )
+
+    parsed = IRParser().parse_article(article)
+    revenue_candidates = [
+        candidate for candidate in parsed["candidates"] if candidate["type"] == "revenue_total"
+    ]
+    margin_candidates = [
+        candidate for candidate in parsed["candidates"] if candidate["type"] == "operating_margin"
+    ]
+
+    assert [candidate["value_krwbn"] for candidate in revenue_candidates] == [1200, 900]
+    assert [candidate["value_pct"] for candidate in margin_candidates] == [12.5, 4.1]
+    assert {candidate["business_area"] for candidate in revenue_candidates} == {
+        "cloud",
+        "logistics",
+    }
+    assert all(candidate["metric_scope"] == "segment" for candidate in revenue_candidates)
+
+
+def test_ir_parser_uses_nearby_heading_for_business_area() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="SK AX 2026년 1분기 IR Presentation",
+        content=("[PAGE 1]\n2026년 1분기\nERP AI agent 사업\n매출액 800억원\n영업이익률 9.1%"),
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="sk_ax",
+        source_type="ir",
+        content_type="pdf",
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates_by_type = {candidate["type"]: candidate for candidate in parsed["candidates"]}
+
+    assert candidates_by_type["revenue_total"]["metric_scope"] == "segment"
+    assert candidates_by_type["revenue_total"]["business_area"] == "ai_ax"
+    assert candidates_by_type["operating_margin"]["business_area"] == "ai_ax"
+
+
+def test_ir_parser_does_not_mark_sk_metric_as_portfolio_without_related_entity() -> None:
+    article = RawArticle(
+        url="https://example.com/sk-inc-ir.pdf",
+        title="SK AX 2026년 1분기 IR Presentation",
+        content=(
+            "[PAGE 1]\n"
+            "2026년 1분기\n"
+            "Portfolio Overview\n"
+            "SK AX 경영실적\n"
+            "수주잔고 21.6조원\n"
+            "영업이익률 4.9%"
+        ),
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="sk_ax",
+        source_type="ir",
+        content_type="pdf",
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates_by_type = {candidate["type"]: candidate for candidate in parsed["candidates"]}
+
+    assert candidates_by_type["backlog"]["metric_scope"] == "company_total"
+    assert candidates_by_type["backlog"]["entity_name"] == "sk_ax"
+    assert candidates_by_type["operating_margin"]["metric_scope"] == "company_total"
+
+
+def test_ir_parser_marks_sk_portfolio_metrics_separately() -> None:
+    article = RawArticle(
+        url="https://example.com/sk-inc-ir.pdf",
+        title="SK AX 2026년 1분기 IR Presentation",
+        content=(
+            "[PAGE 1]\n"
+            "2026년 1분기\n"
+            "SK Inc. at a Glance Portfolio\n"
+            "SK바이오팜 매출액 1조원, SK스퀘어 영업이익 500억원"
+        ),
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="sk_ax",
+        source_type="ir",
+        content_type="pdf",
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates_by_type = {candidate["type"]: candidate for candidate in parsed["candidates"]}
+
+    assert candidates_by_type["revenue_total"]["metric_scope"] == "portfolio_company"
+    assert candidates_by_type["revenue_total"]["entity_name"] == "sk_biopharmaceuticals"
+    assert candidates_by_type["operating_profit"]["metric_scope"] == "portfolio_company"
 
 
 def test_dart_parser_parses_dart_crawler_article() -> None:
@@ -208,9 +435,9 @@ def test_dart_parser_classifies_and_normalizes_financial_statement_tables() -> N
     rows_by_metric = {row["metric_key"]: row for row in statement["rows"]}
     assert rows_by_metric["revenue_total"]["current_value_krwbn"] == 139298.68
     assert rows_by_metric["operating_profit"]["current_value_krwbn"] == 9571.02
-    revenue_candidate = {
-        candidate["type"]: candidate for candidate in parsed["candidates"]
-    }["revenue_total"]
+    revenue_candidate = {candidate["type"]: candidate for candidate in parsed["candidates"]}[
+        "revenue_total"
+    ]
     assert revenue_candidate["source"] == "structured_table"
     assert revenue_candidate["unit"] == "백만원"
     assert revenue_candidate["value_krw"] == 13929868000000.0

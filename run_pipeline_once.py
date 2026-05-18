@@ -59,7 +59,6 @@ from src.config.sectors import sector_name_ko  # noqa: E402
 from src.pipeline.ingestion_graph import (  # noqa: E402
     classify_node,
     crawl_node,
-    credibility_node,
     dedup_node,
     ingestion_graph,
     preprocess_route_node,
@@ -104,7 +103,6 @@ def main() -> None:
         "collected_since": _args.collected_since,
         "crawl_run_id": _args.crawl_run_id,
         "raw_article_ids": [],
-        "credible_ids": [],
         "relevant_ids": [],
         "official_document_ids": [],
         "parsed_document_ids": [],
@@ -123,7 +121,6 @@ def main() -> None:
 
     if _args.preprocess_only:
         result = crawl_node(initial_state)
-        result = credibility_node(result)
         result = preprocess_route_node(result)
         result = dedup_node(result)
         result = classify_node(result)
@@ -140,7 +137,6 @@ def main() -> None:
     print("📊 파이프라인 v3 실행 결과")
     print("=" * 78)
     print(f"  RAW 기사:        {len(result.get('raw_article_ids', []))}건")
-    print(f"  신뢰도 통과:     {len(result.get('credible_ids', []))}건")
     print(f"  관련 기사:       {len(result.get('relevant_ids', []))}건")
     print(f"  공식 문서:       {len(result.get('official_document_ids', []))}건")
     print(f"  문서형 자료:     {len(result.get('parsed_document_ids', []))}건")
@@ -194,7 +190,6 @@ def main() -> None:
             f"     노출도: {card.get('exposure_score', 0):.2f} ({band})"
             f"  |  cluster={signals.get('cluster_size', 0)}"
             f"  company={signals.get('company_mention_count', 0)}"
-            f"  cred={signals.get('credibility_max', 0):.2f}"
             f"  tier1={signals.get('tier1_count', 0)}"
         )
         print(f"     검증 첨부: {evidence_mark} {val.get('reason', '')}")
@@ -242,7 +237,6 @@ def _print_preprocess_result(result: dict) -> None:
     print("DB 전처리 실행 결과")
     print("=" * 78)
     print(f"  RAW 기사:        {len(result.get('raw_article_ids', []))}건")
-    print(f"  신뢰도 통과:     {len(result.get('credible_ids', []))}건")
     print(f"  관련 기사:       {len(result.get('relevant_ids', []))}건")
     print(f"  공식 문서:       {len(result.get('official_document_ids', []))}건")
     print(f"  파싱 문서:       {len(result.get('parsed_document_ids', []))}건")

@@ -199,7 +199,6 @@ class BackfillRunner:
         from src.pipeline.ingestion_graph import (
             classify_node,
             crawl_node,
-            credibility_node,
             dedup_node,
             ingestion_graph,
             preprocess_route_node,
@@ -211,7 +210,6 @@ class BackfillRunner:
             "collected_since": None,
             "crawl_run_id": crawl_run_id,
             "raw_article_ids": [],
-            "credible_ids": [],
             "relevant_ids": [],
             "official_document_ids": [],
             "parsed_document_ids": [],
@@ -233,7 +231,6 @@ class BackfillRunner:
             result = ingestion_graph.invoke(state)  # type: ignore[attr-defined]
         else:
             result = crawl_node(state)
-            result = credibility_node(result)
             result = preprocess_route_node(result)
             result = dedup_node(result)
             result = classify_node(result)

@@ -161,7 +161,6 @@ async def _run_collection_track(task_id: str, track: str, companies: list[str]) 
         card_news_node,
         classify_node,
         crawl_node,
-        credibility_node,
         dedup_node,
         evidence_node,
         preprocess_route_node,
@@ -194,7 +193,6 @@ async def _run_collection_track(task_id: str, track: str, companies: list[str]) 
             "collected_since": started_at,
             "crawl_run_id": None,
             "raw_article_ids": [],
-            "credible_ids": [],
             "relevant_ids": [],
             "official_document_ids": [],
             "parsed_document_ids": [],
@@ -211,7 +209,6 @@ async def _run_collection_track(task_id: str, track: str, companies: list[str]) 
             "human_review_flags": [],
         }
         result = crawl_node(state)
-        result = credibility_node(result)
         result = preprocess_route_node(result)
         result = dedup_node(result)
         result = classify_node(result)

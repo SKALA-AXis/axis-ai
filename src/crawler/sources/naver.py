@@ -39,6 +39,7 @@ log = logging.getLogger(__name__)
 NAVER_API_URL = "https://openapi.naver.com/v1/search/news.json"
 NAVER_MAX_DISPLAY = 100
 NAVER_MAX_START = 1000
+NAVER_CREDENTIAL_RETRY_STATUS_CODES = {401, 403, 429}
 PEER_ALIASES = COMPANY_ALIASES
 DEFAULT_PEER_IDS = tuple(PEER_ALIASES.keys())
 DEFAULT_MAX_RESULTS = DailyLimitGuard.SOURCE_TYPE_LIMITS["news"]
@@ -83,6 +84,10 @@ class NaverCredential(NamedTuple):
     client_secret: str
 
 
+class NaverApiCredentialExhaustedError(RuntimeError):
+    """모든 네이버 API 키가 인증/권한/쿼터 문제로 실패한 경우."""
+
+
 class NaverNewsCrawler(BaseCrawler):
     def __init__(
         self,
@@ -123,6 +128,8 @@ class NaverNewsCrawler(BaseCrawler):
                 articles.extend(
                     await self._fetch(query=spec["query"], sector=spec.get("sector", ""))
                 )
+            except NaverApiCredentialExhaustedError:
+                raise
             except Exception as e:
                 log.error("네이버 크롤링 실패 | query=%s error=%s", spec["query"], e)
 
@@ -155,13 +162,15 @@ class NaverNewsCrawler(BaseCrawler):
                 if resp is None:
                     return []
 
-                if self._is_blocked(resp.status_code):
+                if self._is_credential_retryable_status(resp.status_code):
                     log.warning(
                         "네이버 API 접근 차단 | status=%d credentials=%d",
                         resp.status_code,
                         len(self.credentials),
                     )
-                    return []
+                    raise NaverApiCredentialExhaustedError(
+                        f"Naver News API credential exhausted: HTTP {resp.status_code}"
+                    )
 
                 resp.raise_for_status()
                 page_items = resp.json().get("items", [])
@@ -228,7 +237,7 @@ class NaverNewsCrawler(BaseCrawler):
                 },
             )
 
-            if not self._is_blocked(resp.status_code):
+            if not self._is_credential_retryable_status(resp.status_code):
                 return resp
 
             blocked_response = resp
@@ -240,6 +249,9 @@ class NaverNewsCrawler(BaseCrawler):
             )
 
         return blocked_response
+
+    def _is_credential_retryable_status(self, status_code: int) -> bool:
+        return status_code in NAVER_CREDENTIAL_RETRY_STATUS_CODES
 
     def _item_to_article(self, item: dict, query: str, sector: str) -> RawArticle:
         return RawArticle(
@@ -278,6 +290,13 @@ def load_naver_credentials() -> list[NaverCredential]:
         for client_id, client_secret in zip(multi_ids, multi_secrets, strict=False):
             _append_credential(credentials, client_id, client_secret)
 
+    for suffix in _credential_suffixes_from_env():
+        _append_credential(
+            credentials,
+            os.getenv(f"NAVER_CLIENT_ID_{suffix}", ""),
+            os.getenv(f"NAVER_CLIENT_SECRET_{suffix}", ""),
+        )
+
     _append_credential(
         credentials,
         os.getenv("NAVER_CLIENT_ID", ""),
@@ -293,6 +312,21 @@ def _split_env_list(value: str) -> list[str]:
         for item in value.split(",")
         if item.strip().strip('"').strip("'")
     ]
+
+
+def _credential_suffixes_from_env() -> list[str]:
+    suffixes = {
+        key.removeprefix("NAVER_CLIENT_ID_")
+        for key in os.environ
+        if key.startswith("NAVER_CLIENT_ID_")
+    }
+    return sorted(suffixes, key=_credential_suffix_sort_key)
+
+
+def _credential_suffix_sort_key(value: str) -> tuple[int, int | str]:
+    if value.isdigit():
+        return (0, int(value))
+    return (1, value)
 
 
 def _append_credential(

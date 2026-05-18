@@ -6,7 +6,7 @@
   uv run python run_preprocess_once.py
 
 이 runner는 로컬 확인용이다. 크롤링은 실행하지 않고, 이미 저장된 crawler JSON을 읽어
-agents 모듈의 credibility, relevance, dedup, classification 결과를 JSON으로 저장한다.
+agents 모듈의 relevance, dedup, classification 결과를 JSON으로 저장한다.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any
 
 from src.agents.classification_agent import classify_preprocessed_cluster
-from src.agents.credibility_agent import analyze_credibility_article
 from src.agents.dedup_agent import deduplicate_articles
 from src.parsers.parser_quality import analyze_parser_quality_article
 from src.parsers.parser_router import DocumentParserRouter
@@ -142,17 +141,10 @@ def _preprocess(articles: list[dict[str, Any]]) -> dict[str, Any]:
     industry_documents: list[dict[str, Any]] = []
     structured_signals: list[dict[str, Any]] = []
     skipped_items: list[dict[str, Any]] = []
-    credible_count = 0
 
     for index, article in enumerate(articles, start=1):
         item = dict(article)
         item["preprocess_id"] = index
-
-        item, is_credible, _reason = analyze_credibility_article(item)
-        if not is_credible:
-            skipped_items.append(item)
-            continue
-        credible_count += 1
 
         route = _preprocess_route(item)
 
@@ -193,7 +185,6 @@ def _preprocess(articles: list[dict[str, Any]]) -> dict[str, Any]:
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "counts": {
             "raw": len(articles),
-            "valid_after_credibility": credible_count,
             "relevant": len(enriched),
             "official_documents": len(official_documents),
             "parsed_documents": len(parsed_documents),

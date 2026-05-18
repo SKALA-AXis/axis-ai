@@ -235,10 +235,6 @@ def compute_exposure(
     cluster_size = len(cluster_articles)
     cluster_size_score = min(cluster_size / _CLUSTER_SIZE_SATURATION, 1.0)
 
-    credibility_max = max(
-        min(max(a.get("credibility_score") or 0.0, 0.0), 1.0) for a in cluster_articles
-    )
-
     company_aliases = _company_aliases(company)
     company_mention_count = sum(
         1
@@ -249,7 +245,7 @@ def compute_exposure(
     )
     company_mention_score = min(company_mention_count / max(cluster_size, 1), 1.0)
 
-    score = 0.50 * cluster_size_score + 0.30 * credibility_max + 0.20 * company_mention_score
+    score = 0.70 * cluster_size_score + 0.30 * company_mention_score
 
     if score >= _HIGH_THRESHOLD:
         band = "high"
@@ -263,7 +259,6 @@ def compute_exposure(
         "exposure_band": band,
         "cluster_size": cluster_size,
         "company_mention_count": company_mention_count,
-        "credibility_max": round(credibility_max, 3),
     }
 
 
@@ -375,7 +370,6 @@ def _zero_exposure() -> dict[str, Any]:
         "exposure_band": "low",
         "cluster_size": 0,
         "company_mention_count": 0,
-        "credibility_max": 0.0,
     }
 
 
@@ -424,7 +418,6 @@ class ClassificationAgent:
             "signals": {
                 "cluster_size": exposure["cluster_size"],
                 "company_mention_count": exposure["company_mention_count"],
-                "credibility_max": exposure["credibility_max"],
                 "impact_signals": impact["impact_signals"],
             },
             "event_type": event_type,
@@ -577,12 +570,9 @@ def _format_articles(articles: list[dict[str, Any]]) -> str:
     lines = []
 
     for i, a in enumerate(articles, 1):
-        credibility_score = a.get("credibility_score")
-        credibility_text = f"{credibility_score:.2f}" if credibility_score is not None else "미계산"
-
         lines.append(
             f"[{i}] 제목: {a['title']}\n"
-            f"    출처: {a['source_name']} (신뢰도: {credibility_text})\n"
+            f"    출처: {a['source_name']}\n"
             f"    내용: {(a.get('content') or '')[:300]}"
         )
 
@@ -611,7 +601,6 @@ def _default_result() -> dict[str, Any]:
         "signals": {
             "cluster_size": 0,
             "company_mention_count": 0,
-            "credibility_max": 0.0,
             "impact_signals": [],
         },
         "event_type": "company",
@@ -660,12 +649,11 @@ def classify_preprocessed_cluster(
         "exposure_band": exposure["exposure_band"],
         "impact_score": impact["impact_score"],
         "impact_band": impact["impact_band"],
-        "signals": {
-            "cluster_size": exposure["cluster_size"],
-            "company_mention_count": exposure["company_mention_count"],
-            "credibility_max": exposure["credibility_max"],
-            "impact_signals": impact["impact_signals"],
-        },
+            "signals": {
+                "cluster_size": exposure["cluster_size"],
+                "company_mention_count": exposure["company_mention_count"],
+                "impact_signals": impact["impact_signals"],
+            },
         "event_type": event_type,
         "reasoning": reasoning,
         "importance": importance_band,

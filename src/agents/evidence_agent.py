@@ -51,7 +51,6 @@ class EvidenceAgent:
                 "title": s.get("title", ""),
                 "source_name": s.get("source_name", ""),
                 "url": s.get("url", ""),
-                "credibility_score": s.get("credibility_score", 0.0),
             }
             for s in sources
             if s.get("url")

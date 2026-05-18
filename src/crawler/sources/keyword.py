@@ -5,7 +5,7 @@ import platform
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import requests
 from dotenv import load_dotenv
@@ -28,6 +28,7 @@ DEFAULT_CHART_DIR = DEFAULT_OUTPUT_DIR / "charts"
 DEFAULT_TIMEOUT = 10
 DEFAULT_RETRY_COUNT = 3
 DEFAULT_RETRY_DELAY = 1.5
+NAVER_CREDENTIAL_RETRY_STATUS_CODES = {401, 403, 429}
 
 DEFAULT_LOOKBACK_DAYS = 30
 DEFAULT_TIME_UNIT = "date"
@@ -40,19 +41,94 @@ DEFAULT_PEAK_MIN_DELTA = 25.0
 DEFAULT_PEAK_MAX_GAP_DAYS = 3
 
 
+class NaverCredential(NamedTuple):
+    client_id: str
+    client_secret: str
+
+
 def load_naver_credentials() -> tuple[str, str]:
-    load_dotenv(override=True)
+    credentials = load_naver_credential_pairs()
 
-    client_id = os.getenv("NAVER_CLIENT_ID")
-    client_secret = os.getenv("NAVER_CLIENT_SECRET")
-
-    if not client_id or not client_secret:
+    if not credentials:
         raise ValueError("NAVER_CLIENT_ID 또는 NAVER_CLIENT_SECRET 환경변수가 설정되지 않았습니다.")
 
+    credential = credentials[0]
+    return credential.client_id, credential.client_secret
+
+
+def load_naver_credential_pairs() -> list[NaverCredential]:
+    load_dotenv(override=True)
+
+    credentials: list[NaverCredential] = []
+
+    multi_ids = _split_env_list(os.getenv("NAVER_CLIENT_IDS", ""))
+    multi_secrets = _split_env_list(os.getenv("NAVER_CLIENT_SECRETS", ""))
+
+    if multi_ids or multi_secrets:
+        if len(multi_ids) != len(multi_secrets):
+            log.warning(
+                "NAVER_CLIENT_IDS/NAVER_CLIENT_SECRETS 개수가 다릅니다 | ids=%d secrets=%d",
+                len(multi_ids),
+                len(multi_secrets),
+            )
+
+        for client_id, client_secret in zip(multi_ids, multi_secrets, strict=False):
+            _append_credential(credentials, client_id, client_secret)
+
+    for suffix in _credential_suffixes_from_env():
+        _append_credential(
+            credentials,
+            os.getenv(f"NAVER_CLIENT_ID_{suffix}", ""),
+            os.getenv(f"NAVER_CLIENT_SECRET_{suffix}", ""),
+        )
+
+    _append_credential(
+        credentials,
+        os.getenv("NAVER_CLIENT_ID", ""),
+        os.getenv("NAVER_CLIENT_SECRET", ""),
+    )
+
+    return credentials
+
+
+def _split_env_list(value: str) -> list[str]:
+    return [
+        item.strip().strip('"').strip("'")
+        for item in value.split(",")
+        if item.strip().strip('"').strip("'")
+    ]
+
+
+def _credential_suffixes_from_env() -> list[str]:
+    suffixes = {
+        key.removeprefix("NAVER_CLIENT_ID_")
+        for key in os.environ
+        if key.startswith("NAVER_CLIENT_ID_")
+    }
+    return sorted(suffixes, key=_credential_suffix_sort_key)
+
+
+def _credential_suffix_sort_key(value: str) -> tuple[int, int | str]:
+    if value.isdigit():
+        return (0, int(value))
+    return (1, value)
+
+
+def _append_credential(
+    credentials: list[NaverCredential],
+    client_id: str,
+    client_secret: str,
+) -> None:
     client_id = client_id.strip().strip('"').strip("'")
     client_secret = client_secret.strip().strip('"').strip("'")
 
-    return client_id, client_secret
+    if not client_id or not client_secret:
+        return
+
+    credential = NaverCredential(client_id, client_secret)
+
+    if credential not in credentials:
+        credentials.append(credential)
 
 
 def dedupe_texts(values: list[Any]) -> list[str]:
@@ -172,66 +248,79 @@ def request_datalab_api(
     retry_count: int = DEFAULT_RETRY_COUNT,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
-    client_id, client_secret = load_naver_credentials()
+    credentials = load_naver_credential_pairs()
 
-    headers = {
-        "X-Naver-Client-Id": client_id,
-        "X-Naver-Client-Secret": client_secret,
-        "Content-Type": "application/json",
-    }
+    if not credentials:
+        raise ValueError("NAVER_CLIENT_ID 또는 NAVER_CLIENT_SECRET 환경변수가 설정되지 않았습니다.")
 
     last_error: Exception | None = None
 
     for attempt in range(1, retry_count + 1):
-        try:
-            response = requests.post(
-                API_URL,
-                headers=headers,
-                json=payload,
-                timeout=timeout,
-            )
+        for credential_index, credential in enumerate(credentials, start=1):
+            headers = {
+                "X-Naver-Client-Id": credential.client_id,
+                "X-Naver-Client-Secret": credential.client_secret,
+                "Content-Type": "application/json",
+            }
 
-            if response.status_code == 200:
-                return response.json()
-
-            if response.status_code == 400:
-                log.error("Naver DataLab 요청 형식 오류: %s", response.text)
-                response.raise_for_status()
-
-            if response.status_code == 401:
-                log.error(
-                    "Naver DataLab 인증 실패: Client ID/Secret 값을 확인하세요. response=%s",
-                    response.text,
+            try:
+                response = requests.post(
+                    API_URL,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout,
                 )
+
+                if response.status_code == 200:
+                    return response.json()
+
+                if response.status_code == 400:
+                    log.error("Naver DataLab 요청 형식 오류: %s", response.text)
+                    response.raise_for_status()
+
+                if response.status_code in NAVER_CREDENTIAL_RETRY_STATUS_CODES:
+                    last_error = requests.HTTPError(
+                        f"Naver DataLab credential rejected: HTTP {response.status_code}"
+                    )
+                    log.warning(
+                        "Naver DataLab 키 차단/인증/쿼터 문제, 다음 키 재시도 | "
+                        "attempt=%s status=%d key_index=%d/%d response=%s",
+                        attempt,
+                        response.status_code,
+                        credential_index,
+                        len(credentials),
+                        response.text,
+                    )
+                    continue
+
+                if response.status_code >= 500:
+                    log.warning("Naver DataLab 서버 오류: %s", response.text)
+
                 response.raise_for_status()
 
-            if response.status_code == 403:
-                log.error(
-                    "Naver DataLab API 권한 오류: 데이터랩 API 추가 여부를 확인하세요. response=%s",
-                    response.text,
+            except requests.Timeout as exc:
+                last_error = exc
+                log.warning(
+                    "Naver DataLab 요청 timeout: attempt=%s key_index=%d/%d",
+                    attempt,
+                    credential_index,
+                    len(credentials),
                 )
-                response.raise_for_status()
 
-            if response.status_code == 429:
-                log.warning("Naver DataLab 호출 한도 초과 가능성: %s", response.text)
+            except requests.RequestException as exc:
+                last_error = exc
+                log.warning(
+                    "Naver DataLab 요청 실패: attempt=%s key_index=%d/%d error=%s",
+                    attempt,
+                    credential_index,
+                    len(credentials),
+                    exc,
+                )
 
-            if response.status_code >= 500:
-                log.warning("Naver DataLab 서버 오류: %s", response.text)
-
-            response.raise_for_status()
-
-        except requests.Timeout as exc:
-            last_error = exc
-            log.warning("Naver DataLab 요청 timeout: attempt=%s", attempt)
-
-        except requests.RequestException as exc:
-            last_error = exc
-            log.warning("Naver DataLab 요청 실패: attempt=%s, error=%s", attempt, exc)
-
-        except ValueError as exc:
-            last_error = exc
-            log.error("Naver DataLab 응답 JSON 파싱 실패: %s", exc)
-            break
+            except ValueError as exc:
+                last_error = exc
+                log.error("Naver DataLab 응답 JSON 파싱 실패: %s", exc)
+                break
 
         if attempt < retry_count:
             time.sleep(DEFAULT_RETRY_DELAY * attempt)

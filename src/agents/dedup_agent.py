@@ -155,10 +155,11 @@ def _fallback_dedup_key(article: dict[str, Any]) -> str:
     return str(article.get("url_hash") or article.get("url") or article.get("id"))
 
 
-def _representative_score_fallback(article: dict[str, Any]) -> tuple[float, float, int]:
+def _representative_score_fallback(article: dict[str, Any]) -> tuple[float, str, str, int]:
     return (
         float(article.get("relevance_score") or 0.0),
-        float(article.get("credibility_score") or 0.0),
+        str(article.get("published_at") or ""),
+        str(article.get("collected_at") or ""),
         len(article.get("content") or ""),
     )
 
