@@ -284,7 +284,7 @@ def _fetch_dart_rows(
         {order_limit_sql}
     """)
     with SessionLocal() as db:
-        return db.execute(query, params).fetchall()
+        return list(db.execute(query, params).fetchall())
 
 
 def _dart_document_summary(row: dict[str, Any]) -> dict[str, Any]:
