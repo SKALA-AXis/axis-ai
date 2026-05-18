@@ -770,7 +770,10 @@ def load_skax_newsroom_documents(
                     WHERE ra.source_type = 'official'
                       AND ra.source_name = 'SK AX Newsroom'
                       AND ra.publisher = 'SK AX'
-                    ORDER BY ra.published_at DESC NULLS LAST, ra.collected_at DESC NULLS LAST, ra.id DESC
+                    ORDER BY
+                      ra.published_at DESC NULLS LAST,
+                      ra.collected_at DESC NULLS LAST,
+                      ra.id DESC
                     {limit_clause}
                 """),
                 params,
