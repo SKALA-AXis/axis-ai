@@ -154,7 +154,7 @@ def _api_response(data: dict) -> dict:
 
 
 async def _run_collection_track(task_id: str, track: str, companies: list[str]) -> None:
-    from src.config.companies import COMPANY_ALIASES, COMPANY_IDS
+    from src.config.companies import COMPANY_ALIASES
     from src.config.global_companies import GLOBAL_COMPANY_ALIASES, GLOBAL_COMPANY_IDS
     from src.crawler.batch_processor import BatchProcessor
     from src.pipeline.ingestion_graph import (
@@ -169,7 +169,7 @@ async def _run_collection_track(task_id: str, track: str, companies: list[str]) 
     )
 
     all_aliases = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
-    selected = companies or [*COMPANY_IDS, *GLOBAL_COMPANY_IDS]
+    selected = companies or [*COMPANY_ALIASES, *GLOBAL_COMPANY_IDS]
     invalid = sorted({company for company in selected if company not in all_aliases})
     if invalid:
         log.error("수집 파이프라인 실패 | task_id=%s invalid_company=%s", task_id, invalid)
@@ -180,13 +180,13 @@ async def _run_collection_track(task_id: str, track: str, companies: list[str]) 
 
     try:
         if track in {"a", "all"}:
-            await processor.run_track_a(
-                {company: all_aliases[company] for company in selected if company in COMPANY_IDS}
-            )
+            await processor.run_track_a({company: all_aliases[company] for company in selected})
         if track in {"b", "all"}:
             await processor.run_track_b({company: all_aliases[company] for company in selected})
         if track in {"c", "all"}:
             await processor.run_track_c({company: all_aliases[company] for company in selected})
+        if track in {"d", "all"}:
+            await processor.run_track_d({company: all_aliases[company] for company in selected})
 
         state: dict = {
             "company": selected,
