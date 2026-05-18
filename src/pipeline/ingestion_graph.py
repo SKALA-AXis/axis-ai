@@ -4,9 +4,9 @@ ADR 0004: 수집 파이프라인과 전달 파이프라인 분리 원칙.
 
 v3 변경:
 - ImplicationAgent 보류 → implication_node 제거
-- ValidationAgent (SC 검증) 보류 → EvidenceAgent (근거 첨부)로 전환
+- CardNewsAgent 내부 validation/evidence_chain 사용
 - ClassificationAgent v3: sector + 결정적 노출도
-- evidence_chain 테이블 persist + vector_index 노드 + pipeline_logs 누적
+- card_news persist + vector_index 노드 + pipeline_logs 누적
 """
 
 import json
@@ -49,7 +49,6 @@ class IngestionState(TypedDict):
     representative_ids: list[int]
     classified_clusters: list[dict]
     card_news: list[dict]
-    evidence_results: list[dict]  # v3: EvidenceAgent 첨부 결과
     indexed_vector_ids: list[str]  # v3: Qdrant axis_main 삽입 vector_id 목록
     errors: Annotated[list[str], operator.add]
     human_review_flags: list[int]
@@ -497,18 +496,19 @@ def classify_node(state: IngestionState) -> IngestionState:
 @_logged_step("card_news", "classified_clusters", "card_news")
 def card_news_node(state: IngestionState) -> IngestionState:
     """카드 뉴스 생성 — 클러스터 사실 요약 결과 기반. (구 issue_card_node)"""
-    from src.agents.issue_card_agent import IssueCardAgent
+    from src.agents.card_news_agent import CardNewsAgent
     from src.agents.news_summary_agent import PeerNewsSummaryAgent
     from src.config.company_tiers import SELF_COMPANY_IDS
+    from src.db.article_store import save_card_news
 
-    agent = IssueCardAgent()
+    agent = CardNewsAgent()
     summary_agent = PeerNewsSummaryAgent()
     cluster_map = state["cluster_map"]
 
     def _generate_one(cluster: dict) -> dict:
         if cluster.get("company") in SELF_COMPANY_IDS:
             log.info(
-                "이슈카드 생성 제외 | cluster=%s company=%s reason=self company",
+                "카드뉴스 생성 제외 | cluster=%s company=%s reason=self company",
                 cluster.get("cluster_id"),
                 cluster.get("company"),
             )
@@ -524,13 +524,13 @@ def card_news_node(state: IngestionState) -> IngestionState:
         )
         if not summary.get("is_valid_summary"):
             log.info(
-                "이슈카드 생성 제외 | cluster=%s company=%s reason=invalid_summary:%s",
+                "카드뉴스 생성 제외 | cluster=%s company=%s reason=invalid_summary:%s",
                 cluster_id,
                 cluster.get("company"),
                 summary.get("reason"),
             )
             return {}
-        return agent.generate(
+        return agent.generate_from_cluster(
             cluster_id=cluster_id,
             representative_id=cluster["representative_id"],
             company=cluster["company"],
@@ -545,67 +545,23 @@ def card_news_node(state: IngestionState) -> IngestionState:
         for future in as_completed(futures):
             card = future.result()
             if card:
+                save_card_news(card)
                 cards.append(card)
 
     log.info("카드 뉴스 생성 완료 | cards=%d", len(cards))
     return {**state, "card_news": cards}
 
 
-@_logged_step("evidence", "card_news", "evidence_results")
-def evidence_node(state: IngestionState) -> IngestionState:
-    """v3 검증 체인 첨부 + 카드 DB 저장 + evidence_chain 테이블 persist."""
-    from src.agents.evidence_agent import EvidenceAgent
-    from src.db.article_store import save_card_news, save_evidence_chain
-
-    agent = EvidenceAgent()
-    cluster_map = state["cluster_map"]
-
-    def _attach_one(card: dict) -> dict:
-        cluster_id = card.get("cluster_id")
-        result = agent.attach(card, cluster_article_ids=cluster_map.get(cluster_id, []))
-        save_card_news(card)
-        save_evidence_chain(
-            card_news_id=card.get("id") or "",
-            chain=card.get("evidence_chain", {}),
-            passed=bool(result.get("pass")),
-            missing=list(result.get("missing", [])),
-        )
-        return {"card_id": card.get("id"), **result}
-
-    results: list[dict] = []
-    human_review_flags: list[int] = []
-
-    with ThreadPoolExecutor(max_workers=_GPT_WORKERS) as ex:
-        futures = {ex.submit(_attach_one, card): card for card in state["card_news"]}
-        for future in as_completed(futures):
-            result = future.result()
-            results.append(result)
-            if not result["pass"]:
-                card = futures[future]
-                human_review_flags.append(card.get("cluster_id", 0))
-
-    pass_count = sum(1 for r in results if r["pass"])
-    fail_count = len(results) - pass_count
-    log.info(
-        "검증 체인 첨부 + 저장 완료 | total=%d pass=%d fail=%d",
-        len(results),
-        pass_count,
-        fail_count,
-    )
-    return {
-        **state,
-        "evidence_results": results,
-        "human_review_flags": human_review_flags,
-    }
-
-
 @_logged_step("vector_index", "card_news", "indexed_vector_ids")
 def vector_index_node(state: IngestionState) -> IngestionState:
-    """검증 통과 카드를 BGE-M3로 임베딩해 Qdrant axis_main에 인덱싱."""
+    """카드 자체 validation 통과분을 BGE-M3로 임베딩해 Qdrant axis_main에 인덱싱."""
     from src.rag.vector_index import index_card
 
-    passed_card_ids = {r["card_id"] for r in state["evidence_results"] if r.get("pass")}
-    targets = [c for c in state["card_news"] if c.get("id") in passed_card_ids]
+    targets = [
+        c
+        for c in state["card_news"]
+        if bool(c.get("validation_pass", c.get("validation", {}).get("pass", True)))
+    ]
 
     indexed: list[str] = []
     for card in targets:
@@ -637,7 +593,6 @@ def build_ingestion_graph() -> StateGraph:
     graph.add_node("dedup", dedup_node)
     graph.add_node("classify", classify_node)
     graph.add_node("card_news", card_news_node)
-    graph.add_node("evidence", evidence_node)
     graph.add_node("vector_index", vector_index_node)
 
     graph.set_entry_point("crawl")
@@ -646,8 +601,7 @@ def build_ingestion_graph() -> StateGraph:
     graph.add_edge("preprocess_route", "dedup")
     graph.add_edge("dedup", "classify")
     graph.add_edge("classify", "card_news")
-    graph.add_edge("card_news", "evidence")
-    graph.add_edge("evidence", "vector_index")
+    graph.add_edge("card_news", "vector_index")
     graph.add_edge("vector_index", END)
 
     return graph.compile()  # type: ignore[return-value]

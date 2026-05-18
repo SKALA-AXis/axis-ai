@@ -115,7 +115,6 @@ def main() -> None:
         "representative_ids": [],
         "classified_clusters": [],
         "card_news": [],
-        "evidence_results": [],
         "indexed_vector_ids": [],
         "errors": [],
         "human_review_flags": [],
@@ -133,8 +132,11 @@ def main() -> None:
     result = ingestion_graph.invoke(initial_state)
 
     cards = result.get("card_news", [])
-    evidence = result.get("evidence_results", [])
-    pass_count = sum(1 for r in evidence if r.get("pass"))
+    validation_pass_count = sum(
+        1
+        for card in cards
+        if bool(card.get("validation_pass", card.get("validation", {}).get("pass", True)))
+    )
 
     print("\n" + "=" * 78)
     print("📊 파이프라인 v3 실행 결과")
@@ -149,8 +151,8 @@ def main() -> None:
     print(f"  전처리 제외:     {len(result.get('skipped_preprocess_ids', []))}건")
     print(f"  클러스터:        {len(result.get('cluster_map', {}))}개")
     print(f"  대표 기사:       {len(result.get('representative_ids', []))}건")
-    print(f"  이슈카드:        {len(cards)}건")
-    print(f"  검증 첨부 통과:  {pass_count}/{len(evidence)}건")
+    print(f"  카드뉴스:        {len(cards)}건")
+    print(f"  카드 검증 통과:  {validation_pass_count}/{len(cards)}건")
     print(f"  Human 검토 필요: {len(result.get('human_review_flags', []))}건")
     if result.get("errors"):
         print(f"  오류:            {result['errors']}")
@@ -175,7 +177,7 @@ def main() -> None:
             print(f"    {_BAND_MARK[band]} {band:6s} {band_counts[band]}건")
 
     print("\n" + "=" * 78)
-    print("📋 이슈카드 상세")
+    print("📋 카드뉴스 상세")
     print("=" * 78)
 
     for i, card in enumerate(cards, 1):
@@ -203,10 +205,8 @@ def main() -> None:
         for line in card.get("summary_lines", []):
             print(f"       {line}")
 
-        # 검증 체인 4종 요약
+        # 카드 생성 시 함께 만든 evidence_chain 요약
         prov = chain.get("provenance", {}) or {}
-        flink = chain.get("financial_link", {}) or {}
-        seg = (flink.get("segment") or {}) if flink else {}
         print("     ─── 검증 체인 ───")
         print(f"       원문: {len(chain.get('source_links', []))}개")
         print(
@@ -215,17 +215,7 @@ def main() -> None:
             f" model={prov.get('llm_model', '?')}"
             f" prompt={prov.get('prompt_version', '?')}"
         )
-        fr = chain.get("financial_refs", [])
-        seg_ko = seg.get("name_ko") if seg else "-"
-        print(
-            f"       Financial refs: {len(fr)}개"
-            f" (segment={seg_ko}, linked={flink.get('linked', False)})"
-        )
-        for fr_item in fr[:3]:
-            print(f"         · {fr_item.get('narrative', '')}")
-        for hl in (flink.get("highlights") or [])[:3]:
-            print(f"         ▸ {hl}")
-        print(f"       MBB refs: {len(chain.get('mbb_refs', []))}개 (W5 채움)")
+        print(f"       Fact basis: {len(chain.get('fact_basis', []))}개")
 
         print("     ─── 출처 (상위 2) ───")
         for s in card.get("sources", [])[:2]:
@@ -252,8 +242,7 @@ def _print_preprocess_result(result: dict) -> None:
     print(f"  클러스터:        {len(result.get('cluster_map', {}))}개")
     print(f"  대표 기사:       {len(result.get('representative_ids', []))}건")
     print(f"  분류 완료:       {len(classified)}개")
-    print("  이슈카드:        생성 안 함")
-    print("  Evidence:        생성 안 함")
+    print("  카드뉴스:        생성 안 함")
 
     if classified:
         print("\n  ── 대표 클러스터 ──")
