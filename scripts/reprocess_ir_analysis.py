@@ -1,24 +1,35 @@
-"""DB에 저장된 IR 문서를 재파싱하고 financial metric 테이블을 갱신한다.
+"""DB에 저장된 IR 문서를 재파싱하고 분석용 fact/signal 테이블을 갱신한다.
 
 크롤링/API 호출 없이 raw_articles + raw_article_metadata_ir 안의 기존 원문/PDF 텍스트만
 다시 처리한다.
 
 사용 예:
-  uv run python run_ir_analysis_reprocess.py --reparse --upsert-metrics
-  uv run python run_ir_analysis_reprocess.py --upsert-metrics --limit 20
+  uv run python scripts/reprocess_ir_analysis.py --reparse --upsert-metrics
+  uv run python scripts/reprocess_ir_analysis.py --upsert-signals --limit 20
 """
+
+# ruff: noqa: E402
 
 from __future__ import annotations
 
 import argparse
 import logging
+import re
+import sys
+from pathlib import Path
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from sqlalchemy import text
 
 from src.db.article_store import (
+    delete_raw_article_business_signals,
     delete_raw_article_financial_metrics,
     update_preprocess_status,
+    upsert_raw_article_business_signals,
     upsert_raw_article_financial_metrics,
 )
 from src.db.postgres import SessionLocal
@@ -26,7 +37,7 @@ from src.parsers.ir_parser import IRParser
 from src.parsers.parser_quality import analyze_parser_quality_article
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger("run_ir_analysis_reprocess")
+log = logging.getLogger("reprocess_ir_analysis")
 
 _METRIC_SPECS = {
     "revenue_total": {
@@ -72,6 +83,64 @@ _METRIC_SPECS = {
         "metric_scope": "company_total",
     },
 }
+_BUSINESS_AREA_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "cloud",
+        (
+            "cloud",
+            "클라우드",
+            "msp",
+            "csp",
+            "aws",
+            "azure",
+            "gcp",
+            "데이터센터",
+            "data center",
+            "gpu",
+        ),
+    ),
+    (
+        "ai_ax",
+        (
+            "ai",
+            "ax",
+            "genai",
+            "생성형",
+            "llm",
+            "agent",
+            "fabrix",
+            "brity",
+            "erp ai",
+            "scm",
+            "자동화",
+        ),
+    ),
+    ("logistics", ("logistics", "물류", "cello", "scl")),
+    ("smart_factory", ("smart factory", "스마트팩토리", "mes", "factory", "제조")),
+    ("vehicle_sw", ("vehicle", "차량", "sdv", "내비게이션", "navigation")),
+    ("enterprise_it", ("enterprise", "erp", "ito", "si", "그룹사", "it서비스")),
+    ("robotics", ("robot", "로봇", "automation")),
+)
+_SECTION_AREA_MAP = {
+    "cloud": "cloud",
+    "ai": "ai_ax",
+    "digital_transformation": "enterprise_it",
+    "orders_pipeline": "company_total",
+    "financial": "company_total",
+    "summary": "company_total",
+    "outlook": "company_total",
+    "shareholder": "company_total",
+}
+_SIGNAL_TYPE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("orders_pipeline", ("수주", "backlog", "계약", "pipeline", "잔고")),
+    ("investment", ("투자", "capex", "설비", "데이터센터", "gpu", "구축")),
+    ("growth", ("성장", "확대", "증가", "개선", "매출", "영업이익", "profitability")),
+    ("strategy", ("전략", "추진", "강화", "고도화", "출시", "제휴", "협력", "mou")),
+    ("efficiency", ("효율", "최적화", "자동화", "비용 절감", "생산성")),
+    ("risk", ("리스크", "위험", "하락", "감소", "둔화", "부진", "비용 증가")),
+)
+_NEGATIVE_TERMS = ("하락", "감소", "둔화", "부진", "리스크", "위험", "비용 증가")
+_POSITIVE_TERMS = ("성장", "확대", "증가", "개선", "강화", "고도화", "수주", "계약")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -88,9 +157,19 @@ def _parse_args() -> argparse.Namespace:
         help="financial_record를 raw_article_financial_metrics에 upsert",
     )
     parser.add_argument(
+        "--upsert-signals",
+        action="store_true",
+        help="IR document chunks를 raw_article_business_signals에 upsert",
+    )
+    parser.add_argument(
         "--replace-metrics",
         action="store_true",
         help="처리 대상 IR 문서의 기존 financial metrics를 삭제한 뒤 다시 적재",
+    )
+    parser.add_argument(
+        "--replace-signals",
+        action="store_true",
+        help="처리 대상 IR 문서의 기존 business signals를 삭제한 뒤 다시 적재",
     )
     parser.add_argument(
         "--include-unknown-metrics",
@@ -102,13 +181,14 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    if not args.reparse and not args.upsert_metrics:
-        raise SystemExit("--reparse 또는 --upsert-metrics 중 하나 이상을 지정하세요.")
+    if not args.reparse and not args.upsert_metrics and not args.upsert_signals:
+        raise SystemExit("--reparse, --upsert-metrics, --upsert-signals 중 하나 이상을 지정하세요.")
 
     articles = _load_ir_articles(limit=args.limit)
     log.info("IR 문서 로드 완료 | count=%d", len(articles))
 
     all_metrics: list[dict[str, Any]] = []
+    all_signals: list[dict[str, Any]] = []
     for article in articles:
         parser_result = (
             _reparse_ir_article(article) if args.reparse else _stored_parser_result(article)
@@ -124,12 +204,21 @@ def main() -> None:
             )
             all_metrics.extend(metrics)
 
+        if args.upsert_signals:
+            signals = _business_signals_from_parser_result(
+                article,
+                parser_result,
+                financial_record,
+            )
+            all_signals.extend(signals)
+
         log.info(
-            "IR 처리 완료 | id=%s period=%s candidates=%d metrics=%d",
+            "IR 처리 완료 | id=%s period=%s candidates=%d metrics=%d signals=%d",
             article["id"],
             financial_record.get("period") or parser_result.get("period"),
             len(parser_result.get("candidates") or []),
             len(all_metrics),
+            len(all_signals),
         )
 
     if args.upsert_metrics:
@@ -141,6 +230,16 @@ def main() -> None:
             log.info("기존 IR financial metrics 삭제 완료 | count=%d", deleted_count)
         count = upsert_raw_article_financial_metrics(all_metrics)
         log.info("financial metrics upsert 완료 | count=%d", count)
+
+    if args.upsert_signals:
+        if args.replace_signals:
+            deleted_count = delete_raw_article_business_signals(
+                [int(article["id"]) for article in articles],
+                source_type="ir",
+            )
+            log.info("기존 IR business signals 삭제 완료 | count=%d", deleted_count)
+        count = upsert_raw_article_business_signals(all_signals)
+        log.info("business signals upsert 완료 | count=%d", count)
 
 
 def _load_ir_articles(*, limit: int = 0) -> list[dict[str, Any]]:
@@ -412,6 +511,205 @@ def _metric_scope_key(
     if metric_scope == "portfolio_company" and entity_name:
         return str(entity_name)
     return "total"
+
+
+def _business_signals_from_parser_result(
+    article: dict[str, Any],
+    parser_result: dict[str, Any],
+    financial_record: dict[str, Any],
+) -> list[dict[str, Any]]:
+    chunks = _document_chunks(article, parser_result)
+    if not chunks:
+        return []
+
+    article_id = int(article["id"])
+    period = (
+        financial_record.get("period")
+        or parser_result.get("period")
+        or article["extra"].get("period")
+    )
+    peer_id = financial_record.get("peer_id") or _company_peer_id(article.get("company"))
+    period_year = parser_result.get("period_year") or article["extra"].get("period_year")
+    period_quarter = parser_result.get("period_quarter") or article["extra"].get("period_quarter")
+    period_type = parser_result.get("period_type") or article["extra"].get("period_type")
+
+    signals: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+
+        text_value = str(chunk.get("text") or "").strip()
+        if len(text_value) < 80:
+            continue
+
+        business_area = _business_area_from_chunk(chunk, text_value)
+        signal_type = _signal_type_from_text(text_value)
+        if not business_area or not signal_type:
+            continue
+
+        evidence_text = _evidence_text(text_value, business_area, signal_type)
+        if not evidence_text:
+            continue
+
+        source_chunk_uid = str(chunk.get("chunk_id") or chunk.get("chunk_index") or "")
+        dedupe_key = (business_area, signal_type, evidence_text[:160])
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        signal_uid = (
+            f"ir:{business_area}:{signal_type}:"
+            f"p{chunk.get('page') or 'x'}:{chunk.get('chunk_index') or len(signals) + 1}"
+        )
+        signals.append(
+            {
+                "raw_article_id": article_id,
+                "signal_uid": signal_uid,
+                "source_type": "ir",
+                "source_name": article.get("source_name"),
+                "peer_id": peer_id,
+                "period": period,
+                "period_year": period_year,
+                "period_quarter": period_quarter,
+                "period_type": period_type,
+                "business_area": business_area,
+                "signal_type": signal_type,
+                "sentiment": _sentiment_from_text(evidence_text),
+                "summary": _summary_from_evidence(evidence_text),
+                "evidence_text": evidence_text,
+                "source_page": chunk.get("page"),
+                "source_chunk_uid": source_chunk_uid or None,
+                "confidence": _signal_confidence(business_area, signal_type, text_value),
+                "extraction_method": "ir_parser.document_chunks.rule_based",
+                "payload": {
+                    "title": article.get("title"),
+                    "url": article.get("url"),
+                    "chunk": {
+                        "chunk_id": chunk.get("chunk_id"),
+                        "chunk_index": chunk.get("chunk_index"),
+                        "section_key": chunk.get("section_key"),
+                        "section_title": chunk.get("section_title"),
+                        "topics": chunk.get("topics"),
+                    },
+                },
+            }
+        )
+
+    return signals
+
+
+def _document_chunks(
+    article: dict[str, Any],
+    parser_result: dict[str, Any],
+) -> list[Any]:
+    chunks = parser_result.get("document_chunks")
+    if isinstance(chunks, list):
+        return chunks
+
+    metadata = article.get("extra") or {}
+    chunks = metadata.get("ir_document_chunks")
+    return chunks if isinstance(chunks, list) else []
+
+
+def _business_area_from_chunk(chunk: dict[str, Any], text_value: str) -> str | None:
+    detected = _detect_business_area(text_value)
+    if detected:
+        return detected
+
+    section_key = str(chunk.get("section_key") or "")
+    mapped = _SECTION_AREA_MAP.get(section_key)
+    if mapped:
+        return mapped
+
+    if _signal_type_from_text(text_value):
+        return "company_total"
+    return None
+
+
+def _detect_business_area(text_value: str) -> str | None:
+    lowered = text_value.lower()
+    for business_area, terms in _BUSINESS_AREA_RULES:
+        if any(term.lower() in lowered for term in terms):
+            return business_area
+    return None
+
+
+def _signal_type_from_text(text_value: str) -> str | None:
+    lowered = text_value.lower()
+    for signal_type, terms in _SIGNAL_TYPE_RULES:
+        if any(term.lower() in lowered for term in terms):
+            return signal_type
+    return None
+
+
+def _evidence_text(
+    text_value: str,
+    business_area: str,
+    signal_type: str,
+) -> str | None:
+    sentences = _sentences(text_value)
+    terms = _terms_for_evidence(business_area, signal_type)
+    for sentence in sentences:
+        lowered = sentence.lower()
+        if any(term.lower() in lowered for term in terms):
+            return sentence[:800]
+
+    return sentences[0][:800] if sentences else None
+
+
+def _terms_for_evidence(business_area: str, signal_type: str) -> tuple[str, ...]:
+    business_terms = next(
+        (terms for area, terms in _BUSINESS_AREA_RULES if area == business_area),
+        (),
+    )
+    signal_terms = next(
+        (terms for kind, terms in _SIGNAL_TYPE_RULES if kind == signal_type),
+        (),
+    )
+    return (*business_terms, *signal_terms)
+
+
+def _sentences(text_value: str) -> list[str]:
+    value = re.sub(r"\s+", " ", text_value).strip()
+    if not value:
+        return []
+
+    pieces = re.split(r"(?<=[.!?。])\s+|(?<=[다요음함임됨됨\.])\s+", value)
+    sentences = [piece.strip(" -•\t") for piece in pieces if len(piece.strip()) >= 30]
+    if sentences:
+        return sentences
+    return [value]
+
+
+def _sentiment_from_text(text_value: str) -> str:
+    lowered = text_value.lower()
+    if any(term in lowered for term in _NEGATIVE_TERMS):
+        return "negative"
+    if any(term in lowered for term in _POSITIVE_TERMS):
+        return "positive"
+    return "neutral"
+
+
+def _summary_from_evidence(evidence_text: str) -> str:
+    value = re.sub(r"\s+", " ", evidence_text).strip()
+    if len(value) <= 160:
+        return value
+    return f"{value[:157]}..."
+
+
+def _signal_confidence(
+    business_area: str,
+    signal_type: str,
+    text_value: str,
+) -> float:
+    detected_area = _detect_business_area(text_value)
+    detected_type = _signal_type_from_text(text_value)
+    if detected_area == business_area and detected_type == signal_type:
+        return 0.78
+    if business_area == "company_total":
+        return 0.68
+    return 0.72
 
 
 def _company_peer_id(company: Any) -> str | None:

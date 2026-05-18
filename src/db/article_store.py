@@ -162,6 +162,13 @@ _DELETE_FINANCIAL_METRICS_SQL = text("""
     RETURNING 1
 """)
 
+_DELETE_BUSINESS_SIGNALS_SQL = text("""
+    DELETE FROM raw_article_business_signals
+    WHERE raw_article_id = ANY(:raw_article_ids)
+      AND (:source_type IS NULL OR source_type = :source_type)
+    RETURNING 1
+""")
+
 
 def save_articles(
     articles: list[RawArticle],
@@ -583,6 +590,29 @@ def upsert_raw_article_business_signals(
         db.commit()
 
     return len(signals)
+
+
+def delete_raw_article_business_signals(
+    raw_article_ids: list[int],
+    *,
+    source_type: str | None = None,
+) -> int:
+    """선택한 원문 기사에 연결된 사업/전략/리스크 신호를 삭제한다."""
+    if not raw_article_ids:
+        return 0
+
+    with SessionLocal() as db:
+        result = db.execute(
+            _DELETE_BUSINESS_SIGNALS_SQL,
+            {
+                "raw_article_ids": raw_article_ids,
+                "source_type": source_type,
+            },
+        )
+        deleted_rows = result.fetchall()
+        db.commit()
+
+    return len(deleted_rows)
 
 
 def _financial_metric_params(metric: dict[str, Any]) -> dict[str, Any]:
