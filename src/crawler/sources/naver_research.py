@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import date, datetime, time, timedelta
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
@@ -116,27 +117,27 @@ class NaverResearchCrawler(BaseCrawler):
         report_type: str,
         base_url: str,
     ) -> RawArticle | None:
-        cells = row.select("td")
-
-        if len(cells) < 3:
+        fields = _row_fields(row)
+        if not fields:
             return None
 
-        title_el = cells[0].select_one("a")
         pdf_el = row.select_one("a[href*='.pdf']")
+        firm = fields["firm"]
+        report_title = fields["title"]
+        published_at = fields["published_at"]
 
-        if not title_el:
-            return None
-
-        firm = strip_html(cells[1].get_text(" ", strip=True))
-        report_title = strip_html(title_el.get_text(" ", strip=True))
-        published_at = _parse_report_date(cells[2].get_text(" ", strip=True))
-
-        if published_at and not self._is_in_collection_window(published_at):
+        if not self._is_in_collection_window(published_at):
             return None
 
         pdf_url = urljoin(base_url, pdf_el.get("href", "")) if pdf_el else ""
         pdf_payload = await _fetch_pdf_payload(client, pdf_url) if pdf_url else _empty_pdf_payload()
         pdf_text = str(pdf_payload.get("text") or "")
+        pdf_published_at = _extract_pdf_report_date(pdf_text)
+        if pdf_published_at is not None:
+            published_at = pdf_published_at
+
+        if not self._is_in_collection_window(published_at):
+            return None
 
         if pdf_url and not pdf_text:
             log.warning("네이버 기업 리포트 PDF 본문 추출 실패 | url=%s", pdf_url)
@@ -168,6 +169,8 @@ class NaverResearchCrawler(BaseCrawler):
                 "tables": pdf_payload.get("tables"),
                 "table_parse_strategy": pdf_payload.get("table_parse_strategy"),
                 "chart_parse_strategy": pdf_payload.get("chart_parse_strategy"),
+                "list_published_at": fields["published_at_text"],
+                "pdf_published_at": pdf_published_at.isoformat() if pdf_published_at else None,
                 "lookback_days": self.lookback_days,
                 "start_date": self.start_date.isoformat() if self.start_date else None,
                 "end_date": self.end_date.isoformat() if self.end_date else None,
@@ -175,7 +178,10 @@ class NaverResearchCrawler(BaseCrawler):
             },
         )
 
-    def _is_in_collection_window(self, published_at: datetime) -> bool:
+    def _is_in_collection_window(self, published_at: datetime | None) -> bool:
+        if published_at is None:
+            return False
+
         if self.start_date or self.end_date:
             start = datetime.combine(self.start_date, time.min) if self.start_date else datetime.min
             end = datetime.combine(self.end_date, time.max) if self.end_date else datetime.max
@@ -246,19 +252,75 @@ def _parse_report_date(date_text: str) -> datetime | None:
     return None
 
 
-def _row_published_at(row) -> datetime | None:
-    cells = row.select("td")
-    if len(cells) < 3:
+_FULL_DATE_RE = re.compile(
+    r"(?<!\d)(?P<year>20\d{2}|19\d{2})[.\-/]\s*(?P<month>\d{1,2})[.\-/]\s*(?P<day>\d{1,2})(?!\d)"
+)
+
+
+def _extract_pdf_report_date(pdf_text: str) -> datetime | None:
+    """PDF 표지/첫 페이지 초반에 적힌 실제 리포트 작성일을 추출한다."""
+    if not pdf_text:
         return None
-    return _parse_report_date(cells[2].get_text(" ", strip=True))
+
+    first_page = pdf_text.split("[PAGE 2]", 1)[0][:4000]
+    for line in first_page.splitlines()[:40]:
+        text = strip_html(line).strip()
+        if not text or len(text) > 80:
+            continue
+        match = _FULL_DATE_RE.search(text)
+        if not match:
+            continue
+        try:
+            return datetime(
+                int(match.group("year")),
+                int(match.group("month")),
+                int(match.group("day")),
+            )
+        except ValueError:
+            continue
+
+    return None
+
+
+def _row_published_at(row) -> datetime | None:
+    fields = _row_fields(row)
+    return fields["published_at"] if fields else None
 
 
 def _row_key(row) -> str:
-    cells = row.select("td")
-    text_parts = [cell.get_text(" ", strip=True) for cell in cells[:3]]
+    fields = _row_fields(row)
+    if not fields:
+        text_parts = [cell.get_text(" ", strip=True) for cell in row.select("td")[:3]]
+    else:
+        text_parts = [fields["title"], fields["firm"], fields["published_at_text"]]
     pdf_el = row.select_one("a[href*='.pdf']")
     pdf_href = pdf_el.get("href", "") if pdf_el else ""
     return "|".join([*text_parts, pdf_href])
+
+
+def _row_fields(row) -> dict[str, object] | None:
+    cells = row.select("td")
+    if len(cells) >= 5:
+        title_el = cells[1].select_one("a")
+        firm_cell = cells[2]
+        date_cell = cells[4]
+    elif len(cells) >= 3:
+        title_el = cells[0].select_one("a")
+        firm_cell = cells[1]
+        date_cell = cells[2]
+    else:
+        return None
+
+    if not title_el:
+        return None
+
+    published_at_text = date_cell.get_text(" ", strip=True)
+    return {
+        "title": strip_html(title_el.get_text(" ", strip=True)),
+        "firm": strip_html(firm_cell.get_text(" ", strip=True)),
+        "published_at_text": published_at_text,
+        "published_at": _parse_report_date(published_at_text),
+    }
 
 
 def _with_query_param(url: str, key: str, value: str) -> str:

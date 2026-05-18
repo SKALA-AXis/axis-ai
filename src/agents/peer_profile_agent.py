@@ -1193,7 +1193,9 @@ class PeerProfileAgent:
             .replace("{now}", now)
             .replace(
                 "{company_config_json}",
-                json.dumps(_compact_company_config(company_config), ensure_ascii=False, default=str),
+                json.dumps(
+                    _compact_company_config(company_config), ensure_ascii=False, default=str
+                ),
             )
             .replace("{basis_period_json}", json.dumps(basis_period, ensure_ascii=False))
             .replace(
@@ -1313,7 +1315,9 @@ def load_company_profile_documents(
     with SessionLocal() as db:
         dart_rows = _fetch_rows_by_source(db=db, source_type="dart", company_json=company_json)
         ir_rows = _fetch_rows_by_source(db=db, source_type="ir", company_json=company_json)
-        official_rows = _fetch_rows_by_source(db=db, source_type="official", company_json=company_json)
+        official_rows = _fetch_rows_by_source(
+            db=db, source_type="official", company_json=company_json
+        )
         securities_rows = _fetch_rows_by_source(
             db=db,
             source_type="securities_report",
@@ -1352,8 +1356,12 @@ def load_company_profile_documents(
         for source_type in _BASELINE_SOURCE_TYPES:
             raw_matched[source_type] = historical_raw_matched.get(source_type, 0)
         source_counts["raw_matched"].update(raw_matched)
-        source_counts["news_pipeline"].update(collect_news_pipeline_counts(company_id, all_data_start, db=db))
-        source_counts["by_processing_status"].update(collect_processing_status_counts(company_id, all_data_start, db=db))
+        source_counts["news_pipeline"].update(
+            collect_news_pipeline_counts(company_id, all_data_start, db=db)
+        )
+        source_counts["by_processing_status"].update(
+            collect_processing_status_counts(company_id, all_data_start, db=db)
+        )
         recent_signal_period = collect_source_period(
             company_id,
             all_data_start,
@@ -1491,7 +1499,9 @@ def _fetch_news_cluster_articles(
 
 
 def _historical_baseline_period(baseline_documents: list[dict[str, Any]]) -> dict[str, Any]:
-    dates_by_source: dict[str, list[datetime]] = {source_type: [] for source_type in _BASELINE_SOURCE_TYPES}
+    dates_by_source: dict[str, list[datetime]] = {
+        source_type: [] for source_type in _BASELINE_SOURCE_TYPES
+    }
     for doc in baseline_documents:
         source_type = str(doc.get("source_type") or "")
         parsed = _parse_iso_datetime(str(doc.get("document_date") or ""))
@@ -1506,9 +1516,7 @@ def _historical_baseline_period(baseline_documents: list[dict[str, Any]]) -> dic
     baseline_document_ids = [
         int(doc["article_id"]) for doc in baseline_documents if doc.get("article_id") is not None
     ]
-    all_document_dates = [
-        value for values in dates_by_source.values() for value in values
-    ]
+    all_document_dates = [value for values in dates_by_source.values() for value in values]
     if not all_document_dates:
         return {
             "source_types": list(_BASELINE_SOURCE_TYPES),
@@ -1782,7 +1790,10 @@ def _compact_source_intelligence_for_final_profile(
         evidence_rich_intelligence_focus.append(_compact_unit_intelligence_for_final(unit))
 
     evidence_rich_intelligence_focus.sort(
-        key=lambda item: (_source_priority(str(item.get("source_type") or "")), str(item.get("latest_collected_at") or "")),
+        key=lambda item: (
+            _source_priority(str(item.get("source_type") or "")),
+            str(item.get("latest_collected_at") or ""),
+        ),
         reverse=False,
     )
 
@@ -1909,11 +1920,16 @@ def _stage_source_counts(
     raw = source_counts.get("raw_matched", {}) if isinstance(source_counts, dict) else {}
     return {
         "raw_matched": {
-            source_type: int(raw.get(source_type) or 0)
-            for source_type in sorted(source_types)
+            source_type: int(raw.get(source_type) or 0) for source_type in sorted(source_types)
         },
-        "analysis_units": source_counts.get("analysis_units", {}) if isinstance(source_counts, dict) else {},
-        "document_or_cluster_intelligence_created": source_counts.get("document_or_cluster_intelligence_created", {}) if isinstance(source_counts, dict) else {},
+        "analysis_units": source_counts.get("analysis_units", {})
+        if isinstance(source_counts, dict)
+        else {},
+        "document_or_cluster_intelligence_created": source_counts.get(
+            "document_or_cluster_intelligence_created", {}
+        )
+        if isinstance(source_counts, dict)
+        else {},
     }
 
 
@@ -1922,8 +1938,7 @@ def _fit_stage_intelligence(stage_input: dict[str, Any]) -> dict[str, Any]:
     manifest = candidate.get("manifest", [])
     if isinstance(manifest, list):
         candidate["manifest"] = [
-            _manifest_line(item) if isinstance(item, dict) else str(item)
-            for item in manifest
+            _manifest_line(item) if isinstance(item, dict) else str(item) for item in manifest
         ]
     focus = candidate.get("evidence_focus", [])
     if isinstance(focus, list):
@@ -1984,8 +1999,12 @@ def _build_final_reducer_input(
         "unit_rollup": source_intelligence.get("unit_rollup", {}),
         "keyword_rollup": source_intelligence.get("keyword_rollup", {}),
         "metrics_rollup": source_intelligence.get("metrics_rollup", []),
-        "document_or_cluster_intelligence_manifest": source_intelligence.get("document_or_cluster_intelligence_manifest", []),
-        "evidence_rich_intelligence_focus": source_intelligence.get("evidence_rich_intelligence_focus", []),
+        "document_or_cluster_intelligence_manifest": source_intelligence.get(
+            "document_or_cluster_intelligence_manifest", []
+        ),
+        "evidence_rich_intelligence_focus": source_intelligence.get(
+            "evidence_rich_intelligence_focus", []
+        ),
         "source_stage_summaries": stage_summaries,
         "evidence_index": source_intelligence.get("evidence_index", {}),
         "llm_flow": {
@@ -2027,7 +2046,9 @@ def _fit_final_source_intelligence(source_intelligence: dict[str, Any]) -> dict[
     ]
     for budget in budgets:
         candidate = _apply_intelligence_budget(fitted, budget)
-        if len(json.dumps(candidate, ensure_ascii=False, default=str)) <= int(budget["target_chars"]):
+        if len(json.dumps(candidate, ensure_ascii=False, default=str)) <= int(
+            budget["target_chars"]
+        ):
             return candidate
         fitted = candidate
     return fitted
@@ -2037,7 +2058,9 @@ def _apply_intelligence_budget(data: dict[str, Any], budget: dict[str, Any]) -> 
     candidate = json.loads(json.dumps(data, ensure_ascii=False, default=str))
     focus = candidate.get("evidence_rich_intelligence_focus", [])
     if isinstance(focus, list):
-        candidate["evidence_rich_intelligence_focus"] = focus[: int(budget.get("evidence_focus", 0))]
+        candidate["evidence_rich_intelligence_focus"] = focus[
+            : int(budget.get("evidence_focus", 0))
+        ]
     metrics = candidate.get("metrics_rollup", [])
     if isinstance(metrics, list):
         candidate["metrics_rollup"] = metrics[: int(budget.get("metrics", 0))]
@@ -2059,7 +2082,9 @@ def _apply_intelligence_budget(data: dict[str, Any], budget: dict[str, Any]) -> 
         "target_chars": budget.get("target_chars"),
         "note": "최종 LLM 입력은 raw 원문이 아니라 전체 document/cluster intelligence manifest, 집계 rollup, 근거 focus를 사용",
     }
-    if len(json.dumps(candidate, ensure_ascii=False, default=str)) > int(budget.get("target_chars", 0)):
+    if len(json.dumps(candidate, ensure_ascii=False, default=str)) > int(
+        budget.get("target_chars", 0)
+    ):
         candidate = _minimize_manifest(candidate)
     return candidate
 
@@ -2096,7 +2121,9 @@ def _manifest_line(item: dict[str, Any]) -> str:
 
 
 def _source_priority(source_type: str) -> int:
-    return {"dart": 0, "ir": 1, "official": 2, "news": 3, "securities_report": 4}.get(source_type, 9)
+    return {"dart": 0, "ir": 1, "official": 2, "news": 3, "securities_report": 4}.get(
+        source_type, 9
+    )
 
 
 def _update_counter(counter: Counter[str], values: Any) -> None:
@@ -2121,7 +2148,9 @@ def _compact_unit_intelligence_for_final(unit: dict[str, Any]) -> dict[str, Any]
             evidence_text = str(first.get("text") or "")
     direct_match = unit.get("direct_company_match", {})
     sector_signals = []
-    for signal in unit.get("sector_signals", [])[:4] if isinstance(unit.get("sector_signals"), list) else []:
+    for signal in (
+        unit.get("sector_signals", [])[:4] if isinstance(unit.get("sector_signals"), list) else []
+    ):
         if not isinstance(signal, dict):
             continue
         sector_signals.append(
@@ -2155,7 +2184,11 @@ def _compact_unit_intelligence_for_final(unit: dict[str, Any]) -> dict[str, Any]
         "target_industries": unit.get("target_industries", [])[:3],
         "target_customer_groups": unit.get("target_customer_groups", [])[:3],
         "sector_signals": sector_signals,
-        "quantitative_signals": [_compact_metric(metric, unit) for metric in unit.get("quantitative_signals", [])[:1] if isinstance(metric, dict)],
+        "quantitative_signals": [
+            _compact_metric(metric, unit)
+            for metric in unit.get("quantitative_signals", [])[:1]
+            if isinstance(metric, dict)
+        ],
         "activity_signals": unit.get("activity_signals", [])[:3],
         "evidence_text": _compact_text(evidence_text, limit=90),
         "confidence": unit.get("confidence"),
@@ -2177,7 +2210,9 @@ def _unit_manifest_for_final(unit: dict[str, Any]) -> dict[str, Any]:
         "cluster_id": unit.get("cluster_id"),
         "title": _compact_text(str(unit.get("title") or ""), limit=70),
         "date": unit.get("published_at") or unit.get("latest_collected_at"),
-        "direct_company_match_confidence": direct_match.get("match_confidence") if isinstance(direct_match, dict) else None,
+        "direct_company_match_confidence": direct_match.get("match_confidence")
+        if isinstance(direct_match, dict)
+        else None,
         "sector_ids": list(dict.fromkeys(sector_ids)),
         "business_area_count": len(unit.get("business_area_candidates", []) or []),
         "capability_count": len(unit.get("capability_keywords", []) or []),
@@ -2217,7 +2252,9 @@ def _compact_metric(metric: dict[str, Any], unit: dict[str, Any]) -> dict[str, A
         "source_title": _compact_text(str(unit.get("title") or ""), limit=120),
         "article_id": metric.get("article_id") or article_id,
         "unit_id": unit.get("unit_id"),
-        "direct_company_match": metric.get("direct_company_match") or unit.get("direct_company_match") or {},
+        "direct_company_match": metric.get("direct_company_match")
+        or unit.get("direct_company_match")
+        or {},
         "caution": metric.get("caution"),
     }
 
@@ -2236,17 +2273,17 @@ def _news_cluster_unit_from_rows(
     title = str(rep.get("title") or "")
     article_ids = [int(row["id"]) for row in rows if row.get("id") is not None]
     related_titles = [
-        str(row.get("title") or "") for row in rows if row.get("id") != rep.get("id") and row.get("title")
+        str(row.get("title") or "")
+        for row in rows
+        if row.get("id") != rep.get("id") and row.get("title")
     ][:8]
     combined_text = " ".join(
         [title, *related_titles, *[str(row.get("content") or "")[:700] for row in rows[:5]]]
     )
     sector_signals = _sector_signals_for_text(combined_text, sector_config)
     direct_match = _direct_company_match(rep, company_config)
-    latest_collected_at = max(
-        (_document_datetime(row) for row in rows if _document_datetime(row) is not None),
-        default=_document_datetime(rep),
-    )
+    row_datetimes = [value for row in rows if (value := _document_datetime(row)) is not None]
+    latest_collected_at = max(row_datetimes) if row_datetimes else _document_datetime(rep)
     return {
         "unit_id": f"news_cluster:{cluster_id}",
         "unit_type": "news_cluster",
@@ -2286,7 +2323,9 @@ def _news_cluster_unit_from_rows(
     }
 
 
-def _sector_signals_for_text(text_value: str, sector_config: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _sector_signals_for_text(
+    text_value: str, sector_config: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     lowered = text_value.lower()
     signals: list[dict[str, Any]] = []
     for sector in sector_config:
@@ -2829,7 +2868,9 @@ def _split_target_industries_and_customer_groups(profile: dict[str, Any]) -> Non
     raw_industries = _extract_named_objects(target.get("target_industries"), key="industry")
     raw_groups = _extract_named_objects(target.get("target_customer_groups"), key="customer_group")
     clean_industries: dict[str, dict[str, Any]] = {}
-    groups: dict[str, dict[str, Any]] = {str(item.get("customer_group")): item for item in raw_groups if item.get("customer_group")}
+    groups: dict[str, dict[str, Any]] = {
+        str(item.get("customer_group")): item for item in raw_groups if item.get("customer_group")
+    }
     for item in raw_industries:
         industry = str(item.get("industry") or "").strip()
         if not industry:
@@ -2903,7 +2944,9 @@ def _is_customer_group_value(value: str) -> bool:
     stripped = value.strip()
     if stripped in _CUSTOMER_GROUP_TERMS:
         return True
-    return any(term in stripped for term in ("기업 고객", "엔터프라이즈 고객", "고객사")) or stripped in {"대기업", "기관"}
+    return any(
+        term in stripped for term in ("기업 고객", "엔터프라이즈 고객", "고객사")
+    ) or stripped in {"대기업", "기관"}
 
 
 def _validate_recent_activities(profile: dict[str, Any], uncertain: list[str]) -> None:
@@ -2937,7 +2980,14 @@ def _valid_basis_items(value: Any) -> list[dict[str, Any]]:
             continue
         has_title = bool(str(item.get("title") or item.get("source_title") or "").strip())
         has_article = item.get("article_id") is not None
-        has_reason = bool(str(item.get("why_used") or item.get("evidence_text") or item.get("evidence_summary") or "").strip())
+        has_reason = bool(
+            str(
+                item.get("why_used")
+                or item.get("evidence_text")
+                or item.get("evidence_summary")
+                or ""
+            ).strip()
+        )
         if (has_title or has_article) and has_reason:
             valid.append(item)
     return valid
@@ -2977,7 +3027,9 @@ def _validate_metrics_profile(profile: dict[str, Any]) -> None:
             metric.setdefault("direct_company_match", {})
             ambiguous = str(metric.get("metric_name") or "").strip() in {"", "문서 내 수치"}
             missing_context = not str(metric.get("metric_context") or "").strip()
-            missing_direct = not isinstance(metric.get("direct_company_match"), dict) or not metric.get("direct_company_match")
+            missing_direct = not isinstance(
+                metric.get("direct_company_match"), dict
+            ) or not metric.get("direct_company_match")
             if ambiguous or missing_context or missing_direct:
                 uncertain_metrics.append(_normalize_uncertain_metric(metric))
             else:
@@ -3018,11 +3070,17 @@ def _validate_sector_profile(profile: dict[str, Any]) -> None:
         evidence_text = _sector_evidence_text(sector)
         mapping_status = str(sector.get("mapping_status") or "")
         strength = str(sector.get("evidence_strength") or "")
-        if mapping_status == "direct_match" and (strength == "strong" or not evidence_text) and not evidence_text:
+        if (
+            mapping_status == "direct_match"
+            and (strength == "strong" or not evidence_text)
+            and not evidence_text
+        ):
             sector["mapping_status"] = "no_match"
             sector["evidence_strength"] = "weak"
             sector["confidence"] = "low"
-            sector["caution"] = "실제 근거 요약 없이 direct_match/strong으로 반환되어 no_match로 보정"
+            sector["caution"] = (
+                "실제 근거 요약 없이 direct_match/strong으로 반환되어 no_match로 보정"
+            )
             continue
         sector_id = str(sector.get("sector_id") or "")
         if mapping_status == "direct_match" and sector_id in {"deal", "security"}:
@@ -3044,14 +3102,13 @@ def _sector_evidence_text(sector: dict[str, Any]) -> str:
             elif isinstance(value, list):
                 for item in value:
                     if isinstance(item, dict):
-                        parts.extend(str(item.get(key) or "") for key in ("evidence_summary", "why_used", "source_ref"))
+                        parts.extend(
+                            str(item.get(key) or "")
+                            for key in ("evidence_summary", "why_used", "source_ref")
+                        )
                     else:
                         parts.append(str(item or ""))
-    meaningful = [
-        part
-        for part in parts
-        if part and not _is_id_only_or_generic_basis(part)
-    ]
+    meaningful = [part for part in parts if part and not _is_id_only_or_generic_basis(part)]
     return " ".join(meaningful)
 
 
@@ -3071,7 +3128,17 @@ def _is_id_only_or_generic_basis(value: str) -> bool:
 
 def _sector_required_terms(sector_id: str) -> tuple[str, ...]:
     if sector_id == "deal":
-        return ("수주", "계약", "공급계약", "우선협상대상자", "MOU", "협약", "프로젝트", "지분투자", "사업자 선정")
+        return (
+            "수주",
+            "계약",
+            "공급계약",
+            "우선협상대상자",
+            "MOU",
+            "협약",
+            "프로젝트",
+            "지분투자",
+            "사업자 선정",
+        )
     if sector_id == "security":
         return ("보안", "정보보호", "사이버보안", "클라우드 보안", "침해", "랜섬웨어", "관제")
     return ()
@@ -3150,8 +3217,7 @@ def _backfill_recent_activities_from_stage_summaries(
     recent = profile.setdefault("recent_activity_profile", {})
     current = recent.get("key_activities", [])
     if isinstance(current, list) and any(
-        isinstance(item, dict) and item.get("source_type") and item.get("basis")
-        for item in current
+        isinstance(item, dict) and item.get("source_type") and item.get("basis") for item in current
     ):
         return
 
@@ -3186,7 +3252,9 @@ def _backfill_recent_activities_from_stage_summaries(
                 continue
             activities.append(
                 {
-                    "activity": activity.get("activity") or activity.get("summary") or "최근 실행 신호",
+                    "activity": activity.get("activity")
+                    or activity.get("summary")
+                    or "최근 실행 신호",
                     "source_type": activity.get("source_type") or stage_source_type,
                     "cluster_id": activity.get("cluster_id"),
                     "related_keywords": activity.get("related_keywords", []),
@@ -3210,14 +3278,18 @@ def _primary_stage_source_type(stage: dict[str, Any]) -> str:
     return ""
 
 
-def _intelligence_basis_lookup(final_source_intelligence: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _intelligence_basis_lookup(
+    final_source_intelligence: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
     lookup: dict[str, dict[str, Any]] = {}
     for unit in final_source_intelligence.get("evidence_rich_intelligence_focus", []) or []:
         if not isinstance(unit, dict):
             continue
         source_type = str(unit.get("source_type") or "")
         title = str(unit.get("title") or "")
-        article_ids = unit.get("article_ids", []) if isinstance(unit.get("article_ids"), list) else []
+        article_ids = (
+            unit.get("article_ids", []) if isinstance(unit.get("article_ids"), list) else []
+        )
         article_id = article_ids[0] if article_ids else None
         if source_type and article_id is not None:
             lookup[f"{source_type}:{article_id}"] = {
@@ -3235,7 +3307,9 @@ def _intelligence_basis_lookup(final_source_intelligence: dict[str, Any]) -> dic
                 "cluster_id": cluster_id,
                 "why_used": "stage summary에서 복원한 news_cluster_intelligence 근거",
             }
-    for line in final_source_intelligence.get("document_or_cluster_intelligence_manifest", []) or []:
+    for line in (
+        final_source_intelligence.get("document_or_cluster_intelligence_manifest", []) or []
+    ):
         if not isinstance(line, str):
             continue
         parts = line.split("|")
@@ -3276,7 +3350,9 @@ def _basis_objects_from_refs(
     for ref in refs:
         if isinstance(ref, dict):
             normalized = dict(ref)
-            normalized.setdefault("why_used", normalized.get("evidence_summary") or "stage summary 근거")
+            normalized.setdefault(
+                "why_used", normalized.get("evidence_summary") or "stage summary 근거"
+            )
             if normalized.get("article_id") is not None or normalized.get("title"):
                 basis.append(normalized)
             continue
@@ -3338,7 +3414,10 @@ def _fallback_strongest_sources_from_intelligence(
                     f"{unit.get('intelligence_type')} 기반 실제 근거. "
                     f"{_compact_text(evidence_text, limit=100)}"
                 ),
-                "_sort": (priority.get(source_type, 99), 0 if confidence in {"high", "medium"} else 1),
+                "_sort": (
+                    priority.get(source_type, 99),
+                    0 if confidence in {"high", "medium"} else 1,
+                ),
             }
         )
     candidates.sort(key=lambda item: item.get("_sort", (99, 99)))
@@ -3386,7 +3465,11 @@ def _normalize_strongest_sources(value: Any) -> list[dict[str, Any]]:
                 "url": item.get("url"),
                 "why_strong": item.get("why_strong") or item.get("reason"),
             }
-            if candidate.get("source_type") and (candidate.get("article_id") or candidate.get("title")) and candidate.get("why_strong"):
+            if (
+                candidate.get("source_type")
+                and (candidate.get("article_id") or candidate.get("title"))
+                and candidate.get("why_strong")
+            ):
                 normalized.append(candidate)
     return normalized
 
@@ -3419,7 +3502,9 @@ def _limitations_from_counts(source_counts: dict[str, Any], *, company_id: str) 
     if representative < 5:
         notes.append("뉴스 대표 클러스터 수가 적어 최근 활동 신호가 제한적임")
     if raw_news > 0 and representative == 0:
-        notes.append("raw 뉴스는 있으나 대표 클러스터가 없어 DeduplicationAgent/ingestion_graph 미실행 가능성")
+        notes.append(
+            "raw 뉴스는 있으나 대표 클러스터가 없어 DeduplicationAgent/ingestion_graph 미실행 가능성"
+        )
     if unclustered > 0:
         notes.append("cluster_id가 없는 뉴스가 많아 프로필 입력에서 제외됨")
 
@@ -3769,7 +3854,9 @@ def _save_source_intelligence(*, company_id: str, source_intelligence: dict[str,
     target_dir.mkdir(parents=True, exist_ok=True)
     grouped = {
         "news_clusters.json": [
-            unit for unit in units if isinstance(unit, dict) and unit.get("unit_type") == "news_cluster"
+            unit
+            for unit in units
+            if isinstance(unit, dict) and unit.get("unit_type") == "news_cluster"
         ],
         "dart_ir_documents.json": [
             unit
@@ -3777,7 +3864,9 @@ def _save_source_intelligence(*, company_id: str, source_intelligence: dict[str,
             if isinstance(unit, dict) and unit.get("source_type") in {"dart", "ir"}
         ],
         "official_documents.json": [
-            unit for unit in units if isinstance(unit, dict) and unit.get("source_type") == "official"
+            unit
+            for unit in units
+            if isinstance(unit, dict) and unit.get("source_type") == "official"
         ],
         "securities_reports.json": [
             unit
