@@ -182,7 +182,6 @@ _ARTICLE_FACT_EXTRACTION_PROMPT = """\
 }}"""
 
 
-
 _FACT_ID_SUMMARY_PROMPT = """\
 당신은 피어사 뉴스 클러스터를 fact_id 기반으로 요약하는 Agent입니다.
 
@@ -265,7 +264,6 @@ all_available_facts:
 }}"""
 
 
-
 class PeerNewsSummaryAgent:
     """클러스터 단위로 피어사 뉴스의 사실 요약을 생성한다."""
 
@@ -329,11 +327,13 @@ class PeerNewsSummaryAgent:
                 coverage=coverage,
             )
 
-        article_fact_notes, fact_extraction_warnings, fact_extraction_failed = _extract_article_fact_notes_batch(
-            cluster_id=cluster_id,
-            articles=articles,
-            target_companies=target_companies,
-            representative_id=representative_id,
+        article_fact_notes, fact_extraction_warnings, fact_extraction_failed = (
+            _extract_article_fact_notes_batch(
+                cluster_id=cluster_id,
+                articles=articles,
+                target_companies=target_companies,
+                representative_id=representative_id,
+            )
         )
         merged_facts = _merge_article_facts(article_fact_notes)
         cluster_fact_intelligence = _build_cluster_fact_intelligence(merged_facts)
@@ -571,7 +571,9 @@ def _extract_article_fact_notes(
                         prompt_version=_PROMPT_VERSION,
                     ),
                 )
-                content = response.content if isinstance(response.content, str) else str(response.content)
+                content = (
+                    response.content if isinstance(response.content, str) else str(response.content)
+                )
                 if _response_hit_length_limit(response):
                     usage = _response_token_usage(response)
                     log.warning(
@@ -608,10 +610,14 @@ def _extract_article_fact_notes(
 
 
 def _invoke_fact_extraction_llm(prompt: str, *, config: dict[str, Any]) -> Any:
-    return _get_llm().bind(
-        response_format={"type": "json_object"},
-        max_completion_tokens=_FACT_EXTRACTION_MAX_TOKENS,
-    ).invoke(prompt, config=config)
+    return (
+        _get_llm()
+        .bind(
+            response_format={"type": "json_object"},
+            max_completion_tokens=_FACT_EXTRACTION_MAX_TOKENS,
+        )
+        .invoke(prompt, config=config)
+    )
 
 
 class _LengthLimitError(RuntimeError):
@@ -666,12 +672,10 @@ def _normalize_article_fact_note(item: dict[str, Any]) -> dict[str, Any]:
             for fact in _as_list(item.get("core_facts"))
         ],
         "unique_facts": [
-            _normalize_unique_fact(fact)
-            for fact in _as_list(item.get("unique_facts"))
+            _normalize_unique_fact(fact) for fact in _as_list(item.get("unique_facts"))
         ],
         "uncertain_facts": [
-            _normalize_uncertain_fact(fact)
-            for fact in _as_list(item.get("uncertain_facts"))
+            _normalize_uncertain_fact(fact) for fact in _as_list(item.get("uncertain_facts"))
         ],
     }
 
@@ -824,11 +828,7 @@ def _rule_based_entities(sentences: list[str]) -> list[str]:
     quoted = re.findall(r"['\"‘’“”]([^'\"‘’“”]{2,40})['\"‘’“”]", text)
     acronym_like = re.findall(r"\b[A-Z][A-Za-z0-9+\-/]{1,20}\b", text)
     return _dedupe_keep_order(
-        [
-            _clean_domain_term(term)
-            for term in [*quoted, *acronym_like]
-            if _clean_domain_term(term)
-        ]
+        [_clean_domain_term(term) for term in [*quoted, *acronym_like] if _clean_domain_term(term)]
     )[:12]
 
 
@@ -894,8 +894,12 @@ def _merge_article_facts(article_fact_notes: list[dict[str, Any]]) -> dict[str, 
             if fact.get("summary_role"):
                 entry.setdefault("summary_roles", []).append(str(fact.get("summary_role")))
             entry["numbers_and_dates"].extend(_normalize_string_list(fact.get("numbers_and_dates")))
-            entry["customers_or_industries"].extend(_normalize_string_list(fact.get("customers_or_industries")))
-            entry["products_or_services"].extend(_normalize_string_list(fact.get("products_or_services")))
+            entry["customers_or_industries"].extend(
+                _normalize_string_list(fact.get("customers_or_industries"))
+            )
+            entry["products_or_services"].extend(
+                _normalize_string_list(fact.get("products_or_services"))
+            )
 
         for fact in note.get("unique_facts", []):
             fact_text = str(fact.get("fact") or "").strip()
@@ -933,10 +937,18 @@ def _merge_article_facts(article_fact_notes: list[dict[str, Any]]) -> dict[str, 
     single_core_facts: list[dict[str, Any]] = []
     for entry in fact_map.values():
         entry["source_article_ids"] = _dedupe_ints(entry["source_article_ids"])
-        entry["evidence_texts"] = _dedupe_keep_order([text for text in entry["evidence_texts"] if text])[:5]
-        entry["activity_types"] = _dedupe_keep_order([item for item in entry["activity_types"] if item])
-        entry["fact_types"] = _dedupe_keep_order([item for item in entry.get("fact_types", []) if item])
-        entry["summary_roles"] = _dedupe_keep_order([item for item in entry.get("summary_roles", []) if item])
+        entry["evidence_texts"] = _dedupe_keep_order(
+            [text for text in entry["evidence_texts"] if text]
+        )[:5]
+        entry["activity_types"] = _dedupe_keep_order(
+            [item for item in entry["activity_types"] if item]
+        )
+        entry["fact_types"] = _dedupe_keep_order(
+            [item for item in entry.get("fact_types", []) if item]
+        )
+        entry["summary_roles"] = _dedupe_keep_order(
+            [item for item in entry.get("summary_roles", []) if item]
+        )
         entry["numbers_and_dates"] = _dedupe_keep_order(entry["numbers_and_dates"])
         entry["customers_or_industries"] = _dedupe_keep_order(entry["customers_or_industries"])
         entry["products_or_services"] = _dedupe_keep_order(entry["products_or_services"])
@@ -969,7 +981,9 @@ def _important_single_core_facts(facts: list[dict[str, Any]]) -> list[dict[str, 
         if not _has_unique_fact_importance(text):
             continue
         copied = dict(fact)
-        copied["importance_reason"] = "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        copied["importance_reason"] = (
+            "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        )
         important.append(copied)
     return important
 
@@ -986,13 +1000,25 @@ def _build_cluster_fact_intelligence(merged_facts: dict[str, Any]) -> dict[str, 
         "uncertain_facts": merged_facts.get("uncertain_facts", []),
         "conflict_notes": merged_facts.get("conflict_notes", []),
         "numbers_and_dates": _dedupe_keep_order(
-            [value for fact in all_facts for value in _normalize_string_list(fact.get("numbers_and_dates"))]
+            [
+                value
+                for fact in all_facts
+                for value in _normalize_string_list(fact.get("numbers_and_dates"))
+            ]
         ),
         "customers_or_industries": _dedupe_keep_order(
-            [value for fact in all_facts for value in _normalize_string_list(fact.get("customers_or_industries"))]
+            [
+                value
+                for fact in all_facts
+                for value in _normalize_string_list(fact.get("customers_or_industries"))
+            ]
         ),
         "products_or_services": _dedupe_keep_order(
-            [value for fact in all_facts for value in _normalize_string_list(fact.get("products_or_services"))]
+            [
+                value
+                for fact in all_facts
+                for value in _normalize_string_list(fact.get("products_or_services"))
+            ]
         ),
         "activity_types": _dedupe_keep_order(
             [
@@ -1015,7 +1041,10 @@ def _classify_cluster_event_type(
     text = " ".join(
         [
             json.dumps(cluster_fact_intelligence, ensure_ascii=False),
-            *[f"{article.get('title') or ''} {article.get('content') or ''}" for article in articles],
+            *[
+                f"{article.get('title') or ''} {article.get('content') or ''}"
+                for article in articles
+            ],
         ]
     )
     return _classify_event_type_from_text(text)
@@ -1071,7 +1100,9 @@ def _build_extracted_facts(
                 "evidence_text": evidence,
                 "normalized_fact": text,
                 "entities": _dedupe_keep_order(_normalize_string_list(entities)),
-                "numbers": _dedupe_keep_order([*_normalize_string_list(numbers), *_number_tokens(evidence)]),
+                "numbers": _dedupe_keep_order(
+                    [*_normalize_string_list(numbers), *_number_tokens(evidence)]
+                ),
                 "dates": _date_tokens(evidence),
                 "event_verbs": _event_verbs_in_text(f"{text} {evidence}"),
                 "confidence": confidence if confidence in {"high", "medium", "low"} else "medium",
@@ -1304,7 +1335,9 @@ def _select_fact_ids_for_summary_lines(
     }
 
 
-def _line_summary_role_preferences(event_type: str) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+def _line_summary_role_preferences(
+    event_type: str,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     event_type = _normalize_event_type(event_type)
     if event_type == "launch":
         return (
@@ -1351,7 +1384,9 @@ def _line_summary_role_preferences(event_type: str) -> tuple[tuple[str, ...], tu
 
 def _fact_selection_score(fact: dict[str, Any]) -> int:
     score = 0
-    score += 3 if fact.get("confidence") == "high" else 2 if fact.get("confidence") == "medium" else 1
+    score += (
+        3 if fact.get("confidence") == "high" else 2 if fact.get("confidence") == "medium" else 1
+    )
     if fact.get("entities"):
         score += 2
     if fact.get("numbers") or fact.get("dates"):
@@ -1395,16 +1430,22 @@ def _summarize_from_fact_ids(
             )
             .replace(
                 "{all_facts_json}",
-                json.dumps(_compact_facts_for_prompt(extracted_facts), ensure_ascii=False, indent=2),
+                json.dumps(
+                    _compact_facts_for_prompt(extracted_facts), ensure_ascii=False, indent=2
+                ),
             )
         )
-        response = _get_llm().bind(max_completion_tokens=_SUMMARY_MAX_TOKENS).invoke(
-            prompt,
-            config=tracing_config(
-                agent="PeerNewsSummaryAgent",
-                phase="fact_id_summary",
-                prompt_version=_PROMPT_VERSION,
-            ),
+        response = (
+            _get_llm()
+            .bind(max_completion_tokens=_SUMMARY_MAX_TOKENS)
+            .invoke(
+                prompt,
+                config=tracing_config(
+                    agent="PeerNewsSummaryAgent",
+                    phase="fact_id_summary",
+                    prompt_version=_PROMPT_VERSION,
+                ),
+            )
         )
         content = response.content if isinstance(response.content, str) else str(response.content)
         result = _normalize_fact_id_summary_result(
@@ -1440,7 +1481,9 @@ def _summarize_from_fact_ids(
         cluster_event_type=cluster_event_type,
         extracted_facts=extracted_facts,
         selected_fact_ids=selected_fact_ids,
-        reason=_append_reason(checked.get("reason"), "LLM 결과 검증 실패 후 fallback template 사용"),
+        reason=_append_reason(
+            checked.get("reason"), "LLM 결과 검증 실패 후 fallback template 사용"
+        ),
     )
     fallback["repair_actions"] = _dedupe_keep_order(
         [
@@ -1471,7 +1514,9 @@ def _normalize_fact_id_summary_result(
     if not line_items and data.get("fact_summary"):
         line_items = [
             {"line_index": index, "text": text, "fact_ids": []}
-            for index, text in enumerate(_normalize_string_list(data.get("fact_summary"))[:3], start=1)
+            for index, text in enumerate(
+                _normalize_string_list(data.get("fact_summary"))[:3], start=1
+            )
         ]
     line_items = _ensure_three_fact_summary_lines(line_items, extracted_facts)
     fact_summary = [str(item.get("text") or "").strip() for item in line_items]
@@ -1479,12 +1524,18 @@ def _normalize_fact_id_summary_result(
         "is_valid_summary": bool(data.get("is_valid_summary", True)) and len(fact_summary) == 3,
         "main_company": main_company,
         "mentioned_peer_companies": mentioned or [main_company],
-        "cluster_event_type": _normalize_event_type(data.get("cluster_event_type") or cluster_event_type),
+        "cluster_event_type": _normalize_event_type(
+            data.get("cluster_event_type") or cluster_event_type
+        ),
         "headline": str(data.get("headline") or fact_summary[0] if fact_summary else "").strip(),
-        "one_line_summary": str(data.get("one_line_summary") or fact_summary[0] if fact_summary else "").strip(),
+        "one_line_summary": str(
+            data.get("one_line_summary") or fact_summary[0] if fact_summary else ""
+        ).strip(),
         "fact_summary": fact_summary,
         "summary_lines_with_fact_ids": line_items,
-        "main_event": str(data.get("main_event") or fact_summary[0] if fact_summary else "").strip(),
+        "main_event": str(
+            data.get("main_event") or fact_summary[0] if fact_summary else ""
+        ).strip(),
         "confidence": _clamp_float(data.get("confidence"), default=0.0),
         "reason": str(data.get("reason") or "").strip(),
     }
@@ -1499,9 +1550,7 @@ def _normalize_summary_line_items(value: Any) -> list[dict[str, Any]]:
             index = _safe_int(item.get("line_index")) or fallback_index
             text = normalize_korean_spacing(item.get("text") or item.get("summary_line") or "")
             fact_ids = [
-                str(fact_id)
-                for fact_id in _normalize_string_list(item.get("fact_ids"))
-                if fact_id
+                str(fact_id) for fact_id in _normalize_string_list(item.get("fact_ids")) if fact_id
             ]
         else:
             index = fallback_index
@@ -1529,9 +1578,7 @@ def _ensure_three_fact_summary_lines(
     for index in (1, 2, 3):
         item = result.get(index)
         if item and item.get("fact_ids"):
-            item["fact_ids"] = [
-                fact_id for fact_id in item["fact_ids"] if fact_id in fact_by_id
-            ]
+            item["fact_ids"] = [fact_id for fact_id in item["fact_ids"] if fact_id in fact_by_id]
         if item and item.get("fact_ids"):
             continue
         fact = unused_facts[min(index - 1, len(unused_facts) - 1)] if unused_facts else None
@@ -1554,17 +1601,25 @@ def _fact_basis_from_summary_line_fact_ids(
     basis: list[dict[str, Any]] = []
     for item in line_items:
         index = _safe_int(item.get("line_index"))
-        fact_ids = [fact_id for fact_id in _normalize_string_list(item.get("fact_ids")) if fact_id in fact_by_id]
+        fact_ids = [
+            fact_id
+            for fact_id in _normalize_string_list(item.get("fact_ids"))
+            if fact_id in fact_by_id
+        ]
         if not index or not fact_ids:
             continue
         facts = [fact_by_id[fact_id] for fact_id in fact_ids]
-        evidence_texts = _dedupe_similar_texts([str(fact.get("evidence_text") or "") for fact in facts])
+        evidence_texts = _dedupe_similar_texts(
+            [str(fact.get("evidence_text") or "") for fact in facts]
+        )
         basis.append(
             {
                 "summary_sentence_index": index,
                 "summary_line_index": index,
                 "fact": str(item.get("text") or ""),
-                "source_article_ids": _dedupe_ints([_safe_int(fact.get("article_id")) for fact in facts]),
+                "source_article_ids": _dedupe_ints(
+                    [_safe_int(fact.get("article_id")) for fact in facts]
+                ),
                 "fact_ids": fact_ids,
                 "evidence_count": len(fact_ids),
                 "evidence_type": _combined_evidence_type(facts),
@@ -1575,8 +1630,17 @@ def _fact_basis_from_summary_line_fact_ids(
 
 
 def _combined_evidence_type(facts: list[dict[str, Any]]) -> str:
-    evidence_types = [_evidence_type_from_fact_type(str(fact.get("fact_type") or "")) for fact in facts]
-    for preferred in ("risk_fact", "market_reaction_fact", "uncertain_fact", "core_fact", "unique_fact", "numeric_fact"):
+    evidence_types = [
+        _evidence_type_from_fact_type(str(fact.get("fact_type") or "")) for fact in facts
+    ]
+    for preferred in (
+        "risk_fact",
+        "market_reaction_fact",
+        "uncertain_fact",
+        "core_fact",
+        "unique_fact",
+        "numeric_fact",
+    ):
         if preferred in evidence_types:
             return preferred
     return "reported_fact"
@@ -1614,7 +1678,9 @@ def _fallback_fact_id_summary(
         cluster_event_type=cluster_event_type,
     )
     for index in (1, 2, 3):
-        ids = [fact_id for fact_id in selected_fact_ids.get(str(index), []) if fact_id in fact_by_id]
+        ids = [
+            fact_id for fact_id in selected_fact_ids.get(str(index), []) if fact_id in fact_by_id
+        ]
         if not ids and extracted_facts:
             fallback_fact = extracted_facts[min(index - 1, len(extracted_facts) - 1)]
             ids = [str(fallback_fact.get("fact_id"))]
@@ -1625,7 +1691,9 @@ def _fallback_fact_id_summary(
     result = {
         "is_valid_summary": bool(extracted_facts),
         "main_company": main_company,
-        "mentioned_peer_companies": [main_company] if main_company in target_companies else target_companies[:1],
+        "mentioned_peer_companies": [main_company]
+        if main_company in target_companies
+        else target_companies[:1],
         "cluster_event_type": _normalize_event_type(cluster_event_type),
         "headline": fact_summary[0] if fact_summary else "",
         "one_line_summary": fact_summary[0] if fact_summary else "",
@@ -1670,7 +1738,10 @@ def _validate_fact_id_summary(
     main_company: str,
 ) -> dict[str, Any]:
     fact_by_id = {str(fact.get("fact_id")): fact for fact in extracted_facts}
-    lines = [normalize_korean_spacing(line) for line in _normalize_string_list(result.get("fact_summary"))[:3]]
+    lines = [
+        normalize_korean_spacing(line)
+        for line in _normalize_string_list(result.get("fact_summary"))[:3]
+    ]
     result["fact_summary"] = lines
     line_items = _normalize_summary_line_items(result.get("summary_lines_with_fact_ids"))
     if not line_items:
@@ -1747,7 +1818,11 @@ def _validate_fact_id_summary(
     bad_korean = [line for line in result["fact_summary"] if _has_bad_korean_join(line)]
     if bad_korean:
         warnings.append("한국어 조사/띄어쓰기 오류가 남아 있음")
-    if main_company and result.get("is_valid_summary") and not _summary_mentions_company(result, main_company):
+    if (
+        main_company
+        and result.get("is_valid_summary")
+        and not _summary_mentions_company(result, main_company)
+    ):
         warnings.append("요약 문장에 main_company alias가 없음")
     if source_article_ids:
         basis_source_ids = _dedupe_ints(
@@ -1993,7 +2068,11 @@ def _selected_facts_by_line(
 ) -> dict[str, list[dict[str, Any]]]:
     fact_by_id = {str(fact.get("fact_id")): fact for fact in extracted_facts}
     return {
-        str(index): [_compact_fact_for_prompt(fact_by_id[fact_id]) for fact_id in selected_fact_ids.get(str(index), []) if fact_id in fact_by_id]
+        str(index): [
+            _compact_fact_for_prompt(fact_by_id[fact_id])
+            for fact_id in selected_fact_ids.get(str(index), [])
+            if fact_id in fact_by_id
+        ]
         for index in (1, 2, 3)
     }
 
@@ -2076,7 +2155,10 @@ def _date_tokens(text: str) -> list[str]:
     return _dedupe_keep_order(
         [
             match.group(0).strip()
-            for match in re.finditer(r"\d{4}년\s*\d{1,2}월\s*\d{1,2}일|\d{1,2}월\s*\d{1,2}일|\d{4}-\d{2}-\d{2}", str(text or ""))
+            for match in re.finditer(
+                r"\d{4}년\s*\d{1,2}월\s*\d{1,2}일|\d{1,2}월\s*\d{1,2}일|\d{4}-\d{2}-\d{2}",
+                str(text or ""),
+            )
         ]
     )
 
@@ -2091,36 +2173,6 @@ def _has_bad_korean_join(text: str) -> bool:
     return bool(re.search(r"(를|을|는|은|이|가)로\b", value))
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _dedupe_similar_texts(values: list[str]) -> list[str]:
     result: list[str] = []
     for value in values:
@@ -2133,44 +2185,12 @@ def _dedupe_similar_texts(values: list[str]) -> list[str]:
     return result
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _text_similarity(left: str, right: str) -> float:
     left_compact = _compact(left)
     right_compact = _compact(right)
     if not left_compact or not right_compact:
         return 0.0
     return SequenceMatcher(None, left_compact, right_compact).ratio()
-
-
-
-
-
-
-
-
-
-
 
 
 def _split_evidence_sentences(text: str, limit: int = 80) -> list[str]:
@@ -2184,46 +2204,6 @@ def _split_evidence_sentences(text: str, limit: int = 80) -> list[str]:
         if len(sentences) >= limit:
             break
     return sentences
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _number_tokens(text: str) -> list[str]:
@@ -2255,25 +2235,19 @@ def _number_token_covered(number: str, evidence_numbers: list[str]) -> bool:
     return False
 
 
-
-
 def normalize_korean_spacing(value: Any) -> str | list[str]:
     """요약 출력에서 자주 붙는 한국어 조사를 보수적으로 교정한다."""
     if isinstance(value, list):
         return [str(normalize_korean_spacing(item)) for item in value]
     text = str(value or "")
-    text = re.sub(r"([가-힣A-Za-z0-9])(['\"‘’“”])\s*(를|을|은|는|이|가|와|과|에|에서|로|으로)", r"\1\2\3", text)
+    text = re.sub(
+        r"([가-힣A-Za-z0-9])(['\"‘’“”])\s*(를|을|은|는|이|가|와|과|에|에서|로|으로)",
+        r"\1\2\3",
+        text,
+    )
     text = re.sub(r"(를|을|은|는|이|가|와|과|에|에서|로|으로)(?=[A-Z][A-Za-z])", r"\1 ", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
-
-
-
-
-
-
-
-
 
 
 def _candidate_peer_companies(articles: list[dict[str, Any]]) -> list[str]:
@@ -2368,8 +2342,6 @@ def _summary_mentions_company(summary: dict[str, Any], company_id: str) -> bool:
         )
     )
     return any(_compact(alias) and _compact(alias) in compact_text for alias in aliases)
-
-
 
 
 def _clean_domain_term(term: str) -> str:
@@ -2470,10 +2442,6 @@ def _coverage_info(
     }
 
 
-
-
-
-
 def _as_int_list(value: Any) -> list[int]:
     return [_safe_int(item) for item in _as_list(value) if _safe_int(item) > 0]
 
@@ -2497,27 +2465,9 @@ def _detect_conflict_notes(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return []
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def _has_uncertain_fact_marker(sentence: str) -> bool:
     del sentence
     return False
-
-
-
-
-
-
 
 
 def _append_reason(current: Any, reason: str) -> str:

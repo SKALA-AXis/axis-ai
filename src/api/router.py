@@ -213,8 +213,7 @@ async def _run_collection_track(task_id: str, track: str, companies: list[str]) 
         result = card_news_node(result)
         result = vector_index_node(result)
         log.info(
-            "수집 파이프라인 완료 | task_id=%s track=%s raw=%d classified=%d "
-            "cards=%d indexed=%d",
+            "수집 파이프라인 완료 | task_id=%s track=%s raw=%d classified=%d cards=%d indexed=%d",
             task_id,
             track,
             len(result.get("raw_article_ids", [])),

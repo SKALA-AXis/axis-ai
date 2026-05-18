@@ -863,9 +863,7 @@ def _validation_pass(summary: dict[str, Any], analysis: dict[str, Any]) -> bool:
         bool(summary.get("is_valid_summary", True))
         and not bool(summary.get("fact_extraction_failed"))
         and not _missing_fact_basis_line_indexes(summary)
-    ) and bool(
-        analysis.get("is_valid_analysis", True)
-    )
+    ) and bool(analysis.get("is_valid_analysis", True))
 
 
 def _validation_missing(summary: dict[str, Any], analysis: dict[str, Any]) -> list[str]:
@@ -1039,8 +1037,7 @@ def _signals(
         if cluster_size <= 1:
             signals["near_duplicate_card_candidate"] = True
             signals["near_duplicate_reason"] = (
-                "단일 기사 클러스터이며 핵심 제품/서비스 키워드가 있어 "
-                "유사 카드 병합 검토 필요"
+                "단일 기사 클러스터이며 핵심 제품/서비스 키워드가 있어 유사 카드 병합 검토 필요"
             )
     if summary.get("representative_id"):
         signals["representative_id"] = _optional_int(summary.get("representative_id"))
@@ -1054,9 +1051,7 @@ def _issue_terms(summary: dict[str, Any], card_text: str) -> list[str]:
     if isinstance(intelligence, dict):
         terms.extend(_list_string(intelligence.get("products_or_services")))
     cleaned = [_clean_issue_term(term) for term in terms]
-    return _dedupe_keep_order(
-        [term for term in cleaned if _is_signature_noun_phrase(term)]
-    )[:8]
+    return _dedupe_keep_order([term for term in cleaned if _is_signature_noun_phrase(term)])[:8]
 
 
 def _clean_issue_term(term: str) -> str:
@@ -1147,9 +1142,7 @@ def _fact_basis(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 item.get("summary_line_index", item.get("summary_sentence_index"))
             ),
             "source_article_ids": source_ids,
-            "evidence_text": (
-                evidence_texts[0] if evidence_texts else str(item.get("fact") or "")
-            ),
+            "evidence_text": (evidence_texts[0] if evidence_texts else str(item.get("fact") or "")),
             "evidence_type": _normalize_fact_basis_evidence_type(item.get("evidence_type")),
         }
         fact_ids = _list_string(item.get("fact_ids"))
