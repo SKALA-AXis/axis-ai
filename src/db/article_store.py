@@ -252,7 +252,9 @@ def get_dart_document_detail(article_id: int) -> dict[str, Any] | None:
         "content": row.get("content"),
         "document": document,
         "sections": metadata.get("dart_sections") or parser_result.get("sections") or {},
-        "section_tree": metadata.get("dart_section_tree") or parser_result.get("section_tree") or [],
+        "section_tree": metadata.get("dart_section_tree")
+        or parser_result.get("section_tree")
+        or [],
         "document_chunks": metadata.get("dart_document_chunks")
         or parser_result.get("document_chunks")
         or [],
