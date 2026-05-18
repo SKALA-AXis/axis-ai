@@ -10,14 +10,15 @@ from src.agents.relevance_agent import (
     _metadata_patch_for_relevance,
     _result,
 )
-from src.crawler.base import CrawlWindow, RawArticle
 from src.crawler.backfill_runner import BackfillRunner
+from src.crawler.base import CrawlWindow, RawArticle
 from src.crawler.batch_processor import _window_months
 from src.crawler.sources.bcg import match_bcg_core_sectors
 from src.crawler.sources.naver import (
     article_mentions_target_peer,
     classify_peer_relevance,
     get_search_aliases,
+    load_naver_credentials,
 )
 from src.crawler.sources.skax_crawler import (
     classify_page_kind,
@@ -45,6 +46,18 @@ def test_raw_article_fields():
     )
     assert article.url
     assert article.company == ["samsung_sds"]
+
+
+def test_naver_credentials_support_multiple_keys(monkeypatch):
+    monkeypatch.setenv("NAVER_CLIENT_IDS", "id1, id2")
+    monkeypatch.setenv("NAVER_CLIENT_SECRETS", "secret1, secret2")
+    monkeypatch.setenv("NAVER_CLIENT_ID", "id2")
+    monkeypatch.setenv("NAVER_CLIENT_SECRET", "secret2")
+
+    credentials = load_naver_credentials()
+
+    assert [credential.client_id for credential in credentials] == ["id1", "id2"]
+    assert [credential.client_secret for credential in credentials] == ["secret1", "secret2"]
 
 
 def test_window_months_includes_all_months_crossing_backfill_window():

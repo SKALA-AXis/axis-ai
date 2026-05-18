@@ -256,100 +256,6 @@ def _candidate_page(candidates: list[dict[str, Any]], metric_type: str) -> int |
     return None
 
 
-def _candidate_metric_details(candidates: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    details: dict[str, dict[str, Any]] = {}
-    for candidate in candidates:
-        metric_type = candidate.get("type")
-        if not isinstance(metric_type, str):
-            continue
-        details[metric_type] = {
-            "source": candidate.get("source"),
-            "table_index": candidate.get("table_index"),
-            "unit": candidate.get("unit"),
-            "raw": candidate.get("raw"),
-            "value_krwbn": candidate.get("value_krwbn"),
-            "value_krw": candidate.get("value_krw"),
-            "confidence": candidate.get("confidence"),
-        }
-    return details
-
-
-def _analysis_facts(
-    *,
-    candidates: list[dict[str, Any]],
-    topic_signals: list[dict[str, Any]],
-    peer_id: str | None,
-    period: str | None,
-    rcept_no: str,
-) -> list[dict[str, Any]]:
-    facts: list[dict[str, Any]] = []
-    for candidate in candidates:
-        metric_type = candidate.get("type")
-        if not metric_type:
-            continue
-        facts.append(
-            {
-                "fact_type": "financial_metric",
-                "metric": metric_type,
-                "peer_id": peer_id,
-                "period": period,
-                "rcept_no": rcept_no or None,
-                "value_krwbn": candidate.get("value_krwbn"),
-                "value_krw": candidate.get("value_krw"),
-                "source": candidate.get("source"),
-                "table_index": candidate.get("table_index"),
-                "confidence": candidate.get("confidence"),
-            }
-        )
-
-    for signal in topic_signals:
-        facts.append(
-            {
-                "fact_type": "business_context",
-                "topic": signal.get("topic"),
-                "topic_name_ko": signal.get("topic_name_ko"),
-                "peer_id": peer_id,
-                "period": period,
-                "rcept_no": rcept_no or None,
-                "matched_keywords": signal.get("matched_terms") or [],
-                "snippet": signal.get("snippet"),
-                "confidence": min(0.95, 0.55 + 0.1 * int(signal.get("count") or 0)),
-            }
-        )
-    return facts
-
-
-def _enrich_document_chunks(
-    chunks: list[dict[str, Any]],
-    *,
-    peer_id: str | None,
-    period: str | None,
-    rcept_no: str,
-) -> list[dict[str, Any]]:
-    enriched: list[dict[str, Any]] = []
-    for chunk in chunks:
-        raw_signals = chunk.get("topic_signals")
-        signals: list[Any] = raw_signals if isinstance(raw_signals, list) else []
-        matched_keywords: list[str] = []
-        for signal in signals:
-            if not isinstance(signal, dict):
-                continue
-            terms = signal.get("matched_terms")
-            if isinstance(terms, list):
-                matched_keywords.extend(str(term) for term in terms)
-
-        enriched.append(
-            {
-                **chunk,
-                "peer_id": peer_id,
-                "period": period,
-                "rcept_no": rcept_no or None,
-                "matched_keywords": list(dict.fromkeys(matched_keywords)),
-            }
-        )
-    return enriched
-
-
 def _normalize_dart_amount_krwbn(value: str, unit: str) -> float | None:
     amount_text = value.strip()
     negative = amount_text.startswith("(") and amount_text.endswith(")")
@@ -443,7 +349,6 @@ def _extract_dart_statement_metrics(text: str) -> dict[str, Any]:
             "revenue_raw": revenue_raw,
             "operating_profit": operating_profit,
             "operating_profit_raw": operating_profit_raw,
-            "unit": unit,
         }
         if not best or candidate["score"] > best["score"]:
             best = candidate
@@ -490,7 +395,6 @@ def _extract_table_statement_metrics(tables: list[dict[str, Any]]) -> dict[str, 
             "source": "structured_table",
             "table_index": table.get("table_index"),
             "table_title": table.get("title"),
-            "unit": unit,
             "revenue_total": revenue_total,
             "revenue_raw": revenue_raw,
             "operating_profit": operating_profit,
@@ -888,9 +792,7 @@ def _build_subsection_tree(raw_section_text: str, section_title: str) -> list[di
 
 
 def _same_heading(left: str, right: str) -> bool:
-    def normalize(value: str) -> str:
-        return re.sub(r"\s+", "", value or "")
-
+    normalize = lambda value: re.sub(r"\s+", "", value or "")
     return normalize(left) == normalize(right)
 
 
@@ -1124,14 +1026,9 @@ class DartParser:
                     "page": None,
                     "type": "revenue_total",
                     "value_krwbn": revenue_total,
-                    "value_krw": revenue_total * 100_000_000,
                     "raw": revenue_raw,
                     "source": statement_metrics.get("source", "document_text"),
                     "table_index": statement_metrics.get("table_index"),
-                    "unit": statement_metrics.get("unit"),
-                    "confidence": 0.95
-                    if statement_metrics.get("source") == "structured_table"
-                    else 0.75,
                 }
             )
 
@@ -1148,14 +1045,9 @@ class DartParser:
                     "page": None,
                     "type": "operating_profit",
                     "value_krwbn": operating_profit,
-                    "value_krw": operating_profit * 100_000_000,
                     "raw": operating_profit_raw,
                     "source": statement_metrics.get("source", "document_text"),
                     "table_index": statement_metrics.get("table_index"),
-                    "unit": statement_metrics.get("unit"),
-                    "confidence": 0.95
-                    if statement_metrics.get("source") == "structured_table"
-                    else 0.75,
                 }
             )
 
@@ -1171,20 +1063,6 @@ class DartParser:
             warnings.append("operating_profit 추출 실패")
 
         rcept_no = str(extra.get("rcept_no") or extra.get("receipt_no") or "")
-        document_chunks = _enrich_document_chunks(
-            document_chunks,
-            peer_id=peer_id,
-            period=period,
-            rcept_no=rcept_no,
-        )
-        metric_details = _candidate_metric_details(candidates)
-        analysis_facts = _analysis_facts(
-            candidates=candidates,
-            topic_signals=topic_signals,
-            peer_id=peer_id,
-            period=period,
-            rcept_no=rcept_no,
-        )
         financial_record = {
             "peer_id": peer_id,
             "period": period,
@@ -1208,7 +1086,6 @@ class DartParser:
                 statement_metrics.get("source")
                 or ("dart_document_text" if document_fetched else "not_available_without_document")
             ),
-            "metric_details": metric_details,
         }
 
         result = {
@@ -1256,7 +1133,6 @@ class DartParser:
             "topic_signals": topic_signals,
             "topics": [signal["topic"] for signal in topic_signals],
             "financial_record": financial_record,
-            "analysis_facts": analysis_facts,
             "warnings": warnings,
         }
 

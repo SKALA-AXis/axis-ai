@@ -13,6 +13,7 @@ import sys
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
@@ -57,6 +58,11 @@ REQUEST_HEADERS = {
 }
 
 
+class NaverCredential(NamedTuple):
+    client_id: str
+    client_secret: str
+
+
 class NaverNewsCrawler(BaseCrawler):
     def __init__(
         self,
@@ -77,12 +83,12 @@ class NaverNewsCrawler(BaseCrawler):
         )
         self.cutoff_datetime = cutoff_datetime
         self.fetch_body = fetch_body
-        self.client_id = os.getenv("NAVER_CLIENT_ID", "")
-        self.client_secret = os.getenv("NAVER_CLIENT_SECRET", "")
+        self.credentials = load_naver_credentials()
+        self._credential_index = 0
 
     async def crawl(self) -> list[RawArticle]:
-        if not self.client_id:
-            log.warning("NAVER_CLIENT_ID 미설정. 크롤링 스킵.")
+        if not self.credentials:
+            log.warning("NAVER_CLIENT_ID 또는 NAVER_CLIENT_IDS 미설정. 크롤링 스킵.")
             return []
 
         articles = []
@@ -114,22 +120,25 @@ class NaverNewsCrawler(BaseCrawler):
                 if display <= 0:
                     break
 
-                resp = await client.get(
-                    NAVER_API_URL,
+                resp = await self._request_api(
+                    client,
                     params={
                         "query": query,
                         "display": display,
                         "start": start,
                         "sort": "date",
                     },
-                    headers={
-                        "X-Naver-Client-Id": self.client_id,
-                        "X-Naver-Client-Secret": self.client_secret,
-                    },
                 )
 
+                if resp is None:
+                    return []
+
                 if self._is_blocked(resp.status_code):
-                    log.warning("네이버 API 접근 차단 | status=%d", resp.status_code)
+                    log.warning(
+                        "네이버 API 접근 차단 | status=%d credentials=%d",
+                        resp.status_code,
+                        len(self.credentials),
+                    )
                     return []
 
                 resp.raise_for_status()
@@ -160,6 +169,40 @@ class NaverNewsCrawler(BaseCrawler):
 
             return articles
 
+    async def _request_api(
+        self,
+        client: httpx.AsyncClient,
+        params: dict[str, object],
+    ) -> httpx.Response | None:
+        blocked_response: httpx.Response | None = None
+
+        for _ in range(len(self.credentials)):
+            credential_index = self._credential_index
+            credential = self.credentials[credential_index]
+            self._credential_index = (credential_index + 1) % len(self.credentials)
+
+            resp = await client.get(
+                NAVER_API_URL,
+                params=params,
+                headers={
+                    "X-Naver-Client-Id": credential.client_id,
+                    "X-Naver-Client-Secret": credential.client_secret,
+                },
+            )
+
+            if not self._is_blocked(resp.status_code):
+                return resp
+
+            blocked_response = resp
+            log.warning(
+                "네이버 API 키 차단/쿼터 초과, 다음 키 재시도 | status=%d key_index=%d/%d",
+                resp.status_code,
+                credential_index + 1,
+                len(self.credentials),
+            )
+
+        return blocked_response
+
     def _item_to_article(self, item: dict, query: str, sector: str) -> RawArticle:
         return RawArticle(
             url=item.get("originallink") or item["link"],
@@ -176,6 +219,57 @@ class NaverNewsCrawler(BaseCrawler):
                 **({"sector": sector} if sector else {}),
             },
         )
+
+
+def load_naver_credentials() -> list[NaverCredential]:
+    credentials: list[NaverCredential] = []
+
+    multi_ids = _split_env_list(os.getenv("NAVER_CLIENT_IDS", ""))
+    multi_secrets = _split_env_list(os.getenv("NAVER_CLIENT_SECRETS", ""))
+
+    if multi_ids or multi_secrets:
+        if len(multi_ids) != len(multi_secrets):
+            log.warning(
+                "NAVER_CLIENT_IDS/NAVER_CLIENT_SECRETS 개수가 다릅니다 | ids=%d secrets=%d",
+                len(multi_ids),
+                len(multi_secrets),
+            )
+
+        for client_id, client_secret in zip(multi_ids, multi_secrets, strict=False):
+            _append_credential(credentials, client_id, client_secret)
+
+    _append_credential(
+        credentials,
+        os.getenv("NAVER_CLIENT_ID", ""),
+        os.getenv("NAVER_CLIENT_SECRET", ""),
+    )
+
+    return credentials
+
+
+def _split_env_list(value: str) -> list[str]:
+    return [
+        item.strip().strip('"').strip("'")
+        for item in value.split(",")
+        if item.strip().strip('"').strip("'")
+    ]
+
+
+def _append_credential(
+    credentials: list[NaverCredential],
+    client_id: str,
+    client_secret: str,
+) -> None:
+    client_id = client_id.strip().strip('"').strip("'")
+    client_secret = client_secret.strip().strip('"').strip("'")
+
+    if not client_id or not client_secret:
+        return
+
+    credential = NaverCredential(client_id, client_secret)
+
+    if credential not in credentials:
+        credentials.append(credential)
 
 
 async def enrich_with_body_text(
