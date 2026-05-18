@@ -187,15 +187,17 @@ class RelevanceAgent:
             rows = db.execute(
                 text("""
                     SELECT
-                        id,
-                        title,
-                        content,
-                        company,
-                        source_type,
-                        crawl_status,
-                        metadata
-                    FROM raw_articles
-                    WHERE id = ANY(:ids)
+                        ra.id,
+                        ra.title,
+                        ra.content,
+                        ra.company,
+                        ra.source_type,
+                        ra.crawl_status,
+                        COALESCE(mu.metadata, '{}'::jsonb) AS metadata
+                    FROM raw_articles ra
+                    LEFT JOIN raw_article_metadata_unified mu
+                        ON mu.raw_article_id = ra.id
+                    WHERE ra.id = ANY(:ids)
                 """),
                 {"ids": raw_article_ids},
             ).fetchall()
@@ -220,8 +222,6 @@ class RelevanceAgent:
                             relevance_reason = :relevance_reason,
                             matched_companies = CAST(:matched_companies AS jsonb),
                             matched_sectors = CAST(:matched_sectors AS jsonb),
-                            metadata = COALESCE(metadata, '{}'::jsonb)
-                                || CAST(:metadata_patch AS jsonb),
                             processing_status = CASE
                                 WHEN :is_relevant THEN processing_status
                                 ELSE 'SKIPPED_RELEVANCE'
@@ -240,11 +240,19 @@ class RelevanceAgent:
                             result["matched_sectors"],
                             ensure_ascii=False,
                         ),
-                        "metadata_patch": json.dumps(metadata_patch, ensure_ascii=False),
                         "is_relevant": is_relevant,
                         "id": row.id,
                     },
                 )
+                if metadata_patch:
+                    from src.db.article_store import _upsert_source_metadata
+
+                    _upsert_source_metadata(
+                        db,
+                        article_id=row.id,
+                        source_type=row.source_type,
+                        source_metadata=json.dumps(metadata_patch, ensure_ascii=False),
+                    )
 
                 if is_relevant:
                     relevant_ids.append(row.id)

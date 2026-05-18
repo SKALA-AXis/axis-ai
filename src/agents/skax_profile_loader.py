@@ -702,24 +702,27 @@ def load_skax_official_documents(
         with SessionLocal() as db:
             rows = db.execute(
                 text(f"""
-                    SELECT id, title, content, url, metadata
-                    FROM raw_articles
-                    WHERE source_type = 'company_site'
+                    SELECT ra.id, ra.title, ra.content, ra.url,
+                           COALESCE(mu.metadata, '{{}}'::jsonb) AS metadata
+                    FROM raw_articles ra
+                    LEFT JOIN raw_article_metadata_unified mu
+                        ON mu.raw_article_id = ra.id
+                    WHERE ra.source_type = 'company_site'
                       AND (
-                        source_name = 'SK AX Site'
-                        OR publisher = 'SK AX'
-                        OR metadata ->> 'source_family' = 'sk_ax_site'
+                        ra.source_name = 'SK AX Site'
+                        OR ra.publisher = 'SK AX'
+                        OR mu.metadata ->> 'source_family' = 'sk_ax_site'
                       )
                     ORDER BY
-                      CASE metadata ->> 'page_kind'
+                      CASE mu.metadata ->> 'page_kind'
                         WHEN 'company_about' THEN 0
                         WHEN 'service' THEN 1
                         WHEN 'industry' THEN 2
                         WHEN 'insight' THEN 3
                         ELSE 4
                       END,
-                      collected_at DESC NULLS LAST,
-                      id DESC
+                      ra.collected_at DESC NULLS LAST,
+                      ra.id DESC
                     {limit_clause}
                 """),
                 params,
@@ -759,12 +762,15 @@ def load_skax_newsroom_documents(
         with SessionLocal() as db:
             rows = db.execute(
                 text(f"""
-                    SELECT id, title, content, url, metadata
-                    FROM raw_articles
-                    WHERE source_type = 'official'
-                      AND source_name = 'SK AX Newsroom'
-                      AND publisher = 'SK AX'
-                    ORDER BY published_at DESC NULLS LAST, collected_at DESC NULLS LAST, id DESC
+                    SELECT ra.id, ra.title, ra.content, ra.url,
+                           COALESCE(mu.metadata, '{{}}'::jsonb) AS metadata
+                    FROM raw_articles ra
+                    LEFT JOIN raw_article_metadata_unified mu
+                        ON mu.raw_article_id = ra.id
+                    WHERE ra.source_type = 'official'
+                      AND ra.source_name = 'SK AX Newsroom'
+                      AND ra.publisher = 'SK AX'
+                    ORDER BY ra.published_at DESC NULLS LAST, ra.collected_at DESC NULLS LAST, ra.id DESC
                     {limit_clause}
                 """),
                 params,

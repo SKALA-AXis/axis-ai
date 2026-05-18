@@ -130,6 +130,7 @@ class BatchProcessor:
                     peer_id=peer_id,
                     aliases=kws,
                     cutoff_datetime=cutoff,
+                    end_datetime=crawl_window.end if crawl_window else None,
                 )
                 try:
                     articles.extend(await naver_crawler.crawl())

@@ -77,6 +77,37 @@ def ensure_backfill_state_schema() -> None:
                     ON crawl_runs (window_start, window_end)
             """)
         )
+        db.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS crawl_run_articles (
+                    id BIGSERIAL PRIMARY KEY,
+                    crawl_run_id UUID NOT NULL REFERENCES crawl_runs(id) ON DELETE CASCADE,
+                    raw_article_id BIGINT REFERENCES raw_articles(id) ON DELETE SET NULL,
+                    url TEXT NOT NULL,
+                    url_hash VARCHAR(32) NOT NULL,
+                    discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    action VARCHAR(30) NOT NULL,
+                    fetch_status VARCHAR(30),
+                    error_message TEXT,
+                    source_rank INT,
+                    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    CONSTRAINT uq_crawl_run_articles_run_url UNIQUE (crawl_run_id, url_hash)
+                )
+            """)
+        )
+        db.execute(
+            text("""
+                CREATE INDEX IF NOT EXISTS idx_crawl_run_articles_run
+                    ON crawl_run_articles (crawl_run_id)
+            """)
+        )
+        db.execute(
+            text("""
+                CREATE INDEX IF NOT EXISTS idx_crawl_run_articles_article
+                    ON crawl_run_articles (raw_article_id)
+            """)
+        )
         db.commit()
 
 

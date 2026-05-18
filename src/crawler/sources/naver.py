@@ -86,6 +86,7 @@ class NaverNewsCrawler(BaseCrawler):
         display: int = 100,
         max_results: int = 0,
         cutoff_datetime: datetime | None = None,
+        end_datetime: datetime | None = None,
         fetch_body: bool = True,
     ):
         super().__init__(peer_id)
@@ -96,6 +97,7 @@ class NaverNewsCrawler(BaseCrawler):
             NAVER_MAX_START if max_results <= 0 else min(max_results, NAVER_MAX_START)
         )
         self.cutoff_datetime = cutoff_datetime
+        self.end_datetime = end_datetime
         self.fetch_body = fetch_body
         self.client_id = os.getenv("NAVER_CLIENT_ID", "")
         self.client_secret = os.getenv("NAVER_CLIENT_SECRET", "")
@@ -171,7 +173,7 @@ class NaverNewsCrawler(BaseCrawler):
                 for article in (
                     self._item_to_article(item, query=query, sector=sector) for item in items
                 )
-                if article_within_cutoff(article, self.cutoff_datetime)
+                if article_within_window(article, self.cutoff_datetime, self.end_datetime)
                 and article_mentions_target_peer(article, self.peer_id)
                 and not is_obvious_non_business_candidate(article)
             ]
@@ -458,6 +460,28 @@ def article_within_cutoff(article: RawArticle, cutoff: datetime | None) -> bool:
         return True
 
     return article.published_at is not None and article.published_at >= cutoff
+
+
+def article_within_window(
+    article: RawArticle,
+    start: datetime | None,
+    end: datetime | None,
+) -> bool:
+    if article.published_at is None:
+        return False
+    if start is not None and article.published_at < _align_tz(start, article.published_at):
+        return False
+    if end is not None and article.published_at > _align_tz(end, article.published_at):
+        return False
+    return True
+
+
+def _align_tz(boundary: datetime, value: datetime) -> datetime:
+    if boundary.tzinfo is None and value.tzinfo is not None:
+        return boundary.replace(tzinfo=value.tzinfo)
+    if boundary.tzinfo is not None and value.tzinfo is None:
+        return boundary.replace(tzinfo=None)
+    return boundary
 
 
 def article_mentions_target_peer(article: RawArticle, target_peer_id: str) -> bool:

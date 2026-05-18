@@ -9,7 +9,6 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
-from src.config.company_tiers import company_tier_map
 from src.crawler.base import CrawlRunContext, RawArticle
 from src.db.postgres import SessionLocal
 
@@ -24,15 +23,62 @@ _INSERT_SQL = text("""
     INSERT INTO raw_articles (
         source_type, source_name, publisher, title, content, url, url_hash,
         published_at, collected_at, company, language, content_type,
-        crawl_status, error_message, processing_status, metadata
+        crawl_status, error_message, processing_status
     ) VALUES (
         :source_type, :source_name, :publisher, :title, :content, :url, :url_hash,
         :published_at, :collected_at, CAST(:company AS jsonb), :language, :content_type,
-        :crawl_status, :error_message, 'RAW', CAST(:metadata AS jsonb)
+        :crawl_status, :error_message, 'RAW'
     )
     ON CONFLICT (url) DO NOTHING
     RETURNING id
 """)
+
+_SELECT_ARTICLE_ID_BY_URL = text("SELECT id FROM raw_articles WHERE url = :url")
+
+_INSERT_CRAWL_RUN_ARTICLE = text("""
+    INSERT INTO crawl_run_articles (
+        crawl_run_id, raw_article_id, url, url_hash, discovered_at,
+        action, fetch_status, error_message, raw_payload
+    ) VALUES (
+        CAST(:crawl_run_id AS uuid), :raw_article_id, :url, :url_hash, :discovered_at,
+        :action, :fetch_status, :error_message, CAST(:raw_payload AS jsonb)
+    )
+    ON CONFLICT (crawl_run_id, url_hash) DO UPDATE SET
+        raw_article_id = COALESCE(EXCLUDED.raw_article_id, crawl_run_articles.raw_article_id),
+        action = EXCLUDED.action,
+        fetch_status = EXCLUDED.fetch_status,
+        error_message = EXCLUDED.error_message,
+        raw_payload = crawl_run_articles.raw_payload || EXCLUDED.raw_payload
+""")
+
+_SOURCE_METADATA_TABLES = {
+    "news": "raw_article_metadata_news",
+    "official": "raw_article_metadata_official",
+    "company_site": "raw_article_metadata_company_site",
+    "dart": "raw_article_metadata_dart",
+    "ir": "raw_article_metadata_ir",
+    "securities_report": "raw_article_metadata_securities_report",
+    "trend_report": "raw_article_metadata_trend_report",
+    "search_trend": "raw_article_metadata_search_trend",
+    "job": "raw_article_metadata_job",
+    "market_data": "raw_article_metadata_market_data",
+    "social": "raw_article_metadata_social",
+}
+
+_SOURCE_METADATA_EXCLUDED_KEYS = {
+    "url_hash",
+    "source_type",
+    "content_type",
+    "company_tier",
+    "collection_mode",
+    "crawl_run_id",
+    "crawl_source_name",
+    "track",
+    "window_start",
+    "window_end",
+    "matched_companies",
+    "matched_sectors",
+}
 
 
 def save_articles(
@@ -56,6 +102,7 @@ def save_articles(
             try:
                 sanitized_title = _sanitize_text(article.title)[:500]
                 sanitized_content = _sanitize_text(article.content if article.content else "")
+                source_metadata = _source_metadata_json(article, storage_company)
                 result = db.execute(
                     _INSERT_SQL,
                     {
@@ -73,11 +120,35 @@ def save_articles(
                         "content_type": article.content_type,
                         "crawl_status": article.crawl_status,
                         "error_message": article.error_message,
-                        "metadata": _metadata_json(article, storage_company, run_context),
                     },
                 )
-                if result.fetchone():
+                row = result.fetchone()
+                if row:
+                    article_id = row[0]
                     inserted += 1
+                    action = "inserted"
+                else:
+                    existing = db.execute(
+                        _SELECT_ARTICLE_ID_BY_URL,
+                        {"url": article.url},
+                    ).fetchone()
+                    article_id = existing[0] if existing else None
+                    action = "duplicate"
+                if article_id:
+                    _upsert_source_metadata(
+                        db,
+                        article_id=article_id,
+                        source_type=article.source_type,
+                        source_metadata=source_metadata,
+                    )
+                    _upsert_crawl_run_article(
+                        db,
+                        article_id=article_id,
+                        article=article,
+                        run_context=run_context,
+                        action=action,
+                        source_metadata=source_metadata,
+                    )
             except Exception as e:
                 log.error("raw_articles 저장 실패 | url=%s error=%s", article.url, e)
                 db.rollback()
@@ -104,19 +175,177 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
     with SessionLocal() as db:
         rows = db.execute(
             text("""
-                SELECT id, company, title, content, url,
+                SELECT raw_articles.id, company, title, content, url,
                        source_type, content_type, publisher, language,
                        credibility_score, credibility_grade,
                        relevance_score, relevance_label, relevance_reason,
                        matched_companies, matched_sectors,
-                       source_name, published_at, collected_at, metadata
+                       source_name, published_at, collected_at,
+                       COALESCE(mu.metadata, '{}'::jsonb) AS metadata
                 FROM raw_articles
-                WHERE id = ANY(:ids)
+                LEFT JOIN raw_article_metadata_unified mu
+                    ON mu.raw_article_id = raw_articles.id
+                WHERE raw_articles.id = ANY(:ids)
                 ORDER BY credibility_score DESC NULLS LAST
             """),
             {"ids": ids},
         ).fetchall()
     return [dict(row._mapping) for row in rows]
+
+
+def list_dart_documents(
+    *,
+    company: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """프론트 DART 문서 목록에 필요한 파싱 요약을 조회한다."""
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    company_filter = "AND (:company IS NULL OR r.company @> CAST(:company_json AS jsonb))"
+    rows = _fetch_dart_rows(
+        select_sql="""
+            SELECT r.id, r.company, r.title, r.url, r.published_at, r.collected_at,
+                   r.processing_status, COALESCE(mu.metadata, '{}'::jsonb) AS metadata
+            FROM raw_articles r
+            LEFT JOIN raw_article_metadata_unified mu
+                ON mu.raw_article_id = r.id
+        """,
+        where_sql=company_filter,
+        order_limit_sql="""
+            ORDER BY published_at DESC NULLS LAST, collected_at DESC
+            LIMIT :limit OFFSET :offset
+        """,
+        params={
+            "company": company,
+            "company_json": json.dumps([company], ensure_ascii=False) if company else "[]",
+            "limit": limit,
+            "offset": offset,
+        },
+    )
+    return [_dart_document_summary(dict(row._mapping)) for row in rows]
+
+
+def get_dart_document_detail(article_id: int) -> dict[str, Any] | None:
+    """DART 문서 상세 페이지에 필요한 파싱 결과를 조회한다."""
+    rows = _fetch_dart_rows(
+        select_sql="""
+            SELECT r.id, r.company, r.title, r.content, r.url, r.published_at, r.collected_at,
+                   r.processing_status, COALESCE(mu.metadata, '{}'::jsonb) AS metadata
+            FROM raw_articles r
+            LEFT JOIN raw_article_metadata_unified mu
+                ON mu.raw_article_id = r.id
+        """,
+        where_sql="AND r.id = :id",
+        order_limit_sql="LIMIT 1",
+        params={"id": article_id},
+    )
+    if not rows:
+        return None
+
+    row = dict(rows[0]._mapping)
+    metadata = _metadata_dict(row.get("metadata"))
+    parser_result = _metadata_dict(metadata.get("parser_result"))
+    document = _metadata_dict(parser_result.get("document"))
+    return {
+        **_dart_document_summary(row),
+        "content": row.get("content"),
+        "document": document,
+        "sections": metadata.get("dart_sections") or parser_result.get("sections") or {},
+        "section_tree": metadata.get("dart_section_tree") or parser_result.get("section_tree") or [],
+        "document_chunks": metadata.get("dart_document_chunks")
+        or parser_result.get("document_chunks")
+        or [],
+        "classified_tables": metadata.get("dart_classified_tables")
+        or parser_result.get("classified_tables")
+        or [],
+        "financial_statements": metadata.get("dart_financial_statements")
+        or parser_result.get("financial_statements")
+        or [],
+        "topic_signals": metadata.get("topic_signals") or parser_result.get("topic_signals") or [],
+        "warnings": parser_result.get("warnings") or [],
+    }
+
+
+def _fetch_dart_rows(
+    *,
+    select_sql: str,
+    where_sql: str,
+    order_limit_sql: str,
+    params: dict[str, Any],
+) -> list[Any]:
+    query = text(f"""
+        {select_sql}
+        WHERE r.source_type = 'dart'
+          AND r.crawl_status = 'success'
+          {where_sql}
+        {order_limit_sql}
+    """)
+    with SessionLocal() as db:
+        return db.execute(query, params).fetchall()
+
+
+def _dart_document_summary(row: dict[str, Any]) -> dict[str, Any]:
+    metadata = _metadata_dict(row.get("metadata"))
+    parser_result = _metadata_dict(metadata.get("parser_result"))
+    financial_record = _metadata_dict(
+        metadata.get("financial_record") or parser_result.get("financial_record")
+    )
+    company = row.get("company")
+    return {
+        "id": row.get("id"),
+        "company": company if isinstance(company, list) else _json_or_value(company, []),
+        "title": row.get("title"),
+        "url": row.get("url"),
+        "published_at": _iso_or_none(row.get("published_at")),
+        "collected_at": _iso_or_none(row.get("collected_at")),
+        "processing_status": row.get("processing_status"),
+        "rcept_no": metadata.get("rcept_no") or metadata.get("receipt_no"),
+        "corp_code": metadata.get("corp_code"),
+        "corp_name": metadata.get("corp_name"),
+        "report_name": metadata.get("report_name") or metadata.get("report_nm") or row.get("title"),
+        "period": metadata.get("period") or parser_result.get("period"),
+        "period_year": metadata.get("period_year") or parser_result.get("period_year"),
+        "period_quarter": metadata.get("period_quarter") or parser_result.get("period_quarter"),
+        "period_type": metadata.get("period_type") or parser_result.get("period_type"),
+        "document_text_length": metadata.get("document_text_length"),
+        "table_count": metadata.get("table_count"),
+        "structured_table_count": metadata.get("structured_table_count"),
+        "section_count": len(metadata.get("dart_sections") or parser_result.get("sections") or {}),
+        "financial_statement_count": financial_record.get("financial_statement_count")
+        or len(metadata.get("dart_financial_statements") or []),
+        "revenue_total_krwbn": financial_record.get("revenue_total_krwbn")
+        or parser_result.get("revenue_total_krwbn"),
+        "operating_profit_krwbn": financial_record.get("operating_profit_krwbn")
+        or parser_result.get("operating_profit_krwbn"),
+    }
+
+
+def _metadata_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _json_or_value(value: Any, default: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value if value is not None else default
+
+
+def _iso_or_none(value: Any) -> str | None:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value) if value else None
 
 
 def list_card_news_cluster_candidates(
@@ -182,18 +411,30 @@ def update_preprocess_status(
             text("""
                 UPDATE raw_articles
                 SET processing_status = :processing_status,
-                    metadata = COALESCE(metadata, '{}'::jsonb)
-                        || CAST(:metadata_patch AS jsonb),
                     error_message = COALESCE(:error_message, error_message)
                 WHERE id = :id
             """),
             {
                 "processing_status": processing_status,
-                "metadata_patch": json.dumps(metadata_patch or {}, ensure_ascii=False),
                 "error_message": error_message,
                 "id": article_id,
             },
         )
+        if metadata_patch:
+            source_type = db.execute(
+                text("SELECT source_type FROM raw_articles WHERE id = :id"),
+                {"id": article_id},
+            ).scalar_one_or_none()
+            if source_type:
+                _upsert_source_metadata(
+                    db,
+                    article_id=article_id,
+                    source_type=source_type,
+                    source_metadata=json.dumps(
+                        _sanitize_jsonish(metadata_patch),
+                        ensure_ascii=False,
+                    ),
+                )
         db.commit()
 
 
@@ -501,34 +742,93 @@ def _is_valid(article: RawArticle, storage_company: Optional[list[str]] = None) 
     return True
 
 
-def _metadata_json(
+def _source_metadata_json(
     article: RawArticle,
     storage_company: Optional[list[str]] = None,
-    run_context: CrawlRunContext | None = None,
 ) -> str:
     meta = _sanitize_jsonish(dict(article.extra))
-    meta["url_hash"] = article.url_hash
-    meta["company_tier"] = company_tier_map(storage_company or article.company)
-    if article.peer_id and "peer_id" not in meta:
-        meta["peer_id"] = _sanitize_text(article.peer_id)
     if not article.company and storage_company and INDUSTRY_TREND_COMPANY in storage_company:
         meta["topic_scope"] = "industry_trend"
         meta["company_scope"] = "industry"
         meta["company_fallback"] = INDUSTRY_TREND_COMPANY
     elif _is_industry_trend_article(article):
         meta.setdefault("topic_scope", "industry_trend")
-    if run_context:
-        meta["collection_mode"] = run_context.collection_mode
-        if run_context.crawl_run_id:
-            meta["crawl_run_id"] = run_context.crawl_run_id
-        meta["crawl_source_name"] = run_context.source_name or article.source_name
-        if run_context.track:
-            meta["track"] = run_context.track
-        if run_context.window_start:
-            meta["window_start"] = run_context.window_start.isoformat()
-        if run_context.window_end:
-            meta["window_end"] = run_context.window_end.isoformat()
+    for key in _SOURCE_METADATA_EXCLUDED_KEYS:
+        meta.pop(key, None)
     return json.dumps(meta, ensure_ascii=False)
+
+
+def _metadata_json(
+    article: RawArticle,
+    storage_company: Optional[list[str]] = None,
+    run_context: CrawlRunContext | None = None,
+) -> str:
+    """Compatibility shim for older tests/callers.
+
+    Crawl run context is now written to crawl_run_articles, not metadata.
+    """
+    return _source_metadata_json(article, storage_company)
+
+
+def _upsert_source_metadata(
+    db,
+    *,
+    article_id: int,
+    source_type: str,
+    source_metadata: str,
+) -> None:
+    table = _SOURCE_METADATA_TABLES.get(source_type)
+    if not table:
+        return
+    db.execute(
+        text(f"""
+            INSERT INTO {table} (raw_article_id, source_metadata)
+            VALUES (:raw_article_id, CAST(:source_metadata AS jsonb))
+            ON CONFLICT (raw_article_id) DO UPDATE SET
+                source_metadata = {table}.source_metadata || EXCLUDED.source_metadata,
+                updated_at = NOW()
+        """),
+        {
+            "raw_article_id": article_id,
+            "source_metadata": source_metadata,
+        },
+    )
+
+
+def _upsert_crawl_run_article(
+    db,
+    *,
+    article_id: int,
+    article: RawArticle,
+    run_context: CrawlRunContext | None,
+    action: str,
+    source_metadata: str,
+) -> None:
+    if not run_context or not run_context.crawl_run_id:
+        return
+
+    raw_payload = {
+        "source_name": run_context.source_name or article.source_name,
+        "collection_mode": run_context.collection_mode,
+        "track": run_context.track,
+        "window_start": _iso_or_none(run_context.window_start),
+        "window_end": _iso_or_none(run_context.window_end),
+        "source_metadata": _json_or_value(source_metadata, {}),
+    }
+    db.execute(
+        _INSERT_CRAWL_RUN_ARTICLE,
+        {
+            "crawl_run_id": run_context.crawl_run_id,
+            "raw_article_id": article_id,
+            "url": article.url,
+            "url_hash": article.url_hash,
+            "discovered_at": article.collected_at,
+            "action": action,
+            "fetch_status": article.crawl_status,
+            "error_message": article.error_message,
+            "raw_payload": json.dumps(raw_payload, ensure_ascii=False),
+        },
+    )
 
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")

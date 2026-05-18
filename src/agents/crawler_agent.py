@@ -14,12 +14,21 @@ from src.db.postgres import SessionLocal
 log = logging.getLogger(__name__)
 
 _LOAD_SQL = text("""
-    SELECT id FROM raw_articles
-    WHERE processing_status = 'RAW'
-      AND (:no_filter OR company ?| :company)
-      AND (:collected_since IS NULL OR collected_at >= CAST(:collected_since AS timestamptz))
-      AND (:crawl_run_id IS NULL OR metadata ->> 'crawl_run_id' = :crawl_run_id)
-    ORDER BY published_at DESC NULLS LAST
+    SELECT ra.id
+    FROM raw_articles ra
+    WHERE ra.processing_status = 'RAW'
+      AND (:no_filter OR ra.company ?| :company)
+      AND (:collected_since IS NULL OR ra.collected_at >= CAST(:collected_since AS timestamptz))
+      AND (
+          :crawl_run_id IS NULL
+          OR EXISTS (
+              SELECT 1
+              FROM crawl_run_articles cra
+              WHERE cra.raw_article_id = ra.id
+                AND cra.crawl_run_id = CAST(:crawl_run_id AS uuid)
+          )
+      )
+    ORDER BY ra.published_at DESC NULLS LAST
     LIMIT :limit
 """)
 

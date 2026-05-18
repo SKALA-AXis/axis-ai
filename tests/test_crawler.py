@@ -11,6 +11,7 @@ from src.agents.relevance_agent import (
     _result,
 )
 from src.crawler.base import CrawlWindow, RawArticle
+from src.crawler.backfill_runner import BackfillRunner
 from src.crawler.batch_processor import _window_months
 from src.crawler.sources.bcg import match_bcg_core_sectors
 from src.crawler.sources.naver import (
@@ -53,6 +54,13 @@ def test_window_months_includes_all_months_crossing_backfill_window():
     )
 
     assert _window_months(window) == ["2026-02", "2026-03", "2026-04", "2026-05"]
+
+
+def test_backfill_runner_includes_global_company_keywords():
+    runner = BackfillRunner(persist=False, use_state=False, process_after_window="none")
+
+    assert "nvidia" in runner.keywords
+    assert "samsung_sds" in runner.keywords
 
 
 def test_skax_url_normalization_keeps_site_pages_and_excludes_newsroom():
