@@ -175,18 +175,22 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
     with SessionLocal() as db:
         rows = db.execute(
             text("""
-                SELECT raw_articles.id, company, title, content, url,
-                       source_type, content_type, publisher, language,
-                       credibility_score, credibility_grade,
-                       relevance_score, relevance_label, relevance_reason,
-                       matched_companies, matched_sectors,
-                       source_name, published_at, collected_at,
+                SELECT raw_articles.id, raw_articles.company, raw_articles.title,
+                       raw_articles.content, raw_articles.url,
+                       raw_articles.source_type, raw_articles.content_type,
+                       raw_articles.publisher, raw_articles.language,
+                       raw_articles.credibility_score, raw_articles.credibility_grade,
+                       raw_articles.relevance_score, raw_articles.relevance_label,
+                       raw_articles.relevance_reason,
+                       raw_articles.matched_companies, raw_articles.matched_sectors,
+                       raw_articles.source_name, raw_articles.published_at,
+                       raw_articles.collected_at,
                        COALESCE(mu.metadata, '{}'::jsonb) AS metadata
                 FROM raw_articles
                 LEFT JOIN raw_article_metadata_unified mu
                     ON mu.raw_article_id = raw_articles.id
                 WHERE raw_articles.id = ANY(:ids)
-                ORDER BY credibility_score DESC NULLS LAST
+                ORDER BY raw_articles.credibility_score DESC NULLS LAST
             """),
             {"ids": ids},
         ).fetchall()
