@@ -2282,10 +2282,8 @@ def _news_cluster_unit_from_rows(
     )
     sector_signals = _sector_signals_for_text(combined_text, sector_config)
     direct_match = _direct_company_match(rep, company_config)
-    latest_collected_at = max(
-        (_document_datetime(row) for row in rows if _document_datetime(row) is not None),
-        default=_document_datetime(rep),
-    )
+    row_datetimes = [value for row in rows if (value := _document_datetime(row)) is not None]
+    latest_collected_at = max(row_datetimes) if row_datetimes else _document_datetime(rep)
     return {
         "unit_id": f"news_cluster:{cluster_id}",
         "unit_type": "news_cluster",
