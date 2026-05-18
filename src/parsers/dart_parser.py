@@ -395,6 +395,7 @@ def _extract_table_statement_metrics(tables: list[dict[str, Any]]) -> dict[str, 
             "source": "structured_table",
             "table_index": table.get("table_index"),
             "table_title": table.get("title"),
+            "unit": unit,
             "revenue_total": revenue_total,
             "revenue_raw": revenue_raw,
             "operating_profit": operating_profit,
@@ -920,6 +921,9 @@ def _build_chunk(
     if len(cleaned) < 40:
         return None
     topic_signals = _extract_topic_signals(cleaned)
+    matched_keywords = [
+        term for signal in topic_signals for term in signal.get("matched_terms", [])
+    ]
     return {
         "chunk_id": f"{section_key}:{chunk_index}",
         "section_key": section_key,
@@ -930,6 +934,7 @@ def _build_chunk(
         "chunk_index": chunk_index,
         "text_chars": len(cleaned),
         "text": cleaned,
+        "matched_keywords": matched_keywords,
         "topics": [signal["topic"] for signal in topic_signals],
         "topic_signals": topic_signals,
     }
@@ -1023,16 +1028,19 @@ class DartParser:
         if revenue_total is None:
             revenue_total, revenue_raw = _first_amount(text, _REVENUE_PATTERNS)
         if revenue_total is not None:
-            candidates.append(
-                {
-                    "page": None,
-                    "type": "revenue_total",
-                    "value_krwbn": revenue_total,
-                    "raw": revenue_raw,
-                    "source": statement_metrics.get("source", "document_text"),
-                    "table_index": statement_metrics.get("table_index"),
-                }
-            )
+            revenue_candidate = {
+                "page": None,
+                "type": "revenue_total",
+                "value_krwbn": revenue_total,
+                "raw": revenue_raw,
+                "source": statement_metrics.get("source", "document_text"),
+                "table_index": statement_metrics.get("table_index"),
+            }
+            if statement_metrics.get("unit"):
+                revenue_candidate["unit"] = statement_metrics["unit"]
+                revenue_candidate["value_krw"] = revenue_total * 100_000_000
+                revenue_candidate["confidence"] = 0.95
+            candidates.append(revenue_candidate)
 
         operating_profit = statement_metrics.get("operating_profit")
         operating_profit_raw = statement_metrics.get("operating_profit_raw")
@@ -1042,16 +1050,50 @@ class DartParser:
                 _OPERATING_PROFIT_PATTERNS,
             )
         if operating_profit is not None:
-            candidates.append(
-                {
-                    "page": None,
-                    "type": "operating_profit",
-                    "value_krwbn": operating_profit,
-                    "raw": operating_profit_raw,
-                    "source": statement_metrics.get("source", "document_text"),
-                    "table_index": statement_metrics.get("table_index"),
-                }
-            )
+            operating_profit_candidate = {
+                "page": None,
+                "type": "operating_profit",
+                "value_krwbn": operating_profit,
+                "raw": operating_profit_raw,
+                "source": statement_metrics.get("source", "document_text"),
+                "table_index": statement_metrics.get("table_index"),
+            }
+            if statement_metrics.get("unit"):
+                operating_profit_candidate["unit"] = statement_metrics["unit"]
+                operating_profit_candidate["value_krw"] = operating_profit * 100_000_000
+                operating_profit_candidate["confidence"] = 0.95
+            candidates.append(operating_profit_candidate)
+
+        metric_details = {
+            candidate["type"]: {
+                "value_krwbn": candidate.get("value_krwbn"),
+                "value_krw": candidate.get("value_krw"),
+                "unit": candidate.get("unit"),
+                "raw": candidate.get("raw"),
+                "source": candidate.get("source"),
+                "table_index": candidate.get("table_index"),
+            }
+            for candidate in candidates
+            if candidate.get("type") in {"revenue_total", "operating_profit"}
+        }
+        analysis_facts: list[dict[str, Any]] = [
+            {
+                "fact_type": "financial_metric",
+                "metric": metric_type,
+                **details,
+            }
+            for metric_type, details in metric_details.items()
+        ]
+        analysis_facts.extend(
+            {
+                "fact_type": "business_context",
+                "topic": signal["topic"],
+                "topic_name_ko": signal["topic_name_ko"],
+                "matched_terms": signal.get("matched_terms", []),
+                "snippet": signal.get("snippet", ""),
+            }
+            for signal in topic_signals
+        )
 
         if not text:
             warnings.append("content 없음")
@@ -1065,6 +1107,11 @@ class DartParser:
             warnings.append("operating_profit 추출 실패")
 
         rcept_no = str(extra.get("rcept_no") or extra.get("receipt_no") or "")
+        for chunk in document_chunks:
+            chunk["peer_id"] = peer_id
+            chunk["period"] = period
+            chunk["rcept_no"] = rcept_no or None
+
         financial_record = {
             "peer_id": peer_id,
             "period": period,
@@ -1088,6 +1135,7 @@ class DartParser:
                 statement_metrics.get("source")
                 or ("dart_document_text" if document_fetched else "not_available_without_document")
             ),
+            "metric_details": metric_details,
         }
 
         result = {
@@ -1134,6 +1182,7 @@ class DartParser:
             "financial_statements": financial_statements,
             "topic_signals": topic_signals,
             "topics": [signal["topic"] for signal in topic_signals],
+            "analysis_facts": analysis_facts,
             "financial_record": financial_record,
             "warnings": warnings,
         }
