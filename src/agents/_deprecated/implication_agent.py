@@ -58,7 +58,7 @@ class ImplicationAgent:
         """SK AX 관점의 시사점 초안을 생성한다.
 
         Args:
-            issue_card: IssueCardAgent가 생성한 이슈 카드 dict.
+            issue_card: CardNewsAgent가 생성한 카드뉴스 dict.
 
         Returns:
             시사점 dict (why_important, potential_impact, follow_up_questions,

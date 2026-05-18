@@ -841,6 +841,9 @@ PGPASSWORD=axpass psql -h localhost -U axuser -d axis -c "
 ```bash
 # LLM
 OPENAI_API_KEY=sk-...
+FACT_EXTRACTION_MAX_TOKENS=3000
+SUMMARY_MAX_TOKENS=1500
+VALIDATION_MAX_TOKENS=1200
 
 # DB — Cloud (Supabase Transaction Pooler, sslmode=require)
 DATABASE_URL=postgresql://postgres.<ref>:<pw>@aws-1-ap-northeast-2.pooler.supabase.com:6543/postgres?sslmode=require

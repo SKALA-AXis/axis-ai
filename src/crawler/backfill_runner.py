@@ -220,7 +220,6 @@ class BackfillRunner:
             "representative_ids": [],
             "classified_clusters": [],
             "card_news": [],
-            "evidence_results": [],
             "indexed_vector_ids": [],
             "errors": [],
             "human_review_flags": [],
