@@ -649,11 +649,11 @@ def classify_preprocessed_cluster(
         "exposure_band": exposure["exposure_band"],
         "impact_score": impact["impact_score"],
         "impact_band": impact["impact_band"],
-            "signals": {
-                "cluster_size": exposure["cluster_size"],
-                "company_mention_count": exposure["company_mention_count"],
-                "impact_signals": impact["impact_signals"],
-            },
+        "signals": {
+            "cluster_size": exposure["cluster_size"],
+            "company_mention_count": exposure["company_mention_count"],
+            "impact_signals": impact["impact_signals"],
+        },
         "event_type": event_type,
         "reasoning": reasoning,
         "importance": importance_band,

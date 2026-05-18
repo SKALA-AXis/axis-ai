@@ -562,12 +562,10 @@ def _normalize_article_fact_note(item: dict[str, Any]) -> dict[str, Any]:
             for fact in _as_list(item.get("core_facts"))
         ],
         "unique_facts": [
-            _normalize_unique_fact(fact)
-            for fact in _as_list(item.get("unique_facts"))
+            _normalize_unique_fact(fact) for fact in _as_list(item.get("unique_facts"))
         ],
         "uncertain_facts": [
-            _normalize_uncertain_fact(fact)
-            for fact in _as_list(item.get("uncertain_facts"))
+            _normalize_uncertain_fact(fact) for fact in _as_list(item.get("uncertain_facts"))
         ],
     }
 
@@ -649,8 +647,12 @@ def _merge_article_facts(article_fact_notes: list[dict[str, Any]]) -> dict[str, 
             if fact.get("activity_type"):
                 entry["activity_types"].append(str(fact.get("activity_type")))
             entry["numbers_and_dates"].extend(_normalize_string_list(fact.get("numbers_and_dates")))
-            entry["customers_or_industries"].extend(_normalize_string_list(fact.get("customers_or_industries")))
-            entry["products_or_services"].extend(_normalize_string_list(fact.get("products_or_services")))
+            entry["customers_or_industries"].extend(
+                _normalize_string_list(fact.get("customers_or_industries"))
+            )
+            entry["products_or_services"].extend(
+                _normalize_string_list(fact.get("products_or_services"))
+            )
 
         for fact in note.get("unique_facts", []):
             fact_text = str(fact.get("fact") or "").strip()
@@ -684,8 +686,12 @@ def _merge_article_facts(article_fact_notes: list[dict[str, Any]]) -> dict[str, 
     single_core_facts: list[dict[str, Any]] = []
     for entry in fact_map.values():
         entry["source_article_ids"] = _dedupe_ints(entry["source_article_ids"])
-        entry["evidence_texts"] = _dedupe_keep_order([text for text in entry["evidence_texts"] if text])[:5]
-        entry["activity_types"] = _dedupe_keep_order([item for item in entry["activity_types"] if item])
+        entry["evidence_texts"] = _dedupe_keep_order(
+            [text for text in entry["evidence_texts"] if text]
+        )[:5]
+        entry["activity_types"] = _dedupe_keep_order(
+            [item for item in entry["activity_types"] if item]
+        )
         entry["numbers_and_dates"] = _dedupe_keep_order(entry["numbers_and_dates"])
         entry["customers_or_industries"] = _dedupe_keep_order(entry["customers_or_industries"])
         entry["products_or_services"] = _dedupe_keep_order(entry["products_or_services"])
@@ -718,7 +724,9 @@ def _important_single_core_facts(facts: list[dict[str, Any]]) -> list[dict[str, 
         if not _has_unique_fact_importance(text):
             continue
         copied = dict(fact)
-        copied["importance_reason"] = "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        copied["importance_reason"] = (
+            "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        )
         important.append(copied)
     return important
 
@@ -735,13 +743,25 @@ def _build_cluster_fact_intelligence(merged_facts: dict[str, Any]) -> dict[str, 
         "uncertain_facts": merged_facts.get("uncertain_facts", []),
         "conflict_notes": merged_facts.get("conflict_notes", []),
         "numbers_and_dates": _dedupe_keep_order(
-            [value for fact in all_facts for value in _normalize_string_list(fact.get("numbers_and_dates"))]
+            [
+                value
+                for fact in all_facts
+                for value in _normalize_string_list(fact.get("numbers_and_dates"))
+            ]
         ),
         "customers_or_industries": _dedupe_keep_order(
-            [value for fact in all_facts for value in _normalize_string_list(fact.get("customers_or_industries"))]
+            [
+                value
+                for fact in all_facts
+                for value in _normalize_string_list(fact.get("customers_or_industries"))
+            ]
         ),
         "products_or_services": _dedupe_keep_order(
-            [value for fact in all_facts for value in _normalize_string_list(fact.get("products_or_services"))]
+            [
+                value
+                for fact in all_facts
+                for value in _normalize_string_list(fact.get("products_or_services"))
+            ]
         ),
         "activity_types": _dedupe_keep_order(
             [
@@ -764,7 +784,10 @@ def _classify_cluster_event_type(
     text = " ".join(
         [
             json.dumps(cluster_fact_intelligence, ensure_ascii=False),
-            *[f"{article.get('title') or ''} {article.get('content') or ''}" for article in articles],
+            *[
+                f"{article.get('title') or ''} {article.get('content') or ''}"
+                for article in articles
+            ],
         ]
     )
     return _classify_event_type_from_text(text)
@@ -799,13 +822,17 @@ def _build_fact_basis(
 ) -> list[dict[str, Any]]:
     existing = result.get("fact_basis")
     if isinstance(existing, list) and len(existing) >= 3:
-        normalized = [_normalize_fact_basis_item(item) for item in existing if isinstance(item, dict)]
+        normalized = [
+            _normalize_fact_basis_item(item) for item in existing if isinstance(item, dict)
+        ]
         if len([item for item in normalized if item.get("source_article_ids")]) >= 3:
             return normalized
 
     facts = _basis_fact_pool(cluster_fact_intelligence)
     basis: list[dict[str, Any]] = []
-    for index, sentence in enumerate(_normalize_string_list(result.get("fact_summary"))[:3], start=1):
+    for index, sentence in enumerate(
+        _normalize_string_list(result.get("fact_summary"))[:3], start=1
+    ):
         best = _best_fact_for_sentence(sentence, facts)
         if best is None:
             basis.append(
@@ -824,7 +851,9 @@ def _build_fact_basis(
                 "summary_sentence_index": index,
                 "fact": best.get("fact") or sentence,
                 "source_article_ids": best.get("source_article_ids", []),
-                "evidence_count": int(best.get("evidence_count") or len(best.get("source_article_ids", []))),
+                "evidence_count": int(
+                    best.get("evidence_count") or len(best.get("source_article_ids", []))
+                ),
                 "evidence_type": best.get("evidence_type", "common_fact"),
                 "evidence_texts": best.get("evidence_texts", [])[:3],
             }
@@ -885,11 +914,19 @@ def _validate_summary_grounding(
     if not source_article_ids:
         result["is_valid_summary"] = False
         result["reason"] = _append_reason(result.get("reason"), "source_article_ids가 비어 있음")
-    if main_company and result.get("is_valid_summary") and not _summary_mentions_company(result, main_company):
+    if (
+        main_company
+        and result.get("is_valid_summary")
+        and not _summary_mentions_company(result, main_company)
+    ):
         result["is_valid_summary"] = False
-        result["reason"] = _append_reason(result.get("reason"), "요약 문장에 main_company alias가 없음")
+        result["reason"] = _append_reason(
+            result.get("reason"), "요약 문장에 main_company alias가 없음"
+        )
     if _contains_disallowed_interpretation(result):
-        result["reason"] = _append_reason(result.get("reason"), "시사점/대응방향 표현을 제거해야 함")
+        result["reason"] = _append_reason(
+            result.get("reason"), "시사점/대응방향 표현을 제거해야 함"
+        )
     return result
 
 
