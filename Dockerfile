@@ -24,6 +24,14 @@ RUN uv export --frozen --no-emit-project --no-hashes --format requirements-txt -
     && uv pip install --system --no-cache -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 
+# Playwright chromium-headless-shell binary + 시스템 의존성
+# - SPA IR 사이트 (예: samsungsds.com/investor/ir_events) 크롤링 시 사용
+# - chromium-headless-shell 만 (full chromium 보다 ~80MB 작음)
+# - --with-deps 가 libnss3 / libgbm1 / libxshmfence1 등 chromium 시스템 lib 설치
+# - 이미지 사이즈 ~200MB 추가. 빌드 시간 ~1-2분 추가.
+RUN python -m playwright install --with-deps chromium-headless-shell \
+    && rm -rf /var/lib/apt/lists/* /root/.cache/pip
+
 # 애플리케이션 코드
 COPY src ./src
 # v3 §5.1·§5.2: FinancialLinkerAgent가 런타임에 읽는 stub 재무 데이터
