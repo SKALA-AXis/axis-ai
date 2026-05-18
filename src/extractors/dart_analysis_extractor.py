@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from typing import Any
 
 _DART_METRIC_LABELS = {
@@ -59,12 +60,48 @@ _BUSINESS_AREA_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("enterprise_it", ("enterprise", "erp", "ito", "si", "그룹사", "it서비스")),
     ("robotics", ("robot", "로봇", "automation")),
 )
-_SECTION_SIGNAL_HINTS = {
-    "business": ("strategy", "company_total"),
-    "financial": ("growth", "company_total"),
-    "management_discussion": ("strategy", "company_total"),
-    "other": ("risk", "company_total"),
-    "affiliates": ("strategy", "company_total"),
+_EXCLUDED_SIGNAL_SECTIONS = {
+    "auditor",
+    "governance",
+    "shareholder",
+    "executives",
+    "major_shareholder",
+    "detailed_tables",
+}
+_SECTION_SIGNAL_POLICY: dict[str, dict[str, object]] = {
+    "business": {
+        "allowed_signal_types": {
+            "strategy",
+            "growth",
+            "orders_pipeline",
+            "investment",
+            "efficiency",
+        },
+        "default_business_area": None,
+    },
+    "management_discussion": {
+        "allowed_signal_types": {
+            "strategy",
+            "growth",
+            "orders_pipeline",
+            "investment",
+            "efficiency",
+            "risk",
+        },
+        "default_business_area": "company_total",
+    },
+    "financial": {
+        "allowed_signal_types": {"investment"},
+        "default_business_area": "company_total",
+    },
+    "other": {
+        "allowed_signal_types": {"risk"},
+        "default_business_area": "company_total",
+    },
+    "affiliates": {
+        "allowed_signal_types": {"strategy", "risk"},
+        "default_business_area": "company_total",
+    },
 }
 _SIGNAL_TYPE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("risk", ("위험", "리스크", "소송", "규제", "불확실", "하락", "감소", "부진")),
@@ -76,6 +113,52 @@ _SIGNAL_TYPE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 _NEGATIVE_TERMS = ("위험", "리스크", "하락", "감소", "둔화", "부진", "소송", "규제")
 _POSITIVE_TERMS = ("성장", "확대", "증가", "개선", "강화", "고도화", "수주", "계약")
+_SK_AX_STRONG_TERMS = (
+    "sk ax",
+    "에스케이 ax",
+    "sk㈜ c&c",
+    "sk주식회사 c&c",
+    "sk c&c",
+    "sk c & c",
+    "씨앤씨",
+    "c&c부문",
+    "c&c 부문",
+    "it서비스",
+    "it 서비스",
+    "디지털전환",
+    "enterprise it",
+)
+_SK_AX_BUSINESS_TERMS = (
+    "ax",
+    "ai",
+    "인공지능",
+    "생성형",
+    "클라우드",
+    "cloud",
+    "데이터센터",
+    "data center",
+    "erp",
+    "scm",
+    "자동화",
+)
+_SK_GROUP_UNRELATED_TERMS = (
+    "sk이노베이션",
+    "sk innovation",
+    "sk텔레콤",
+    "sk telecom",
+    "sk하이닉스",
+    "sk hynix",
+    "sk스퀘어",
+    "sk square",
+    "sk바이오팜",
+    "sk biopharmaceuticals",
+    "sk e&s",
+    "투자부문",
+    "계열회사",
+    "관계회사",
+    "자회사",
+    "포트폴리오",
+)
 
 
 def financial_metrics_from_dart(
@@ -85,6 +168,8 @@ def financial_metrics_from_dart(
     """DART 재무제표 구조화 결과를 raw_article_financial_metrics row로 변환한다."""
     article_id = int(article["id"])
     peer_id = _peer_id(article, parser_result)
+    if peer_id == "sk_ax":
+        return []
     period = _period(article, parser_result)
     period_year = parser_result.get("period_year") or article["extra"].get("period_year")
     period_quarter = parser_result.get("period_quarter") or article["extra"].get("period_quarter")
@@ -148,61 +233,67 @@ def business_signals_from_dart(
         if not isinstance(chunk, dict):
             continue
         text_value = str(chunk.get("text") or "").strip()
-        if len(text_value) < 80:
+        if len(text_value) < 30:
             continue
 
-        business_area = _business_area_from_chunk(chunk, text_value)
-        signal_type = _signal_type_from_chunk(chunk, text_value)
-        if not business_area or not signal_type:
-            continue
+        for sentence_index, evidence_text, business_area, signal_type in _signals_from_chunk(
+            chunk,
+            text_value,
+            peer_id=peer_id,
+        ):
+            dedupe_key = (business_area, signal_type, evidence_text[:180])
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
 
-        evidence_text = _evidence_text(text_value, business_area, signal_type)
-        if not evidence_text:
-            continue
-        dedupe_key = (business_area, signal_type, evidence_text[:180])
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
-
-        signal_uid = (
-            f"dart:{business_area}:{signal_type}:"
-            f"{chunk.get('chunk_id') or chunk.get('chunk_index') or len(signals) + 1}"
-        )
-        signals.append(
-            {
-                "raw_article_id": article_id,
-                "signal_uid": signal_uid,
-                "source_type": "dart",
-                "source_name": article.get("source_name"),
-                "peer_id": peer_id,
-                "period": period,
-                "period_year": period_year,
-                "period_quarter": period_quarter,
-                "period_type": period_type,
-                "business_area": business_area,
-                "signal_type": signal_type,
-                "sentiment": _sentiment(evidence_text),
-                "summary": _summary(evidence_text),
-                "evidence_text": evidence_text,
-                "source_page": None,
-                "source_chunk_uid": str(chunk.get("chunk_id") or chunk.get("chunk_index") or ""),
-                "confidence": _signal_confidence(chunk, business_area, signal_type, text_value),
-                "extraction_method": "dart_parser.document_chunks.rule_based",
-                "payload": {
-                    "title": article.get("title"),
-                    "url": article.get("url"),
-                    "rcept_no": parser_result.get("rcept_no") or article["extra"].get("rcept_no"),
-                    "chunk": {
-                        "chunk_id": chunk.get("chunk_id"),
-                        "chunk_index": chunk.get("chunk_index"),
-                        "section_key": chunk.get("section_key"),
-                        "section_title": chunk.get("section_title"),
-                        "subsection_title": chunk.get("subsection_title"),
-                        "topics": chunk.get("topics"),
+            signal_uid = (
+                f"dart:{business_area}:{signal_type}:"
+                f"{chunk.get('chunk_id') or chunk.get('chunk_index') or len(signals) + 1}:"
+                f"s{sentence_index}"
+            )
+            signals.append(
+                {
+                    "raw_article_id": article_id,
+                    "signal_uid": signal_uid,
+                    "source_type": "dart",
+                    "source_name": article.get("source_name"),
+                    "peer_id": peer_id,
+                    "period": period,
+                    "period_year": period_year,
+                    "period_quarter": period_quarter,
+                    "period_type": period_type,
+                    "business_area": business_area,
+                    "signal_type": signal_type,
+                    "sentiment": _sentiment(evidence_text),
+                    "summary": _summary(evidence_text),
+                    "evidence_text": evidence_text,
+                    "source_page": None,
+                    "source_chunk_uid": str(
+                        chunk.get("chunk_id") or chunk.get("chunk_index") or ""
+                    ),
+                    "confidence": _signal_confidence(
+                        chunk,
+                        business_area,
+                        signal_type,
+                        evidence_text,
+                    ),
+                    "extraction_method": "dart_parser.section_sentence.rule_based",
+                    "payload": {
+                        "title": article.get("title"),
+                        "url": article.get("url"),
+                        "rcept_no": parser_result.get("rcept_no")
+                        or article["extra"].get("rcept_no"),
+                        "chunk": {
+                            "chunk_id": chunk.get("chunk_id"),
+                            "chunk_index": chunk.get("chunk_index"),
+                            "section_key": chunk.get("section_key"),
+                            "section_title": chunk.get("section_title"),
+                            "subsection_title": chunk.get("subsection_title"),
+                            "topics": chunk.get("topics"),
+                        },
                     },
-                },
-            }
-        )
+                }
+            )
 
     return signals
 
@@ -372,68 +463,104 @@ def _metric_row(
     }
 
 
-def _business_area_from_chunk(chunk: dict[str, Any], text_value: str) -> str | None:
-    detected = _detect_business_area(text_value)
-    if detected:
-        return detected
-
+def _signals_from_chunk(
+    chunk: dict[str, Any],
+    text_value: str,
+    *,
+    peer_id: str | None = None,
+) -> list[tuple[int, str, str, str]]:
     section_key = str(chunk.get("section_key") or "")
-    hint = _SECTION_SIGNAL_HINTS.get(section_key)
-    if hint:
-        return hint[1]
+    if section_key in _EXCLUDED_SIGNAL_SECTIONS:
+        return []
 
-    return None
+    policy = _SECTION_SIGNAL_POLICY.get(section_key)
+    if policy is None:
+        return []
+
+    allowed_signal_types = policy["allowed_signal_types"]
+    if not isinstance(allowed_signal_types, Collection):
+        return []
+    default_business_area = policy["default_business_area"]
+    if default_business_area is not None:
+        default_business_area = str(default_business_area)
+    signals: list[tuple[int, str, str, str]] = []
+
+    for index, sentence in enumerate(_sentences(text_value), start=1):
+        if peer_id == "sk_ax" and not _is_sk_ax_relevant_sentence(sentence):
+            continue
+
+        sentence_signal_types = [
+            signal_type
+            for signal_type in _detect_signal_types(sentence)
+            if signal_type in allowed_signal_types
+        ]
+        if not sentence_signal_types:
+            continue
+
+        business_area = _detect_business_area(sentence)
+        if not business_area:
+            chunk_areas = _detect_business_areas(text_value)
+            if len(chunk_areas) == 1:
+                business_area = next(iter(chunk_areas))
+        if not business_area:
+            business_area = default_business_area
+        if not business_area:
+            continue
+
+        for signal_type in sentence_signal_types:
+            signals.append((index, sentence[:1000], business_area, signal_type))
+
+    return signals
 
 
-def _signal_type_from_chunk(chunk: dict[str, Any], text_value: str) -> str | None:
-    detected = _detect_signal_type(text_value)
-    if detected:
-        return detected
+def _is_sk_ax_relevant_sentence(sentence: str) -> bool:
+    lowered = sentence.lower()
+    has_strong = any(_contains_term(lowered, term) for term in _SK_AX_STRONG_TERMS)
+    if has_strong:
+        return True
 
-    section_key = str(chunk.get("section_key") or "")
-    hint = _SECTION_SIGNAL_HINTS.get(section_key)
-    if hint:
-        return hint[0]
+    has_unrelated_group = any(_contains_term(lowered, term) for term in _SK_GROUP_UNRELATED_TERMS)
+    if has_unrelated_group:
+        return False
 
-    return None
+    return any(_contains_term(lowered, term) for term in _SK_AX_BUSINESS_TERMS)
 
 
 def _detect_business_area(text_value: str) -> str | None:
     lowered = text_value.lower()
     for business_area, terms in _BUSINESS_AREA_RULES:
-        if any(term.lower() in lowered for term in terms):
+        if any(_contains_term(lowered, term) for term in terms):
             return business_area
     return None
 
 
-def _detect_signal_type(text_value: str) -> str | None:
+def _detect_business_areas(text_value: str) -> set[str]:
     lowered = text_value.lower()
+    areas: set[str] = set()
+    for business_area, terms in _BUSINESS_AREA_RULES:
+        if any(_contains_term(lowered, term) for term in terms):
+            areas.add(business_area)
+    return areas
+
+
+def _detect_signal_types(text_value: str) -> list[str]:
+    lowered = text_value.lower()
+    signal_types: list[str] = []
     for signal_type, terms in _SIGNAL_TYPE_RULES:
-        if any(term.lower() in lowered for term in terms):
-            return signal_type
-    return None
+        if any(_contains_term(lowered, term) for term in terms):
+            signal_types.append(signal_type)
+    return signal_types
 
 
-def _evidence_text(text_value: str, business_area: str, signal_type: str) -> str | None:
-    terms = _terms_for_evidence(business_area, signal_type)
-    sentences = _sentences(text_value)
-    for sentence in sentences:
-        lowered = sentence.lower()
-        if any(term.lower() in lowered for term in terms):
-            return sentence[:1000]
-    return sentences[0][:1000] if sentences else None
+def _contains_term(lowered_text: str, term: str) -> bool:
+    lowered_term = term.lower()
+    if _is_short_ascii_term(lowered_term):
+        return bool(re.search(rf"(?<![a-z0-9]){re.escape(lowered_term)}(?![a-z0-9])", lowered_text))
+    return lowered_term in lowered_text
 
 
-def _terms_for_evidence(business_area: str, signal_type: str) -> tuple[str, ...]:
-    business_terms = next(
-        (terms for area, terms in _BUSINESS_AREA_RULES if area == business_area),
-        (),
-    )
-    signal_terms = next(
-        (terms for kind, terms in _SIGNAL_TYPE_RULES if kind == signal_type),
-        (),
-    )
-    return (*business_terms, *signal_terms)
+def _is_short_ascii_term(value: str) -> bool:
+    return len(value) <= 3 and bool(re.fullmatch(r"[a-z0-9&]+", value))
 
 
 def _sentences(text_value: str) -> list[str]:
@@ -441,7 +568,7 @@ def _sentences(text_value: str) -> list[str]:
     if not value:
         return []
     pieces = re.split(r"(?<=[.!?。])\s+|(?<=다\.)\s+", value)
-    sentences = [piece.strip(" -•\t") for piece in pieces if len(piece.strip()) >= 30]
+    sentences = [piece.strip(" -•\t") for piece in pieces if len(piece.strip()) >= 18]
     return sentences or [value]
 
 
@@ -466,10 +593,9 @@ def _signal_confidence(
     text_value: str,
 ) -> float:
     detected_area = _detect_business_area(text_value)
-    detected_type = _detect_signal_type(text_value)
-    if detected_area == business_area and detected_type == signal_type:
+    if detected_area == business_area and signal_type in _detect_signal_types(text_value):
         return 0.82
-    if chunk.get("section_key") in _SECTION_SIGNAL_HINTS:
+    if chunk.get("section_key") in _SECTION_SIGNAL_POLICY:
         return 0.72
     return 0.68
 
