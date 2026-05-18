@@ -888,10 +888,10 @@ def _build_subsection_tree(raw_section_text: str, section_title: str) -> list[di
 
 
 def _same_heading(left: str, right: str) -> bool:
-    def normalize(value: str) -> str:
+    def _normalize(value: str) -> str:
         return re.sub(r"\s+", "", value or "")
 
-    return normalize(left) == normalize(right)
+    return _normalize(left) == _normalize(right)
 
 
 def _heading_level(label: str) -> int:
