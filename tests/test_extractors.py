@@ -2,6 +2,10 @@ from src.extractors.dart_analysis_extractor import (
     business_signals_from_dart,
     financial_metrics_from_dart,
 )
+from src.extractors.securities_report_analysis_extractor import (
+    business_signals_from_securities_report,
+    financial_metrics_from_securities_report,
+)
 
 
 def test_dart_financial_metrics_from_statement_rows() -> None:
@@ -273,3 +277,68 @@ def test_dart_sk_ax_signals_keep_only_sk_ax_related_sentences() -> None:
     assert all("C&C" in signal["evidence_text"] for signal in signals)
     assert all("SK하이닉스" not in signal["evidence_text"] for signal in signals)
     assert all("SK바이오팜" not in signal["evidence_text"] for signal in signals)
+
+
+def test_securities_report_extracts_valuation_and_financial_metrics() -> None:
+    article = {
+        "id": 77,
+        "company": ["samsung_sds"],
+        "title": "[iM증권] 삼성SDS 2026Q1 Review",
+        "content": (
+            "목표주가 220,000원 현재주가 169,800원\n"
+            "매출액 33,529억원 영업이익 783억원 영업이익률 2.3%\n"
+        ),
+        "url": "https://example.com/report.pdf",
+        "source_name": "naver_research",
+        "extra": {},
+    }
+    parser_result = {
+        "peer_id": "samsung_sds",
+        "period": "2026Q1",
+        "report_firm": "iM증권",
+        "target_price_krw": 220000,
+        "current_price_krw": 169800,
+    }
+
+    metrics = financial_metrics_from_securities_report(article, parser_result)
+    by_name = {metric["metric_name"]: metric for metric in metrics}
+
+    assert by_name["target_price"]["value_numeric"] == 220000
+    assert by_name["current_price"]["value_numeric"] == 169800
+    assert by_name["upside_pct"]["unit"] == "%"
+    assert by_name["revenue_total"]["value_krwbn"] == 33529
+    assert by_name["operating_profit"]["value_krwbn"] == 783
+    assert by_name["operating_margin"]["value_numeric"] == 2.3
+
+
+def test_securities_report_extracts_business_forecast_signals() -> None:
+    article = {
+        "id": 78,
+        "company": ["samsung_sds"],
+        "title": "[iM증권] 삼성SDS 2026Q1 Review",
+        "content": "",
+        "url": "https://example.com/report.pdf",
+        "source_name": "naver_research",
+        "extra": {},
+    }
+    parser_result = {
+        "peer_id": "samsung_sds",
+        "period": "2026Q1",
+        "report_firm": "iM증권",
+        "document_chunks": [
+            {
+                "chunk_id": "forecast:1",
+                "section_key": "forecast",
+                "section_title": "Forecast",
+                "text": (
+                    "AI 데이터센터 투자 확대와 클라우드 수요 증가로 "
+                    "2026년 성장 모멘텀이 강화될 전망이다."
+                ),
+            }
+        ],
+    }
+
+    signals = business_signals_from_securities_report(article, parser_result)
+
+    assert {signal["business_area"] for signal in signals} == {"cloud"}
+    assert {"forecast", "investment", "growth"} <= {signal["signal_type"] for signal in signals}

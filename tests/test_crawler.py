@@ -1,7 +1,7 @@
 """크롤러 단위 테스트"""
 
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 from src.agents.relevance_agent import (
@@ -27,6 +27,11 @@ from src.crawler.sources.naver import (
     classify_peer_relevance,
     get_search_aliases,
     load_naver_credentials,
+)
+from src.crawler.sources.naver_research import (
+    NaverResearchCrawler,
+    _extract_pdf_report_date,
+    _parse_report_date,
 )
 from src.crawler.sources.skax_crawler import (
     classify_page_kind,
@@ -94,6 +99,36 @@ def test_naver_credentials_support_numbered_keys(monkeypatch):
         "secret2",
         "default_secret",
     ]
+
+
+def test_naver_research_requires_publish_date_in_window() -> None:
+    crawler = NaverResearchCrawler(
+        peer_id="samsung_sds",
+        item_code="018260",
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 1, 31),
+    )
+
+    assert crawler._is_in_collection_window(datetime(2026, 1, 15))
+    assert not crawler._is_in_collection_window(datetime(2014, 1, 15))
+    assert not crawler._is_in_collection_window(None)
+
+
+def test_naver_research_two_digit_year_is_historical_year() -> None:
+    assert _parse_report_date("14.05.16") == datetime(2014, 5, 16)
+
+
+def test_naver_research_extracts_pdf_cover_date_before_financial_years() -> None:
+    text = (
+        "[PAGE 1]\n"
+        "2014. 06. 12\n"
+        "기업분석 리포트\n"
+        "포괄손익계산서 2012 2013 2014F 2015F 2016F\n"
+        "[PAGE 2]\n"
+        "2026.01.01"
+    )
+
+    assert _extract_pdf_report_date(text) == datetime(2014, 6, 12)
 
 
 async def test_naver_news_retries_next_key_on_401(monkeypatch):
