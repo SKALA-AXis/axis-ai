@@ -117,20 +117,14 @@ class NaverResearchCrawler(BaseCrawler):
         report_type: str,
         base_url: str,
     ) -> RawArticle | None:
-        cells = row.select("td")
-
-        if len(cells) < 3:
+        fields = _row_fields(row)
+        if not fields:
             return None
 
-        title_el = cells[0].select_one("a")
         pdf_el = row.select_one("a[href*='.pdf']")
-
-        if not title_el:
-            return None
-
-        firm = strip_html(cells[1].get_text(" ", strip=True))
-        report_title = strip_html(title_el.get_text(" ", strip=True))
-        published_at = _parse_report_date(cells[2].get_text(" ", strip=True))
+        firm = fields["firm"]
+        report_title = fields["title"]
+        published_at = fields["published_at"]
 
         if not self._is_in_collection_window(published_at):
             return None
@@ -175,7 +169,7 @@ class NaverResearchCrawler(BaseCrawler):
                 "tables": pdf_payload.get("tables"),
                 "table_parse_strategy": pdf_payload.get("table_parse_strategy"),
                 "chart_parse_strategy": pdf_payload.get("chart_parse_strategy"),
-                "list_published_at": cells[2].get_text(" ", strip=True),
+                "list_published_at": fields["published_at_text"],
                 "pdf_published_at": pdf_published_at.isoformat() if pdf_published_at else None,
                 "lookback_days": self.lookback_days,
                 "start_date": self.start_date.isoformat() if self.start_date else None,
@@ -289,18 +283,44 @@ def _extract_pdf_report_date(pdf_text: str) -> datetime | None:
 
 
 def _row_published_at(row) -> datetime | None:
-    cells = row.select("td")
-    if len(cells) < 3:
-        return None
-    return _parse_report_date(cells[2].get_text(" ", strip=True))
+    fields = _row_fields(row)
+    return fields["published_at"] if fields else None
 
 
 def _row_key(row) -> str:
-    cells = row.select("td")
-    text_parts = [cell.get_text(" ", strip=True) for cell in cells[:3]]
+    fields = _row_fields(row)
+    if not fields:
+        text_parts = [cell.get_text(" ", strip=True) for cell in row.select("td")[:3]]
+    else:
+        text_parts = [fields["title"], fields["firm"], fields["published_at_text"]]
     pdf_el = row.select_one("a[href*='.pdf']")
     pdf_href = pdf_el.get("href", "") if pdf_el else ""
     return "|".join([*text_parts, pdf_href])
+
+
+def _row_fields(row) -> dict[str, object] | None:
+    cells = row.select("td")
+    if len(cells) >= 5:
+        title_el = cells[1].select_one("a")
+        firm_cell = cells[2]
+        date_cell = cells[4]
+    elif len(cells) >= 3:
+        title_el = cells[0].select_one("a")
+        firm_cell = cells[1]
+        date_cell = cells[2]
+    else:
+        return None
+
+    if not title_el:
+        return None
+
+    published_at_text = date_cell.get_text(" ", strip=True)
+    return {
+        "title": strip_html(title_el.get_text(" ", strip=True)),
+        "firm": strip_html(firm_cell.get_text(" ", strip=True)),
+        "published_at_text": published_at_text,
+        "published_at": _parse_report_date(published_at_text),
+    }
 
 
 def _with_query_param(url: str, key: str, value: str) -> str:

@@ -4,6 +4,8 @@ import json
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
+from bs4 import BeautifulSoup
+
 from src.agents.relevance_agent import (
     _core_company_role_reject_result,
     _metadata_patch_for_relevance,
@@ -32,6 +34,7 @@ from src.crawler.sources.naver_research import (
     NaverResearchCrawler,
     _extract_pdf_report_date,
     _parse_report_date,
+    _row_published_at,
 )
 from src.crawler.sources.skax_crawler import (
     classify_page_kind,
@@ -116,6 +119,24 @@ def test_naver_research_requires_publish_date_in_window() -> None:
 
 def test_naver_research_two_digit_year_is_historical_year() -> None:
     assert _parse_report_date("14.05.16") == datetime(2014, 5, 16)
+
+
+def test_naver_research_reads_current_company_table_layout() -> None:
+    soup = BeautifulSoup(
+        """
+        <tr>
+            <td><a href="/item/main.naver?code=018260" class="stock_item">삼성SDS</a></td>
+            <td><a href="company_read.naver?nid=91965">AI 데이터센터 확장과 클라우드</a></td>
+            <td>iM증권</td>
+            <td class="file"><a href="https://stock.pstatic.net/report.pdf">pdf</a></td>
+            <td class="date">26.04.27</td>
+            <td class="date">9238</td>
+        </tr>
+        """,
+        "html.parser",
+    )
+
+    assert _row_published_at(soup.select_one("tr")) == datetime(2026, 4, 27)
 
 
 def test_naver_research_extracts_pdf_cover_date_before_financial_years() -> None:
