@@ -403,8 +403,12 @@ def get_dart_document_detail(article_id: int) -> dict[str, Any] | None:
         "content": row.get("content"),
         "document": document,
         "sections": parser_result.get("sections") or metadata.get("dart_sections") or {},
-        "section_tree": parser_result.get("section_tree") or metadata.get("dart_section_tree") or [],
-        "document_chunks": parser_result.get("document_chunks") or metadata.get("dart_document_chunks") or [],
+        "section_tree": parser_result.get("section_tree")
+        or metadata.get("dart_section_tree")
+        or [],
+        "document_chunks": parser_result.get("document_chunks")
+        or metadata.get("dart_document_chunks")
+        or [],
         "classified_tables": parser_result.get("classified_tables")
         or metadata.get("dart_classified_tables")
         or [],
@@ -1186,7 +1190,9 @@ def _upsert_source_metadata(
         )
 
     if parse_payload:
-        _upsert_parse_result(db, article_id=article_id, source_type=source_type, payload=parse_payload)
+        _upsert_parse_result(
+            db, article_id=article_id, source_type=source_type, payload=parse_payload
+        )
 
 
 _PARSE_RESULT_METADATA_KEYS = {
@@ -1220,7 +1226,9 @@ def _parse_result_payload(metadata: dict[str, Any]) -> dict[str, Any]:
     if not parser_result and not any(key in metadata for key in _PARSE_RESULT_METADATA_KEYS):
         return {}
 
-    financial_record = metadata.get("financial_record") or parser_result.get("financial_record") or {}
+    financial_record = (
+        metadata.get("financial_record") or parser_result.get("financial_record") or {}
+    )
     warnings = parser_result.get("warnings") or metadata.get("warnings") or []
     raw_payload = {
         key: metadata.get(key)

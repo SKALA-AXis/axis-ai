@@ -780,7 +780,11 @@ def _segment_header_row(rows: list[Any]) -> tuple[int, int, int] | None:
             None,
         )
         if segment_index is not None and value_index is not None:
-            return segment_index, item_index if item_index is not None else segment_index, value_index
+            return (
+                segment_index,
+                item_index if item_index is not None else segment_index,
+                value_index,
+            )
     return None
 
 
