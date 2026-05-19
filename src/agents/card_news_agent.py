@@ -420,7 +420,8 @@ def _attach_card_news_schema_fields(card: dict[str, Any]) -> None:
         "signals": card.get("signals", {}),
         "evidence_chain": card.get("evidence_chain", {}),
     }
-    validation = card.get("validation") if isinstance(card.get("validation"), dict) else {}
+    raw_validation = card.get("validation")
+    validation: dict[str, Any] = raw_validation if isinstance(raw_validation, dict) else {}
     validation_pass = bool(validation.get("pass", card.get("validation_pass", False)))
     validation_sc_score = validation.get("sc_score", card.get("validation_sc_score", 0.0))
     card.update(
@@ -1137,7 +1138,7 @@ def _fact_basis(summary: dict[str, Any]) -> list[dict[str, Any]]:
             if article_id is not None
         ]
         evidence_texts = _list_string(item.get("evidence_texts"))
-        basis_item = {
+        basis_item: dict[str, Any] = {
             "summary_line_index": _optional_int(
                 item.get("summary_line_index", item.get("summary_sentence_index"))
             ),
