@@ -7,8 +7,8 @@ from typing import Any
 
 from langchain_openai import ChatOpenAI
 
-from src.config.sectors import SECTOR_IDS, match_sectors, primary_sector
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES
+from src.config.sectors import SECTOR_IDS, match_sectors, primary_sector
 from src.db.article_store import get_articles_by_ids, update_classification
 
 log = logging.getLogger(__name__)

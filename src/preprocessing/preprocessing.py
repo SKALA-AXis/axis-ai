@@ -241,7 +241,9 @@ class PreprocessingService:
                 article_id,
                 "SKIPPED_PREPROCESS_UNSUPPORTED_SOURCE",
                 {
-                    "skip_reason": f"{source_type or 'unknown'} source_type은 현재 전처리 대상이 아님"
+                    "skip_reason": (
+                        f"{source_type or 'unknown'} source_type은 현재 전처리 대상이 아님"
+                    )
                 },
             )
 
