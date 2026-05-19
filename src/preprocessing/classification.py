@@ -7,8 +7,8 @@ from typing import Any
 
 from langchain_openai import ChatOpenAI
 
-from src.config.sectors import SECTOR_IDS, match_sectors, primary_sector
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES
+from src.config.sectors import SECTOR_IDS, match_sectors, primary_sector
 from src.db.article_store import get_articles_by_ids, update_classification
 
 log = logging.getLogger(__name__)
@@ -177,7 +177,7 @@ MEDIUM_IMPACT_KEYWORDS = [
     "투자계획",
 ]
 
-_llm = ChatOpenAI(model="gpt-4o", temperature=0.1, max_completion_tokens=400)
+_llm: ChatOpenAI | None = None
 _PROMPT_VERSION = "classify-v3.0"
 
 _CLASSIFY_PROMPT = """\
@@ -476,7 +476,8 @@ class ClusterClassifier:
         try:
             from src.observability import tracing_config
 
-            response = _llm.invoke(
+            llm = _get_llm()
+            response = llm.invoke(
                 prompt,
                 config=tracing_config(
                     agent="ClusterClassifier",
@@ -498,6 +499,13 @@ class ClusterClassifier:
         except Exception as e:
             log.warning("event_type 분류 실패, company 기본값 | error=%s", e)
             return "company", ""
+
+
+def _get_llm() -> ChatOpenAI:
+    global _llm
+    if _llm is None:
+        _llm = ChatOpenAI(model="gpt-4o", temperature=0.1, max_completion_tokens=400)
+    return _llm
 
 
 def _classify_event_type_rule_based(

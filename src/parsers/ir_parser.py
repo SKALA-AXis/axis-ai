@@ -105,7 +105,11 @@ _IR_FINANCIAL_METRIC_RULES: tuple[tuple[str, list[re.Pattern[str]], str], ...] =
     ("operating_margin", _OPERATING_MARGIN_PATTERNS, "percentage"),
 )
 _IR_TABLE_METRIC_ALIASES: tuple[tuple[str, tuple[str, ...], str], ...] = (
-    ("operating_margin", ("영업이익률", "opm", "operating margin", "op margin", "margin"), "percentage"),
+    (
+        "operating_margin",
+        ("영업이익률", "opm", "operating margin", "op margin", "margin"),
+        "percentage",
+    ),
     ("gross_margin", ("gpm", "gross profit margin", "gross margin"), "percentage"),
     ("gross_profit", ("매출총이익", "gross profit"), "amount_krwbn"),
     ("revenue_total", ("매출액", "매출", "revenue", "sales"), "amount_krwbn"),
@@ -713,7 +717,9 @@ def _extract_financial_table_candidates(
             table_rows: list[dict[str, Any]] = []
             active_metric: tuple[str, str] | None = None
             active_metric_parent_label: str | None = None
-            for row_index, row_line in enumerate(lines[header_index + 1 : header_index + 14], start=1):
+            for row_index, row_line in enumerate(
+                lines[header_index + 1 : header_index + 14], start=1
+            ):
                 row_metric = _table_metric_from_label(row_line)
                 row_label = _table_row_label(row_line)
                 explicit_metric = row_metric is not None
@@ -867,8 +873,7 @@ def _table_row_evidence(
         if part
     ]
     series = [
-        f"{column['label']} {value}"
-        for column, value in zip(columns, row_values, strict=False)
+        f"{column['label']} {value}" for column, value in zip(columns, row_values, strict=False)
     ]
     prefix = " > ".join(path) if path else row_label
     return f"{prefix} | {' | '.join(series)} ({unit})"
@@ -1006,11 +1011,7 @@ def _looks_like_table_noise_label(label: str) -> bool:
 
 def _table_row_values(line: str, expected_count: int) -> list[str]:
     values = _IR_TABLE_NUMBER_PATTERN.findall(line or "")
-    clean_values = [
-        value
-        for value in values
-        if not re.fullmatch(r"20\d{2}", value.strip())
-    ]
+    clean_values = [value for value in values if not re.fullmatch(r"20\d{2}", value.strip())]
     return clean_values[:expected_count]
 
 
@@ -1101,9 +1102,18 @@ def _business_area_label_from_context(text: str) -> str | None:
 
 
 def _clean_table_context_label(text: str) -> str:
-    cleaned = re.sub(r"\([^)]*(?:단위|unit|krw|억원|십억원|백만원|%).*?\)", "", text or "", flags=re.IGNORECASE)
-    cleaned = re.sub(r"\b(?:revenue|sales|operating profit|op|margin|results?|financial)\b", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"매출|영업이익|영업이익률|실적|손익|요약|현황|단위|억원|십억원|백만원", "", cleaned)
+    cleaned = re.sub(
+        r"\([^)]*(?:단위|unit|krw|억원|십억원|백만원|%).*?\)", "", text or "", flags=re.IGNORECASE
+    )
+    cleaned = re.sub(
+        r"\b(?:revenue|sales|operating profit|op|margin|results?|financial)\b",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"매출|영업이익|영업이익률|실적|손익|요약|현황|단위|억원|십억원|백만원", "", cleaned
+    )
     return re.sub(r"\s+", " ", cleaned).strip(" :-|")
 
 

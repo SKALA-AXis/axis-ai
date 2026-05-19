@@ -374,7 +374,8 @@ def _metrics_from_statement(
                     period_type=metric_period_type,
                     metric_uid=(
                         f"dart:{metric_name}:{statement_scope}:"
-                        f"table{table_index or 'x'}:c{value_info.get('column_index') or value_index}:"
+                        f"table{table_index or 'x'}:"
+                        f"c{value_info.get('column_index') or value_index}:"
                         f"{metric_period or 'unknown'}"
                     ),
                     metric_name=metric_name,

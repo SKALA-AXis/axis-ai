@@ -113,7 +113,10 @@ _DART_BUSINESS_AREA_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("cloud", ("클라우드", "cloud", "msp", "csp", "saas", "gpu", "데이터센터")),
     ("logistics", ("물류", "logistics", "cello", "scl")),
     ("ai_ax", ("ai", "ax", "생성형", "fabrix", "brity", "인공지능", "agent", "data", "데이터")),
-    ("smart_factory", ("스마트팩토리", "smart factory", "mes", "factory", "제조", "factory 솔루션")),
+    (
+        "smart_factory",
+        ("스마트팩토리", "smart factory", "mes", "factory", "제조", "factory 솔루션"),
+    ),
     ("vehicle_sw", ("차량", "vehicle", "sdv", "내비게이션", "navigation")),
     (
         "enterprise_it",
@@ -515,8 +518,7 @@ def _looks_like_header_row(cells: list[str]) -> bool:
     joined = " ".join(cells)
     compact = re.sub(r"\s+", "", joined)
     return (
-        "사업부문" in compact
-        and ("품목" in compact or "제품" in compact or "서비스" in compact)
+        "사업부문" in compact and ("품목" in compact or "제품" in compact or "서비스" in compact)
     ) or ("매출액" in compact and ("사업부문" in compact or "품목" in compact))
 
 
@@ -554,7 +556,9 @@ def _is_company_total_segment_label(label: str) -> bool:
 def _detect_dart_business_area(text: str, *, peer_id: str | None = None) -> str | None:
     lowered = (text or "").lower()
     compact = re.sub(r"\s+", "", lowered)
-    if peer_id == "sk_ax" and any(term.replace(" ", "") in compact for term in _SK_AX_SEGMENT_TERMS):
+    if peer_id == "sk_ax" and any(
+        term.replace(" ", "") in compact for term in _SK_AX_SEGMENT_TERMS
+    ):
         return "sk_ax"
     for business_area, terms in _DART_BUSINESS_AREA_RULES:
         for term in terms:
@@ -735,7 +739,9 @@ def _statement_column_headers(table: dict[str, Any]) -> dict[int, str]:
         joined = " ".join(cells)
         if not joined:
             continue
-        has_metric_label = any(alias in joined for _metric, aliases in _FINANCIAL_METRIC_ALIASES for alias in aliases)
+        has_metric_label = any(
+            alias in joined for _metric, aliases in _FINANCIAL_METRIC_ALIASES for alias in aliases
+        )
         has_header_token = any(
             token in joined
             for token in ("과목", "구분", "계정", "당기", "전기", "분기", "반기", "누적", "연결")
@@ -818,7 +824,12 @@ def _statement_column_period(
     if "전" in header or report_period_type == "annual":
         return f"{inferred_year}Q4", inferred_year, 4, "annual"
     if report_quarter:
-        return f"{inferred_year}Q{report_quarter}", inferred_year, report_quarter, report_period_type
+        return (
+            f"{inferred_year}Q{report_quarter}",
+            inferred_year,
+            report_quarter,
+            report_period_type,
+        )
     return str(inferred_year), inferred_year, None, "year"
 
 
