@@ -11,6 +11,8 @@ from sqlalchemy import text
 from src.crawler.backfill_config import BackfillSourceConfig
 from src.db.postgres import SessionLocal
 
+_BACKFILL_STATE_TABLES = ("crawl_cursors", "crawl_runs", "crawl_run_articles")
+
 
 @dataclass(frozen=True)
 class CrawlCursor:
@@ -109,6 +111,35 @@ def ensure_backfill_state_schema() -> None:
             """)
         )
         db.commit()
+
+
+def get_missing_backfill_state_tables() -> list[str]:
+    """현재 DB에 없는 backfill 상태 테이블 목록을 반환한다."""
+    missing: list[str] = []
+    with SessionLocal() as db:
+        for table_name in _BACKFILL_STATE_TABLES:
+            exists = db.execute(
+                text("SELECT to_regclass(:table_name)"),
+                {"table_name": table_name},
+            ).scalar()
+            if exists is None:
+                missing.append(table_name)
+    return missing
+
+
+def validate_backfill_state_schema() -> None:
+    """backfill 상태 테이블이 없으면 실행 초기에 명확한 오류를 낸다."""
+    missing = get_missing_backfill_state_tables()
+    if not missing:
+        return
+
+    missing_list = ", ".join(missing)
+    raise RuntimeError(
+        "backfill state schema is missing required table(s): "
+        f"{missing_list}. For local validation, run with --init-state-schema. "
+        "For shared/cloud DBs, apply the backend migration that creates "
+        "crawl_cursors, crawl_runs, and crawl_run_articles."
+    )
 
 
 def get_or_create_cursor(config: BackfillSourceConfig, initial_cursor_date: date) -> CrawlCursor:

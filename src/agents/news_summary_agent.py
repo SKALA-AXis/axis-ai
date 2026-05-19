@@ -14,6 +14,7 @@ import re
 from difflib import SequenceMatcher
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 
 from src.config.companies import COMPANY_ALIASES
@@ -609,7 +610,7 @@ def _extract_article_fact_notes(
         return {}, ["fact_extraction_rule_based_fallback"]
 
 
-def _invoke_fact_extraction_llm(prompt: str, *, config: dict[str, Any]) -> Any:
+def _invoke_fact_extraction_llm(prompt: str, *, config: RunnableConfig | None) -> Any:
     return (
         _get_llm()
         .bind(
@@ -2235,10 +2236,8 @@ def _number_token_covered(number: str, evidence_numbers: list[str]) -> bool:
     return False
 
 
-def normalize_korean_spacing(value: Any) -> str | list[str]:
+def normalize_korean_spacing(value: Any) -> str:
     """요약 출력에서 자주 붙는 한국어 조사를 보수적으로 교정한다."""
-    if isinstance(value, list):
-        return [str(normalize_korean_spacing(item)) for item in value]
     text = str(value or "")
     text = re.sub(
         r"([가-힣A-Za-z0-9])(['\"‘’“”])\s*(를|을|은|는|이|가|와|과|에|에서|로|으로)",
