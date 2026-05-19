@@ -1327,6 +1327,60 @@ def test_document_parser_router_parses_securities_report() -> None:
     assert len(parsed["highlights"]) >= 1
 
 
+def test_securities_report_parser_uses_front_pages_for_opinion_and_prices() -> None:
+    item = {
+        "url": "https://example.com/report.pdf",
+        "title": "[한화투자증권] 1Q26 Review : 하이닉스와 연결된 현금흐름",
+        "content": (
+            "[PAGE 1]\n"
+            "투자의견 BUY 유지\n"
+            "목표주가 810,000원\n"
+            "현재주가 650,000원\n"
+            "1Q26 Review 실적은 예상치를 상회했다.\n"
+            "[PAGE 7]\n"
+            "투자의견 및 목표주가 변동추이\n"
+            "2024 2025 2026 81 9 괴리율 평균 최고 최저\n"
+        ),
+        "source_name": "naver_research",
+        "source_type": "securities_report",
+        "publisher": "한화투자증권",
+        "company": ["sk_ax"],
+        "extra": {"firm": "한화투자증권"},
+    }
+
+    parsed = DocumentParserRouter().parse_article(item)
+
+    assert parsed["investment_opinion"] == "BUY"
+    assert parsed["target_price_krw"] == 810000
+    assert parsed["current_price_krw"] == 650000
+    assert parsed["period"] == "2026Q1"
+    assert all("목표주가 변동추이" not in chunk["text"] for chunk in parsed["document_chunks"])
+
+
+def test_securities_report_parser_rejects_trailing_price_history_noise() -> None:
+    item = {
+        "url": "https://example.com/report.pdf",
+        "title": "[DS투자증권] 단기 노이즈보다 중기 모멘텀에 주목",
+        "content": (
+            "[PAGE 1]\n"
+            "목표주가 변동추이 및 투자의견 비율\n"
+            "목표주가 2024 원\n"
+            "투자의견 및 목표주가 변동추이\n"
+            "매수 유지하고 목표주가 변동추이 9 81\n"
+        ),
+        "source_name": "naver_research",
+        "source_type": "securities_report",
+        "publisher": "DS투자증권",
+        "company": ["hyundai_autoever"],
+        "extra": {"firm": "DS투자증권"},
+    }
+
+    parsed = DocumentParserRouter().parse_article(item)
+
+    assert parsed["investment_opinion"] is None
+    assert parsed["target_price_krw"] is None
+
+
 def test_securities_report_preprocess_metadata_patch_includes_analysis_fields() -> None:
     parser_result = {
         "parser": "securities_report_parser",
