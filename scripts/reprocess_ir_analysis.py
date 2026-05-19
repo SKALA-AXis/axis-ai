@@ -25,6 +25,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from sqlalchemy import text
 
+from src.config.env_loader import load_profile
+
+load_profile()
+
 from src.db.article_store import (
     delete_raw_article_business_signals,
     delete_raw_article_financial_metrics,
@@ -289,8 +293,48 @@ def _load_ir_articles(*, limit: int = 0) -> list[dict[str, Any]]:
     limit_sql = "LIMIT :limit" if limit > 0 else ""
     params = {"limit": limit} if limit > 0 else {}
     with SessionLocal() as db:
-        rows = db.execute(
-            text(f"""
+        rows = db.execute(text(_ir_article_select_sql(limit_sql)), params).fetchall()
+
+    articles = []
+    for row in rows:
+        article = dict(row._mapping)
+        article["extra"] = article.get("metadata") or {}
+        articles.append(article)
+
+    return articles
+
+
+def _ir_article_select_sql(limit_sql: str) -> str:
+    """Return an IR article query for either legacy or unified metadata schemas."""
+    with SessionLocal() as db:
+        has_unified = _table_exists(db, "raw_article_metadata_unified")
+        has_source_metadata = _table_exists(db, "raw_article_source_metadata")
+        has_legacy_ir = _table_exists(db, "raw_article_metadata_ir")
+
+    if has_unified:
+        metadata_join = """
+                LEFT JOIN raw_article_metadata_unified md
+                  ON md.raw_article_id = ra.id
+            """
+        metadata_expr = "COALESCE(md.metadata, md.source_metadata, '{}'::jsonb)"
+    elif has_source_metadata:
+        metadata_join = """
+                LEFT JOIN raw_article_source_metadata md
+                  ON md.raw_article_id = ra.id
+                 AND md.source_type = 'ir'
+            """
+        metadata_expr = "COALESCE(md.source_metadata, '{}'::jsonb)"
+    elif has_legacy_ir:
+        metadata_join = """
+                LEFT JOIN raw_article_metadata_ir md
+                  ON md.raw_article_id = ra.id
+            """
+        metadata_expr = "COALESCE(md.source_metadata, '{}'::jsonb)"
+    else:
+        metadata_join = ""
+        metadata_expr = "COALESCE(ra.metadata, '{}'::jsonb)"
+
+    return f"""
                 SELECT
                     ra.id,
                     ra.company,
@@ -302,24 +346,22 @@ def _load_ir_articles(*, limit: int = 0) -> list[dict[str, Any]]:
                     ra.content_type,
                     ra.published_at,
                     ra.collected_at,
-                    COALESCE(md.source_metadata, '{{}}'::jsonb) AS metadata
+                    {metadata_expr} AS metadata
                 FROM raw_articles ra
-                LEFT JOIN raw_article_metadata_ir md
-                  ON md.raw_article_id = ra.id
+                {metadata_join}
                 WHERE ra.source_type = 'ir'
                 ORDER BY ra.published_at DESC NULLS LAST, ra.id DESC
                 {limit_sql}
-            """),
-            params,
-        ).fetchall()
+            """
 
-    articles = []
-    for row in rows:
-        article = dict(row._mapping)
-        article["extra"] = article.get("metadata") or {}
-        articles.append(article)
 
-    return articles
+def _table_exists(db: Any, table_name: str) -> bool:
+    return bool(
+        db.execute(
+            text("SELECT to_regclass(:table_name)"),
+            {"table_name": f"public.{table_name}"},
+        ).scalar_one_or_none()
+    )
 
 
 def _reparse_ir_article(

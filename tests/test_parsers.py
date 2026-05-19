@@ -6,6 +6,10 @@ from scripts.reprocess_ir_analysis import (
 )
 from src.crawler.base import RawArticle
 from src.crawler.sources.dart import _infer_header_rows
+from src.extractors.ir_llm_analysis_extractor import (
+    _normalize_llm_metrics,
+    _normalize_llm_signals,
+)
 from src.parsers.dart_parser import DartParser
 from src.parsers.ir_parser import IRParser
 from src.parsers.parser_quality import analyze_parser_quality_article
@@ -556,6 +560,62 @@ def test_ir_reprocess_maps_llm_metrics_and_signals_separately() -> None:
     assert signals[0]["signal_type"] == "growth"
     assert signals[0]["extraction_method"] == "ir_llm.analysis"
     assert "신규 DX 사업 수주 확대" in signals[0]["evidence_text"]
+
+
+def test_ir_llm_analysis_filters_sk_ax_portfolio_companies() -> None:
+    signals = _normalize_llm_signals(
+        [
+            {
+                "business_area": "SK에코플랜트",
+                "signal_type": "growth",
+                "sentiment": "positive",
+                "summary": "반도체사업 실적 호조로 매출 및 영업이익 증가.",
+                "evidence_text": "SK에코플랜트는 반도체사업 실적 호조로 수익성이 개선되었습니다.",
+                "source_page": 8,
+                "confidence": 0.9,
+            },
+            {
+                "business_area": "IT서비스",
+                "signal_type": "growth",
+                "sentiment": "positive",
+                "summary": "AI Transformation 수요 확대로 IT서비스 매출이 증가.",
+                "evidence_text": (
+                    "SK AX IT서비스 부문은 AI Transformation 수요 확대로 성장했습니다."
+                ),
+                "source_page": 6,
+                "confidence": 0.9,
+            },
+        ],
+        peer_id="sk_ax",
+    )
+    metrics = _normalize_llm_metrics(
+        [
+            {
+                "metric_name": "revenue_total",
+                "metric_scope": "segment",
+                "business_area": "SK스퀘어",
+                "period": "2026Q1",
+                "value_numeric": 1000,
+                "unit": "억원",
+                "evidence_text": "SK스퀘어 매출액 1,000억원",
+                "confidence": 0.9,
+            },
+            {
+                "metric_name": "revenue_total",
+                "metric_scope": "segment",
+                "business_area": "Enterprise IT",
+                "period": "2026Q1",
+                "value_numeric": 7378,
+                "unit": "억원",
+                "evidence_text": "SK AX Enterprise IT 매출액 7,378억원",
+                "confidence": 0.9,
+            },
+        ],
+        peer_id="sk_ax",
+    )
+
+    assert [signal["business_area"] for signal in signals] == ["IT서비스"]
+    assert [metric["business_area"] for metric in metrics] == ["Enterprise IT"]
 
 
 def test_ir_parser_filters_low_value_chunks_and_keeps_business_evidence() -> None:
@@ -1325,6 +1385,60 @@ def test_document_parser_router_parses_securities_report() -> None:
     assert parsed["period"] == "2026Q1"
     assert parsed["metadata"]["item_code"] == "018260"
     assert len(parsed["highlights"]) >= 1
+
+
+def test_securities_report_parser_uses_front_pages_for_opinion_and_prices() -> None:
+    item = {
+        "url": "https://example.com/report.pdf",
+        "title": "[한화투자증권] 1Q26 Review : 하이닉스와 연결된 현금흐름",
+        "content": (
+            "[PAGE 1]\n"
+            "투자의견 BUY 유지\n"
+            "목표주가 810,000원\n"
+            "현재주가 650,000원\n"
+            "1Q26 Review 실적은 예상치를 상회했다.\n"
+            "[PAGE 7]\n"
+            "투자의견 및 목표주가 변동추이\n"
+            "2024 2025 2026 81 9 괴리율 평균 최고 최저\n"
+        ),
+        "source_name": "naver_research",
+        "source_type": "securities_report",
+        "publisher": "한화투자증권",
+        "company": ["sk_ax"],
+        "extra": {"firm": "한화투자증권"},
+    }
+
+    parsed = DocumentParserRouter().parse_article(item)
+
+    assert parsed["investment_opinion"] == "BUY"
+    assert parsed["target_price_krw"] == 810000
+    assert parsed["current_price_krw"] == 650000
+    assert parsed["period"] == "2026Q1"
+    assert all("목표주가 변동추이" not in chunk["text"] for chunk in parsed["document_chunks"])
+
+
+def test_securities_report_parser_rejects_trailing_price_history_noise() -> None:
+    item = {
+        "url": "https://example.com/report.pdf",
+        "title": "[DS투자증권] 단기 노이즈보다 중기 모멘텀에 주목",
+        "content": (
+            "[PAGE 1]\n"
+            "목표주가 변동추이 및 투자의견 비율\n"
+            "목표주가 2024 원\n"
+            "투자의견 및 목표주가 변동추이\n"
+            "매수 유지하고 목표주가 변동추이 9 81\n"
+        ),
+        "source_name": "naver_research",
+        "source_type": "securities_report",
+        "publisher": "DS투자증권",
+        "company": ["hyundai_autoever"],
+        "extra": {"firm": "DS투자증권"},
+    }
+
+    parsed = DocumentParserRouter().parse_article(item)
+
+    assert parsed["investment_opinion"] is None
+    assert parsed["target_price_krw"] is None
 
 
 def test_securities_report_preprocess_metadata_patch_includes_analysis_fields() -> None:

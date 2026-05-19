@@ -9,8 +9,13 @@ from typing import Any
 from src.config.sectors import SECTOR_KEYWORDS
 
 _INVESTMENT_OPINION_PATTERNS = (
-    re.compile(r"(?:투자의견|Investment Opinion)\s*[:：]?\s*([A-Za-z가-힣+/ ]{1,20})"),
-    re.compile(r"\b(BUY|HOLD|SELL|OUTPERFORM|NEUTRAL|매수|중립|비중확대|시장수익률)\b", re.I),
+    re.compile(
+        r"(?:투자의견|Investment Opinion|Opinion)\s*[:：]?\s*"
+        r"(BUY|HOLD|SELL|OUTPERFORM|NEUTRAL|매수|중립|비중확대|시장수익률)",
+        re.I,
+    ),
+    re.compile(r"\b(BUY|HOLD|SELL|OUTPERFORM|NEUTRAL)\b", re.I),
+    re.compile(r"\b(매수|중립|비중확대|시장수익률)\b"),
 )
 _TARGET_PRICE_PATTERNS = (
     re.compile(r"(?:목표주가|Target Price)\s*[:：]?\s*([0-9][0-9,]*)\s*원?"),
@@ -21,11 +26,27 @@ _CURRENT_PRICE_PATTERNS = (
     re.compile(r"(?:CP)\s*[:：]?\s*([0-9][0-9,]*)\s*원?", re.I),
 )
 _PERIOD_PATTERNS = (
+    re.compile(r"\b([1-4])\s*Q\s*(\d{2})\s*(?:P|E)?\b", re.I),
     re.compile(r"(20\d{2})\s*Q\s*([1-4])", re.I),
+    re.compile(r"(\d{2})\s*년\s*([1-4])\s*분기"),
     re.compile(r"(20\d{2})\s*년\s*([1-4])\s*분기"),
     re.compile(r"(20\d{2})E"),
 )
 _HIGHLIGHT_SPLIT = re.compile(r"(?:\r?\n)+")
+_PAGE_MARKER = re.compile(r"(?m)^\s*\[PAGE\s+(\d+)\]\s*$")
+_TRAILING_REPORT_SECTIONS = re.compile(
+    r"목표주가\s*변동\s*추이|투자의견\s*변동\s*내역|투자의견\s*및\s*목표주가|"
+    r"Compliance|Disclaimer|컴플라이언스|고지사항|등급분포|괴리율",
+    re.I,
+)
+_PRICE_BAD_CONTEXT = re.compile(
+    r"목표주가\s*변동\s*추이|투자의견\s*변동|괴리율|평균|최고|최저|등급분포|"
+    r"Compliance|Disclaimer|고지사항",
+    re.I,
+)
+_PRICE_MIN_KRW = 1_000
+_PRICE_MAX_KRW = 10_000_000
+_FRONT_MATTER_PAGES = 2
 _SECTION_RULES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("summary", "Summary", ("summary", "investment points", "핵심", "요약", "투자포인트")),
     ("investment_view", "Investment View", ("투자의견", "investment opinion", "buy", "hold")),
@@ -76,22 +97,31 @@ def _normalize_text(value: str) -> str:
 
 
 def _parse_price(patterns: tuple[re.Pattern[str], ...], text: str) -> int | None:
-    for pattern in patterns:
-        match = pattern.search(text)
-        if not match:
+    for line in _candidate_lines(text):
+        if _PRICE_BAD_CONTEXT.search(line):
             continue
-        digits = re.sub(r"[^0-9]", "", match.group(1))
-        if digits:
-            return int(digits)
+        for pattern in patterns:
+            match = pattern.search(line)
+            if not match:
+                continue
+            digits = re.sub(r"[^0-9]", "", match.group(1))
+            if not digits:
+                continue
+            value = int(digits)
+            if _PRICE_MIN_KRW <= value <= _PRICE_MAX_KRW:
+                return value
     return None
 
 
 def _parse_investment_opinion(text: str) -> str | None:
-    for pattern in _INVESTMENT_OPINION_PATTERNS:
-        match = pattern.search(text)
-        if not match:
+    for line in _candidate_lines(text):
+        if _PRICE_BAD_CONTEXT.search(line):
             continue
-        return _normalize_text(match.group(1))
+        for pattern in _INVESTMENT_OPINION_PATTERNS:
+            match = pattern.search(line)
+            if not match:
+                continue
+            return _normalize_opinion(match.group(1))
     return None
 
 
@@ -100,10 +130,83 @@ def _parse_period(text: str) -> str | None:
         match = pattern.search(text)
         if not match:
             continue
+        if pattern.pattern.startswith(r"\b([1-4]"):
+            return f"20{match.group(2)}Q{match.group(1)}"
         if len(match.groups()) == 2 and match.group(2):
-            return f"{match.group(1)}Q{match.group(2)}"
+            year = match.group(1)
+            if len(year) == 2:
+                year = f"20{year}"
+            return f"{year}Q{match.group(2)}"
         return f"{match.group(1)}E"
     return None
+
+
+def _candidate_lines(text: str) -> list[str]:
+    return [_normalize_text(line) for line in (text or "").splitlines() if _normalize_text(line)]
+
+
+def _normalize_opinion(value: str) -> str:
+    opinion = _normalize_text(value).upper()
+    mapping = {
+        "BUY": "BUY",
+        "HOLD": "HOLD",
+        "SELL": "SELL",
+        "OUTPERFORM": "OUTPERFORM",
+        "NEUTRAL": "NEUTRAL",
+    }
+    if opinion in mapping:
+        return mapping[opinion]
+    return _normalize_text(value)
+
+
+def _pages_from_article(text: str, extra: dict[str, Any]) -> list[dict[str, Any]]:
+    page_blocks = extra.get("pdf_page_blocks") or []
+    pages: list[dict[str, Any]] = []
+    if isinstance(page_blocks, list):
+        for page in page_blocks:
+            if not isinstance(page, dict):
+                continue
+            page_no = page.get("page")
+            blocks = page.get("blocks") or []
+            page_text = "\n".join(
+                str(block.get("text") or "")
+                for block in blocks
+                if isinstance(block, dict) and block.get("text")
+            )
+            if page_text.strip():
+                pages.append({"page": page_no, "text": page_text, "blocks": blocks})
+    if pages:
+        return pages
+
+    matches = list(_PAGE_MARKER.finditer(text or ""))
+    if not matches:
+        return [{"page": 1, "text": text or ""}] if text else []
+
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        page_text = text[start:end].strip()
+        if page_text:
+            pages.append({"page": int(match.group(1)), "text": page_text})
+    return pages
+
+
+def _front_matter_text(pages: list[dict[str, Any]], fallback_text: str) -> str:
+    if not pages:
+        return fallback_text[:6000]
+    front = "\n".join(
+        str(page.get("text") or "")
+        for page in pages
+        if isinstance(page.get("page"), int) and int(page["page"]) <= _FRONT_MATTER_PAGES
+    )
+    if not front:
+        front = "\n".join(str(page.get("text") or "") for page in pages[:_FRONT_MATTER_PAGES])
+    return _strip_trailing_report_sections(front or fallback_text[:6000])
+
+
+def _strip_trailing_report_sections(text: str) -> str:
+    match = _TRAILING_REPORT_SECTIONS.search(text or "")
+    return text[: match.start()] if match else text
 
 
 def _match_topics(text: str) -> tuple[list[str], dict[str, list[str]]]:
@@ -149,15 +252,20 @@ def _split_chunks(text: str) -> list[str]:
     return chunks
 
 
-def _extract_sections_and_chunks(text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _extract_sections_and_chunks(
+    text: str,
+    pages: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     sections: dict[str, dict[str, Any]] = {}
     chunks: list[dict[str, Any]] = []
-    parts = [part.strip() for part in _HIGHLIGHT_SPLIT.split(text or "") if part.strip()]
+    parts_with_page = _section_parts(text, pages)
 
-    if not parts:
+    if not parts_with_page:
         return [], []
 
-    for part in parts:
+    for part, page_no in parts_with_page:
+        if _TRAILING_REPORT_SECTIONS.search(part):
+            continue
         section_key, section_title = _section_for_text(part)
         topics, topic_signals = _match_topics(part)
         section = sections.setdefault(
@@ -183,6 +291,7 @@ def _extract_sections_and_chunks(text: str) -> tuple[list[dict[str, Any]], list[
                     "section_key": section_key,
                     "section_title": section_title,
                     "chunk_index": len(chunks) + 1,
+                    "page": page_no,
                     "text_chars": len(chunk_text),
                     "text": chunk_text,
                     "topics": topics,
@@ -196,6 +305,24 @@ def _extract_sections_and_chunks(text: str) -> tuple[list[dict[str, Any]], list[
         section["section_order"] = index
 
     return ordered_sections, chunks
+
+
+def _section_parts(
+    text: str,
+    pages: list[dict[str, Any]] | None,
+) -> list[tuple[str, int | None]]:
+    if pages:
+        parts: list[tuple[str, int | None]] = []
+        for page in pages:
+            page_no = page.get("page")
+            page_index = int(page_no) if isinstance(page_no, int) else None
+            page_text = _strip_trailing_report_sections(str(page.get("text") or ""))
+            for part in _HIGHLIGHT_SPLIT.split(page_text):
+                cleaned = part.strip()
+                if cleaned:
+                    parts.append((cleaned, page_index))
+        return parts
+    return [(part.strip(), None) for part in _HIGHLIGHT_SPLIT.split(text or "") if part.strip()]
 
 
 def _extract_highlights(text: str) -> list[str]:
@@ -218,9 +345,11 @@ class SecuritiesReportParser:
         url = str(_article_get(article, "url", "") or extra.get("pdf_url", "") or "")
         peer_id = _article_peer_id(article)
         published_at = _article_published_at(article, extra)
-        period = _parse_period(" ".join([title, text[:4000]]))
+        pages = _pages_from_article(text, extra)
+        front_matter = _front_matter_text(pages, text)
+        period = _parse_period(" ".join([title, front_matter, text[:2000]]))
         topics, topic_signals = _match_topics(text)
-        sections, document_chunks = _extract_sections_and_chunks(text)
+        sections, document_chunks = _extract_sections_and_chunks(text, pages)
 
         metadata = {
             "report_firm": extra.get("firm") or _article_get(article, "publisher"),
@@ -250,11 +379,11 @@ class SecuritiesReportParser:
             "url": url,
             "published_at": published_at,
             "report_firm": metadata["report_firm"],
-            "investment_opinion": _parse_investment_opinion(text),
-            "target_price_krw": _parse_price(_TARGET_PRICE_PATTERNS, text),
-            "current_price_krw": _parse_price(_CURRENT_PRICE_PATTERNS, text),
+            "investment_opinion": _parse_investment_opinion(front_matter),
+            "target_price_krw": _parse_price(_TARGET_PRICE_PATTERNS, front_matter),
+            "current_price_krw": _parse_price(_CURRENT_PRICE_PATTERNS, front_matter),
             "period": period,
-            "highlights": _extract_highlights(text),
+            "highlights": _extract_highlights(front_matter or text),
             "sections": sections,
             "document_chunks": document_chunks,
             "topics": topics,
