@@ -68,7 +68,7 @@ async def run_pipeline(request: PipelineRunRequest, background_tasks: Background
     """수집 파이프라인 비동기 실행 (SpringBoot 스케줄러가 매시간 호출)"""
     task_id = str(uuid.uuid4())
     track = request.track.strip().lower()
-    if track not in {"a", "b", "c", "all"}:
+    if track not in {"a", "b", "c", "d", "all"}:
         raise HTTPException(status_code=400, detail=f"unsupported track: {request.track}")
 
     log.info(
