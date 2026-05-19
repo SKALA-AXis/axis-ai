@@ -1172,8 +1172,48 @@ def _upsert_source_metadata(
     source_type: str,
     source_metadata: str,
 ) -> None:
+    if _metadata_table_exists(db, "raw_article_source_metadata"):
+        source_name = db.execute(
+            text("SELECT source_name FROM raw_articles WHERE id = :id"),
+            {"id": article_id},
+        ).scalar_one_or_none()
+        result = db.execute(
+            text("""
+                UPDATE raw_article_source_metadata
+                SET source_type = :source_type,
+                    source_name = COALESCE(:source_name, source_name),
+                    source_metadata = source_metadata || CAST(:source_metadata AS jsonb),
+                    updated_at = NOW()
+                WHERE raw_article_id = :raw_article_id
+            """),
+            {
+                "raw_article_id": article_id,
+                "source_type": source_type,
+                "source_name": source_name,
+                "source_metadata": source_metadata,
+            },
+        )
+        if result.rowcount == 0:
+            db.execute(
+                text("""
+                    INSERT INTO raw_article_source_metadata (
+                        raw_article_id, source_type, source_name, source_metadata
+                    ) VALUES (
+                        :raw_article_id, :source_type, :source_name,
+                        CAST(:source_metadata AS jsonb)
+                    )
+                """),
+                {
+                    "raw_article_id": article_id,
+                    "source_type": source_type,
+                    "source_name": source_name,
+                    "source_metadata": source_metadata,
+                },
+            )
+        return
+
     table = _SOURCE_METADATA_TABLES.get(source_type)
-    if not table:
+    if not table or not _metadata_table_exists(db, table):
         return
     db.execute(
         text(f"""
@@ -1187,6 +1227,15 @@ def _upsert_source_metadata(
             "raw_article_id": article_id,
             "source_metadata": source_metadata,
         },
+    )
+
+
+def _metadata_table_exists(db, table_name: str) -> bool:
+    return bool(
+        db.execute(
+            text("SELECT to_regclass(:table_name)"),
+            {"table_name": f"public.{table_name}"},
+        ).scalar_one_or_none()
     )
 
 

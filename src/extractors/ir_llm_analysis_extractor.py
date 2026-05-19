@@ -44,6 +44,51 @@ _ALLOWED_SIGNAL_TYPES = {
     "investment",
     "profitability",
 }
+_SK_AX_STRONG_TERMS = (
+    "sk ax",
+    "sk에이엑스",
+    "sk㈜ c&c",
+    "sk주식회사 c&c",
+    "sk c&c",
+    "sk c & c",
+    "c&c",
+    "씨앤씨",
+    "it서비스",
+    "it 서비스",
+    "enterprise it",
+    "si",
+    "ito",
+    "클라우드",
+    "물류",
+    "cloud",
+    "logistics",
+    "ai transformation",
+    "fabrix",
+    "brity",
+)
+_SK_AX_PORTFOLIO_TERMS = (
+    "sk에코플랜트",
+    "에코플랜트",
+    "sk ecoplant",
+    "sk이노베이션",
+    "sk innovation",
+    "sk텔레콤",
+    "sk telecom",
+    "skt",
+    "sk하이닉스",
+    "sk hynix",
+    "sk스퀘어",
+    "sk square",
+    "sk바이오팜",
+    "sk biopharmaceuticals",
+    "sk e&s",
+    "sk실트론",
+    "sk siltron",
+    "sk온",
+    "sk on",
+    "sk머티리얼즈",
+    "sk materials",
+)
 
 _llm: ChatOpenAI | None = None
 
@@ -74,9 +119,16 @@ def analyze_ir_with_llm(
         ]
     )
     parsed = _parse_json_response(getattr(response, "content", response))
+    peer_id = _peer_id(article, parser_result)
     return {
-        "llm_financial_metrics": _normalize_llm_metrics(parsed.get("financial_metrics")),
-        "llm_business_signals": _normalize_llm_signals(parsed.get("business_signals")),
+        "llm_financial_metrics": _normalize_llm_metrics(
+            parsed.get("financial_metrics"),
+            peer_id=peer_id,
+        ),
+        "llm_business_signals": _normalize_llm_signals(
+            parsed.get("business_signals"),
+            peer_id=peer_id,
+        ),
     }
 
 
@@ -108,6 +160,7 @@ def _build_ir_llm_prompt(
         "peer_id": parser_result.get("peer_id"),
         "report_period": parser_result.get("period"),
     }
+    peer_guardrail = _peer_guardrail(metadata.get("peer_id") or _peer_id(article, parser_result))
     page_text = "\n\n".join(pages)
     return f"""
 IR 문서에서 표/차트 기반 재무 지표와 본문 기반 사업 시그널을 분리 추출하세요.
@@ -122,6 +175,7 @@ IR 문서에서 표/차트 기반 재무 지표와 본문 기반 사업 시그�
 - business_area는 표/페이지에 보이는 원문 라벨을 쓰고, 전사/전체이면 company_total을 쓰세요.
 - evidence_text는 표 제목 > 상위 metric > 행 라벨 > 열/값 흐름이 보이도록 충분히 길게 쓰세요.
 - 확실하지 않은 값은 confidence를 0.6 미만으로 두세요.
+{peer_guardrail}
 
 허용 metric_name:
 {sorted(_ALLOWED_METRICS)}
@@ -220,7 +274,7 @@ def _parse_json_response(content: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _normalize_llm_metrics(value: Any) -> list[dict[str, Any]]:
+def _normalize_llm_metrics(value: Any, *, peer_id: str | None = None) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
 
@@ -236,6 +290,8 @@ def _normalize_llm_metrics(value: Any) -> list[dict[str, Any]]:
             continue
         confidence = _confidence(item.get("confidence"))
         if confidence < 0.6:
+            continue
+        if not _is_allowed_peer_item(item, peer_id=peer_id):
             continue
         unit = (
             str(item.get("unit") or "%").strip()
@@ -276,7 +332,7 @@ def _normalize_llm_metrics(value: Any) -> list[dict[str, Any]]:
     return metrics
 
 
-def _normalize_llm_signals(value: Any) -> list[dict[str, Any]]:
+def _normalize_llm_signals(value: Any, *, peer_id: str | None = None) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     signals: list[dict[str, Any]] = []
@@ -290,6 +346,8 @@ def _normalize_llm_signals(value: Any) -> list[dict[str, Any]]:
         summary = str(item.get("summary") or evidence[:160]).strip()
         confidence = _confidence(item.get("confidence"))
         if not evidence or confidence < 0.55:
+            continue
+        if not _is_allowed_peer_item(item, peer_id=peer_id):
             continue
         signals.append(
             {
@@ -313,6 +371,69 @@ def _normalize_metric_name(value: Any) -> str:
         if cleaned in aliases:
             return metric_name
     return cleaned
+
+
+def _peer_id(article: dict[str, Any], parser_result: dict[str, Any]) -> str | None:
+    peer_id = parser_result.get("peer_id") or article.get("peer_id")
+    if peer_id:
+        return str(peer_id)
+    company = article.get("company")
+    if isinstance(company, list) and company:
+        return str(company[0])
+    if isinstance(company, str):
+        return company
+    return None
+
+
+def _peer_guardrail(peer_id: Any) -> str:
+    if str(peer_id or "") != "sk_ax":
+        return ""
+    excluded = ", ".join(_SK_AX_PORTFOLIO_TERMS[:10])
+    return (
+        "\nSK AX 특수 규칙:"
+        "\n- peer_id가 sk_ax이면 SK주식회사 C&C/SK AX의 IT서비스, Enterprise IT, "
+        "SI, ITO, 클라우드, 물류 사업만 추출하세요."
+        "\n- SK Inc. IR 안의 투자/포트폴리오 회사 실적은 제외하세요."
+        f"\n- 특히 다음 회사/부문은 business_area와 evidence에서 보이면 제외하세요: {excluded}."
+    )
+
+
+def _is_allowed_peer_item(item: dict[str, Any], *, peer_id: str | None) -> bool:
+    if peer_id != "sk_ax":
+        return True
+
+    combined = " ".join(
+        str(item.get(key) or "")
+        for key in (
+            "business_area",
+            "evidence_text",
+            "summary",
+            "table_title",
+            "row_label",
+            "parent_row_label",
+        )
+    ).lower()
+    if not combined.strip():
+        return True
+
+    has_portfolio_term = any(_contains_term(combined, term) for term in _SK_AX_PORTFOLIO_TERMS)
+    if not has_portfolio_term:
+        return True
+
+    has_strong_ax_term = any(_contains_term(combined, term) for term in _SK_AX_STRONG_TERMS)
+    return has_strong_ax_term
+
+
+def _contains_term(lowered_text: str, term: str) -> bool:
+    lowered_term = term.lower()
+    if len(lowered_term) <= 3 and re.fullmatch(r"[a-z0-9&]+", lowered_term):
+        return bool(
+            re.search(
+                rf"(?<![a-z0-9]){re.escape(lowered_term)}(?![a-z0-9])",
+                lowered_text,
+            )
+        )
+    return lowered_term in lowered_text
 
 
 def _number(value: Any) -> float | None:

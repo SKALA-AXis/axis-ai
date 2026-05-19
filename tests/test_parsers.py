@@ -6,6 +6,10 @@ from scripts.reprocess_ir_analysis import (
 )
 from src.crawler.base import RawArticle
 from src.crawler.sources.dart import _infer_header_rows
+from src.extractors.ir_llm_analysis_extractor import (
+    _normalize_llm_metrics,
+    _normalize_llm_signals,
+)
 from src.parsers.dart_parser import DartParser
 from src.parsers.ir_parser import IRParser
 from src.parsers.parser_quality import analyze_parser_quality_article
@@ -556,6 +560,62 @@ def test_ir_reprocess_maps_llm_metrics_and_signals_separately() -> None:
     assert signals[0]["signal_type"] == "growth"
     assert signals[0]["extraction_method"] == "ir_llm.analysis"
     assert "신규 DX 사업 수주 확대" in signals[0]["evidence_text"]
+
+
+def test_ir_llm_analysis_filters_sk_ax_portfolio_companies() -> None:
+    signals = _normalize_llm_signals(
+        [
+            {
+                "business_area": "SK에코플랜트",
+                "signal_type": "growth",
+                "sentiment": "positive",
+                "summary": "반도체사업 실적 호조로 매출 및 영업이익 증가.",
+                "evidence_text": "SK에코플랜트는 반도체사업 실적 호조로 수익성이 개선되었습니다.",
+                "source_page": 8,
+                "confidence": 0.9,
+            },
+            {
+                "business_area": "IT서비스",
+                "signal_type": "growth",
+                "sentiment": "positive",
+                "summary": "AI Transformation 수요 확대로 IT서비스 매출이 증가.",
+                "evidence_text": (
+                    "SK AX IT서비스 부문은 AI Transformation 수요 확대로 성장했습니다."
+                ),
+                "source_page": 6,
+                "confidence": 0.9,
+            },
+        ],
+        peer_id="sk_ax",
+    )
+    metrics = _normalize_llm_metrics(
+        [
+            {
+                "metric_name": "revenue_total",
+                "metric_scope": "segment",
+                "business_area": "SK스퀘어",
+                "period": "2026Q1",
+                "value_numeric": 1000,
+                "unit": "억원",
+                "evidence_text": "SK스퀘어 매출액 1,000억원",
+                "confidence": 0.9,
+            },
+            {
+                "metric_name": "revenue_total",
+                "metric_scope": "segment",
+                "business_area": "Enterprise IT",
+                "period": "2026Q1",
+                "value_numeric": 7378,
+                "unit": "억원",
+                "evidence_text": "SK AX Enterprise IT 매출액 7,378억원",
+                "confidence": 0.9,
+            },
+        ],
+        peer_id="sk_ax",
+    )
+
+    assert [signal["business_area"] for signal in signals] == ["IT서비스"]
+    assert [metric["business_area"] for metric in metrics] == ["Enterprise IT"]
 
 
 def test_ir_parser_filters_low_value_chunks_and_keeps_business_evidence() -> None:
