@@ -23,11 +23,12 @@ _INSERT_SQL = text("""
     INSERT INTO raw_articles (
         source_type, source_name, publisher, title, content, url, url_hash,
         published_at, collected_at, company, language, content_type,
-        crawl_status, error_message, processing_status
+        crawl_status, error_message, processing_status, metadata, crawl_run_id
     ) VALUES (
         :source_type, :source_name, :publisher, :title, :content, :url, :url_hash,
         :published_at, :collected_at, CAST(:company AS jsonb), :language, :content_type,
-        :crawl_status, :error_message, 'RAW'
+        :crawl_status, :error_message, 'RAW', CAST(:metadata AS jsonb),
+        CAST(:crawl_run_id AS uuid)
     )
     ON CONFLICT (url) DO NOTHING
     RETURNING id
@@ -50,20 +51,6 @@ _INSERT_CRAWL_RUN_ARTICLE = text("""
         error_message = EXCLUDED.error_message,
         raw_payload = crawl_run_articles.raw_payload || EXCLUDED.raw_payload
 """)
-
-_SOURCE_METADATA_TABLES = {
-    "news": "raw_article_metadata_news",
-    "official": "raw_article_metadata_official",
-    "company_site": "raw_article_metadata_company_site",
-    "dart": "raw_article_metadata_dart",
-    "ir": "raw_article_metadata_ir",
-    "securities_report": "raw_article_metadata_securities_report",
-    "trend_report": "raw_article_metadata_trend_report",
-    "search_trend": "raw_article_metadata_search_trend",
-    "job": "raw_article_metadata_job",
-    "market_data": "raw_article_metadata_market_data",
-    "social": "raw_article_metadata_social",
-}
 
 _SOURCE_METADATA_EXCLUDED_KEYS = {
     "url_hash",
@@ -267,6 +254,8 @@ def save_articles(
                         "content_type": article.content_type,
                         "crawl_status": article.crawl_status,
                         "error_message": article.error_message,
+                        "metadata": source_metadata,
+                        "crawl_run_id": run_context.crawl_run_id if run_context else None,
                     },
                 )
                 row = result.fetchone()
@@ -332,10 +321,13 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
                        raw_articles.matched_companies, raw_articles.matched_sectors,
                        raw_articles.source_name, raw_articles.published_at,
                        raw_articles.collected_at,
-                       COALESCE(mu.metadata, '{}'::jsonb) AS metadata
+                       raw_articles.metadata,
+                       COALESCE(pr.parser_result, '{}'::jsonb) AS parser_result,
+                       COALESCE(pr.financial_record, '{}'::jsonb) AS financial_record,
+                       COALESCE(pr.warnings, '[]'::jsonb) AS parser_warnings
                 FROM raw_articles
-                LEFT JOIN raw_article_metadata_unified mu
-                    ON mu.raw_article_id = raw_articles.id
+                LEFT JOIN raw_article_parse_results pr
+                    ON pr.raw_article_id = raw_articles.id
                 WHERE raw_articles.id = ANY(:ids)
                 ORDER BY raw_articles.published_at DESC NULLS LAST,
                          raw_articles.collected_at DESC NULLS LAST,
@@ -359,10 +351,13 @@ def list_dart_documents(
     rows = _fetch_dart_rows(
         select_sql="""
             SELECT r.id, r.company, r.title, r.url, r.published_at, r.collected_at,
-                   r.processing_status, COALESCE(mu.metadata, '{}'::jsonb) AS metadata
+                   r.processing_status, r.metadata,
+                   COALESCE(pr.parser_result, '{}'::jsonb) AS parser_result,
+                   COALESCE(pr.financial_record, '{}'::jsonb) AS financial_record,
+                   COALESCE(pr.warnings, '[]'::jsonb) AS parser_warnings
             FROM raw_articles r
-            LEFT JOIN raw_article_metadata_unified mu
-                ON mu.raw_article_id = r.id
+            LEFT JOIN raw_article_parse_results pr
+                ON pr.raw_article_id = r.id
         """,
         where_sql=company_filter,
         order_limit_sql="""
@@ -384,10 +379,13 @@ def get_dart_document_detail(article_id: int) -> dict[str, Any] | None:
     rows = _fetch_dart_rows(
         select_sql="""
             SELECT r.id, r.company, r.title, r.content, r.url, r.published_at, r.collected_at,
-                   r.processing_status, COALESCE(mu.metadata, '{}'::jsonb) AS metadata
+                   r.processing_status, r.metadata,
+                   COALESCE(pr.parser_result, '{}'::jsonb) AS parser_result,
+                   COALESCE(pr.financial_record, '{}'::jsonb) AS financial_record,
+                   COALESCE(pr.warnings, '[]'::jsonb) AS parser_warnings
             FROM raw_articles r
-            LEFT JOIN raw_article_metadata_unified mu
-                ON mu.raw_article_id = r.id
+            LEFT JOIN raw_article_parse_results pr
+                ON pr.raw_article_id = r.id
         """,
         where_sql="AND r.id = :id",
         order_limit_sql="LIMIT 1",
@@ -398,27 +396,23 @@ def get_dart_document_detail(article_id: int) -> dict[str, Any] | None:
 
     row = dict(rows[0]._mapping)
     metadata = _metadata_dict(row.get("metadata"))
-    parser_result = _metadata_dict(metadata.get("parser_result"))
+    parser_result = _metadata_dict(row.get("parser_result") or metadata.get("parser_result"))
     document = _metadata_dict(parser_result.get("document"))
     return {
         **_dart_document_summary(row),
         "content": row.get("content"),
         "document": document,
-        "sections": metadata.get("dart_sections") or parser_result.get("sections") or {},
-        "section_tree": metadata.get("dart_section_tree")
-        or parser_result.get("section_tree")
+        "sections": parser_result.get("sections") or metadata.get("dart_sections") or {},
+        "section_tree": parser_result.get("section_tree") or metadata.get("dart_section_tree") or [],
+        "document_chunks": parser_result.get("document_chunks") or metadata.get("dart_document_chunks") or [],
+        "classified_tables": parser_result.get("classified_tables")
+        or metadata.get("dart_classified_tables")
         or [],
-        "document_chunks": metadata.get("dart_document_chunks")
-        or parser_result.get("document_chunks")
-        or [],
-        "classified_tables": metadata.get("dart_classified_tables")
-        or parser_result.get("classified_tables")
-        or [],
-        "financial_statements": metadata.get("dart_financial_statements")
-        or parser_result.get("financial_statements")
+        "financial_statements": parser_result.get("financial_statements")
+        or metadata.get("dart_financial_statements")
         or [],
         "topic_signals": metadata.get("topic_signals") or parser_result.get("topic_signals") or [],
-        "warnings": parser_result.get("warnings") or [],
+        "warnings": row.get("parser_warnings") or parser_result.get("warnings") or [],
     }
 
 
@@ -442,9 +436,11 @@ def _fetch_dart_rows(
 
 def _dart_document_summary(row: dict[str, Any]) -> dict[str, Any]:
     metadata = _metadata_dict(row.get("metadata"))
-    parser_result = _metadata_dict(metadata.get("parser_result"))
+    parser_result = _metadata_dict(row.get("parser_result") or metadata.get("parser_result"))
     financial_record = _metadata_dict(
-        metadata.get("financial_record") or parser_result.get("financial_record")
+        row.get("financial_record")
+        or metadata.get("financial_record")
+        or parser_result.get("financial_record")
     )
     company = row.get("company")
     return {
@@ -1172,70 +1168,136 @@ def _upsert_source_metadata(
     source_type: str,
     source_metadata: str,
 ) -> None:
-    if _metadata_table_exists(db, "raw_article_source_metadata"):
-        source_name = db.execute(
-            text("SELECT source_name FROM raw_articles WHERE id = :id"),
-            {"id": article_id},
-        ).scalar_one_or_none()
-        result = db.execute(
+    metadata = _metadata_dict(source_metadata)
+    parse_payload = _parse_result_payload(metadata)
+    collection_metadata = _collection_metadata(metadata)
+
+    if collection_metadata:
+        db.execute(
             text("""
-                UPDATE raw_article_source_metadata
-                SET source_type = :source_type,
-                    source_name = COALESCE(:source_name, source_name),
-                    source_metadata = source_metadata || CAST(:source_metadata AS jsonb),
-                    updated_at = NOW()
-                WHERE raw_article_id = :raw_article_id
+                UPDATE raw_articles
+                SET metadata = metadata || CAST(:metadata AS jsonb)
+                WHERE id = :raw_article_id
             """),
             {
                 "raw_article_id": article_id,
-                "source_type": source_type,
-                "source_name": source_name,
-                "source_metadata": source_metadata,
+                "metadata": json.dumps(collection_metadata, ensure_ascii=False),
             },
         )
-        if result.rowcount == 0:
-            db.execute(
-                text("""
-                    INSERT INTO raw_article_source_metadata (
-                        raw_article_id, source_type, source_name, source_metadata
-                    ) VALUES (
-                        :raw_article_id, :source_type, :source_name,
-                        CAST(:source_metadata AS jsonb)
-                    )
-                """),
-                {
-                    "raw_article_id": article_id,
-                    "source_type": source_type,
-                    "source_name": source_name,
-                    "source_metadata": source_metadata,
-                },
-            )
-        return
 
-    table = _SOURCE_METADATA_TABLES.get(source_type)
-    if not table or not _metadata_table_exists(db, table):
-        return
+    if parse_payload:
+        _upsert_parse_result(db, article_id=article_id, source_type=source_type, payload=parse_payload)
+
+
+_PARSE_RESULT_METADATA_KEYS = {
+    "parser_result",
+    "parser_quality_score",
+    "parser_quality_label",
+    "parser_quality_reason",
+    "financial_record",
+    "dart_sections",
+    "dart_section_tree",
+    "dart_document_chunks",
+    "dart_classified_tables",
+    "dart_financial_statements",
+    "ir_sections",
+    "ir_document_chunks",
+    "securities_report_sections",
+    "securities_report_document_chunks",
+}
+
+
+def _collection_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key not in _PARSE_RESULT_METADATA_KEYS and value is not None
+    }
+
+
+def _parse_result_payload(metadata: dict[str, Any]) -> dict[str, Any]:
+    parser_result = _metadata_dict(metadata.get("parser_result"))
+    if not parser_result and not any(key in metadata for key in _PARSE_RESULT_METADATA_KEYS):
+        return {}
+
+    financial_record = metadata.get("financial_record") or parser_result.get("financial_record") or {}
+    warnings = parser_result.get("warnings") or metadata.get("warnings") or []
+    raw_payload = {
+        key: metadata.get(key)
+        for key in (
+            "parser_quality_score",
+            "parser_quality_reason",
+            "period",
+            "period_year",
+            "period_quarter",
+            "period_type",
+            "topics",
+            "topic_signals",
+        )
+        if metadata.get(key) is not None
+    }
+    return {
+        "parser_version": parser_result.get("parser_version"),
+        "parse_status": "ok" if parser_result.get("ok") else "failed",
+        "parser_quality_label": metadata.get("parser_quality_label"),
+        "parser_result": parser_result,
+        "financial_record": financial_record if isinstance(financial_record, dict) else {},
+        "raw_payload": raw_payload,
+        "warnings": warnings if isinstance(warnings, list) else [warnings],
+    }
+
+
+def _upsert_parse_result(
+    db,
+    *,
+    article_id: int,
+    source_type: str,
+    payload: dict[str, Any],
+) -> None:
     db.execute(
-        text(f"""
-            INSERT INTO {table} (raw_article_id, source_metadata)
-            VALUES (:raw_article_id, CAST(:source_metadata AS jsonb))
+        text("""
+            INSERT INTO raw_article_parse_results (
+                raw_article_id, parser_version, parse_status,
+                parser_quality_label, parser_result, financial_record,
+                raw_payload, warnings
+            ) VALUES (
+                :raw_article_id, :parser_version, :parse_status,
+                :parser_quality_label, CAST(:parser_result AS jsonb),
+                CAST(:financial_record AS jsonb), CAST(:raw_payload AS jsonb),
+                CAST(:warnings AS jsonb)
+            )
             ON CONFLICT (raw_article_id) DO UPDATE SET
-                source_metadata = {table}.source_metadata || EXCLUDED.source_metadata,
+                parser_version = EXCLUDED.parser_version,
+                parse_status = EXCLUDED.parse_status,
+                parser_quality_label = EXCLUDED.parser_quality_label,
+                parser_result = EXCLUDED.parser_result,
+                financial_record = EXCLUDED.financial_record,
+                raw_payload = raw_article_parse_results.raw_payload || EXCLUDED.raw_payload,
+                warnings = EXCLUDED.warnings,
                 updated_at = NOW()
         """),
         {
             "raw_article_id": article_id,
-            "source_metadata": source_metadata,
+            "parser_version": payload.get("parser_version") or f"{source_type}_parser",
+            "parse_status": payload.get("parse_status"),
+            "parser_quality_label": payload.get("parser_quality_label"),
+            "parser_result": json.dumps(
+                _sanitize_jsonish(payload.get("parser_result") or {}),
+                ensure_ascii=False,
+            ),
+            "financial_record": json.dumps(
+                _sanitize_jsonish(payload.get("financial_record") or {}),
+                ensure_ascii=False,
+            ),
+            "raw_payload": json.dumps(
+                _sanitize_jsonish(payload.get("raw_payload") or {}),
+                ensure_ascii=False,
+            ),
+            "warnings": json.dumps(
+                _sanitize_jsonish(payload.get("warnings") or []),
+                ensure_ascii=False,
+            ),
         },
-    )
-
-
-def _metadata_table_exists(db, table_name: str) -> bool:
-    return bool(
-        db.execute(
-            text("SELECT to_regclass(:table_name)"),
-            {"table_name": f"public.{table_name}"},
-        ).scalar_one_or_none()
     )
 
 
