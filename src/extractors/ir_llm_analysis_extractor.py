@@ -243,9 +243,7 @@ def _normalize_llm_metrics(value: Any) -> list[dict[str, Any]]:
             else str(item.get("unit") or "억원").strip()
         )
         value_kind = (
-            "percentage"
-            if unit == "%" or metric_name.endswith("margin")
-            else "amount_krwbn"
+            "percentage" if unit == "%" or metric_name.endswith("margin") else "amount_krwbn"
         )
         metric: dict[str, Any] = {
             "type": metric_name,

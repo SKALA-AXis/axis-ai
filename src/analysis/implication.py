@@ -27,7 +27,9 @@ class ImplicationGenerator:
         skax_profile_context = skax_profile_context or {}
 
         risk_or_opportunity = str(analysis.get("risk_or_opportunity") or "neutral")
-        impact_level = str(analysis.get("impact_level") or classification.get("importance") or "low")
+        impact_level = str(
+            analysis.get("impact_level") or classification.get("importance") or "low"
+        )
         market_signal = str(analysis.get("market_signal") or "")
         analysis_summary = str(analysis.get("analysis_summary") or summary.get("main_event") or "")
 
@@ -77,7 +79,11 @@ def _skax_implication(
     skax_profile_context: dict[str, Any],
 ) -> str:
     business_lines = skax_profile_context.get("business_lines") or []
-    target = ", ".join(str(item) for item in business_lines[:3]) if isinstance(business_lines, list) else ""
+    target = (
+        ", ".join(str(item) for item in business_lines[:3])
+        if isinstance(business_lines, list)
+        else ""
+    )
     base = "SK AX 관점에서는"
     if target:
         base = f"{base} {target} 영역과의 연결 가능성을 기준으로"

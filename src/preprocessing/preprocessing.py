@@ -240,7 +240,9 @@ class PreprocessingService:
             update_preprocess_status(
                 article_id,
                 "SKIPPED_PREPROCESS_UNSUPPORTED_SOURCE",
-                {"skip_reason": f"{source_type or 'unknown'} source_type은 현재 전처리 대상이 아님"},
+                {
+                    "skip_reason": f"{source_type or 'unknown'} source_type은 현재 전처리 대상이 아님"
+                },
             )
 
         log.info(
@@ -302,7 +304,9 @@ class PreprocessingService:
 
         classified: list[dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
-            futures = {ex.submit(_classify_one, cid, aids): cid for cid, aids in cluster_map.items()}
+            futures = {
+                ex.submit(_classify_one, cid, aids): cid for cid, aids in cluster_map.items()
+            }
             for future in as_completed(futures):
                 result = future.result()
                 if result:

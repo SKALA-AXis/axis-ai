@@ -113,18 +113,10 @@ def _cluster_metadata(
     skax_profile_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
     source_names = sorted(
-        {
-            str(article.get("source_name"))
-            for article in articles
-            if article.get("source_name")
-        }
+        {str(article.get("source_name")) for article in articles if article.get("source_name")}
     )
     source_types = sorted(
-        {
-            str(article.get("source_type"))
-            for article in articles
-            if article.get("source_type")
-        }
+        {str(article.get("source_type")) for article in articles if article.get("source_type")}
     )
     return {
         "cluster_size": len(cluster_article_ids or articles),
