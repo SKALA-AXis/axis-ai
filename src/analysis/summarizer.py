@@ -1,6 +1,6 @@
-"""피어사 뉴스 사실 요약 에이전트.
+"""소스 사실 요약 컴포넌트.
 
-클러스터에 묶인 기사들을 바탕으로 피어사 관련 본문 내용을 요약한다.
+클러스터에 묶인 기사들을 바탕으로 분석 가능한 사실 요약을 생성한다.
 """
 
 # ruff: noqa: E501
@@ -265,8 +265,8 @@ all_available_facts:
 }}"""
 
 
-class PeerNewsSummaryAgent:
-    """클러스터 단위로 피어사 뉴스의 사실 요약을 생성한다."""
+class SourceSummarizer:
+    """클러스터 단위로 source 사실 요약을 생성한다."""
 
     def summarize(
         self,
@@ -533,7 +533,7 @@ def _extract_article_fact_notes(
         response = _invoke_fact_extraction_llm(
             build_prompt(articles_text),
             config=tracing_config(
-                agent="PeerNewsSummaryAgent",
+                agent="SourceSummarizer",
                 phase="extract_facts",
                 prompt_version=_PROMPT_VERSION,
             ),
@@ -567,7 +567,7 @@ def _extract_article_fact_notes(
                 response = _invoke_fact_extraction_llm(
                     build_prompt(compact_articles_text, compact_retry=True),
                     config=tracing_config(
-                        agent="PeerNewsSummaryAgent",
+                        agent="SourceSummarizer",
                         phase="extract_facts_compact_retry",
                         prompt_version=_PROMPT_VERSION,
                     ),
@@ -1442,7 +1442,7 @@ def _summarize_from_fact_ids(
             .invoke(
                 prompt,
                 config=tracing_config(
-                    agent="PeerNewsSummaryAgent",
+                    agent="SourceSummarizer",
                     phase="fact_id_summary",
                     prompt_version=_PROMPT_VERSION,
                 ),

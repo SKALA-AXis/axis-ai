@@ -1,10 +1,11 @@
-"""크롤러 1회 실행 스크립트 — Track A / B / C 결과를 콘솔에 출력.
+"""크롤러 1회 실행 스크립트 — Track A / B / C / D 결과를 콘솔에 출력.
 
 사용법:
   uv run python run_crawler_once.py                       # Track A, 프로세스 env
   uv run python run_crawler_once.py --track a
   uv run python run_crawler_once.py --track b
   uv run python run_crawler_once.py --track c
+  uv run python run_crawler_once.py --track d
   uv run python run_crawler_once.py --track all
   uv run python run_crawler_once.py --env local           # .env.local 로드 (로컬 DB)
   uv run python run_crawler_once.py --env cloud           # .env.cloud 로드
@@ -33,7 +34,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AXIS 크롤러 1회 실행")
     parser.add_argument(
         "--track",
-        choices=["a", "b", "c", "all"],
+        choices=["a", "b", "c", "d", "all"],
         default="a",
         help="실행할 트랙 (기본: a)",
     )
@@ -251,6 +252,18 @@ async def _run(track: str) -> None:
         )
         _summarize("Track C", articles)
         _save_local("track_c", articles)
+
+    if track in ("d", "all"):
+        company_keywords = _resolve_company_keywords(include_global=True)
+        company_labels = [_company_label(company_id) for company_id in company_keywords]
+        log.info("Track D 시작 | company=%s labels=%s", list(company_keywords), company_labels)
+        articles = await processor.run_track_d(
+            company_keywords,
+            persist=persist,
+            crawl_window=crawl_window,
+        )
+        _summarize("Track D", articles)
+        _save_local("track_d", articles)
 
 
 def main() -> None:

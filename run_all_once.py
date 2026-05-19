@@ -23,7 +23,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AXIS DB 크롤링 후 전처리까지만 1회 순차 실행")
     parser.add_argument(
         "--track",
-        choices=["a", "b", "c", "all"],
+        choices=["a", "b", "c", "d", "all"],
         default="all",
         help="크롤링할 트랙. 기본은 all.",
     )

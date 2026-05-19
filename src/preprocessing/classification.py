@@ -1,4 +1,4 @@
-"""분류 에이전트 v4 — 섹터 태깅 + 노출도 점수 + event_type 규칙 기반 분류."""
+"""분류 전처리 v4 — 섹터 태깅 + 노출도 점수 + event_type 규칙 기반 분류."""
 
 import json
 import logging
@@ -7,7 +7,7 @@ from typing import Any
 
 from langchain_openai import ChatOpenAI
 
-from src.agents.sector_keywords import SECTOR_IDS, match_sectors, primary_sector
+from src.config.sectors import SECTOR_IDS, match_sectors, primary_sector
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES
 from src.db.article_store import get_articles_by_ids, update_classification
 
@@ -373,7 +373,7 @@ def _zero_exposure() -> dict[str, Any]:
     }
 
 
-class ClassificationAgent:
+class ClusterClassifier:
     """클러스터를 섹터, 노출도, 이벤트 타입 기준으로 분류한다."""
 
     def classify(
@@ -479,7 +479,7 @@ class ClassificationAgent:
             response = _llm.invoke(
                 prompt,
                 config=tracing_config(
-                    agent="ClassificationAgent",
+                    agent="ClusterClassifier",
                     prompt_version=_PROMPT_VERSION,
                     cluster_size=exposure["cluster_size"],
                 ),
@@ -634,7 +634,7 @@ def classify_preprocessed_cluster(
     sectors = match_sectors(text)
     sector = primary_sector(text)
     exposure = compute_exposure(cluster_articles, company)
-    event_type, reasoning = ClassificationAgent()._classify_event_type(rep, exposure)
+    event_type, reasoning = ClusterClassifier()._classify_event_type(rep, exposure)
     impact = compute_article_impact(rep, event_type)
     importance_score = max(exposure["exposure_score"], impact["impact_score"])
     importance_band = _to_band(importance_score)
@@ -664,7 +664,7 @@ def classify_preprocessed_cluster(
 
 
 __all__ = [
-    "ClassificationAgent",
+    "ClusterClassifier",
     "EVENT_TYPES",
     "SECTOR_IDS",
     "classify_preprocessed_cluster",

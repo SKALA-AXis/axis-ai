@@ -109,6 +109,19 @@ _FINANCIAL_METRIC_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("financing_cash_flow", ("재무활동현금흐름", "재무활동으로 인한 현금흐름")),
     ("cash_and_cash_equivalents", ("현금및현금성자산", "기말현금및현금성자산")),
 )
+_DART_BUSINESS_AREA_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("cloud", ("클라우드", "cloud", "msp", "csp", "saas", "gpu", "데이터센터")),
+    ("logistics", ("물류", "logistics", "cello", "scl")),
+    ("ai_ax", ("ai", "ax", "생성형", "fabrix", "brity", "인공지능", "agent", "data", "데이터")),
+    ("smart_factory", ("스마트팩토리", "smart factory", "mes", "factory", "제조", "factory 솔루션")),
+    ("vehicle_sw", ("차량", "vehicle", "sdv", "내비게이션", "navigation")),
+    (
+        "enterprise_it",
+        ("it서비스", "it 서비스", "si", "ito", "enterprise", "erp", "그룹사", "am", "sm"),
+    ),
+)
+_SK_AX_SEGMENT_TERMS = ("sk ax", "sk㈜ c&c", "sk주식회사", "c&c", "씨앤씨")
+_DART_SEGMENT_TOTAL_LABELS = {"소계", "합계", "계", "total"}
 
 
 def _article_get(article: Any, key: str, default: Any = None) -> Any:
@@ -407,6 +420,158 @@ def _extract_table_statement_metrics(tables: list[dict[str, Any]]) -> dict[str, 
     return best
 
 
+def _extract_business_segment_candidates(
+    tables: list[dict[str, Any]],
+    *,
+    peer_id: str | None,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+
+    for table in tables:
+        table_text = str(table.get("text") or "")
+        title = str(table.get("title") or "")
+        combined = _clean_section_text(" ".join([title, table_text[:2000]]))
+        if not _is_business_segment_sales_table(combined):
+            continue
+
+        unit = _dart_statement_unit(combined) or _infer_table_unit(table)
+        if not unit:
+            continue
+
+        current_parent_label = ""
+        current_parent_area: str | None = None
+        rows = table.get("rows")
+        if not isinstance(rows, list):
+            continue
+
+        for row in rows:
+            if not isinstance(row, list):
+                continue
+
+            cells = [_clean_section_text(str(cell or "")) for cell in row]
+            if len(cells) < 2 or _looks_like_header_row(cells):
+                continue
+
+            label_cells = _segment_label_cells(cells)
+            if not label_cells:
+                continue
+
+            first_label = cells[0] if cells else ""
+            first_area = _detect_dart_business_area(first_label, peer_id=peer_id)
+            if first_area:
+                current_parent_label = first_label
+                current_parent_area = first_area
+
+            segment_label = _segment_metric_label(label_cells, current_parent_label)
+            if not segment_label or _is_company_total_segment_label(segment_label):
+                continue
+
+            standard_business_area = _detect_dart_business_area(segment_label, peer_id=peer_id)
+            if not standard_business_area and _is_segment_subtotal_label(segment_label):
+                standard_business_area = current_parent_area
+                segment_label = current_parent_label or segment_label
+            business_area = segment_label
+
+            values = _amount_values_from_row(cells, unit)
+            if not values:
+                continue
+
+            current_value = values[0]
+            candidates.append(
+                {
+                    "page": None,
+                    "type": "revenue_total",
+                    "metric_scope": "segment",
+                    "business_area": business_area,
+                    "standard_business_area": standard_business_area,
+                    "segment_label": segment_label,
+                    "value_krwbn": current_value["value_krwbn"],
+                    "value_krw": current_value["value_krwbn"] * 100_000_000,
+                    "unit": unit,
+                    "raw": f"{segment_label} {current_value['raw']} ({unit})",
+                    "source": "business_segment_table",
+                    "table_index": table.get("table_index"),
+                    "table_title": title,
+                    "column_index": current_value.get("column_index"),
+                    "confidence": 0.9,
+                }
+            )
+
+    return candidates
+
+
+def _is_business_segment_sales_table(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text or "").lower()
+    if "매출액" not in compact:
+        return False
+    return (
+        "주요제품" in compact
+        or "제품및서비스" in compact
+        or ("사업부문" in compact and "품목" in compact)
+    )
+
+
+def _looks_like_header_row(cells: list[str]) -> bool:
+    joined = " ".join(cells)
+    compact = re.sub(r"\s+", "", joined)
+    return (
+        "사업부문" in compact
+        and ("품목" in compact or "제품" in compact or "서비스" in compact)
+    ) or ("매출액" in compact and ("사업부문" in compact or "품목" in compact))
+
+
+def _segment_label_cells(cells: list[str]) -> list[str]:
+    labels: list[str] = []
+    for cell in cells[:3]:
+        value = _clean_section_text(cell)
+        if not value:
+            continue
+        if _DART_AMOUNT_PATTERN.search(value):
+            break
+        labels.append(value)
+    return labels
+
+
+def _segment_metric_label(label_cells: list[str], current_parent_label: str) -> str:
+    for label in reversed(label_cells):
+        if label:
+            if _is_segment_subtotal_label(label) and current_parent_label:
+                return current_parent_label
+            return label
+    return ""
+
+
+def _is_segment_subtotal_label(label: str) -> bool:
+    normalized = re.sub(r"\s+", "", label or "").lower()
+    return normalized in {"소계", "subtotal"}
+
+
+def _is_company_total_segment_label(label: str) -> bool:
+    normalized = re.sub(r"\s+", "", label or "").lower()
+    return normalized in _DART_SEGMENT_TOTAL_LABELS - {"소계"}
+
+
+def _detect_dart_business_area(text: str, *, peer_id: str | None = None) -> str | None:
+    lowered = (text or "").lower()
+    compact = re.sub(r"\s+", "", lowered)
+    if peer_id == "sk_ax" and any(term.replace(" ", "") in compact for term in _SK_AX_SEGMENT_TERMS):
+        return "sk_ax"
+    for business_area, terms in _DART_BUSINESS_AREA_RULES:
+        for term in terms:
+            lowered_term = term.lower()
+            if _is_short_ascii_segment_term(lowered_term):
+                if re.search(rf"(?<![a-z0-9]){re.escape(lowered_term)}(?![a-z0-9])", lowered):
+                    return business_area
+                continue
+            if lowered_term.replace(" ", "") in compact:
+                return business_area
+    return None
+
+
+def _is_short_ascii_segment_term(value: str) -> bool:
+    return len(value) <= 3 and bool(re.fullmatch(r"[a-z0-9]+", value))
+
+
 def _extract_metric_from_table_rows(
     table: dict[str, Any],
     label: str,
@@ -509,7 +674,14 @@ def _clean_metric_label(row: list[Any]) -> str:
     return _clean_section_text(str(row[0] if row else ""))
 
 
-def _amount_values_from_row(row: list[Any], unit: str) -> list[dict[str, Any]]:
+def _amount_values_from_row(
+    row: list[Any],
+    unit: str,
+    *,
+    column_headers: dict[int, str] | None = None,
+    report_period: str | None = None,
+    report_period_type: str | None = None,
+) -> list[dict[str, Any]]:
     values: list[dict[str, Any]] = []
     for position, cell in enumerate(row[1:], start=1):
         cell_text = str(cell or "")
@@ -518,23 +690,151 @@ def _amount_values_from_row(row: list[Any], unit: str) -> list[dict[str, Any]]:
             value = _normalize_dart_amount_krwbn(raw, unit)
             if value is None or abs(value) < 1:
                 continue
+            column_header = (column_headers or {}).get(position)
+            period, period_year, period_quarter, value_period_type = _statement_column_period(
+                column_header,
+                report_period=report_period,
+                report_period_type=report_period_type,
+                value_position=position,
+            )
             values.append(
                 {
                     "column_index": position,
+                    "column_header": column_header,
                     "raw": raw,
                     "value_krwbn": value,
+                    "period": period,
+                    "period_year": period_year,
+                    "period_quarter": period_quarter,
+                    "period_type": value_period_type,
+                    "is_historical": bool(period and report_period and period != report_period),
                 }
             )
             break
     return values
 
 
-def _normalized_statement_rows(table: dict[str, Any], unit: str | None) -> list[dict[str, Any]]:
+def _statement_column_headers(table: dict[str, Any]) -> dict[int, str]:
+    rows = table.get("rows")
+    if not isinstance(rows, list):
+        return {}
+
+    explicit_headers = table.get("column_headers")
+    if isinstance(explicit_headers, list) and explicit_headers:
+        return {
+            index: _clean_section_text(str(header or ""))
+            for index, header in enumerate(explicit_headers)
+            if index > 0 and _clean_section_text(str(header or ""))
+        }
+
+    header_rows: list[list[str]] = []
+    for row in rows[:3]:
+        if not isinstance(row, list):
+            continue
+        cells = [_clean_section_text(str(cell or "")) for cell in row]
+        joined = " ".join(cells)
+        if not joined:
+            continue
+        has_metric_label = any(alias in joined for _metric, aliases in _FINANCIAL_METRIC_ALIASES for alias in aliases)
+        has_header_token = any(
+            token in joined
+            for token in ("과목", "구분", "계정", "당기", "전기", "분기", "반기", "누적", "연결")
+        )
+        has_amount = bool(_DART_AMOUNT_PATTERN.search(joined))
+        if has_header_token and not has_metric_label and not has_amount:
+            header_rows.append(cells)
+            continue
+        if header_rows and has_header_token and not has_metric_label:
+            header_rows.append(cells)
+            continue
+        break
+
+    headers: dict[int, str] = {}
+    if not header_rows:
+        return headers
+
+    column_count = max((len(row) for row in header_rows), default=0)
+    for column_index in range(1, column_count):
+        parts: list[str] = []
+        for row in header_rows:
+            if column_index >= len(row):
+                continue
+            value = row[column_index]
+            if value and value not in parts:
+                parts.append(value)
+        if parts:
+            headers[column_index] = " / ".join(parts)
+    return headers
+
+
+def _statement_column_period(
+    column_header: str | None,
+    *,
+    report_period: str | None,
+    report_period_type: str | None,
+    value_position: int,
+) -> tuple[str | None, int | None, int | None, str | None]:
+    header = _clean_section_text(column_header or "")
+    explicit_period = _extract_period(header)
+    if explicit_period:
+        parts = _period_parts(explicit_period)
+        return (
+            explicit_period,
+            parts["period_year"],
+            parts["period_quarter"],
+            "quarter",
+        )
+
+    year_match = re.search(r"(20\d{2})\s*년", header)
+    if year_match:
+        year = int(year_match.group(1))
+        if "분기" in header:
+            quarter_match = re.search(r"([1-4])\s*분기", header)
+            quarter = int(quarter_match.group(1)) if quarter_match else None
+            return (
+                f"{year}Q{quarter}" if quarter else str(year),
+                year,
+                quarter,
+                "quarter" if quarter else "year",
+            )
+        return str(year), year, None, "year"
+
+    report_parts = _period_parts(report_period)
+    report_year = report_parts["period_year"]
+    report_quarter = report_parts["period_quarter"]
+    if not report_year:
+        return None, None, None, None
+
+    if value_position == 1 or "당" in header:
+        return report_period, report_year, report_quarter, report_period_type
+
+    inferred_year = report_year - (value_position - 1)
+    if "분기" in header:
+        quarter_match = re.search(r"([1-4])\s*분기", header)
+        quarter = int(quarter_match.group(1)) if quarter_match else report_quarter
+        return f"{inferred_year}Q{quarter}", inferred_year, quarter, "quarter"
+    if "반기" in header:
+        return f"{inferred_year}Q2", inferred_year, 2, "half"
+    if "전" in header or report_period_type == "annual":
+        return f"{inferred_year}Q4", inferred_year, 4, "annual"
+    if report_quarter:
+        return f"{inferred_year}Q{report_quarter}", inferred_year, report_quarter, report_period_type
+    return str(inferred_year), inferred_year, None, "year"
+
+
+def _normalized_statement_rows(
+    table: dict[str, Any],
+    unit: str | None,
+    *,
+    report_period: str | None,
+    report_period_type: str | None,
+) -> list[dict[str, Any]]:
     rows = table.get("rows")
     if not isinstance(rows, list) or not unit:
         return []
 
     normalized_rows: list[dict[str, Any]] = []
+    column_headers = _statement_column_headers(table)
     for row in rows:
         if not isinstance(row, list):
             continue
@@ -547,7 +847,13 @@ def _normalized_statement_rows(table: dict[str, Any], unit: str | None) -> list[
         if not metric_key:
             continue
 
-        values = _amount_values_from_row(row_values, unit)
+        values = _amount_values_from_row(
+            row_values,
+            unit,
+            column_headers=column_headers,
+            report_period=report_period,
+            report_period_type=report_period_type,
+        )
         if not values:
             continue
 
@@ -568,7 +874,12 @@ def _classify_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [_classify_table(table) for table in tables]
 
 
-def _extract_financial_statements(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _extract_financial_statements(
+    tables: list[dict[str, Any]],
+    *,
+    report_period: str | None,
+    report_period_type: str | None,
+) -> list[dict[str, Any]]:
     statements: list[dict[str, Any]] = []
 
     for table in tables:
@@ -576,7 +887,12 @@ def _extract_financial_statements(tables: list[dict[str, Any]]) -> list[dict[str
         if classified["table_type"] == "unclassified":
             continue
 
-        normalized_rows = _normalized_statement_rows(table, classified.get("unit"))
+        normalized_rows = _normalized_statement_rows(
+            table,
+            classified.get("unit"),
+            report_period=report_period,
+            report_period_type=report_period_type,
+        )
         if not normalized_rows:
             continue
 
@@ -1018,7 +1334,11 @@ class DartParser:
             else []
         )
         classified_tables = _classify_tables(tables)
-        financial_statements = _extract_financial_statements(tables)
+        financial_statements = _extract_financial_statements(
+            tables,
+            report_period=period,
+            report_period_type=period_type,
+        )
 
         table_metrics = _extract_table_statement_metrics(tables)
         statement_metrics = table_metrics or _extract_dart_statement_metrics(text)
@@ -1063,6 +1383,8 @@ class DartParser:
                 operating_profit_candidate["value_krw"] = operating_profit * 100_000_000
                 operating_profit_candidate["confidence"] = 0.95
             candidates.append(operating_profit_candidate)
+
+        candidates.extend(_extract_business_segment_candidates(tables, peer_id=peer_id))
 
         metric_details = {
             candidate["type"]: {

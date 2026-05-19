@@ -441,6 +441,10 @@ def _to_raw_article(item: object) -> RawArticle:
     extra = dict(data.get("extra") or data.get("metadata") or {})
     if data.get("data") is not None:
         extra.setdefault("data", data["data"])
+    if data.get("ticker") is not None:
+        extra.setdefault("ticker", data["ticker"])
+    if data.get("schema_name") is not None:
+        extra.setdefault("schema_name", data["schema_name"])
     if data.get("company_tier") is not None:
         extra.setdefault("company_tier", data["company_tier"])
 

@@ -7,7 +7,6 @@ from datetime import UTC, datetime
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.chat_orchestrator_schemas import ChatTurnRequest, ChatTurnResponse
 from src.api.global_trends_schemas import GlobalTrendsRequest, GlobalTrendsResponse
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
 from src.api.link_verification_schemas import LinkVerificationRequest, LinkVerificationResponse
@@ -68,7 +67,7 @@ async def run_pipeline(request: PipelineRunRequest, background_tasks: Background
     """수집 파이프라인 비동기 실행 (SpringBoot 스케줄러가 매시간 호출)"""
     task_id = str(uuid.uuid4())
     track = request.track.strip().lower()
-    if track not in {"a", "b", "c", "all"}:
+    if track not in {"a", "b", "c", "d", "all"}:
         raise HTTPException(status_code=400, detail=f"unsupported track: {request.track}")
 
     log.info(
@@ -338,30 +337,11 @@ async def verify_link(request: LinkVerificationRequest) -> LinkVerificationRespo
     phase 2 prototype — deterministic, LLM 미사용. ``link_verification_logs``
     테이블 저장은 Day 90+ 후속 작업.
     """
-    from src.agents.link_verification_agent import LinkVerificationAgent
+    from src.services.link_verification import LinkVerificationService
 
     log.info("LinkVerify 요청 | card_id=%s", request.card_id)
-    result = await LinkVerificationAgent().verify(card_id=request.card_id)
+    result = await LinkVerificationService().verify(card_id=request.card_id)
     return LinkVerificationResponse.model_validate(result)
-
-
-@app.post("/chat", response_model=ChatTurnResponse)
-async def chat_turn(request: ChatTurnRequest) -> ChatTurnResponse:
-    """ChatOrchestrator — intent 분류 + 분석 agent 라우팅 + compose.
-
-    design: ``axis-ai/design/40-user-query/chat-orchestrator.md``. Walking Skeleton
-    phase 2 prototype — Intent Router (gpt-4o-mini) → sub-agent (insight/mixer/peer/
-    global/link) → Compose (gpt-4o-mini). deep_dive / search / summary 는 Day 90+ deferred.
-    """
-    from src.agents.chat_orchestrator_agent import ChatOrchestratorAgent
-
-    log.info("Chat 요청 | session=%s message=%s", request.session_id, request.message[:80])
-    result = await ChatOrchestratorAgent().chat(
-        message=request.message,
-        session_id=request.session_id,
-        history=request.history,
-    )
-    return ChatTurnResponse.model_validate(result)
 
 
 @app.post("/weak-signal/run")
@@ -400,12 +380,11 @@ def _check_qdrant() -> bool:
 
 def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
     """DB 대표 클러스터를 요약·분석·카드뉴스 에이전트 흐름으로 변환한다."""
+    from src.agents.analysis_supervisor_agent import AnalysisSupervisorAgent
     from src.agents.card_news_agent import CardNewsAgent
-    from src.agents.classification_agent import ClassificationAgent
-    from src.agents.news_analysis_agent import PeerNewsAnalysisAgent
-    from src.agents.news_summary_agent import PeerNewsSummaryAgent
     from src.config.company_tiers import SELF_COMPANY_IDS
     from src.db.article_store import get_articles_by_ids, list_card_news_cluster_candidates
+    from src.preprocessing.classification import ClusterClassifier
 
     candidate_limit = min(max(limit * 5, limit), 30)
     candidates = list_card_news_cluster_candidates(
@@ -415,9 +394,8 @@ def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
     if not candidates:
         return []
 
-    classifier = ClassificationAgent()
-    summary_agent = PeerNewsSummaryAgent()
-    analysis_agent = PeerNewsAnalysisAgent()
+    classifier = ClusterClassifier()
+    analysis_supervisor = AnalysisSupervisorAgent()
     card_agent = CardNewsAgent()
     cards: list[dict] = []
     seen_cluster_ids: set[int] = set()
@@ -444,28 +422,20 @@ def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
             cluster_article_ids=article_ids,
             company=company,
         )
-        summary = summary_agent.summarize_articles(
+        analysis_result = analysis_supervisor.analyze_cluster(
             cluster_id=cluster_id,
             representative_id=representative_id,
+            classification=classification,
             articles=articles,
             cluster_article_ids=article_ids,
         )
+        summary = analysis_result["summary"]
         if not summary.get("is_valid_summary"):
             continue
-
-        analysis = analysis_agent.analyze(
-            summary=summary,
-            classification=classification,
-            cluster_metadata={
-                "cluster_size": int(candidate.get("cluster_size") or len(article_ids)),
-                "source_count": len({article.get("source_name") for article in articles}),
-                "source_names": sorted({str(article.get("source_name")) for article in articles}),
-            },
-        )
         cards.append(
             card_agent.generate(
                 summary=summary,
-                analysis=analysis,
+                analysis=analysis_result["analysis"],
                 classification=classification,
                 articles=articles,
             )

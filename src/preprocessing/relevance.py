@@ -1,7 +1,7 @@
-"""Gate 2.5 내용 기반 관련성 판단 에이전트.
+"""Gate 2.5 내용 기반 관련성 판단 전처리.
 
 크롤링 단계에서 키워드 기반 후보 수집은 이미 수행되었다고 가정한다.
-이 에이전트는 raw_articles에 저장된 원문을 읽고, 모니터링 대상 company와 sector 관점에서
+이 단계는 raw_articles에 저장된 원문을 읽고, 모니터링 대상 company와 sector 관점에서
 실제로 분석할 가치가 있는 기사인지 판단한다.
 
 판단 결과는 raw_articles에 업데이트하고, 관련 있는 기사 ID만 다음 Gate로 넘긴다.
@@ -163,7 +163,7 @@ peer_context: {peer_context}
 """
 
 
-class RelevanceAgent:
+class RelevanceEvaluator:
     """company/sector 관점의 내용 기반 관련성을 판단한다."""
 
     def filter(self, raw_article_ids: list[int]) -> tuple[list[int], list[int]]:
@@ -447,7 +447,7 @@ class RelevanceAgent:
             response = _get_llm().invoke(
                 prompt,
                 config=tracing_config(
-                    agent="RelevanceAgent",
+                    agent="RelevanceEvaluator",
                     prompt_version=_PROMPT_VERSION,
                     source_type=source_type,
                 ),
@@ -488,7 +488,7 @@ def analyze_relevance_article(article: dict[str, Any]) -> tuple[dict[str, Any], 
     """JSON article에 Gate 2.5 관련성 결과를 붙인다."""
 
     row = _DictRow(article)
-    result = RelevanceAgent()._analyze(row)
+    result = RelevanceEvaluator()._analyze(row)
     is_relevant = _is_relevant(result)
 
     item = dict(article)

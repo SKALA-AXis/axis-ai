@@ -33,6 +33,7 @@ from src.db.article_store import (
     upsert_raw_article_financial_metrics,
 )
 from src.db.postgres import SessionLocal
+from src.extractors.ir_llm_analysis_extractor import analyze_ir_with_llm
 from src.parsers.ir_parser import IRParser
 from src.parsers.parser_quality import analyze_parser_quality_article
 
@@ -52,6 +53,18 @@ _METRIC_SPECS = {
         "unit": "억원",
         "metric_scope": "company_total",
     },
+    "gross_profit": {
+        "record_key": "gross_profit_krwbn",
+        "label": "매출총이익",
+        "unit": "억원",
+        "metric_scope": "company_total",
+    },
+    "gross_margin": {
+        "record_key": "gross_margin_pct",
+        "label": "매출총이익률",
+        "unit": "%",
+        "metric_scope": "company_total",
+    },
     "net_income": {
         "record_key": "net_income_krwbn",
         "label": "순이익",
@@ -67,6 +80,12 @@ _METRIC_SPECS = {
     "backlog": {
         "record_key": "backlog_krwbn",
         "label": "수주잔고",
+        "unit": "억원",
+        "metric_scope": "company_total",
+    },
+    "orders": {
+        "record_key": "orders_krwbn",
+        "label": "수주",
         "unit": "억원",
         "metric_scope": "company_total",
     },
@@ -176,6 +195,17 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="scope가 unknown인 IR 숫자 후보도 저장",
     )
+    parser.add_argument(
+        "--llm-analysis",
+        action="store_true",
+        help="OPENAI_API_KEY를 사용해 IR 표/본문 LLM 보조 분석을 실행",
+    )
+    parser.add_argument(
+        "--llm-max-pages",
+        type=int,
+        default=0,
+        help="LLM 보조 분석에 보낼 최대 페이지 수. 0이면 IR_LLM_MAX_PAGES 환경값 사용",
+    )
     return parser.parse_args()
 
 
@@ -191,8 +221,21 @@ def main() -> None:
     all_signals: list[dict[str, Any]] = []
     for article in articles:
         parser_result = (
-            _reparse_ir_article(article) if args.reparse else _stored_parser_result(article)
+            _reparse_ir_article(
+                article,
+                llm_analysis=args.llm_analysis,
+                llm_max_pages=args.llm_max_pages or None,
+            )
+            if args.reparse
+            else _stored_parser_result(article)
         )
+        if args.llm_analysis and not args.reparse:
+            parser_result = _attach_llm_analysis(
+                article,
+                parser_result,
+                llm_max_pages=args.llm_max_pages or None,
+            )
+            article["extra"] = {**article["extra"], "parser_result": parser_result}
         financial_record = _financial_record(article, parser_result)
 
         if args.upsert_metrics:
@@ -279,11 +322,22 @@ def _load_ir_articles(*, limit: int = 0) -> list[dict[str, Any]]:
     return articles
 
 
-def _reparse_ir_article(article: dict[str, Any]) -> dict[str, Any]:
+def _reparse_ir_article(
+    article: dict[str, Any],
+    *,
+    llm_analysis: bool = False,
+    llm_max_pages: int | None = None,
+) -> dict[str, Any]:
     parser = IRParser()
-    parsed = parser.parse_article(article)
+    parsed = parser.parse_article(article, include_raw_pages=llm_analysis)
     item, ok, reason = analyze_parser_quality_article(article)
-    parser_result = item.get("parser_result") or parsed
+    parser_result = parsed if llm_analysis else item.get("parser_result") or parsed
+    if llm_analysis:
+        parser_result = _attach_llm_analysis(
+            article,
+            parser_result,
+            llm_max_pages=llm_max_pages,
+        )
 
     metadata_patch = {
         "parser_result": parser_result,
@@ -299,6 +353,8 @@ def _reparse_ir_article(article: dict[str, Any]) -> dict[str, Any]:
         "topic_signals": parser_result.get("topic_signals"),
         "ir_sections": parser_result.get("sections"),
         "ir_document_chunks": parser_result.get("document_chunks"),
+        "ir_llm_financial_metrics": parser_result.get("llm_financial_metrics"),
+        "ir_llm_business_signals": parser_result.get("llm_business_signals"),
     }
 
     update_preprocess_status(
@@ -309,6 +365,25 @@ def _reparse_ir_article(article: dict[str, Any]) -> dict[str, Any]:
     )
     article["extra"] = {**article["extra"], **metadata_patch}
     return parser_result
+
+
+def _attach_llm_analysis(
+    article: dict[str, Any],
+    parser_result: dict[str, Any],
+    *,
+    llm_max_pages: int | None = None,
+) -> dict[str, Any]:
+    analysis = analyze_ir_with_llm(article, parser_result, max_pages=llm_max_pages)
+    llm_metrics = analysis.get("llm_financial_metrics") or []
+    llm_signals = analysis.get("llm_business_signals") or []
+    candidates = parser_result.get("candidates")
+    merged_candidates = [*candidates, *llm_metrics] if isinstance(candidates, list) else llm_metrics
+    return {
+        **parser_result,
+        "candidates": merged_candidates,
+        "llm_financial_metrics": llm_metrics,
+        "llm_business_signals": llm_signals,
+    }
 
 
 def _stored_parser_result(article: dict[str, Any]) -> dict[str, Any]:
@@ -364,6 +439,8 @@ def _metrics_from_financial_record(
             continue
 
         business_area = detail.get("business_area")
+        if not business_area and metric_scope == "company_total":
+            business_area = "company_total"
         scope_key = business_area if metric_scope == "segment" and business_area else "total"
         is_percentage = spec["unit"] == "%"
         confidence = detail.get("confidence")
@@ -454,7 +531,20 @@ def _metrics_from_parser_result(
         if not isinstance(value, int | float):
             continue
 
+        has_candidate_period = "period" in candidate
+        candidate_period = candidate.get("period") or period
+        candidate_period_year = (
+            candidate.get("period_year") if has_candidate_period else period_year
+        )
+        candidate_period_quarter = (
+            candidate.get("period_quarter") if has_candidate_period else period_quarter
+        )
+        candidate_period_type = (
+            candidate.get("period_type") if has_candidate_period else period_type
+        )
         business_area = candidate.get("business_area")
+        if not business_area and metric_scope == "company_total":
+            business_area = "company_total"
         entity_name = candidate.get("entity_name")
         scope_key = _metric_scope_key(metric_scope, business_area, entity_name)
         confidence = candidate.get("confidence")
@@ -462,20 +552,27 @@ def _metrics_from_parser_result(
             confidence = 0.85 if metric_scope == "company_total" else 0.7
 
         is_percentage = spec["unit"] == "%"
+        extraction_method = (
+            "ir_parser.table_matrix"
+            if candidate.get("source") == "ir_table_matrix"
+            else "ir_llm.analysis"
+            if candidate.get("source") == "ir_llm_analysis"
+            else "ir_parser.candidates"
+        )
         metrics.append(
             {
                 "raw_article_id": article_id,
                 "metric_uid": (
                     f"ir:{metric_name}:{metric_scope}:{scope_key}:"
-                    f"p{candidate.get('page') or 'x'}:{idx}:{period or 'unknown'}"
+                    f"p{candidate.get('page') or 'x'}:{idx}:{candidate_period or 'unknown'}"
                 ),
                 "source_type": "ir",
                 "source_name": article.get("source_name"),
                 "peer_id": peer_id,
-                "period": period,
-                "period_year": period_year,
-                "period_quarter": period_quarter,
-                "period_type": period_type,
+                "period": candidate_period,
+                "period_year": candidate_period_year,
+                "period_quarter": candidate_period_quarter,
+                "period_type": candidate_period_type,
                 "metric_name": metric_name,
                 "metric_label": spec["label"],
                 "metric_scope": metric_scope,
@@ -486,9 +583,11 @@ def _metrics_from_parser_result(
                 "unit": spec["unit"],
                 "currency": None if is_percentage else "KRW",
                 "source_page": candidate.get("page") or financial_record.get("ir_page"),
+                "source_table_uid": candidate.get("source_table_uid"),
+                "source_chunk_uid": candidate.get("source_chunk_uid"),
                 "confidence": confidence,
-                "extraction_method": "ir_parser.candidates",
-                "evidence_text": candidate.get("raw"),
+                "extraction_method": extraction_method,
+                "evidence_text": candidate.get("evidence_text") or candidate.get("raw"),
                 "payload": {
                     "financial_record": financial_record,
                     "metric_candidate": candidate,
@@ -519,9 +618,6 @@ def _business_signals_from_parser_result(
     financial_record: dict[str, Any],
 ) -> list[dict[str, Any]]:
     chunks = _document_chunks(article, parser_result)
-    if not chunks:
-        return []
-
     article_id = int(article["id"])
     period = (
         financial_record.get("period")
@@ -535,6 +631,22 @@ def _business_signals_from_parser_result(
 
     signals: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
+    signals.extend(
+        _llm_business_signals_from_parser_result(
+            article=article,
+            parser_result=parser_result,
+            article_id=article_id,
+            peer_id=peer_id,
+            period=period,
+            period_year=period_year,
+            period_quarter=period_quarter,
+            period_type=period_type,
+            seen=seen,
+        )
+    )
+    if not chunks:
+        return signals
+
     for chunk in chunks:
         if not isinstance(chunk, dict):
             continue
@@ -597,6 +709,68 @@ def _business_signals_from_parser_result(
         )
 
     return signals
+
+
+def _llm_business_signals_from_parser_result(
+    *,
+    article: dict[str, Any],
+    parser_result: dict[str, Any],
+    article_id: int,
+    peer_id: str | None,
+    period: Any,
+    period_year: Any,
+    period_quarter: Any,
+    period_type: Any,
+    seen: set[tuple[str, str, str]],
+) -> list[dict[str, Any]]:
+    llm_signals = parser_result.get("llm_business_signals")
+    if not isinstance(llm_signals, list):
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for index, signal in enumerate(llm_signals, start=1):
+        if not isinstance(signal, dict):
+            continue
+        business_area = str(signal.get("business_area") or "company_total")
+        signal_type = str(signal.get("signal_type") or "")
+        evidence_text = str(signal.get("evidence_text") or "")
+        if not signal_type or not evidence_text:
+            continue
+        dedupe_key = (business_area, signal_type, evidence_text[:160])
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        rows.append(
+            {
+                "raw_article_id": article_id,
+                "signal_uid": (
+                    f"ir-llm:{business_area}:{signal_type}:"
+                    f"p{signal.get('source_page') or 'x'}:{index}"
+                ),
+                "source_type": "ir",
+                "source_name": article.get("source_name"),
+                "peer_id": peer_id,
+                "period": period,
+                "period_year": period_year,
+                "period_quarter": period_quarter,
+                "period_type": period_type,
+                "business_area": business_area,
+                "signal_type": signal_type,
+                "sentiment": signal.get("sentiment") or _sentiment_from_text(evidence_text),
+                "summary": signal.get("summary") or _summary_from_evidence(evidence_text),
+                "evidence_text": evidence_text,
+                "source_page": signal.get("source_page"),
+                "source_chunk_uid": None,
+                "confidence": signal.get("confidence") or 0.78,
+                "extraction_method": "ir_llm.analysis",
+                "payload": {
+                    "title": article.get("title"),
+                    "url": article.get("url"),
+                    "llm_signal": signal,
+                },
+            }
+        )
+    return rows
 
 
 def _document_chunks(

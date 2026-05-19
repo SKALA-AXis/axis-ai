@@ -77,7 +77,7 @@ _SECTION_SIGNAL_POLICY: dict[str, dict[str, object]] = {
             "investment",
             "efficiency",
         },
-        "default_business_area": None,
+        "default_business_area": "company_total",
     },
     "management_discussion": {
         "allowed_signal_types": {
@@ -195,6 +195,21 @@ def financial_metrics_from_dart(
             )
 
     if metrics:
+        metrics.extend(
+            metric
+            for metric in _metrics_from_candidates(
+                article=article,
+                parser_result=parser_result,
+                article_id=article_id,
+                peer_id=peer_id,
+                period=period,
+                period_year=period_year,
+                period_quarter=period_quarter,
+                period_type=period_type,
+            )
+            if metric.get("metric_scope") == "segment"
+            or metric.get("business_area") not in {None, "company_total"}
+        )
         return metrics
 
     return _metrics_from_candidates(
@@ -320,42 +335,79 @@ def _metrics_from_statement(
         if not isinstance(row, dict):
             continue
         metric_name = str(row.get("metric_key") or "")
-        value = row.get("current_value_krwbn")
-        if metric_name not in _DART_METRIC_LABELS or not isinstance(value, int | float):
+        if metric_name not in _DART_METRIC_LABELS:
             continue
+        row_values = row.get("values")
+        if not isinstance(row_values, list):
+            row_values = [
+                {
+                    "column_index": 1,
+                    "value_krwbn": row.get("current_value_krwbn"),
+                }
+            ]
 
-        metrics.append(
-            _metric_row(
-                article=article,
-                article_id=article_id,
-                peer_id=peer_id,
-                period=period,
-                period_year=period_year,
-                period_quarter=period_quarter,
-                period_type=period_type,
-                metric_uid=(
-                    f"dart:{metric_name}:{statement_scope}:"
-                    f"table{table_index or 'x'}:{period or 'unknown'}"
-                ),
-                metric_name=metric_name,
-                metric_label=_DART_METRIC_LABELS[metric_name],
-                metric_scope="company_total",
-                value_numeric=float(value),
-                source_table_uid=f"dart-table-{table_index}" if table_index is not None else None,
-                evidence_text=str(row.get("label") or metric_name),
-                confidence=0.94 if statement.get("table_type") != "unclassified" else 0.86,
-                payload={
-                    "statement": {
-                        "table_index": table_index,
-                        "title": statement.get("title"),
-                        "table_type": statement.get("table_type"),
-                        "statement_scope": statement_scope,
-                        "unit": statement.get("unit"),
-                    },
-                    "row": row,
-                },
+        for value_index, value_info in enumerate(row_values, start=1):
+            if not isinstance(value_info, dict):
+                continue
+            value = value_info.get("value_krwbn")
+            if not isinstance(value, int | float):
+                continue
+            metric_period = value_info.get("period") or period
+            metric_period_year = (
+                value_info.get("period_year") if value_info.get("period") else period_year
             )
-        )
+            metric_period_quarter = (
+                value_info.get("period_quarter") if value_info.get("period") else period_quarter
+            )
+            metric_period_type = (
+                value_info.get("period_type") if value_info.get("period") else period_type
+            )
+
+            metrics.append(
+                _metric_row(
+                    article=article,
+                    article_id=article_id,
+                    peer_id=peer_id,
+                    period=metric_period,
+                    period_year=metric_period_year,
+                    period_quarter=metric_period_quarter,
+                    period_type=metric_period_type,
+                    metric_uid=(
+                        f"dart:{metric_name}:{statement_scope}:"
+                        f"table{table_index or 'x'}:c{value_info.get('column_index') or value_index}:"
+                        f"{metric_period or 'unknown'}"
+                    ),
+                    metric_name=metric_name,
+                    metric_label=_DART_METRIC_LABELS[metric_name],
+                    metric_scope="company_total",
+                    business_area="company_total",
+                    value_numeric=float(value),
+                    source_table_uid=(
+                        f"dart-table-{table_index}" if table_index is not None else None
+                    ),
+                    evidence_text=" ".join(
+                        str(part)
+                        for part in (
+                            row.get("label") or metric_name,
+                            value_info.get("column_header"),
+                            value_info.get("raw"),
+                        )
+                        if part
+                    ),
+                    confidence=0.94 if statement.get("table_type") != "unclassified" else 0.86,
+                    payload={
+                        "statement": {
+                            "table_index": table_index,
+                            "title": statement.get("title"),
+                            "table_type": statement.get("table_type"),
+                            "statement_scope": statement_scope,
+                            "unit": statement.get("unit"),
+                        },
+                        "row": row,
+                        "value": value_info,
+                    },
+                )
+            )
 
     return metrics
 
@@ -395,7 +447,8 @@ def _metrics_from_candidates(
                 metric_uid=f"dart:{metric_name}:candidate:{index}:{period or 'unknown'}",
                 metric_name=metric_name,
                 metric_label=_DART_METRIC_LABELS[metric_name],
-                metric_scope="company_total",
+                metric_scope=str(candidate.get("metric_scope") or "company_total"),
+                business_area=str(candidate.get("business_area") or "company_total"),
                 value_numeric=float(value),
                 source_table_uid=(
                     f"dart-table-{candidate.get('table_index')}"
@@ -424,6 +477,7 @@ def _metric_row(
     metric_name: str,
     metric_label: str,
     metric_scope: str,
+    business_area: str,
     value_numeric: float,
     source_table_uid: str | None,
     evidence_text: str,
@@ -443,7 +497,7 @@ def _metric_row(
         "metric_name": metric_name,
         "metric_label": metric_label,
         "metric_scope": metric_scope,
-        "business_area": None,
+        "business_area": business_area,
         "value_numeric": value_numeric,
         "value_krwbn": value_numeric,
         "value_krw": value_numeric * 100_000_000,
@@ -484,6 +538,7 @@ def _signals_from_chunk(
     if default_business_area is not None:
         default_business_area = str(default_business_area)
     signals: list[tuple[int, str, str, str]] = []
+    chunk_areas = _detect_business_areas(text_value)
 
     for index, sentence in enumerate(_sentences(text_value), start=1):
         if peer_id == "sk_ax" and not _is_sk_ax_relevant_sentence(sentence):
@@ -499,10 +554,11 @@ def _signals_from_chunk(
 
         business_area = _detect_business_area(sentence)
         if not business_area:
-            chunk_areas = _detect_business_areas(text_value)
             if len(chunk_areas) == 1:
                 business_area = next(iter(chunk_areas))
-        if not business_area:
+        if not business_area and peer_id == "sk_ax" and _is_sk_ax_relevant_sentence(sentence):
+            business_area = "sk_ax"
+        if not business_area and not chunk_areas:
             business_area = default_business_area
         if not business_area:
             continue

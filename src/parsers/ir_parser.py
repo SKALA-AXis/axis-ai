@@ -104,6 +104,37 @@ _IR_FINANCIAL_METRIC_RULES: tuple[tuple[str, list[re.Pattern[str]], str], ...] =
     ("capex", _CAPEX_PATTERNS, "amount_krwbn"),
     ("operating_margin", _OPERATING_MARGIN_PATTERNS, "percentage"),
 )
+_IR_TABLE_METRIC_ALIASES: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("operating_margin", ("영업이익률", "opm", "operating margin", "op margin", "margin"), "percentage"),
+    ("gross_margin", ("gpm", "gross profit margin", "gross margin"), "percentage"),
+    ("gross_profit", ("매출총이익", "gross profit"), "amount_krwbn"),
+    ("revenue_total", ("매출액", "매출", "revenue", "sales"), "amount_krwbn"),
+    ("operating_profit", ("영업이익", "operating profit", "op"), "amount_krwbn"),
+    ("net_income", ("당기순이익", "순이익", "net income", "net profit"), "amount_krwbn"),
+    ("ebitda", ("ebitda", "상각전영업이익"), "amount_krwbn"),
+    ("backlog", ("수주잔고", "backlog", "잔여수주", "계약잔액"), "amount_krwbn"),
+    ("capex", ("capex", "설비투자", "투자금액", "자본적지출"), "amount_krwbn"),
+)
+_IR_TABLE_NON_METRIC_LABEL_PATTERN = re.compile(
+    r"매출\s*원가|원가|매출\s*총이익|총이익|gross\s*profit|cost\s*of\s*sales|"
+    r"이익률|margin\s*rate",
+    re.IGNORECASE,
+)
+_IR_TABLE_PERIOD_PATTERN = re.compile(
+    r"20\d{2}\s*년\s*(?:[1-4]\s*분기|상반기|하반기)?|"
+    r"\d{2}\s*년\s*(?:[1-4]\s*분기|상반기|하반기)?|"
+    r"20\d{2}\s*Q\s*[1-4]|"
+    r"[1-4]\s*Q\s*['’]?\s*\d{2}|"
+    r"\b20\d{2}\b",
+    re.IGNORECASE,
+)
+_IR_TABLE_NUMBER_PATTERN = re.compile(r"\(?-?\d[\d,]*(?:\.\d+)?\)?%?")
+_IR_TABLE_NOISE_LABEL_PATTERN = re.compile(
+    r"yoy|qoq|증감|증가|감소|상승|하락|개선|악화|영향|사유|원인|요청|스케줄|조정|"
+    r"전년|전분기|대비|진행중|고부가|프로세스|자동화|운영효율|통한|기반의|고객|"
+    r"△|▲",
+    re.IGNORECASE,
+)
 _PERIOD_PATTERNS = [
     re.compile(r"(20\d{2})\s*년?\s*([1-4])\s*분기"),
     re.compile(r"(20\d{2})\s*Q\s*([1-4])", re.IGNORECASE),
@@ -460,14 +491,14 @@ def _classify_metric_context(
     if has_total:
         return {
             "metric_scope": "company_total",
-            "business_area": None,
+            "business_area": "company_total",
             "entity_name": peer_id,
             "confidence": 0.85,
         }
 
     return {
         "metric_scope": "unknown",
-        "business_area": segment_area,
+        "business_area": segment_area or "company_total",
         "entity_name": peer_id,
         "confidence": 0.55,
     }
@@ -528,8 +559,9 @@ def _metric_context_window(page_text: str, raw_match: str | None) -> str:
 
 
 def _detect_business_area(text: str) -> str | None:
+    lowered = (text or "").lower()
     for business_area, terms in _IR_SEGMENT_CONTEXT_RULES:
-        if any(term.lower() in text for term in terms):
+        if any(term.lower() in lowered for term in terms):
             return business_area
     return None
 
@@ -622,7 +654,7 @@ def _pages_from_ir_article(article: Any, extra: dict[str, Any]) -> list[dict[str
             page_no = int(page.get("page") or idx)
 
             if text:
-                pages.append({"page": page_no, "text": text})
+                pages.append({"page": page_no, "text": text, "blocks": blocks})
 
     if pages:
         return pages
@@ -650,6 +682,524 @@ def _candidate_page(candidates: list[dict[str, Any]], metric_type: str) -> int |
             page = candidate.get("page")
             return int(page) if isinstance(page, int) else None
     return None
+
+
+def _extract_financial_table_candidates(
+    pages: list[dict[str, Any]],
+    *,
+    report_period: str | None,
+    peer_id: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    candidates: list[dict[str, Any]] = []
+    tables: list[dict[str, Any]] = []
+
+    for page in pages:
+        page_no = page.get("page")
+        page_text = str(page.get("text") or "")
+        lines = [re.sub(r"\s+", " ", line).strip() for line in page_text.splitlines()]
+        lines = [line for line in lines if line]
+        unit = _table_unit(page_text)
+        if not unit:
+            continue
+
+        for header_index, line in enumerate(lines):
+            columns = _period_columns_from_header(line)
+            if len(columns) < 2:
+                continue
+
+            table_uid = f"ir-p{page_no or 'x'}-t{len(tables) + 1}"
+            table_title = _nearby_table_title(lines, header_index)
+            table_context_business_area = _table_context_business_area(lines, header_index)
+            table_rows: list[dict[str, Any]] = []
+            active_metric: tuple[str, str] | None = None
+            active_metric_parent_label: str | None = None
+            for row_index, row_line in enumerate(lines[header_index + 1 : header_index + 14], start=1):
+                row_metric = _table_metric_from_label(row_line)
+                row_label = _table_row_label(row_line)
+                explicit_metric = row_metric is not None
+                if row_metric is not None:
+                    active_metric = row_metric
+                    active_metric_parent_label = row_label
+                elif active_metric and _looks_like_segment_value_row(row_line, len(columns)):
+                    row_metric = active_metric
+                else:
+                    if table_rows:
+                        break
+                    continue
+
+                metric_name, value_kind = row_metric
+                row_values = _table_row_values(row_line, len(columns))
+                if len(row_values) < len(columns):
+                    if table_rows:
+                        break
+                    continue
+
+                if not _is_valid_table_metric_row(row_label, row_metric):
+                    if table_rows:
+                        break
+                    continue
+                row_evidence = _table_row_evidence(
+                    table_title=table_title,
+                    context_business_area=table_context_business_area,
+                    metric_parent_label=active_metric_parent_label if not explicit_metric else None,
+                    row_label=row_label,
+                    columns=columns,
+                    row_values=row_values,
+                    unit=unit,
+                )
+                business_area = _table_business_area(
+                    row_label,
+                    page_text,
+                    peer_id=peer_id,
+                    context_business_area=table_context_business_area,
+                    explicit_metric=explicit_metric,
+                    active_metric_parent_label=active_metric_parent_label,
+                )
+                metric_scope = "company_total" if business_area == "company_total" else "segment"
+                table_cells: list[dict[str, Any]] = []
+                for column, raw_value in zip(columns, row_values, strict=False):
+                    normalized = _table_value(raw_value, unit=unit, value_kind=value_kind)
+                    if normalized is None:
+                        continue
+                    period = column["period"]
+                    candidate: dict[str, Any] = {
+                        "page": page_no,
+                        "type": metric_name,
+                        "value_kind": value_kind,
+                        _candidate_value_key(value_kind): normalized,
+                        "raw": f"{row_label} {column['label']} {raw_value} ({unit})",
+                        "source": "ir_table_matrix",
+                        "source_table_uid": table_uid,
+                        "table_title": table_title,
+                        "metric_parent_label": active_metric_parent_label
+                        if not explicit_metric
+                        else None,
+                        "row_label": row_label,
+                        "column_label": column["label"],
+                        "row_evidence": row_evidence,
+                        "evidence_text": (
+                            f"{row_evidence} | 선택 셀: {column['label']}={raw_value} ({unit})"
+                        ),
+                        "period": period,
+                        "period_year": column.get("period_year"),
+                        "period_quarter": column.get("period_quarter"),
+                        "period_type": column.get("period_type"),
+                        "is_historical": _is_historical_period(period, report_period),
+                        "metric_scope": metric_scope,
+                        "business_area": business_area,
+                        "entity_name": peer_id,
+                        "confidence": 0.88,
+                    }
+                    candidates.append(candidate)
+                    table_cells.append(candidate)
+                if table_cells:
+                    table_rows.append(
+                        {
+                            "row_index": row_index,
+                            "row_label": row_label,
+                            "metric_name": metric_name,
+                            "business_area": business_area,
+                            "cells": [
+                                {
+                                    "column_label": cell["column_label"],
+                                    "period": cell["period"],
+                                    "raw": cell["raw"],
+                                    "value": cell.get(_candidate_value_key(value_kind)),
+                                }
+                                for cell in table_cells
+                            ],
+                        }
+                    )
+
+            if table_rows:
+                tables.append(
+                    {
+                        "table_uid": table_uid,
+                        "page": page_no,
+                        "title": table_title,
+                        "context_business_area": table_context_business_area,
+                        "unit": unit,
+                        "columns": columns,
+                        "rows": table_rows,
+                    }
+                )
+
+    return candidates, tables
+
+
+def _period_columns_from_header(line: str) -> list[dict[str, Any]]:
+    columns: list[dict[str, Any]] = []
+    for match in _IR_TABLE_PERIOD_PATTERN.finditer(line or ""):
+        label = match.group(0).strip()
+        period, period_year, period_quarter, period_type = _normalize_table_period(label)
+        if not period:
+            continue
+        columns.append(
+            {
+                "label": label,
+                "period": period,
+                "period_year": period_year,
+                "period_quarter": period_quarter,
+                "period_type": period_type,
+            }
+        )
+    return columns
+
+
+def _table_row_evidence(
+    *,
+    table_title: str | None,
+    context_business_area: str | None,
+    metric_parent_label: str | None,
+    row_label: str,
+    columns: list[dict[str, Any]],
+    row_values: list[str],
+    unit: str,
+) -> str:
+    path = [
+        part
+        for part in (
+            table_title,
+            context_business_area,
+            metric_parent_label,
+            row_label,
+        )
+        if part
+    ]
+    series = [
+        f"{column['label']} {value}"
+        for column, value in zip(columns, row_values, strict=False)
+    ]
+    prefix = " > ".join(path) if path else row_label
+    return f"{prefix} | {' | '.join(series)} ({unit})"
+
+
+def _normalize_table_period(label: str) -> tuple[str | None, int | None, int | None, str | None]:
+    value = re.sub(r"\s+", " ", label or "").strip()
+    match = re.search(r"(\d{2})\s*년\s*([1-4])\s*분기", value)
+    if match:
+        year = 2000 + int(match.group(1))
+        quarter = int(match.group(2))
+        return f"{year}Q{quarter}", year, quarter, "quarter"
+    match = re.search(r"(20\d{2})\s*년\s*([1-4])\s*분기", value)
+    if match:
+        year = int(match.group(1))
+        quarter = int(match.group(2))
+        return f"{year}Q{quarter}", year, quarter, "quarter"
+    match = re.search(r"(20\d{2})\s*Q\s*([1-4])", value, flags=re.IGNORECASE)
+    if match:
+        year = int(match.group(1))
+        quarter = int(match.group(2))
+        return f"{year}Q{quarter}", year, quarter, "quarter"
+    match = re.search(r"([1-4])\s*Q\s*['’]?\s*(\d{2})", value, flags=re.IGNORECASE)
+    if match:
+        quarter = int(match.group(1))
+        year = 2000 + int(match.group(2))
+        return f"{year}Q{quarter}", year, quarter, "quarter"
+    match = re.search(r"(20\d{2})\s*년\s*(상반기|하반기)", value)
+    if match:
+        year = int(match.group(1))
+        half = 1 if match.group(2) == "상반기" else 2
+        return f"{year}H{half}", year, None, "half"
+    match = re.search(r"(\d{2})\s*년\s*(상반기|하반기)", value)
+    if match:
+        year = 2000 + int(match.group(1))
+        half = 1 if match.group(2) == "상반기" else 2
+        return f"{year}H{half}", year, None, "half"
+    match = re.search(r"(\d{2})\s*년$", value)
+    if match:
+        year = 2000 + int(match.group(1))
+        return str(year), year, None, "year"
+    match = re.search(r"(20\d{2})\s*년$", value)
+    if match:
+        year = int(match.group(1))
+        return str(year), year, None, "year"
+    match = re.search(r"\b(20\d{2})\b", value)
+    if match:
+        year = int(match.group(1))
+        return str(year), year, None, "year"
+    return None, None, None, None
+
+
+def _table_metric_from_label(line: str) -> tuple[str, str] | None:
+    label = re.split(r"\(?-?\d", line or "", maxsplit=1)[0]
+    compact = re.sub(r"[\sㆍ·\[\]\(\)]", "", label).lower()
+    if _looks_like_table_noise_label(label):
+        return None
+    if _looks_like_non_target_metric_label(label):
+        return None
+    for metric_name, aliases, value_kind in _IR_TABLE_METRIC_ALIASES:
+        if any(_metric_alias_matches_label(alias, compact) for alias in aliases):
+            return metric_name, value_kind
+    return None
+
+
+def _looks_like_non_target_metric_label(label: str) -> bool:
+    compact = re.sub(r"[\sㆍ·\[\]\(\)]", "", label or "").lower()
+    if not compact:
+        return False
+    if "영업이익률" in compact or "operatingmargin" in compact or compact in {"opm", "margin"}:
+        return False
+    return bool(_IR_TABLE_NON_METRIC_LABEL_PATTERN.search(label or ""))
+
+
+def _metric_alias_matches_label(alias: str, compact_label: str) -> bool:
+    compact_alias = alias.replace(" ", "").lower()
+    if not compact_alias:
+        return False
+    if compact_alias in {"매출", "sales", "op"}:
+        return compact_label == compact_alias
+    return compact_alias in compact_label
+
+
+def _is_valid_table_metric_row(row_label: str, row_metric: tuple[str, str]) -> bool:
+    cleaned_label = re.sub(r"\s+", " ", row_label or "").strip()
+    if len(cleaned_label) > 60:
+        return False
+    if re.search(r"[.!?。]|다$", cleaned_label):
+        return False
+
+    compact = re.sub(r"[\sㆍ·\[\]\(\)]", "", row_label or "").lower()
+    if not compact:
+        return True
+    if _looks_like_table_noise_label(row_label):
+        return False
+
+    metric_name, _value_kind = row_metric
+    metric_aliases = {
+        alias.replace(" ", "").lower()
+        for candidate_metric, aliases, _candidate_kind in _IR_TABLE_METRIC_ALIASES
+        if candidate_metric == metric_name
+        for alias in aliases
+    }
+    label_without_metric = compact
+    for alias in metric_aliases:
+        label_without_metric = label_without_metric.replace(alias, "")
+
+    if not label_without_metric:
+        return True
+    if _is_company_total_table_label(label_without_metric):
+        return True
+    if len(label_without_metric) > 28 and not _detect_business_area(label_without_metric):
+        return False
+    return True
+
+
+def _looks_like_segment_value_row(line: str, expected_count: int) -> bool:
+    row_label = _table_row_label(line)
+    if _looks_like_non_target_metric_label(row_label) or _looks_like_table_noise_label(row_label):
+        return False
+    if not _looks_like_business_area_label(row_label):
+        return False
+    values = _table_row_values(line, expected_count)
+    return len(values) >= expected_count
+
+
+def _looks_like_table_noise_label(label: str) -> bool:
+    compact = re.sub(r"[\sㆍ·\[\]\(\)]", "", label or "")
+    if not compact:
+        return False
+    if re.fullmatch(r"[-+△▲▵▴▽▼()]+", compact):
+        return True
+    return bool(_IR_TABLE_NOISE_LABEL_PATTERN.search(label or ""))
+
+
+def _table_row_values(line: str, expected_count: int) -> list[str]:
+    values = _IR_TABLE_NUMBER_PATTERN.findall(line or "")
+    clean_values = [
+        value
+        for value in values
+        if not re.fullmatch(r"20\d{2}", value.strip())
+    ]
+    return clean_values[:expected_count]
+
+
+def _table_row_label(line: str) -> str:
+    label = re.split(r"\(?-?\d", line or "", maxsplit=1)[0]
+    return re.sub(r"\s+", " ", label).strip(" :-|'\"`‘’“”.,;")
+
+
+def _table_value(raw_value: str, *, unit: str, value_kind: str) -> float | None:
+    value = raw_value.strip()
+    if not value:
+        return None
+    if value_kind == "percentage" or value.endswith("%"):
+        try:
+            return float(value.rstrip("%").replace(",", ""))
+        except ValueError:
+            return None
+    return _normalize_table_amount_krwbn(value.strip("()"), unit)
+
+
+def _normalize_table_amount_krwbn(value: str, unit: str) -> float:
+    number = float(value.replace(",", ""))
+    if unit in {"조원", "조"}:
+        return number * 10_000
+    if unit in {"십억원", "KRW bn"}:
+        return number * 10
+    if unit == "백만원":
+        return number / 100
+    return number
+
+
+def _table_unit(text: str) -> str | None:
+    lowered = text or ""
+    if "십억원" in lowered or "십억 원" in lowered or "KRW bn" in lowered:
+        return "십억원"
+    if "백만원" in lowered or "백만 원" in lowered:
+        return "백만원"
+    if "억원" in lowered:
+        return "억원"
+    if "조원" in lowered:
+        return "조원"
+    if "%" in lowered:
+        return "%"
+    return None
+
+
+def _nearby_table_title(lines: list[str], header_index: int) -> str | None:
+    for line in reversed(lines[max(0, header_index - 3) : header_index]):
+        if _looks_like_unit_line(line):
+            continue
+        if len(_period_columns_from_header(line)) < 2:
+            return line
+    return None
+
+
+def _looks_like_unit_line(line: str) -> bool:
+    compact = re.sub(r"\s+", "", line or "").lower()
+    if not compact:
+        return False
+    return bool(re.fullmatch(r"[\(\[]?단위[:：]?(?:억원|십억원|백만원|조원|%)?[\)\]]?", compact))
+
+
+def _table_context_business_area(lines: list[str], header_index: int) -> str | None:
+    context_lines = lines[max(0, header_index - 6) : header_index]
+    for line in reversed(context_lines):
+        candidate = _business_area_label_from_context(line)
+        if candidate:
+            return candidate
+    return None
+
+
+def _business_area_label_from_context(text: str) -> str | None:
+    cleaned = _clean_table_context_label(text)
+    if not cleaned:
+        return None
+    if len(cleaned) > 50:
+        return None
+    if _looks_like_table_noise_label(cleaned):
+        return None
+    if re.search(r"[.!?。]|다$", cleaned):
+        return None
+    if _looks_like_financial_table_title(cleaned):
+        return None
+    detected = _detect_business_area(cleaned)
+    if detected:
+        return cleaned if _looks_like_business_area_label(cleaned) else detected
+    return None
+
+
+def _clean_table_context_label(text: str) -> str:
+    cleaned = re.sub(r"\([^)]*(?:단위|unit|krw|억원|십억원|백만원|%).*?\)", "", text or "", flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(?:revenue|sales|operating profit|op|margin|results?|financial)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"매출|영업이익|영업이익률|실적|손익|요약|현황|단위|억원|십억원|백만원", "", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip(" :-|")
+
+
+def _looks_like_financial_table_title(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text or "").lower()
+    return any(
+        token in compact
+        for token in (
+            "financialresults",
+            "income",
+            "손익",
+            "경영실적",
+            "실적요약",
+            "재무",
+            "매출",
+            "영업이익",
+            "margin",
+        )
+    )
+
+
+def _is_historical_period(period: str | None, report_period: str | None) -> bool:
+    if not period or not report_period:
+        return False
+    return period != report_period
+
+
+def _table_business_area(
+    row_label: str,
+    page_text: str,
+    *,
+    peer_id: str | None,
+    context_business_area: str | None = None,
+    explicit_metric: bool = True,
+    active_metric_parent_label: str | None = None,
+) -> str | None:
+    metric_removed = row_label
+    for _metric_name, aliases, _value_kind in _IR_TABLE_METRIC_ALIASES:
+        for alias in aliases:
+            metric_removed = re.sub(re.escape(alias), "", metric_removed, flags=re.IGNORECASE)
+    metric_removed = re.sub(r"\s+", " ", metric_removed).strip(" :-|")
+    if _is_punctuation_only_label(metric_removed):
+        return context_business_area or "company_total"
+    if not explicit_metric and _looks_like_business_area_label(row_label):
+        return row_label
+    if _is_company_total_table_label(metric_removed):
+        return context_business_area or "company_total"
+    if active_metric_parent_label and metric_removed == active_metric_parent_label:
+        return context_business_area or "company_total"
+    if metric_removed and _detect_business_area(metric_removed):
+        return metric_removed
+    if metric_removed and _looks_like_business_area_label(metric_removed):
+        return metric_removed
+    return _detect_business_area(metric_removed) or context_business_area or "company_total"
+
+
+def _is_company_total_table_label(label: str) -> bool:
+    compact = re.sub(r"[\sㆍ·\[\]\(\)]", "", label or "").lower()
+    if not compact or _is_punctuation_only_label(label):
+        return True
+    return compact in {
+        "합계",
+        "총계",
+        "계",
+        "전체",
+        "전사",
+        "연결",
+        "별도",
+        "total",
+        "subtotal",
+        "companytotal",
+        "consolidated",
+    }
+
+
+def _looks_like_business_area_label(label: str) -> bool:
+    compact = re.sub(r"[\sㆍ·\[\]\(\)]", "", label or "").lower()
+    if not compact or _is_company_total_table_label(label):
+        return False
+    if _is_punctuation_only_label(label):
+        return False
+    if re.fullmatch(r"[-+%.,\d]+", compact):
+        return False
+    metric_aliases = {
+        alias.replace(" ", "").lower()
+        for _metric_name, aliases, _value_kind in _IR_TABLE_METRIC_ALIASES
+        for alias in aliases
+    }
+    return compact not in metric_aliases
+
+
+def _is_punctuation_only_label(label: str) -> bool:
+    compact = re.sub(r"\s+", "", label or "")
+    if not compact:
+        return True
+    return not bool(re.search(r"[A-Za-z가-힣]", compact))
 
 
 def _company_section_rules(peer_id: str | None) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
@@ -927,6 +1477,19 @@ def _build_financial_record(
                 "business_area",
                 "entity_name",
                 "confidence",
+                "source",
+                "source_table_uid",
+                "table_title",
+                "metric_parent_label",
+                "row_label",
+                "column_label",
+                "row_evidence",
+                "evidence_text",
+                "period",
+                "period_year",
+                "period_quarter",
+                "period_type",
+                "is_historical",
             }
         }
         for candidate in candidates
@@ -1033,6 +1596,12 @@ class IRParser:
             pages,
             peer_id=peer_id,
         )
+        table_candidates, financial_tables = _extract_financial_table_candidates(
+            pages,
+            report_period=period,
+            peer_id=peer_id,
+        )
+        candidates.extend(table_candidates)
         seen_metric_candidates: set[tuple[str, int | None, str]] = set()
 
         for page in pages:
@@ -1114,6 +1683,7 @@ class IRParser:
             "capex_krwbn": financial_record.get("capex_krwbn"),
             "operating_margin_pct": financial_record.get("operating_margin_pct"),
             "candidates": candidates,
+            "financial_tables": financial_tables,
             "sections": sections,
             "document_chunks": document_chunks,
             "topics": topics,

@@ -1,4 +1,4 @@
-"""LinkVerificationAgent — HTTP HEAD/GET 기반 출처 링크 검증.
+"""HTTP HEAD/GET 기반 출처 링크 검증 서비스.
 
 design: ``axis-ai/design/30-analysis/link-verification.md``.
 
@@ -10,7 +10,7 @@ prototype 범위 (Walking Skeleton Phase 2): HTTP HEAD (200 ok / 404 dead / 3xx 
 
 핵심 entry point:
 
-    ``LinkVerificationAgent().verify(card_id)``.
+    ``LinkVerificationService().verify(card_id)``.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ _GET_TIMEOUT_SECONDS = 8.0
 _USER_AGENT = "AxisLinkVerifier/1.0"
 
 
-class LinkVerificationAgent:
+class LinkVerificationService:
     """deterministic HTTP head/get 기반 link liveness + content diff 검증."""
 
     async def verify(self, card_id: str) -> dict:

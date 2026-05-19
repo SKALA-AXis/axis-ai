@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import threading
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -169,6 +169,64 @@ _DELETE_BUSINESS_SIGNALS_SQL = text("""
     RETURNING 1
 """)
 
+_ENSURE_MARKET_PRICE_OHLCV_SQL = text("""
+    CREATE TABLE IF NOT EXISTS market_price_ohlcv (
+        id BIGSERIAL PRIMARY KEY,
+        raw_article_id BIGINT REFERENCES raw_articles(id) ON DELETE SET NULL,
+        peer_id TEXT,
+        ticker TEXT NOT NULL,
+        trade_date DATE NOT NULL,
+        open NUMERIC,
+        high NUMERIC,
+        low NUMERIC,
+        close NUMERIC,
+        volume BIGINT,
+        change_pct NUMERIC,
+        currency TEXT DEFAULT 'KRW',
+        source_type TEXT NOT NULL DEFAULT 'market_data',
+        source_name TEXT,
+        publisher TEXT,
+        collected_at TIMESTAMPTZ,
+        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (ticker, trade_date, source_name)
+    )
+""")
+
+_ENSURE_MARKET_PRICE_OHLCV_INDEX_SQL = text("""
+    CREATE INDEX IF NOT EXISTS idx_market_price_ohlcv_peer_date
+    ON market_price_ohlcv (peer_id, trade_date DESC)
+""")
+
+_UPSERT_MARKET_PRICE_OHLCV_SQL = text("""
+    INSERT INTO market_price_ohlcv (
+        raw_article_id, peer_id, ticker, trade_date,
+        open, high, low, close, volume, change_pct,
+        currency, source_type, source_name, publisher, collected_at, payload
+    ) VALUES (
+        :raw_article_id, :peer_id, :ticker, :trade_date,
+        :open, :high, :low, :close, :volume, :change_pct,
+        :currency, :source_type, :source_name, :publisher, :collected_at,
+        CAST(:payload AS jsonb)
+    )
+    ON CONFLICT (ticker, trade_date, source_name) DO UPDATE SET
+        raw_article_id = EXCLUDED.raw_article_id,
+        peer_id = EXCLUDED.peer_id,
+        open = EXCLUDED.open,
+        high = EXCLUDED.high,
+        low = EXCLUDED.low,
+        close = EXCLUDED.close,
+        volume = EXCLUDED.volume,
+        change_pct = EXCLUDED.change_pct,
+        currency = EXCLUDED.currency,
+        source_type = EXCLUDED.source_type,
+        publisher = EXCLUDED.publisher,
+        collected_at = EXCLUDED.collected_at,
+        payload = EXCLUDED.payload,
+        updated_at = NOW()
+""")
+
 
 def save_articles(
     articles: list[RawArticle],
@@ -230,6 +288,7 @@ def save_articles(
                         source_type=article.source_type,
                         source_metadata=source_metadata,
                     )
+                    _upsert_market_price_ohlcv_for_article(db, article_id, article)
                     _upsert_crawl_run_article(
                         db,
                         article_id=article_id,
@@ -552,6 +611,105 @@ def upsert_raw_article_financial_metrics(
         db.commit()
 
     return len(metrics)
+
+
+def ensure_market_price_ohlcv_schema() -> None:
+    """주가 OHLCV 정규화 테이블을 보장한다."""
+    with SessionLocal() as db:
+        db.execute(_ENSURE_MARKET_PRICE_OHLCV_SQL)
+        db.execute(_ENSURE_MARKET_PRICE_OHLCV_INDEX_SQL)
+        db.commit()
+
+
+def _upsert_market_price_ohlcv_for_article(db, article_id: int, article: RawArticle) -> int:
+    rows = _market_price_ohlcv_rows(article_id, article)
+    if not rows:
+        return 0
+
+    db.execute(_ENSURE_MARKET_PRICE_OHLCV_SQL)
+    db.execute(_ENSURE_MARKET_PRICE_OHLCV_INDEX_SQL)
+    for row in rows:
+        db.execute(_UPSERT_MARKET_PRICE_OHLCV_SQL, row)
+    return len(rows)
+
+
+def _market_price_ohlcv_rows(article_id: int, article: RawArticle) -> list[dict[str, Any]]:
+    if article.source_type != "market_data":
+        return []
+
+    data = article.extra.get("data")
+    if not isinstance(data, list):
+        return []
+
+    ticker = str(article.extra.get("ticker") or "").strip()
+    if not ticker:
+        ticker = _ticker_from_market_data_url(article.url) or ""
+    if not ticker:
+        return []
+
+    peer_id = article.peer_id or (article.company[0] if article.company else None)
+    rows: list[dict[str, Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        trade_date = _parse_market_trade_date(item.get("date"))
+        if trade_date is None:
+            continue
+        rows.append(
+            {
+                "raw_article_id": article_id,
+                "peer_id": peer_id,
+                "ticker": ticker,
+                "trade_date": trade_date,
+                "open": _market_number(item.get("open")),
+                "high": _market_number(item.get("high")),
+                "low": _market_number(item.get("low")),
+                "close": _market_number(item.get("close")),
+                "volume": _market_int(item.get("volume")),
+                "change_pct": _market_number(item.get("change_pct")),
+                "currency": str(article.extra.get("currency") or "KRW"),
+                "source_type": article.source_type,
+                "source_name": article.source_name,
+                "publisher": article.publisher,
+                "collected_at": article.collected_at,
+                "payload": json.dumps(_sanitize_jsonish(item), ensure_ascii=False),
+            }
+        )
+    return rows
+
+
+def _ticker_from_market_data_url(url: str) -> str | None:
+    match = re.search(r"(?:code=|/item/)(\d{6})(?!\d)", url or "")
+    return match.group(1) if match else None
+
+
+def _parse_market_trade_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)[:10]).date()
+    except ValueError:
+        return None
+
+
+def _market_number(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(str(value).replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _market_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(str(value).replace(",", "")))
+    except ValueError:
+        return None
 
 
 def delete_raw_article_financial_metrics(
