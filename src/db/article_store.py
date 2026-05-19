@@ -1296,7 +1296,8 @@ def _upsert_parse_result(
                 parser_quality_label = EXCLUDED.parser_quality_label,
                 parser_quality_reason = EXCLUDED.parser_quality_reason,
                 financial_record = EXCLUDED.financial_record,
-                result_metadata = raw_article_parse_results.result_metadata || EXCLUDED.result_metadata,
+                result_metadata = raw_article_parse_results.result_metadata
+                    || EXCLUDED.result_metadata,
                 warnings = EXCLUDED.warnings,
                 raw_result = EXCLUDED.raw_result,
                 updated_at = NOW()
