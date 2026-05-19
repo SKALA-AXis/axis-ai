@@ -354,8 +354,6 @@ def _extract_dart_statement_metrics(text: str) -> dict[str, Any]:
 
         candidate = {
             "score": score,
-            "source": "document_text",
-            "unit": unit,
             "revenue_total": revenue_total,
             "revenue_raw": revenue_raw,
             "operating_profit": operating_profit,
@@ -406,7 +404,6 @@ def _extract_table_statement_metrics(tables: list[dict[str, Any]]) -> dict[str, 
             "source": "structured_table",
             "table_index": table.get("table_index"),
             "table_title": table.get("title"),
-            "unit": unit,
             "revenue_total": revenue_total,
             "revenue_raw": revenue_raw,
             "operating_profit": operating_profit,
@@ -1228,6 +1225,16 @@ def _enrich_document_chunks(
                 matched_keywords.extend(str(term) for term in signal.get("matched_terms") or [])
         chunk["matched_keywords"] = list(dict.fromkeys(matched_keywords))
     return chunks
+
+
+def _candidate_value_krw(candidate: dict[str, Any]) -> float | None:
+    value = candidate.get("value_krw")
+    if isinstance(value, int | float):
+        return float(value)
+    value_krwbn = candidate.get("value_krwbn")
+    if isinstance(value_krwbn, int | float):
+        return float(value_krwbn) * 100_000_000
+    return None
 
 
 def _metric_details(candidates: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
