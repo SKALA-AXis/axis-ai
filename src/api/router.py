@@ -162,7 +162,6 @@ async def _run_collection_track(task_id: str, track: str, companies: list[str]) 
         classify_node,
         crawl_node,
         dedup_node,
-        evidence_node,
         preprocess_route_node,
         vector_index_node,
     )
@@ -203,7 +202,6 @@ async def _run_collection_track(task_id: str, track: str, companies: list[str]) 
             "representative_ids": [],
             "classified_clusters": [],
             "card_news": [],
-            "evidence_results": [],
             "indexed_vector_ids": [],
             "errors": [],
             "human_review_flags": [],
@@ -213,18 +211,14 @@ async def _run_collection_track(task_id: str, track: str, companies: list[str]) 
         result = dedup_node(result)
         result = classify_node(result)
         result = card_news_node(result)
-        result = evidence_node(result)
         result = vector_index_node(result)
-        evidence_passed = sum(1 for r in result.get("evidence_results", []) if r.get("pass"))
         log.info(
-            "수집 파이프라인 완료 | task_id=%s track=%s raw=%d classified=%d "
-            "cards=%d evidence_passed=%d indexed=%d",
+            "수집 파이프라인 완료 | task_id=%s track=%s raw=%d classified=%d cards=%d indexed=%d",
             task_id,
             track,
             len(result.get("raw_article_ids", [])),
             len(result.get("classified_clusters", [])),
             len(result.get("card_news", [])),
-            evidence_passed,
             len(result.get("indexed_vector_ids", [])),
         )
     except Exception:

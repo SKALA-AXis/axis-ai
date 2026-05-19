@@ -139,7 +139,7 @@ uv run python run_all_once.py --company samsung_sds --company nvidia
 2. 크롤러가 성공한 경우에만 `run_pipeline_once.py --preprocess-only`를 이어 실행한다.
 3. DB 전처리는 RAW row를 읽어 credibility, source_type 라우팅, relevance/parser quality, dedup/clustering, classification까지만 처리한다.
 
-`--skip-preprocess`를 주면 크롤링까지만 실행한다. 이슈카드/evidence/financial refs는 만들지 않는다.
+`--skip-preprocess`를 주면 크롤링까지만 실행한다. 카드뉴스는 만들지 않는다.
 
 ### run_pipeline_once.py --preprocess-only
 
