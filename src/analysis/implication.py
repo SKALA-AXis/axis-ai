@@ -112,8 +112,11 @@ def _watch_points(
 def _confidence(summary: dict[str, Any], analysis: dict[str, Any]) -> float:
     values = []
     for payload in (summary, analysis):
+        confidence = payload.get("confidence")
+        if confidence is None:
+            continue
         try:
-            values.append(float(payload.get("confidence")))
+            values.append(float(confidence))
         except (TypeError, ValueError):
             continue
     if not values:
