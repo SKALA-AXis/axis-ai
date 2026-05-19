@@ -6,7 +6,7 @@
   uv run python run_preprocess_once.py
 
 이 runner는 로컬 확인용이다. 크롤링은 실행하지 않고, 이미 저장된 crawler JSON을 읽어
-agents 모듈의 relevance, dedup, classification 결과를 JSON으로 저장한다.
+preprocessing 모듈의 relevance, dedup, classification 결과를 JSON으로 저장한다.
 """
 
 from __future__ import annotations
@@ -18,11 +18,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.agents.classification_agent import classify_preprocessed_cluster
-from src.agents.dedup_agent import deduplicate_articles
+from src.preprocessing.classification import classify_preprocessed_cluster
+from src.preprocessing.dedup import deduplicate_articles
 from src.parsers.parser_quality import analyze_parser_quality_article
 from src.parsers.parser_router import DocumentParserRouter
-from src.agents.relevance_agent import analyze_relevance_article
+from src.preprocessing.relevance import analyze_relevance_article
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("run_preprocess")

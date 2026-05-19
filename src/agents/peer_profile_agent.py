@@ -3503,7 +3503,7 @@ def _limitations_from_counts(source_counts: dict[str, Any], *, company_id: str) 
         notes.append("뉴스 대표 클러스터 수가 적어 최근 활동 신호가 제한적임")
     if raw_news > 0 and representative == 0:
         notes.append(
-            "raw 뉴스는 있으나 대표 클러스터가 없어 DeduplicationAgent/ingestion_graph 미실행 가능성"
+            "raw 뉴스는 있으나 대표 클러스터가 없어 ArticleDeduplicator/ingestion_graph 미실행 가능성"
         )
     if unclustered > 0:
         notes.append("cluster_id가 없는 뉴스가 많아 프로필 입력에서 제외됨")

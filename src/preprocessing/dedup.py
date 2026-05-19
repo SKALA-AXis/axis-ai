@@ -1,6 +1,6 @@
-"""Gate 3: BGE-M3 임베딩 기반 유사 기사 클러스터링 에이전트.
+"""Gate 3: BGE-M3 임베딩 기반 유사 기사 클러스터링 전처리.
 
-RelevanceAgent를 통과한 기사들을 대상으로 유사 기사 클러스터를 만든다.
+RelevanceEvaluator를 통과한 기사들을 대상으로 유사 기사 클러스터를 만든다.
 title/content 임베딩 유사도로 같은 이슈를 묶는다.
 원본 기사는 삭제하지 않고 raw_articles에 cluster_id와 is_representative만 저장한다.
 """
@@ -40,14 +40,14 @@ _KEEP_AMBIGUOUS_SINGLETONS = os.getenv("DEDUP_KEEP_AMBIGUOUS_SINGLETONS", "true"
 _CANONICAL_ISSUE_TERMS: Mapping[str, tuple[str, ...]] = {}
 
 
-class DeduplicationAgent:
+class ArticleDeduplicator:
     """article_ids → BGE-M3 임베딩 → 코사인 유사도 ≥ 0.80 클러스터링 → 대표 기사 선정."""
 
     def deduplicate(self, article_ids: list[int]) -> tuple[dict[int, list[int]], list[int]]:
         """Gate 3 유사 기사 클러스터링.
 
         Args:
-            article_ids: RelevanceAgent를 통과한 raw_articles ID 목록.
+            article_ids: RelevanceEvaluator를 통과한 raw_articles ID 목록.
 
         Returns:
             (cluster_map, representative_ids)
@@ -94,7 +94,7 @@ def deduplicate_articles(
 ) -> tuple[dict[int, list[int]], list[int]]:
     """JSON article 목록을 Gate 3 클러스터링 규칙으로 묶는다.
 
-    DB 저장 없이 `DeduplicationAgent`의 embedding/대표 선정 로직을 재사용한다.
+    DB 저장 없이 `ArticleDeduplicator`의 embedding/대표 선정 로직을 재사용한다.
     임베딩 모델을 사용할 수 없는 로컬 환경에서는 제목 기반 클러스터링으로
     graceful fallback 한다.
     """
@@ -741,7 +741,7 @@ def _select_representatives(
     """각 클러스터에서 대표 기사를 선정한다.
 
     대표 기사 기준:
-    1. RelevanceAgent가 계산한 relevance_score
+    1. RelevanceEvaluator가 계산한 relevance_score
     2. 클러스터 중심성
     3. 본문 품질
     4. 최신성

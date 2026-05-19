@@ -1,7 +1,7 @@
-"""피어사 뉴스 의미 분석 에이전트.
+"""전략 의미 분석 컴포넌트.
 
-PeerNewsSummaryAgent가 만든 사실 요약을 바탕으로 피어사의 전략적 움직임과
-산업적 의미를 분석한다. SK AX 관점의 대응 제언은 별도 Agent 책임으로 남긴다.
+SourceSummarizer가 만든 사실 요약을 바탕으로 피어사의 전략적 움직임과
+산업적 의미를 분석한다. SK AX 관점의 대응 제언은 별도 단계 책임으로 남긴다.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def _get_llm() -> ChatOpenAI:
 
 
 _PEER_NEWS_ANALYSIS_PROMPT = """\
-당신은 피어사 뉴스 분석 Agent입니다.
+당신은 피어사 전략 분석가입니다.
 
 목적:
 - 피어사 뉴스 사실 요약을 바탕으로 피어사의 전략적 움직임과 산업적 의미를 분석합니다.
@@ -78,8 +78,8 @@ cluster_metadata:
 }}"""
 
 
-class PeerNewsAnalysisAgent:
-    """피어사 뉴스 요약 결과를 산업/전략 의미로 분석한다."""
+class StrategicAnalyzer:
+    """source 요약 결과를 산업/전략 의미로 분석한다."""
 
     def analyze(
         self,
@@ -124,7 +124,7 @@ class PeerNewsAnalysisAgent:
             response = _get_llm().invoke(
                 prompt,
                 config=tracing_config(
-                    agent="PeerNewsAnalysisAgent",
+                    agent="StrategicAnalyzer",
                     phase="analyze",
                     prompt_version=_PROMPT_VERSION,
                 ),

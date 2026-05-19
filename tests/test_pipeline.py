@@ -1,6 +1,6 @@
 """파이프라인 단위 테스트"""
 
-from src.agents.dedup_agent import _company_presence_score, _same_issue
+from src.preprocessing.dedup import _company_presence_score, _same_issue
 from src.pipeline.ingestion_graph import IngestionState
 
 

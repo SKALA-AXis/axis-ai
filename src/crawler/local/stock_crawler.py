@@ -1,11 +1,11 @@
-"""KRX stock latest-price crawler.
+"""KRX stock OHLCV crawler.
 
 Design notes for safe, reproducible collection:
 - Target analysis: monitored Korean listed stocks are resolved from
   src.config.companies. The company registry owns Naver item codes and aliases;
   this crawler owns only the market-price collection logic.
-- Access strategy: latest KRX trading data is fetched with FinanceDataReader.
-- Extraction and parsing: the latest trading row is mapped as
+- Access strategy: KRX trading data is fetched with FinanceDataReader.
+- Extraction and parsing: each trading row in the requested window is mapped as
   date|open|high|low|close|volume|change_pct, then normalized into the existing
   stock_price_ohlcv_v1 payload under the repository's common crawler envelope.
 - Exception handling: provider/import/data failures are returned as failed
@@ -356,13 +356,13 @@ def _find_symbol(company_name: str, fallback_ticker: str | None = None) -> str |
     return fallback_ticker
 
 
-def _fetch_latest_price(
+def _fetch_historical_prices(
     *,
     target: StockTarget,
     start_date: date,
     end_date: date,
-) -> tuple[StockOHLCVRecord, dict[str, Any]]:
-    """Fetch the latest trading row through FinanceDataReader."""
+) -> tuple[list[StockOHLCVRecord], dict[str, Any]]:
+    """Fetch trading rows in the requested window through FinanceDataReader."""
 
     reader = _require_finance_datareader()
     symbol = _find_symbol(target.company_name, fallback_ticker=target.ticker)
@@ -376,43 +376,58 @@ def _fetch_latest_price(
     if df.empty:
         raise DataIntegrityError(f"{symbol} 데이터가 비어 있습니다.")
 
-    latest = df.tail(1).copy()
-    row = latest.iloc[0]
-    trade_date = latest.index[-1]
-    trade_date_str = trade_date.strftime("%Y-%m-%d")
-    change_pct = _row_change_pct(df)
+    records: list[StockOHLCVRecord] = []
+    dropped_rows = 0
+    previous_close: float | None = None
 
-    record = StockOHLCVRecord(
-        date=trade_date_str,
-        open=float(row.get("Open", row.get("Close", 0))),
-        high=float(row.get("High", row.get("Close", 0))),
-        low=float(row.get("Low", row.get("Close", 0))),
-        close=float(row["Close"]),
-        volume=int(row.get("Volume", 0) or 0),
-        change_pct=change_pct,
-    )
+    for trade_date, row in df.sort_index().iterrows():
+        row_date = trade_date.date() if hasattr(trade_date, "date") else trade_date
+        if row_date < start_date or row_date > end_date:
+            if not _is_null_value(row.get("Close")):
+                previous_close = float(row["Close"])
+            continue
+
+        try:
+            close = float(row["Close"])
+            change_pct = _row_change_pct_from_row(row, close, previous_close)
+            record = StockOHLCVRecord(
+                date=row_date.isoformat(),
+                open=float(row.get("Open", close)),
+                high=float(row.get("High", close)),
+                low=float(row.get("Low", close)),
+                close=close,
+                volume=int(row.get("Volume", 0) or 0),
+                change_pct=change_pct,
+            )
+            _assert_sanity(record)
+            records.append(record)
+            previous_close = close
+        except (KeyError, TypeError, ValueError, RowValidationError):
+            dropped_rows += 1
+
+    if not records:
+        raise DataIntegrityError(f"{symbol} 조회 기간 내 유효 데이터가 없습니다.")
+
     validation = {
         "provider": "FinanceDataReader",
         "resolved_symbol": symbol,
         "requested_company_name": target.company_name,
         "requested_ticker": target.ticker,
         "status": "normal",
-        "dropped_rows": 0,
+        "dropped_rows": dropped_rows,
     }
-    return record, validation
+    return records, validation
 
 
-def _row_change_pct(df: Any) -> float | None:
-    latest_row = df.tail(1).iloc[0]
-    if "Change" in df.columns and not _is_null_value(latest_row.get("Change")):
-        return float(latest_row["Change"] * 100)
-
-    close = df["Close"].dropna() if "Close" in df.columns else []
-    if len(close) >= 2:
-        previous_close = float(close.iloc[-2])
-        latest_close = float(close.iloc[-1])
-        if previous_close:
-            return ((latest_close - previous_close) / previous_close) * 100
+def _row_change_pct_from_row(
+    row: Any,
+    close: float,
+    previous_close: float | None,
+) -> float | None:
+    if "Change" in row.index and not _is_null_value(row.get("Change")):
+        return float(row["Change"] * 100)
+    if previous_close:
+        return ((close - previous_close) / previous_close) * 100
     return None
 
 
@@ -525,13 +540,16 @@ class StockCrawler:
         return results
 
     def _crawl_one(self, target: StockTarget) -> StockCrawlResult:
-        source_url = NAVER_ITEM_REFERER.format(ticker=target.ticker)
-        latest, validation = _fetch_latest_price(
+        source_url = (
+            f"{NAVER_ITEM_REFERER.format(ticker=target.ticker)}"
+            f"#ohlcv:{self.start_date.isoformat()}:{self.end_date.isoformat()}"
+        )
+        data, validation = _fetch_historical_prices(
             target=target,
             start_date=self.start_date,
             end_date=self.end_date,
         )
-        data = [latest]
+        latest = data[-1]
         latest_price = _latest_price_payload(target, latest)
 
         extra = {
@@ -544,7 +562,7 @@ class StockCrawler:
                 "end_date": self.end_date.isoformat(),
             },
             "coverage": {
-                "first_date": latest.date,
+                "first_date": data[0].date,
                 "last_date": latest.date,
                 "row_count": len(data),
             },

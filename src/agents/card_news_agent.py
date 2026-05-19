@@ -252,9 +252,9 @@ class CardNewsAgent:
             cluster_id: 클러스터 ID.
             representative_id: 대표 기사 ID (가장 신뢰도 높은 기사).
             company: 회사 ID.
-            classification: ClassificationAgent 결과.
+            classification: ClusterClassifier 결과.
             cluster_article_ids: 클러스터 내 전체 기사 ID 목록 (없으면 대표 기사만 사용).
-            summary: PeerNewsSummaryAgent가 만든 클러스터 사실 요약.
+            summary: SourceSummarizer가 만든 클러스터 사실 요약.
 
         Returns:
             card_news dict (저장 전 validation 없는 상태) — DB card_news 테이블 row 와 1:1.

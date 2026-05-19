@@ -53,9 +53,121 @@ def test_dart_financial_metrics_from_statement_rows() -> None:
         "operating_profit",
     ]
     assert metrics[0]["source_type"] == "dart"
+    assert metrics[0]["business_area"] == "company_total"
     assert metrics[0]["value_krw"] == 13929868000000.0
     assert metrics[0]["source_table_uid"] == "dart-table-3"
     assert metrics[0]["confidence"] >= 0.9
+
+
+def test_dart_financial_metrics_preserve_statement_column_periods() -> None:
+    article = {
+        "id": 10,
+        "title": "사업보고서",
+        "url": "https://example.com/dart",
+        "source_name": "dart",
+        "company": ["test_peer"],
+        "extra": {},
+    }
+    parser_result = {
+        "peer_id": "test_peer",
+        "period": "2025Q4",
+        "period_year": 2025,
+        "period_quarter": 4,
+        "period_type": "annual",
+        "financial_statements": [
+            {
+                "table_index": 3,
+                "title": "연결 포괄손익계산서",
+                "table_type": "income_statement",
+                "statement_scope": "consolidated",
+                "unit": "백만원",
+                "rows": [
+                    {
+                        "metric_key": "revenue_total",
+                        "label": "매출액",
+                        "values": [
+                            {
+                                "column_index": 1,
+                                "column_header": "제 41 (당) 기",
+                                "raw": "13,929,868",
+                                "value_krwbn": 139298.68,
+                                "period": "2025Q4",
+                                "period_year": 2025,
+                                "period_quarter": 4,
+                                "period_type": "annual",
+                            },
+                            {
+                                "column_index": 2,
+                                "column_header": "제 40 (전) 기",
+                                "raw": "13,828,232",
+                                "value_krwbn": 138282.32,
+                                "period": "2024Q4",
+                                "period_year": 2024,
+                                "period_quarter": 4,
+                                "period_type": "annual",
+                            },
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+
+    metrics = financial_metrics_from_dart(article, parser_result)
+
+    assert [metric["period"] for metric in metrics] == ["2025Q4", "2024Q4"]
+    assert metrics[1]["period_year"] == 2024
+    assert metrics[1]["period_quarter"] == 4
+    assert metrics[1]["value_krwbn"] == 138282.32
+
+
+def test_dart_financial_metrics_include_segment_candidates_with_statements() -> None:
+    article = {
+        "id": 10,
+        "title": "분기보고서",
+        "url": "https://example.com/dart",
+        "source_name": "dart",
+        "company": ["test_peer"],
+        "extra": {},
+    }
+    parser_result = {
+        "peer_id": "test_peer",
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "period_type": "quarter",
+        "financial_statements": [
+            {
+                "table_index": 3,
+                "title": "연결 포괄손익계산서",
+                "table_type": "income_statement",
+                "statement_scope": "consolidated",
+                "unit": "백만원",
+                "rows": [
+                    {
+                        "metric_key": "revenue_total",
+                        "label": "매출액",
+                        "current_value_krwbn": 139298.68,
+                    },
+                ],
+            }
+        ],
+        "candidates": [
+            {
+                "type": "revenue_total",
+                "metric_scope": "segment",
+                "business_area": "클라우드",
+                "value_krwbn": 6908.66,
+                "raw": "클라우드 690,866 (백만원)",
+                "table_index": 7,
+                "confidence": 0.9,
+            }
+        ],
+    }
+
+    metrics = financial_metrics_from_dart(article, parser_result)
+
+    assert any(metric["business_area"] == "클라우드" for metric in metrics)
 
 
 def test_dart_business_signals_from_document_chunks() -> None:

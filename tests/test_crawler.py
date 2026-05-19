@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from bs4 import BeautifulSoup
 
-from src.agents.relevance_agent import (
+from src.preprocessing.relevance import (
     _core_company_role_reject_result,
     _metadata_patch_for_relevance,
     _result,
@@ -48,7 +48,7 @@ from src.db.article_store import (
     _company_for_storage,
     _metadata_json,
 )
-from src.pipeline.ingestion_graph import _company_for_context
+from src.preprocessing.preprocessing import _company_for_context
 
 
 def test_raw_article_fields():

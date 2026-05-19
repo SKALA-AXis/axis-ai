@@ -5,16 +5,15 @@ ADR 0004: 수집 파이프라인과 전달 파이프라인 분리 원칙.
 v3 변경:
 - ImplicationAgent 보류 → implication_node 제거
 - CardNewsAgent 내부 validation/evidence_chain 사용
-- ClassificationAgent v3: sector + 결정적 노출도
+- PreprocessingService: RAW 대상 조회 + source 라우팅 + dedup + classification
 - card_news persist + vector_index 노드 + pipeline_logs 누적
 """
 
-import json
 import logging
 import operator
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Annotated, Any, Callable, TypedDict
+from typing import Annotated, Callable, TypedDict, cast
 
 from langgraph.graph import END, StateGraph
 
@@ -22,14 +21,8 @@ from src.db.article_store import save_pipeline_log
 
 log = logging.getLogger(__name__)
 
-# GPT-4o rate limit 고려: 분류·카드 병렬 호출 수
+# GPT-4o rate limit 고려: 카드 병렬 호출 수
 _GPT_WORKERS = 5
-RELEVANCE_SOURCE_TYPES = {"news"}
-OFFICIAL_DOCUMENT_SOURCE_TYPES = {"official"}
-COMPANY_SITE_DOCUMENT_SOURCE_TYPES = {"company_site"}
-PARSED_DOCUMENT_SOURCE_TYPES = {"dart", "ir", "securities_report"}
-STRUCTURED_SIGNAL_SOURCE_TYPES = {"job", "market_data", "search_trend", "social"}
-_METADATA_CHUNK_TEXT_CHARS = 1200
 
 
 class IngestionState(TypedDict):
@@ -51,34 +44,6 @@ class IngestionState(TypedDict):
     indexed_vector_ids: list[str]  # v3: Qdrant axis_main 삽입 vector_id 목록
     errors: Annotated[list[str], operator.add]
     human_review_flags: list[int]
-
-
-def _compact_parser_result_for_metadata(parser_result: dict[str, Any]) -> dict[str, Any]:
-    compact = dict(parser_result)
-    if "document_chunks" in compact:
-        compact["document_chunks"] = _compact_document_chunks(
-            compact.get("document_chunks"),
-        )
-    return compact
-
-
-def _compact_document_chunks(chunks: Any) -> list[dict[str, Any]]:
-    if not isinstance(chunks, list):
-        return []
-
-    compacted: list[dict[str, Any]] = []
-    for chunk in chunks:
-        if not isinstance(chunk, dict):
-            continue
-        text = str(chunk.get("text") or "")
-        compacted.append(
-            {
-                **chunk,
-                "text": text[:_METADATA_CHUNK_TEXT_CHARS],
-                "text_is_truncated_for_metadata": len(text) > _METADATA_CHUNK_TEXT_CHARS,
-            }
-        )
-    return compacted
 
 
 # ── 단계별 통계 헬퍼 ────────────────────────────────────────────
@@ -130,81 +95,15 @@ def _count_value(value) -> int:
     return 1
 
 
-def _first_company(article: dict) -> str:
-    company = article.get("company")
-
-    if isinstance(company, list) and company:
-        return str(company[0])
-
-    if isinstance(company, str):
-        try:
-            parsed = json.loads(company)
-            if isinstance(parsed, list) and parsed:
-                return str(parsed[0])
-        except json.JSONDecodeError:
-            return company
-
-    return ""
-
-
-def _company_for_context(article: dict, requested_companies: list[str]) -> str:
-    article_companies = _company_list(article)
-
-    for company in requested_companies:
-        if company in article_companies:
-            return company
-
-    return (
-        article_companies[0]
-        if article_companies
-        else (requested_companies[0] if requested_companies else "")
-    )
-
-
-def _company_list(article: dict) -> list[str]:
-    company = article.get("company")
-
-    if isinstance(company, list):
-        return [str(value) for value in company if value]
-
-    if isinstance(company, str):
-        try:
-            parsed = json.loads(company)
-            if isinstance(parsed, list):
-                return [str(value) for value in parsed if value]
-        except json.JSONDecodeError:
-            stripped = company.strip()
-            return [stripped] if stripped else []
-
-    return []
-
-
-def _source_type(article: dict) -> str:
-    return str(article.get("source_type") or "").strip().lower()
-
-
-def _article_for_agent(article: dict) -> dict:
-    item = dict(article)
-    metadata = item.get("metadata")
-    if isinstance(metadata, str):
-        try:
-            metadata = json.loads(metadata)
-        except json.JSONDecodeError:
-            metadata = {}
-    item["metadata"] = metadata if isinstance(metadata, dict) else {}
-    item["extra"] = item["metadata"]
-    return item
-
-
 # ── 노드 구현 ──────────────────────────────────────────────────
 
 
 @_logged_step("crawl", "company", "raw_article_ids")
 def crawl_node(state: IngestionState) -> IngestionState:
     """처리 대기 중인 RAW 기사 ID를 DB에서 조회한다."""
-    from src.agents.crawler_agent import CrawlerAgent
+    from src.preprocessing.preprocessing import PreprocessingService
 
-    raw_ids = CrawlerAgent().load_raw_ids(
+    raw_ids = PreprocessingService().load_raw_ids(
         state["company"],
         collected_since=state.get("collected_since"),
         crawl_run_id=state.get("crawl_run_id"),
@@ -222,263 +121,31 @@ def crawl_node(state: IngestionState) -> IngestionState:
 @_logged_step("preprocess_route", "raw_article_ids", "relevant_ids")
 def preprocess_route_node(state: IngestionState) -> IngestionState:
     """source_type별 DB 전처리 라우팅."""
-    from src.agents.relevance_agent import RelevanceAgent
-    from src.db.article_store import get_articles_by_ids, update_preprocess_status
-    from src.parsers.parser_quality import analyze_parser_quality_article
-    from src.parsers.parser_router import DocumentParserRouter
+    from src.preprocessing.preprocessing import PreprocessingService
 
-    raw_article_ids = state.get("raw_article_ids", [])
-    if not raw_article_ids:
-        return {
-            **state,
-            "relevant_ids": [],
-            "official_document_ids": [],
-            "parsed_document_ids": [],
-            "industry_document_ids": [],
-            "structured_signal_ids": [],
-            "skipped_preprocess_ids": [],
-        }
-
-    articles = get_articles_by_ids(raw_article_ids)
-    by_source: dict[str, list[int]] = {}
-    for article in articles:
-        by_source.setdefault(_source_type(article), []).append(int(article["id"]))
-
-    relevant_ids: list[int] = []
-    official_document_ids: list[int] = []
-    parsed_document_ids: list[int] = []
-    industry_document_ids: list[int] = []
-    structured_signal_ids: list[int] = []
-    skipped_ids: list[int] = []
-
-    relevance_ids = [
-        article_id
-        for source_type in RELEVANCE_SOURCE_TYPES
-        for article_id in by_source.get(source_type, [])
-    ]
-    if relevance_ids:
-        passed, skipped = RelevanceAgent().filter(relevance_ids)
-        relevant_ids.extend(passed)
-        skipped_ids.extend(skipped)
-
-    for article in articles:
-        article_id = int(article["id"])
-        source_type = _source_type(article)
-
-        if source_type in RELEVANCE_SOURCE_TYPES:
-            continue
-
-        agent_article = _article_for_agent(article)
-
-        if source_type in OFFICIAL_DOCUMENT_SOURCE_TYPES:
-            official_document_ids.append(article_id)
-            update_preprocess_status(
-                article_id,
-                "PREPROCESSED_OFFICIAL_DOCUMENT",
-                {
-                    "document_scope": "company_official",
-                    "preprocess_note": (
-                        "official 문서는 회사별 공식 원문으로 보존. "
-                        "기사 relevance/dedup/classification 단계는 생략하고 "
-                        "추후 동향 분석에서 사용"
-                    ),
-                },
-            )
-            continue
-
-        if source_type in COMPANY_SITE_DOCUMENT_SOURCE_TYPES:
-            official_document_ids.append(article_id)
-            update_preprocess_status(
-                article_id,
-                "PREPROCESSED_COMPANY_SITE_DOCUMENT",
-                {
-                    "document_scope": "company_site",
-                    "preprocess_note": (
-                        "company_site 문서는 회사 공식 홈페이지의 정적/반정적 원문으로 보존. "
-                        "뉴스룸 relevance/dedup/classification 단계는 생략하고 "
-                        "회사 지식베이스/과거 분석에서 사용"
-                    ),
-                },
-            )
-            continue
-
-        if source_type in PARSED_DOCUMENT_SOURCE_TYPES:
-            item, ok, reason = analyze_parser_quality_article(agent_article)
-            parser_result = item.get("parser_result") or {}
-            compact_parser_result = _compact_parser_result_for_metadata(parser_result)
-            metadata_patch = {
-                "parser_result": compact_parser_result,
-                "parser_quality_score": item.get("parser_quality_score"),
-                "parser_quality_label": item.get("parser_quality_label"),
-                "parser_quality_reason": item.get("parser_quality_reason"),
-            }
-            if source_type == "dart":
-                metadata_patch.update(
-                    {
-                        "period": parser_result.get("period"),
-                        "period_year": parser_result.get("period_year"),
-                        "period_quarter": parser_result.get("period_quarter"),
-                        "period_type": parser_result.get("period_type"),
-                        "financial_record": parser_result.get("financial_record"),
-                        "topics": parser_result.get("topics"),
-                        "topic_signals": parser_result.get("topic_signals"),
-                        "dart_sections": parser_result.get("sections"),
-                        "dart_section_tree": parser_result.get("section_tree"),
-                        "dart_document_chunks": compact_parser_result.get("document_chunks"),
-                        "dart_classified_tables": parser_result.get("classified_tables"),
-                        "dart_financial_statements": parser_result.get("financial_statements"),
-                    }
-                )
-            elif source_type == "ir":
-                metadata_patch.update(
-                    {
-                        "period": parser_result.get("period"),
-                        "period_year": parser_result.get("period_year"),
-                        "period_quarter": parser_result.get("period_quarter"),
-                        "period_type": parser_result.get("period_type"),
-                        "financial_record": parser_result.get("financial_record"),
-                        "topics": parser_result.get("topics"),
-                        "topic_signals": parser_result.get("topic_signals"),
-                        "ir_sections": parser_result.get("sections"),
-                        "ir_document_chunks": compact_parser_result.get("document_chunks"),
-                    }
-                )
-            if ok:
-                parsed_document_ids.append(article_id)
-                update_preprocess_status(
-                    article_id,
-                    "PREPROCESSED_PARSED_DOCUMENT",
-                    {
-                        **metadata_patch,
-                        "document_scope": "company_document",
-                        "preprocess_note": (
-                            f"{source_type} 문서는 parser quality check 후 보존. "
-                            "기사 relevance/dedup/classification 단계는 생략"
-                        ),
-                    },
-                )
-            else:
-                skipped_ids.append(article_id)
-                update_preprocess_status(
-                    article_id,
-                    "SKIPPED_PARSER_QUALITY",
-                    metadata_patch,
-                    error_message=reason,
-                )
-            continue
-
-        if source_type == "trend_report":
-            parser_result = DocumentParserRouter().parse_article(agent_article)
-            industry_document_ids.append(article_id)
-            update_preprocess_status(
-                article_id,
-                "PREPROCESSED_INDUSTRY_DOCUMENT",
-                {
-                    "parser_result": parser_result,
-                    "document_scope": "industry_trend",
-                    "preprocess_note": (
-                        "산업 동향 문서는 기사 relevance/signal 축약 없이 "
-                        "추후 본문 분석 대상으로 보존"
-                    ),
-                },
-            )
-            continue
-
-        if source_type in STRUCTURED_SIGNAL_SOURCE_TYPES:
-            structured_signal_ids.append(article_id)
-            update_preprocess_status(
-                article_id,
-                "PREPROCESSED_STRUCTURED_SIGNAL",
-                {
-                    "signal_scope": source_type,
-                    "preprocess_note": (
-                        f"{source_type} 데이터는 기사/문서가 아닌 구조화 신호로 보존. "
-                        "급변/급증 탐지 및 종합 분석 단계에서 사용"
-                    ),
-                },
-            )
-            continue
-
-        skipped_ids.append(article_id)
-        update_preprocess_status(
-            article_id,
-            "SKIPPED_PREPROCESS_UNSUPPORTED_SOURCE",
-            {"skip_reason": f"{source_type or 'unknown'} source_type은 현재 전처리 대상이 아님"},
-        )
-
-    log.info(
-        (
-            "전처리 라우팅 완료 | relevant=%d official_docs=%d parsed_docs=%d "
-            "industry_docs=%d structured=%d skipped=%d"
-        ),
-        len(relevant_ids),
-        len(official_document_ids),
-        len(parsed_document_ids),
-        len(industry_document_ids),
-        len(structured_signal_ids),
-        len(skipped_ids),
-    )
-    return {
-        **state,
-        "relevant_ids": relevant_ids,
-        "official_document_ids": official_document_ids,
-        "parsed_document_ids": parsed_document_ids,
-        "industry_document_ids": industry_document_ids,
-        "structured_signal_ids": structured_signal_ids,
-        "skipped_preprocess_ids": skipped_ids,
-    }
+    route_result = PreprocessingService().route_by_source(state.get("raw_article_ids", []))
+    return cast(IngestionState, {**state, **route_result})
 
 
 @_logged_step("dedup", "relevant_ids", "representative_ids")
 def dedup_node(state: IngestionState) -> IngestionState:
     """Gate 3: BGE-M3 코사인 유사도 클러스터링."""
-    from src.agents.dedup_agent import DeduplicationAgent
+    from src.preprocessing.preprocessing import PreprocessingService
 
-    cluster_map, rep_ids = DeduplicationAgent().deduplicate(state.get("relevant_ids", []))
-    log.info("Gate 3 완료 | clusters=%d reps=%d", len(cluster_map), len(rep_ids))
+    cluster_map, rep_ids = PreprocessingService().deduplicate(state.get("relevant_ids", []))
     return {**state, "cluster_map": cluster_map, "representative_ids": rep_ids}
 
 
 @_logged_step("classify", "representative_ids", "classified_clusters")
 def classify_node(state: IngestionState) -> IngestionState:
     """v3 분류 — 클러스터별 sector + 결정적 노출도 + event_type."""
-    from src.agents.classification_agent import ClassificationAgent
-    from src.db.article_store import get_articles_by_ids
+    from src.preprocessing.preprocessing import PreprocessingService
 
-    agent = ClassificationAgent()
-    rep_articles = {a["id"]: a for a in get_articles_by_ids(state["representative_ids"])}
-    cluster_map = state["cluster_map"]
-
-    def _classify_one(cluster_id: int, article_ids: list[int]) -> dict | None:
-        rep_id = next(
-            (aid for aid in article_ids if aid in rep_articles),
-            article_ids[0] if article_ids else None,
-        )
-        if rep_id is None:
-            return None
-        company = _company_for_context(rep_articles.get(rep_id, {}), state["company"])
-        result = agent.classify(
-            cluster_id=cluster_id,
-            representative_id=rep_id,
-            cluster_article_ids=article_ids,
-            company=company,
-        )
-        return {
-            "cluster_id": cluster_id,
-            "representative_id": rep_id,
-            "company": company,
-            **result,
-        }
-
-    classified: list[dict] = []
-    with ThreadPoolExecutor(max_workers=_GPT_WORKERS) as ex:
-        futures = {ex.submit(_classify_one, cid, aids): cid for cid, aids in cluster_map.items()}
-        for future in as_completed(futures):
-            result = future.result()
-            if result:
-                classified.append(result)
-
-    log.info("v3 분류 완료 | clusters=%d", len(classified))
+    classified = PreprocessingService(max_workers=_GPT_WORKERS).classify_clusters(
+        representative_ids=state["representative_ids"],
+        cluster_map=state["cluster_map"],
+        requested_companies=state["company"],
+    )
     return {**state, "classified_clusters": classified}
 
 
@@ -486,12 +153,12 @@ def classify_node(state: IngestionState) -> IngestionState:
 def card_news_node(state: IngestionState) -> IngestionState:
     """카드 뉴스 생성 — 클러스터 사실 요약 결과 기반. (구 issue_card_node)"""
     from src.agents.card_news_agent import CardNewsAgent
-    from src.agents.news_summary_agent import PeerNewsSummaryAgent
+    from src.analysis.summarizer import SourceSummarizer
     from src.config.company_tiers import SELF_COMPANY_IDS
     from src.db.article_store import save_card_news
 
     agent = CardNewsAgent()
-    summary_agent = PeerNewsSummaryAgent()
+    summary_agent = SourceSummarizer()
     cluster_map = state["cluster_map"]
 
     def _generate_one(cluster: dict) -> dict:
