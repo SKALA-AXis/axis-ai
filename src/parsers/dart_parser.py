@@ -395,6 +395,8 @@ def _extract_table_statement_metrics(tables: list[dict[str, Any]]) -> dict[str, 
             "source": "structured_table",
             "table_index": table.get("table_index"),
             "table_title": table.get("title"),
+            "unit": unit,
+            "confidence": 0.95,
             "revenue_total": revenue_total,
             "revenue_raw": revenue_raw,
             "operating_profit": operating_profit,
@@ -978,6 +980,98 @@ def _topic_snippet(text: str, term: str, radius: int = 180) -> str:
     return _clean_section_text(text[start:end])
 
 
+def _enrich_document_chunks(
+    chunks: list[dict[str, Any]],
+    *,
+    peer_id: str | None,
+    period: str | None,
+    rcept_no: str | None,
+) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for chunk in chunks:
+        matched_keywords: list[str] = []
+        for signal in chunk.get("topic_signals", []):
+            if isinstance(signal, dict):
+                matched_keywords.extend(str(term) for term in signal.get("matched_terms", []))
+
+        enriched.append(
+            {
+                **chunk,
+                "peer_id": peer_id,
+                "period": period,
+                "rcept_no": rcept_no,
+                "matched_keywords": sorted(set(matched_keywords)),
+            }
+        )
+    return enriched
+
+
+def _metric_details(candidates: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        str(candidate["type"]): {
+            "value_krwbn": candidate.get("value_krwbn"),
+            "value_krw": candidate.get("value_krw"),
+            "raw": candidate.get("raw"),
+            "source": candidate.get("source"),
+            "table_index": candidate.get("table_index"),
+            "unit": candidate.get("unit"),
+            "confidence": candidate.get("confidence"),
+        }
+        for candidate in candidates
+        if candidate.get("type")
+    }
+
+
+def _analysis_facts(
+    *,
+    candidates: list[dict[str, Any]],
+    topic_signals: list[dict[str, Any]],
+    peer_id: str | None,
+    period: str | None,
+    rcept_no: str | None,
+) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+
+    for candidate in candidates:
+        metric = candidate.get("type")
+        if metric:
+            facts.append(
+                {
+                    "fact_type": "financial_metric",
+                    "metric": metric,
+                    "peer_id": peer_id,
+                    "period": period,
+                    "rcept_no": rcept_no,
+                    "value_krwbn": candidate.get("value_krwbn"),
+                    "value_krw": candidate.get("value_krw"),
+                    "source": candidate.get("source"),
+                    "table_index": candidate.get("table_index"),
+                    "confidence": candidate.get("confidence"),
+                    "payload": candidate,
+                }
+            )
+
+    for signal in topic_signals:
+        topic = signal.get("topic")
+        if topic:
+            facts.append(
+                {
+                    "fact_type": "business_context",
+                    "topic": topic,
+                    "topic_name_ko": signal.get("topic_name_ko"),
+                    "peer_id": peer_id,
+                    "period": period,
+                    "rcept_no": rcept_no,
+                    "matched_terms": signal.get("matched_terms", []),
+                    "count": signal.get("count", 0),
+                    "snippet": signal.get("snippet", ""),
+                    "payload": signal,
+                }
+            )
+
+    return facts
+
+
 class DartParser:
     """DartCrawler가 만든 RawArticle 또는 dict 결과를 파싱한다."""
 
@@ -998,7 +1092,14 @@ class DartParser:
             period = _extract_period(" ".join([report_name, text[:5000]]))
 
         period_parts = _period_parts(period)
+        rcept_no = str(extra.get("rcept_no") or extra.get("receipt_no") or "")
         sections, document_chunks = _extract_sections_and_chunks(text)
+        document_chunks = _enrich_document_chunks(
+            document_chunks,
+            peer_id=peer_id,
+            period=period,
+            rcept_no=rcept_no or None,
+        )
         section_tree = _extract_section_tree(text)
         topic_signals = _extract_topic_signals(text)
         warnings: list[str] = []
@@ -1029,6 +1130,9 @@ class DartParser:
                     "raw": revenue_raw,
                     "source": statement_metrics.get("source", "document_text"),
                     "table_index": statement_metrics.get("table_index"),
+                    "unit": statement_metrics.get("unit"),
+                    "value_krw": revenue_total * 100_000_000,
+                    "confidence": statement_metrics.get("confidence", 0.75),
                 }
             )
 
@@ -1048,6 +1152,9 @@ class DartParser:
                     "raw": operating_profit_raw,
                     "source": statement_metrics.get("source", "document_text"),
                     "table_index": statement_metrics.get("table_index"),
+                    "unit": statement_metrics.get("unit"),
+                    "value_krw": operating_profit * 100_000_000,
+                    "confidence": statement_metrics.get("confidence", 0.75),
                 }
             )
 
@@ -1062,7 +1169,15 @@ class DartParser:
         if document_fetched and operating_profit is None:
             warnings.append("operating_profit 추출 실패")
 
-        rcept_no = str(extra.get("rcept_no") or extra.get("receipt_no") or "")
+        metric_details = _metric_details(candidates)
+        analysis_facts = _analysis_facts(
+            candidates=candidates,
+            topic_signals=topic_signals,
+            peer_id=peer_id,
+            period=period,
+            rcept_no=rcept_no or None,
+        )
+
         financial_record = {
             "peer_id": peer_id,
             "period": period,
@@ -1082,6 +1197,7 @@ class DartParser:
             "dart_page": _candidate_page(candidates, "revenue_total")
             or _candidate_page(candidates, "operating_profit"),
             "financial_statement_count": len(financial_statements),
+            "metric_details": metric_details,
             "financial_metrics_source": (
                 statement_metrics.get("source")
                 or ("dart_document_text" if document_fetched else "not_available_without_document")
@@ -1133,6 +1249,7 @@ class DartParser:
             "topic_signals": topic_signals,
             "topics": [signal["topic"] for signal in topic_signals],
             "financial_record": financial_record,
+            "analysis_facts": analysis_facts,
             "warnings": warnings,
         }
 

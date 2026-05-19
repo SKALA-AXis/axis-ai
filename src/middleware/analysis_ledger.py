@@ -1,8 +1,7 @@
-"""KnowledgeCuration K1 — AnalysisLedger middleware.
+"""KnowledgeCuration read-model writeback middleware.
 
 분석 agent (InsightCascade / MixerAnalysis / PeerComparison / GlobalTrends /
-BriefingGeneration) 의 결론을 ``analysis_ledger`` 테이블에 INSERT 하여 다음
-분석 호출 시 ``ContextPackBuilder`` 가 carry-over 하도록 한다.
+BriefingGeneration) 의 결론을 V30 최소 스키마의 화면별 read model에 저장한다.
 
 design: ``axis-ai/design/25-knowledge-curation/analysis-ledger.md``.
 
@@ -37,9 +36,6 @@ log = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────
 
 _DEFAULT_MIN_CONF = float(os.getenv("LEDGER_MIN_CONFIDENCE_FOR_PACK", "0.7"))
-_DEDUP_WINDOW_HOURS = int(os.getenv("LEDGER_DEDUP_WINDOW_HOURS", "24"))
-_DEDUP_TEXT_SIM = float(os.getenv("LEDGER_DEDUP_TEXT_SIM", "0.92"))
-_DEDUP_CONF_DELTA = float(os.getenv("LEDGER_DEDUP_CONF_DELTA", "0.05"))
 
 
 def _git_sha() -> str:
@@ -87,23 +83,13 @@ class LedgerInsertResult(TypedDict):
     included_in_pack: bool
 
 
-_CONTRADICTORY_PAIRS: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("Aggressive Expansion", "Defensive Hold"),
-        ("Defensive Hold", "Aggressive Expansion"),
-        ("Tech Pivot", "Cost Leadership"),
-        ("Cost Leadership", "Tech Pivot"),
-    }
-)
-
-
 # ──────────────────────────────────────────────────────────────────────────
 # Core insert
 # ──────────────────────────────────────────────────────────────────────────
 
 
 class AnalysisLedger:
-    """``analysis_ledger`` 테이블 write-through helper."""
+    """V30 read-model write-through helper."""
 
     @classmethod
     def insert(cls, payload: LedgerInsertInput) -> LedgerInsertResult:
@@ -113,7 +99,6 @@ class AnalysisLedger:
 
         peer_ids = list(payload.get("peer_ids") or [])
         conclusion = (payload.get("conclusion_one_liner") or "").strip()
-        analysis_type = payload.get("analysis_type") or "unknown"
 
         if not peer_ids:
             log.warning(
@@ -128,201 +113,167 @@ class AnalysisLedger:
                 "included_in_pack": False,
             }
 
-        # 1. Dedup — 24h 내 동일 peer + type + similar conclusion + similar confidence
-        if cls._is_recent_duplicate(peer_ids, analysis_type, conclusion, confidence):
-            log.info(
-                "AnalysisLedger.insert | dedup skip | type=%s peer_ids=%s",
-                analysis_type,
-                peer_ids,
-            )
-            return {
-                "ledger_id": -1,
-                "inserted": False,
-                "superseded_ledger_ids": [],
-                "included_in_pack": False,
-            }
+        return cls._insert_read_model(payload, included)
 
-        # 2. Supersede detection — strategy 가 *반대 방향* 으로 뒤집힘
-        superseded_ids = cls._detect_supersede(peer_ids, analysis_type, payload)
-
-        # 3. INSERT
-        try:
-            with SessionLocal() as db:
-                row = db.execute(
-                    text(
-                        """
-                        INSERT INTO analysis_ledger (
-                            analysis_type, analysis_id, peer_ids, conclusion_one_liner,
-                            strategy_label, confidence, source_card_ids, sk_ax_implication,
-                            langfuse_trace_id, prompt_version, git_sha, included_in_pack
-                        ) VALUES (
-                            :analysis_type, :analysis_id, CAST(:peer_ids AS JSONB),
-                            :conclusion, :strategy_label, :confidence,
-                            CAST(:source_card_ids AS JSONB), :sk_ax_implication,
-                            :langfuse_trace_id, :prompt_version, :git_sha, :included_in_pack
-                        )
-                        RETURNING id
-                        """
-                    ),
-                    {
-                        "analysis_type": analysis_type,
-                        "analysis_id": payload.get("analysis_id") or "",
-                        "peer_ids": json.dumps(peer_ids),
-                        "conclusion": conclusion[:1000],
-                        "strategy_label": payload.get("strategy_label"),
-                        "confidence": confidence,
-                        "source_card_ids": json.dumps(list(payload.get("source_card_ids") or [])),
-                        "sk_ax_implication": payload.get("sk_ax_implication"),
-                        "langfuse_trace_id": payload.get("langfuse_trace_id"),
-                        "prompt_version": payload.get("prompt_version") or "unversioned",
-                        "git_sha": payload.get("git_sha") or _GIT_SHA_CACHE,
-                        "included_in_pack": included,
-                    },
-                ).fetchone()
-                ledger_id = int(row[0]) if row else -1
-
-                if superseded_ids:
-                    db.execute(
-                        text(
-                            "UPDATE analysis_ledger SET superseded_by = :new_id "
-                            "WHERE id = ANY(CAST(:ids AS BIGINT[]))"
-                        ),
-                        {
-                            "new_id": ledger_id,
-                            "ids": "{" + ",".join(str(i) for i in superseded_ids) + "}",
-                        },
-                    )
-
-                db.commit()
-        except Exception as e:  # pragma: no cover — fail-soft
-            log.warning("AnalysisLedger.insert | DB INSERT 실패 (fail-soft) | error=%s", e)
-            return {
-                "ledger_id": -1,
-                "inserted": False,
-                "superseded_ledger_ids": [],
-                "included_in_pack": False,
-            }
-
-        log.info(
-            "AnalysisLedger.insert | id=%d type=%s peers=%s conf=%.2f included=%s superseded=%s",
-            ledger_id,
-            analysis_type,
-            peer_ids,
-            confidence,
-            included,
-            superseded_ids,
-        )
-        return {
-            "ledger_id": ledger_id,
-            "inserted": True,
-            "superseded_ledger_ids": superseded_ids,
+    @classmethod
+    def _insert_read_model(
+        cls,
+        payload: LedgerInsertInput,
+        included: bool,
+    ) -> LedgerInsertResult:
+        analysis_type = (payload.get("analysis_type") or "unknown").lower()
+        analysis_id = payload.get("analysis_id") or f"{analysis_type}-{datetime.now(timezone.utc).isoformat()}"
+        peer_ids = list(payload.get("peer_ids") or [])
+        source_card_ids = list(payload.get("source_card_ids") or [])
+        conclusion = payload.get("conclusion_one_liner") or ""
+        confidence = float(payload.get("confidence", 0.0))
+        body = {
+            **payload,
             "included_in_pack": included,
+            "created_by": "analysis_ledger_compat",
         }
 
-    # ── Dedup ────────────────────────────────────────────────────────────
-
-    @classmethod
-    def _is_recent_duplicate(
-        cls,
-        peer_ids: list[str],
-        analysis_type: str,
-        conclusion: str,
-        confidence: float,
-    ) -> bool:
-        if not peer_ids:
-            return False
         try:
             with SessionLocal() as db:
-                rows = db.execute(
-                    text(
-                        """
-                        SELECT conclusion_one_liner, confidence
-                        FROM analysis_ledger
-                        WHERE analysis_type = :type
-                          AND peer_ids ?| CAST(:peers AS TEXT[])
-                          AND created_at > now() - make_interval(hours => :hours)
-                        ORDER BY created_at DESC
-                        LIMIT 20
-                        """
-                    ),
-                    {
-                        "type": analysis_type,
-                        "peers": "{" + ",".join(peer_ids) + "}",
-                        "hours": _DEDUP_WINDOW_HOURS,
-                    },
-                ).fetchall()
+                if analysis_type in {"mixer", "mixeranalysis"}:
+                    db.execute(
+                        text("""
+                            INSERT INTO mixer_results (
+                                source_analysis_id, title, input_peer_ids, input_card_ids,
+                                generated_implication, sk_ax_implication, final_one_liner,
+                                confidence, payload
+                            ) VALUES (
+                                :analysis_id, :title, CAST(:peer_ids AS text[]),
+                                CAST(:source_card_ids AS text[]),
+                                CAST(:generated_implication AS jsonb),
+                                :sk_ax_implication, :final_one_liner,
+                                :confidence, CAST(:payload AS jsonb)
+                            )
+                            ON CONFLICT (source_analysis_id)
+                            WHERE source_analysis_id IS NOT NULL DO UPDATE SET
+                                generated_implication = EXCLUDED.generated_implication,
+                                sk_ax_implication = EXCLUDED.sk_ax_implication,
+                                final_one_liner = EXCLUDED.final_one_liner,
+                                confidence = EXCLUDED.confidence,
+                                payload = EXCLUDED.payload,
+                                updated_at = NOW()
+                        """),
+                        {
+                            "analysis_id": analysis_id,
+                            "title": conclusion,
+                            "peer_ids": _pg_text_array(peer_ids),
+                            "source_card_ids": _pg_text_array(source_card_ids),
+                            "generated_implication": json.dumps(body, ensure_ascii=False),
+                            "sk_ax_implication": payload.get("sk_ax_implication"),
+                            "final_one_liner": conclusion,
+                            "confidence": confidence,
+                            "payload": json.dumps(body, ensure_ascii=False),
+                        },
+                    )
+                elif analysis_type in {"insight", "insightcascade"}:
+                    db.execute(
+                        text("""
+                            INSERT INTO insight_reports (
+                                source_analysis_id, title, insight_type, status,
+                                focus_peer_ids, focus_card_ids, summary, final_one_liner,
+                                sk_ax_implication, source_card_ids, confidence, payload
+                            ) VALUES (
+                                :analysis_id, :title, 'cascade', 'completed',
+                                CAST(:peer_ids AS text[]), CAST(:source_card_ids AS text[]),
+                                :summary, :final_one_liner, :sk_ax_implication,
+                                CAST(:source_card_ids AS text[]), :confidence,
+                                CAST(:payload AS jsonb)
+                            )
+                            ON CONFLICT (source_analysis_id)
+                            WHERE source_analysis_id IS NOT NULL DO UPDATE SET
+                                summary = EXCLUDED.summary,
+                                final_one_liner = EXCLUDED.final_one_liner,
+                                sk_ax_implication = EXCLUDED.sk_ax_implication,
+                                confidence = EXCLUDED.confidence,
+                                payload = EXCLUDED.payload,
+                                updated_at = NOW()
+                        """),
+                        {
+                            "analysis_id": analysis_id,
+                            "title": conclusion,
+                            "peer_ids": _pg_text_array(peer_ids),
+                            "source_card_ids": _pg_text_array(source_card_ids),
+                            "summary": conclusion,
+                            "final_one_liner": conclusion,
+                            "sk_ax_implication": payload.get("sk_ax_implication"),
+                            "confidence": confidence,
+                            "payload": json.dumps(body, ensure_ascii=False),
+                        },
+                    )
+                elif analysis_type in {"global", "globaltrends"}:
+                    db.execute(
+                        text("""
+                            INSERT INTO global_industry_trends (
+                                source_analysis_id, trend_date, industry, region, keyword,
+                                keyword_category, title, summary, mention_count, confidence,
+                                related_peer_ids, related_card_ids, sk_ax_implication, payload
+                            ) VALUES (
+                                :analysis_id, CURRENT_DATE, 'legacy', 'global',
+                                LEFT(:keyword, 120), 'analysis', :title, :summary, 0,
+                                :confidence, CAST(:peer_ids AS text[]),
+                                CAST(:source_card_ids AS text[]), :sk_ax_implication,
+                                CAST(:payload AS jsonb)
+                            )
+                            ON CONFLICT (source_analysis_id)
+                            WHERE source_analysis_id IS NOT NULL DO UPDATE SET
+                                summary = EXCLUDED.summary,
+                                confidence = EXCLUDED.confidence,
+                                payload = EXCLUDED.payload,
+                                updated_at = NOW()
+                        """),
+                        {
+                            "analysis_id": analysis_id,
+                            "keyword": payload.get("strategy_label") or analysis_id,
+                            "title": conclusion,
+                            "summary": conclusion,
+                            "confidence": confidence,
+                            "peer_ids": _pg_text_array(peer_ids),
+                            "source_card_ids": _pg_text_array(source_card_ids),
+                            "sk_ax_implication": payload.get("sk_ax_implication"),
+                            "payload": json.dumps(body, ensure_ascii=False),
+                        },
+                    )
+                else:
+                    db.execute(
+                        text("""
+                            INSERT INTO legacy_records (
+                                source_table, source_pk, owner_table, owner_id, payload
+                            ) VALUES (
+                                'analysis_ledger', :analysis_id, 'analysis', :analysis_type,
+                                CAST(:payload AS jsonb)
+                            )
+                            ON CONFLICT (source_table, source_pk)
+                            WHERE source_pk IS NOT NULL DO UPDATE SET
+                                payload = EXCLUDED.payload,
+                                archived_at = NOW()
+                        """),
+                        {
+                            "analysis_id": analysis_id,
+                            "analysis_type": analysis_type,
+                            "payload": json.dumps(body, ensure_ascii=False),
+                        },
+                    )
+                db.commit()
         except Exception as e:
-            log.warning("AnalysisLedger dedup query failed (skip dedup) | %s", e)
-            return False
+            log.warning("Analysis read-model writeback failed (fail-soft) | %s", e)
+            return {
+                "ledger_id": -1,
+                "inserted": False,
+                "superseded_ledger_ids": [],
+                "included_in_pack": False,
+            }
 
-        for row in rows:
-            existing = (row[0] or "").strip()
-            existing_conf = float(row[1] or 0.0)
-            if abs(existing_conf - confidence) > _DEDUP_CONF_DELTA:
-                continue
-            if _text_similarity(existing, conclusion) >= _DEDUP_TEXT_SIM:
-                return True
-        return False
-
-    # ── Supersede ────────────────────────────────────────────────────────
-
-    @classmethod
-    def _detect_supersede(
-        cls,
-        peer_ids: list[str],
-        analysis_type: str,
-        payload: LedgerInsertInput,
-    ) -> list[int]:
-        if not peer_ids:
-            return []
-        new_strategy = payload.get("strategy_label")
-        new_polarity = _polarity(payload.get("sk_ax_implication") or "")
-        new_conclusion = payload.get("conclusion_one_liner") or ""
-
-        try:
-            with SessionLocal() as db:
-                rows = db.execute(
-                    text(
-                        """
-                        SELECT id, strategy_label, sk_ax_implication, conclusion_one_liner
-                        FROM analysis_ledger
-                        WHERE analysis_type = :type
-                          AND peer_ids ?| CAST(:peers AS TEXT[])
-                          AND superseded_by IS NULL
-                        ORDER BY created_at DESC
-                        LIMIT 5
-                        """
-                    ),
-                    {
-                        "type": analysis_type,
-                        "peers": "{" + ",".join(peer_ids) + "}",
-                    },
-                ).fetchall()
-        except Exception as e:
-            log.warning("AnalysisLedger supersede query failed (skip) | %s", e)
-            return []
-
-        superseded: list[int] = []
-        for prev in rows:
-            prev_id = int(prev[0])
-            prev_strategy = prev[1]
-            prev_impl = prev[2] or ""
-            prev_conclusion = prev[3] or ""
-
-            contradictory_strategy = bool(
-                new_strategy
-                and prev_strategy
-                and (prev_strategy, new_strategy) in _CONTRADICTORY_PAIRS
-            )
-            polarity_swap = _polarity(prev_impl) != new_polarity and (
-                _polarity(prev_impl) in ("positive", "negative")
-                and new_polarity in ("positive", "negative")
-            )
-            negation_swap = _contains_negation_swap(prev_conclusion, new_conclusion)
-
-            if contradictory_strategy or polarity_swap or negation_swap:
-                superseded.append(prev_id)
-        return superseded
+        return {
+            "ledger_id": -1,
+            "inserted": True,
+            "superseded_ledger_ids": [],
+            "included_in_pack": included,
+        }
 
     # ── Fetch (ContextPackBuilder 가 호출) ──────────────────────────────────
 
@@ -334,7 +285,7 @@ class AnalysisLedger:
         min_confidence: float | None = None,
         retention_days: int = 90,
     ) -> list[dict[str, Any]]:
-        """ContextPackBuilder 의 analysis_ledger_top5 carry-over 용."""
+        """ContextPackBuilder carry-over 용 V30 read model 조회."""
         thr = min_confidence if min_confidence is not None else _DEFAULT_MIN_CONF
         try:
             with SessionLocal() as db:
@@ -342,14 +293,30 @@ class AnalysisLedger:
                     db.execute(
                         text(
                             """
-                        SELECT id, analysis_id, analysis_type, conclusion_one_liner,
-                               strategy_label, confidence, source_card_ids,
-                               sk_ax_implication, created_at
-                        FROM analysis_ledger
-                        WHERE peer_ids ? :peer_id
+                        SELECT source_analysis_id AS analysis_id,
+                               'insight' AS analysis_type,
+                               final_one_liner AS conclusion_one_liner,
+                               NULL AS strategy_label,
+                               confidence,
+                               to_jsonb(source_card_ids) AS source_card_ids,
+                               sk_ax_implication,
+                               created_at
+                        FROM insight_reports
+                        WHERE :peer_id = ANY(focus_peer_ids)
                           AND confidence >= :thr
-                          AND superseded_by IS NULL
-                          AND included_in_pack = TRUE
+                          AND created_at > now() - make_interval(days => :days)
+                        UNION ALL
+                        SELECT source_analysis_id AS analysis_id,
+                               'mixer' AS analysis_type,
+                               final_one_liner AS conclusion_one_liner,
+                               NULL AS strategy_label,
+                               confidence,
+                               to_jsonb(input_card_ids) AS source_card_ids,
+                               sk_ax_implication,
+                               created_at
+                        FROM mixer_results
+                        WHERE :peer_id = ANY(input_peer_ids)
+                          AND confidence >= :thr
                           AND created_at > now() - make_interval(days => :days)
                         ORDER BY created_at DESC
                         LIMIT :top_n
@@ -483,52 +450,9 @@ def _peer_ids_from_cards(cards: Iterable[Any]) -> list[str]:
     return deduped
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Helpers — text similarity / polarity / negation
-# ──────────────────────────────────────────────────────────────────────────
-
-
-def _text_similarity(a: str, b: str) -> float:
-    if not a or not b:
-        return 0.0
-    a_set = set(a.split())
-    b_set = set(b.split())
-    if not a_set or not b_set:
-        return 0.0
-    inter = len(a_set & b_set)
-    union = len(a_set | b_set)
-    return inter / union if union else 0.0
-
-
-_POSITIVE_KEYWORDS = ("긍정", "기회", "확대", "성장", "강화", "유리")
-_NEGATIVE_KEYWORDS = ("부정", "위협", "축소", "감소", "약화", "불리", "철수")
-
-
-def _polarity(text_value: str) -> str:
-    t = text_value or ""
-    pos = sum(1 for kw in _POSITIVE_KEYWORDS if kw in t)
-    neg = sum(1 for kw in _NEGATIVE_KEYWORDS if kw in t)
-    if pos > neg:
-        return "positive"
-    if neg > pos:
-        return "negative"
-    return "neutral"
-
-
-_NEGATION_PAIRS = (
-    ("확대", "축소"),
-    ("축소", "확대"),
-    ("진출", "철수"),
-    ("철수", "진출"),
-    ("성장", "감소"),
-    ("감소", "성장"),
-)
-
-
-def _contains_negation_swap(a: str, b: str) -> bool:
-    if not a or not b:
-        return False
-    for pos, neg in _NEGATION_PAIRS:
-        if pos in a and neg in b:
-            return True
-    return False
+def _pg_text_array(values: Iterable[Any]) -> str:
+    escaped: list[str] = []
+    for value in values:
+        text_value = str(value).replace("\\", "\\\\").replace('"', '\\"')
+        escaped.append(f'"{text_value}"')
+    return "{" + ",".join(escaped) + "}"

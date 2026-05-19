@@ -142,7 +142,7 @@ class CrawlWindow:
 
 @dataclass(frozen=True)
 class CrawlRunContext:
-    """크롤 실행 메타데이터. crawl_runs/crawl_run_articles에 저장된다."""
+    """크롤 실행 메타데이터. V30 이후 raw_articles.crawl_events에 흡수 저장된다."""
 
     collection_mode: str
     crawl_run_id: str | None = None

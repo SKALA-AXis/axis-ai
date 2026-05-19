@@ -1,6 +1,6 @@
-"""Gate 2 소스 타입 기반 신뢰도 보정 에이전트.
+"""Gate 2 소스 타입 기반 신뢰도 계산 에이전트.
 
-이 단계에서는 source_type 기준으로 기본 credibility_score와 credibility_grade를 채운다.
+이 단계에서는 source_type 기준으로 credibility_score와 credibility_grade를 계산한다.
 신뢰도 점수만으로 기사를 탈락시키지는 않는다.
 수집 실패, URL 없음, 제목 없음처럼 명백히 사용할 수 없는 데이터만 제외한다.
 """
@@ -40,10 +40,10 @@ _GRADE_MAP: list[tuple[float, str]] = [
 
 
 class CredibilityAgent:
-    """raw_articles의 source_type 기준 신뢰도 점수를 보정한다."""
+    """raw_articles의 source_type 기준 신뢰도 유효성을 검사한다."""
 
     def filter(self, raw_article_ids: list[int]) -> tuple[list[int], list[int]]:
-        """source_type 기준으로 credibility_score를 채우고 유효하지 않은 데이터만 제외한다.
+        """source_type 기준으로 신뢰도 점수를 계산하고 유효하지 않은 데이터만 제외한다.
 
         Args:
             raw_article_ids: 처리할 raw_articles ID 목록.
@@ -65,8 +65,7 @@ class CredibilityAgent:
                         url,
                         title,
                         source_type,
-                        crawl_status,
-                        credibility_score
+                        crawl_status
                     FROM raw_articles
                     WHERE id = ANY(:ids)
                 """),
@@ -94,28 +93,6 @@ class CredibilityAgent:
                     log.debug("Gate 2 제외 | id=%d reason=%s", row.id, reason)
                     continue
 
-                score = row.credibility_score
-
-                if score is None:
-                    score = compute_credibility_score(row.source_type)
-
-                score = float(score)
-                grade = _to_grade(score)
-
-                db.execute(
-                    text("""
-                        UPDATE raw_articles
-                        SET credibility_score = :score,
-                            credibility_grade = :grade
-                        WHERE id = :id
-                    """),
-                    {
-                        "score": score,
-                        "grade": grade,
-                        "id": row.id,
-                    },
-                )
-
                 credible_ids.append(row.id)
 
             db.commit()
@@ -137,6 +114,11 @@ def compute_credibility_score(source_type: str | None) -> float:
 
     key = source_type.strip().lower()
     return SOURCE_TYPE_CREDIBILITY.get(key, DEFAULT_CREDIBILITY_SCORE)
+
+
+def credibility_grade(score: float) -> str:
+    """신뢰도 점수를 등급 라벨로 변환한다."""
+    return _to_grade(score)
 
 
 def analyze_credibility_article(article: dict) -> tuple[dict, bool, str | None]:

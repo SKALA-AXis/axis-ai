@@ -15,7 +15,7 @@ fallback 만 활성 — Phase K3 의 ContextPackBuilder 가 도입되면
     2. ``_llm_call`` — gpt-4o 단일 호출 (temperature 0.3, JSON 응답)
     3. ``_parse_and_validate`` — 3-tier observability 필드 + 4-phase 필드 검증
     4. ``link_langfuse_trace`` — Tier 3 trace_id 자동 매핑
-    5. ``@with_ledger_writeback`` — analysis_ledger INSERT (자동, 데코레이터)
+    5. ``@with_ledger_writeback`` — insight_reports read model 저장 (자동, 데코레이터)
 """
 
 from __future__ import annotations
@@ -341,7 +341,7 @@ def _parse_and_validate(
     data["confidence"] = confidence_in_range(data.get("confidence", 0.0))
     data["sources_used"] = dedup_and_cap(data.get("sources_used") or [c["id"] for c in cards])
 
-    # peer_ids — input cards 의 unique peer (analysis_ledger 의 carry-over 용)
+    # peer_ids — input cards 의 unique peer (read model carry-over 용)
     peer_set: list[str] = []
     seen: set[str] = set()
     for c in cards:

@@ -263,7 +263,7 @@ async def generate_insight(request: InsightGenerateRequest) -> InsightGenerateRe
     phase 2 prototype — cold-start fallback 만 활성 (ContextPack 미주입).
 
     LLM ~1 호출 (gpt-4o, ~3K tokens). 분석 결과는 ``@with_ledger_writeback`` 으로
-    ``analysis_ledger`` 에 자동 INSERT — 다음 분석 호출 시 carry-over.
+    ``insight_reports`` read model에 자동 저장되어 다음 분석 호출 시 carry-over.
     """
     from src.agents.insight_cascade_agent import InsightCascadeAgent
 
@@ -283,7 +283,7 @@ async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
     phase 2 prototype — 6축 radar 는 결정적 산식, reasoning 만 LLM 단일 호출.
 
     cold-start fallback (ContextPack 미주입). ``@with_ledger_writeback`` 으로
-    분석 ledger 에 carry-over.
+    ``mixer_results`` read model에 carry-over.
     """
     from src.agents.mixer_analysis_agent import MixerAnalysisAgent
 
@@ -302,7 +302,7 @@ async def compare_peer(request: PeerComparisonRequest) -> PeerComparisonResponse
 
     design: ``axis-ai/design/30-analysis/peer-comparison.md``. Walking Skeleton
     phase 2 prototype — Phase 3 (Forecast) 는 Day 90+ deferred. trend_deltas 는
-    peer_financials 기반 deterministic 계산, current/strategic 만 LLM 단일 호출.
+    ``peer_companies.financial_history`` 기반 deterministic 계산, current/strategic 만 LLM 단일 호출.
     """
     from src.agents.peer_comparison_agent import PeerComparisonAgent
 

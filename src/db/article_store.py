@@ -6,9 +6,11 @@ import re
 import threading
 from datetime import datetime
 from typing import Any, Optional
+from uuid import uuid4
 
 from sqlalchemy import text
 
+from src.agents.credibility_agent import compute_credibility_score, credibility_grade
 from src.crawler.base import CrawlRunContext, RawArticle
 from src.db.postgres import SessionLocal
 
@@ -23,11 +25,11 @@ _INSERT_SQL = text("""
     INSERT INTO raw_articles (
         source_type, source_name, publisher, title, content, url, url_hash,
         published_at, collected_at, company, language, content_type,
-        crawl_status, error_message, processing_status
+        crawl_status, error_message, processing_status, crawl_run_id
     ) VALUES (
         :source_type, :source_name, :publisher, :title, :content, :url, :url_hash,
         :published_at, :collected_at, CAST(:company AS jsonb), :language, :content_type,
-        :crawl_status, :error_message, 'RAW'
+        :crawl_status, :error_message, 'RAW', CAST(:crawl_run_id AS uuid)
     )
     ON CONFLICT (url) DO NOTHING
     RETURNING id
@@ -35,35 +37,12 @@ _INSERT_SQL = text("""
 
 _SELECT_ARTICLE_ID_BY_URL = text("SELECT id FROM raw_articles WHERE url = :url")
 
-_INSERT_CRAWL_RUN_ARTICLE = text("""
-    INSERT INTO crawl_run_articles (
-        crawl_run_id, raw_article_id, url, url_hash, discovered_at,
-        action, fetch_status, error_message, raw_payload
-    ) VALUES (
-        CAST(:crawl_run_id AS uuid), :raw_article_id, :url, :url_hash, :discovered_at,
-        :action, :fetch_status, :error_message, CAST(:raw_payload AS jsonb)
-    )
-    ON CONFLICT (crawl_run_id, url_hash) DO UPDATE SET
-        raw_article_id = COALESCE(EXCLUDED.raw_article_id, crawl_run_articles.raw_article_id),
-        action = EXCLUDED.action,
-        fetch_status = EXCLUDED.fetch_status,
-        error_message = EXCLUDED.error_message,
-        raw_payload = crawl_run_articles.raw_payload || EXCLUDED.raw_payload
+_APPEND_CRAWL_EVENT = text("""
+    UPDATE raw_articles
+    SET crawl_events = COALESCE(crawl_events, '[]'::jsonb)
+        || jsonb_build_array(CAST(:crawl_event AS jsonb))
+    WHERE id = :raw_article_id
 """)
-
-_SOURCE_METADATA_TABLES = {
-    "news": "raw_article_metadata_news",
-    "official": "raw_article_metadata_official",
-    "company_site": "raw_article_metadata_company_site",
-    "dart": "raw_article_metadata_dart",
-    "ir": "raw_article_metadata_ir",
-    "securities_report": "raw_article_metadata_securities_report",
-    "trend_report": "raw_article_metadata_trend_report",
-    "search_trend": "raw_article_metadata_search_trend",
-    "job": "raw_article_metadata_job",
-    "market_data": "raw_article_metadata_market_data",
-    "social": "raw_article_metadata_social",
-}
 
 _SOURCE_METADATA_EXCLUDED_KEYS = {
     "url_hash",
@@ -120,6 +99,7 @@ def save_articles(
                         "content_type": article.content_type,
                         "crawl_status": article.crawl_status,
                         "error_message": article.error_message,
+                        "crawl_run_id": run_context.crawl_run_id if run_context else None,
                     },
                 )
                 row = result.fetchone()
@@ -139,6 +119,7 @@ def save_articles(
                         db,
                         article_id=article_id,
                         source_type=article.source_type,
+                        source_name=article.source_name,
                         source_metadata=source_metadata,
                     )
                     _upsert_crawl_run_article(
@@ -179,7 +160,6 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
                        raw_articles.content, raw_articles.url,
                        raw_articles.source_type, raw_articles.content_type,
                        raw_articles.publisher, raw_articles.language,
-                       raw_articles.credibility_score, raw_articles.credibility_grade,
                        raw_articles.relevance_score, raw_articles.relevance_label,
                        raw_articles.relevance_reason,
                        raw_articles.matched_companies, raw_articles.matched_sectors,
@@ -190,11 +170,12 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
                 LEFT JOIN raw_article_metadata_unified mu
                     ON mu.raw_article_id = raw_articles.id
                 WHERE raw_articles.id = ANY(:ids)
-                ORDER BY raw_articles.credibility_score DESC NULLS LAST
+                ORDER BY raw_articles.published_at DESC NULLS LAST,
+                         raw_articles.collected_at DESC
             """),
             {"ids": ids},
         ).fetchall()
-    return [dict(row._mapping) for row in rows]
+    return [_with_credibility(dict(row._mapping)) for row in rows]
 
 
 def list_dart_documents(
@@ -348,6 +329,13 @@ def _json_or_value(value: Any, default: Any) -> Any:
     return value if value is not None else default
 
 
+def _with_credibility(row: dict[str, Any]) -> dict[str, Any]:
+    score = compute_credibility_score(row.get("source_type"))
+    row["credibility_score"] = score
+    row["credibility_grade"] = credibility_grade(score)
+    return row
+
+
 def _iso_or_none(value: Any) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -370,11 +358,40 @@ def list_card_news_cluster_candidates(
             r.url,
             r.importance_level,
             r.importance_score,
-            r.credibility_score,
+            CASE LOWER(COALESCE(r.source_type, ''))
+                WHEN 'dart' THEN 1.00
+                WHEN 'ir' THEN 1.00
+                WHEN 'official' THEN 0.90
+                WHEN 'company_site' THEN 0.90
+                WHEN 'securities_report' THEN 0.80
+                WHEN 'trend_report' THEN 0.70
+                WHEN 'news' THEN 0.70
+                WHEN 'market_data' THEN 0.70
+                WHEN 'job' THEN 0.60
+                WHEN 'search_trend' THEN 0.55
+                WHEN 'social' THEN 0.40
+                ELSE 0.50
+            END AS credibility_score,
             r.published_at,
             r.collected_at,
             COALESCE(
-                array_agg(a.id ORDER BY a.credibility_score DESC NULLS LAST, a.published_at DESC)
+                array_agg(a.id ORDER BY
+                    CASE LOWER(COALESCE(a.source_type, ''))
+                        WHEN 'dart' THEN 1.00
+                        WHEN 'ir' THEN 1.00
+                        WHEN 'official' THEN 0.90
+                        WHEN 'company_site' THEN 0.90
+                        WHEN 'securities_report' THEN 0.80
+                        WHEN 'trend_report' THEN 0.70
+                        WHEN 'news' THEN 0.70
+                        WHEN 'market_data' THEN 0.70
+                        WHEN 'job' THEN 0.60
+                        WHEN 'search_trend' THEN 0.55
+                        WHEN 'social' THEN 0.40
+                        ELSE 0.50
+                    END DESC,
+                    a.published_at DESC
+                )
                     FILTER (WHERE a.id IS NOT NULL),
                 ARRAY[]::bigint[]
             ) AS article_ids,
@@ -392,7 +409,7 @@ def list_card_news_cluster_candidates(
           {where_today}
         GROUP BY
             r.cluster_id, r.id, r.company, r.title, r.url,
-            r.importance_level, r.importance_score, r.credibility_score,
+            r.importance_level, r.importance_score, r.source_type,
             r.published_at, r.collected_at
         ORDER BY
             COALESCE(r.importance_score, 0) DESC,
@@ -427,15 +444,16 @@ def update_preprocess_status(
             },
         )
         if metadata_patch:
-            source_type = db.execute(
-                text("SELECT source_type FROM raw_articles WHERE id = :id"),
+            source_row = db.execute(
+                text("SELECT source_type, source_name FROM raw_articles WHERE id = :id"),
                 {"id": article_id},
-            ).scalar_one_or_none()
-            if source_type:
+            ).fetchone()
+            if source_row:
                 _upsert_source_metadata(
                     db,
                     article_id=article_id,
-                    source_type=source_type,
+                    source_type=source_row.source_type,
+                    source_name=source_row.source_name,
                     source_metadata=json.dumps(
                         _sanitize_jsonish(metadata_patch),
                         ensure_ascii=False,
@@ -528,14 +546,14 @@ _INSERT_CARD_NEWS = text("""
 def save_card_news(card: dict[str, Any]) -> Optional[str]:
     """카드 뉴스를 card_news 테이블에 저장한다.
 
-    v3: implication JSONB 컬럼은 evidence_chain + sector 메타데이터의 저장소로 재사용.
-    Backend에서 evidence_chain·sector 전용 컬럼 분리 후 마이그레이션 예정.
+    implication JSONB에는 화면 호환용 섹터/노출도 요약을 유지한다.
+    검증 체인 본문은 save_evidence_chain()에서 card_news.evidence_payload에 저장한다.
 
     Returns:
         저장된 card_news ID, 실패 시 None
     """
     try:
-        # implication JSONB에 v3 메타데이터(섹터·노출도·검증체인) 통합 저장
+        # implication JSONB에 화면 호환 메타데이터를 유지한다.
         v3_payload = {
             "sector": card.get("sector", "other"),
             "sectors": card.get("sectors", ["other"]),
@@ -574,31 +592,22 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
 
 
 # ──────────────────────────────────────────────────────────────
-# evidence_chain 저장
+# card_news.evidence_payload 저장
 # ──────────────────────────────────────────────────────────────
 
 
-# V9 (2026-05-12): card_news 테이블 rename 후에도 evidence_chain.issue_card_id 컬럼은
-# legacy 이름 유지 (deploy race 회피 — 컬럼 rename 은 V10 분리). Python 변수명은
-# card_news_id 로 의미 정렬, SQL column ref 만 issue_card_id 유지.
-_INSERT_EVIDENCE = text("""
-    INSERT INTO evidence_chain (
-        issue_card_id, source_links, provenance, financial_refs,
-        mbb_refs, financial_link, evidence_version, pass, missing
-    ) VALUES (
-        :card_news_id, CAST(:source_links AS jsonb), CAST(:provenance AS jsonb),
-        CAST(:financial_refs AS jsonb), CAST(:mbb_refs AS jsonb),
-        CAST(:financial_link AS jsonb), :evidence_version, :passed, :missing
-    )
-    ON CONFLICT (issue_card_id) DO UPDATE SET
-        source_links = EXCLUDED.source_links,
-        provenance = EXCLUDED.provenance,
-        financial_refs = EXCLUDED.financial_refs,
-        mbb_refs = EXCLUDED.mbb_refs,
-        financial_link = EXCLUDED.financial_link,
-        evidence_version = EXCLUDED.evidence_version,
-        pass = EXCLUDED.pass,
-        missing = EXCLUDED.missing
+_UPDATE_CARD_EVIDENCE = text("""
+    UPDATE card_news
+    SET evidence_payload = CAST(:evidence_payload AS jsonb),
+        source_raw_article_ids = CASE
+            WHEN cardinality(COALESCE(source_raw_article_ids, '{}')) = 0
+             AND :raw_article_ids <> '{}'
+            THEN CAST(:raw_article_ids AS bigint[])
+            ELSE source_raw_article_ids
+        END,
+        implication = COALESCE(implication, '{}'::jsonb)
+            || jsonb_build_object('evidence_chain', CAST(:evidence_payload AS jsonb))
+    WHERE id = :card_news_id
 """)
 
 
@@ -608,46 +617,51 @@ def save_evidence_chain(
     passed: bool,
     missing: list[str],
 ) -> None:
-    """evidence_chain 테이블에 검증 체인 4종을 저장한다."""
+    """검증 체인 4종을 card_news.evidence_payload에 저장한다."""
     if not card_news_id:
         return
     try:
         with SessionLocal() as db:
+            if not _column_exists(db, "card_news", "evidence_payload"):
+                return
+            raw_article_ids = chain.get("provenance", {}).get("raw_article_ids") or []
+            evidence_payload = {
+                "source_links": chain.get("source_links", []),
+                "provenance": chain.get("provenance", {}),
+                "financial_refs": chain.get("financial_refs", []),
+                "mbb_refs": chain.get("mbb_refs", []),
+                "financial_link": chain.get("financial_link", {}),
+                "evidence_version": chain.get("provenance", {}).get("evidence_version", "v3.0"),
+                "pass": passed,
+                "missing": missing,
+            }
             db.execute(
-                _INSERT_EVIDENCE,
+                _UPDATE_CARD_EVIDENCE,
                 {
                     "card_news_id": card_news_id,
-                    "source_links": json.dumps(chain.get("source_links", []), ensure_ascii=False),
-                    "provenance": json.dumps(chain.get("provenance", {}), ensure_ascii=False),
-                    "financial_refs": json.dumps(
-                        chain.get("financial_refs", []), ensure_ascii=False
-                    ),
-                    "mbb_refs": json.dumps(chain.get("mbb_refs", []), ensure_ascii=False),
-                    "financial_link": json.dumps(
-                        chain.get("financial_link", {}), ensure_ascii=False
-                    ),
-                    "evidence_version": chain.get("provenance", {}).get("evidence_version", "v3.0"),
-                    "passed": passed,
-                    "missing": missing,
+                    "evidence_payload": json.dumps(evidence_payload, ensure_ascii=False),
+                    "raw_article_ids": _pg_bigint_array(raw_article_ids),
                 },
             )
             db.commit()
     except Exception as e:
-        log.error("evidence_chain 저장 실패 | card_id=%s error=%s", card_news_id, e)
+        log.error("card_news.evidence_payload 저장 실패 | card_id=%s error=%s", card_news_id, e)
 
 
 # ──────────────────────────────────────────────────────────────
-# pipeline_logs 저장
+# pipeline execution archive 저장
 # ──────────────────────────────────────────────────────────────
 
 
-_INSERT_PIPELINE_LOG = text("""
-    INSERT INTO pipeline_logs (
-        pipeline_step, company, input_count, output_count,
-        elapsed_ms, llm_tokens_used, error_msg
+_INSERT_PIPELINE_ARCHIVE = text("""
+    INSERT INTO legacy_records (
+        source_table, source_pk, owner_table, owner_id, payload
     ) VALUES (
-        :step, :company, :input_count, :output_count,
-        :elapsed_ms, :llm_tokens_used, :error_msg
+        'pipeline_logs',
+        :source_pk,
+        'pipeline',
+        :step,
+        CAST(:payload AS jsonb)
     )
 """)
 
@@ -661,24 +675,34 @@ def save_pipeline_log(
     llm_tokens_used: int = 0,
     error_msg: Optional[str] = None,
 ) -> None:
-    """파이프라인 단계별 실행 통계를 pipeline_logs에 기록."""
+    """파이프라인 단계별 실행 통계를 legacy_records에 보존한다."""
     try:
         with SessionLocal() as db:
+            if not _table_exists(db, "legacy_records"):
+                return
             db.execute(
-                _INSERT_PIPELINE_LOG,
+                _INSERT_PIPELINE_ARCHIVE,
                 {
+                    "source_pk": f"{datetime.utcnow().isoformat()}-{uuid4()}",
                     "step": step,
-                    "company": company,
-                    "input_count": input_count,
-                    "output_count": output_count,
-                    "elapsed_ms": elapsed_ms,
-                    "llm_tokens_used": llm_tokens_used,
-                    "error_msg": error_msg,
+                    "payload": json.dumps(
+                        {
+                            "pipeline_step": step,
+                            "company": company,
+                            "input_count": input_count,
+                            "output_count": output_count,
+                            "elapsed_ms": elapsed_ms,
+                            "llm_tokens_used": llm_tokens_used,
+                            "error_msg": error_msg,
+                            "created_at": datetime.utcnow().isoformat(),
+                        },
+                        ensure_ascii=False,
+                    ),
                 },
             )
             db.commit()
     except Exception as e:
-        log.error("pipeline_logs 저장 실패 | step=%s error=%s", step, e)
+        log.error("pipeline archive 저장 실패 | step=%s error=%s", step, e)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -771,7 +795,7 @@ def _metadata_json(
 ) -> str:
     """Compatibility shim for older tests/callers.
 
-    Crawl run context is now written to crawl_run_articles, not metadata.
+    Crawl run context is now written to raw_articles.crawl_events, not metadata.
     """
     return _source_metadata_json(article, storage_company)
 
@@ -781,21 +805,34 @@ def _upsert_source_metadata(
     *,
     article_id: int,
     source_type: str,
+    source_name: str | None,
     source_metadata: str,
 ) -> None:
-    table = _SOURCE_METADATA_TABLES.get(source_type)
-    if not table:
-        return
     db.execute(
-        text(f"""
-            INSERT INTO {table} (raw_article_id, source_metadata)
-            VALUES (:raw_article_id, CAST(:source_metadata AS jsonb))
+        text("""
+            INSERT INTO raw_article_source_metadata (
+                raw_article_id,
+                source_type,
+                source_name,
+                source_metadata
+            )
+            VALUES (
+                :raw_article_id,
+                :source_type,
+                :source_name,
+                CAST(:source_metadata AS jsonb)
+            )
             ON CONFLICT (raw_article_id) DO UPDATE SET
-                source_metadata = {table}.source_metadata || EXCLUDED.source_metadata,
+                source_type = EXCLUDED.source_type,
+                source_name = COALESCE(EXCLUDED.source_name, raw_article_source_metadata.source_name),
+                source_metadata =
+                    raw_article_source_metadata.source_metadata || EXCLUDED.source_metadata,
                 updated_at = NOW()
         """),
         {
             "raw_article_id": article_id,
+            "source_type": source_type,
+            "source_name": source_name,
             "source_metadata": source_metadata,
         },
     )
@@ -812,8 +849,18 @@ def _upsert_crawl_run_article(
 ) -> None:
     if not run_context or not run_context.crawl_run_id:
         return
+    if not _column_exists(db, "raw_articles", "crawl_events"):
+        return
 
-    raw_payload = {
+    crawl_event = {
+        "crawl_run_id": run_context.crawl_run_id,
+        "raw_article_id": article_id,
+        "url": article.url,
+        "url_hash": article.url_hash,
+        "discovered_at": _iso_or_none(article.collected_at),
+        "action": action,
+        "fetch_status": article.crawl_status,
+        "error_message": article.error_message,
         "source_name": run_context.source_name or article.source_name,
         "collection_mode": run_context.collection_mode,
         "track": run_context.track,
@@ -822,19 +869,56 @@ def _upsert_crawl_run_article(
         "source_metadata": _json_or_value(source_metadata, {}),
     }
     db.execute(
-        _INSERT_CRAWL_RUN_ARTICLE,
+        _APPEND_CRAWL_EVENT,
         {
-            "crawl_run_id": run_context.crawl_run_id,
             "raw_article_id": article_id,
-            "url": article.url,
-            "url_hash": article.url_hash,
-            "discovered_at": article.collected_at,
-            "action": action,
-            "fetch_status": article.crawl_status,
-            "error_message": article.error_message,
-            "raw_payload": json.dumps(raw_payload, ensure_ascii=False),
+            "crawl_event": json.dumps(crawl_event, ensure_ascii=False),
         },
     )
+
+
+def _table_exists(db, table_name: str) -> bool:
+    return bool(
+        db.execute(
+            text("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                      AND table_name = :table_name
+                )
+            """),
+            {"table_name": table_name},
+        ).scalar()
+    )
+
+
+def _column_exists(db, table_name: str, column_name: str) -> bool:
+    return bool(
+        db.execute(
+            text("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = :table_name
+                      AND column_name = :column_name
+                )
+            """),
+            {"table_name": table_name, "column_name": column_name},
+        ).scalar()
+    )
+
+
+def _pg_bigint_array(values: Any) -> str:
+    out: list[str] = []
+    source_values = values if isinstance(values, list) else []
+    for value in source_values:
+        try:
+            out.append(str(int(value)))
+        except (TypeError, ValueError):
+            continue
+    return "{" + ",".join(out) + "}"
 
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")

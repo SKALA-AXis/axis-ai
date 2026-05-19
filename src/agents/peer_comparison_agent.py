@@ -10,11 +10,11 @@ Phase 3 (Forecast) 는 Day 90+ deferred — `forecasts` 빈 배열 반환.
     ``PeerComparisonAgent().compare(peer_id, window_days, focus_sector)``.
 
 흐름:
-    1. ``_fetch_peer_context`` — peer 의 최근 카드 + peer_financials 조회
+    1. ``_fetch_peer_context`` — peer 의 최근 카드 + financial_history 조회
     2. ``_compute_trend_deltas`` — QoQ / YoY deterministic 계산 (LLM X)
     3. ``_llm_call`` — Phase 1 + 4 single gpt-4o call
     4. ``_parse_and_validate`` — 3-tier 필드 검증 + Phase 3 stub
-    5. ``@with_ledger_writeback`` — analysis_ledger INSERT
+    5. ``@with_ledger_writeback`` — 분석 read model 저장
 """
 
 from __future__ import annotations
@@ -401,19 +401,24 @@ def _fetch_peer_cards(peer_id: str, since: datetime, focus_sector: str | None) -
 
 
 def _fetch_financials(peer_id: str) -> list[dict]:
-    sql = (
-        "SELECT period, report_date, revenue_total_krwbn, operating_profit_krwbn, "
-        "ai_revenue_share_pct, segment_revenue, dart_rcept_no "
-        "FROM peer_financials WHERE peer_id = :peer_id "
-        "ORDER BY period ASC"
-    )
+    sql = "SELECT financial_history FROM peer_companies WHERE id = :peer_id"
     try:
         with SessionLocal() as db:
-            rows = db.execute(text(sql), {"peer_id": peer_id}).mappings().all()
+            row = db.execute(text(sql), {"peer_id": peer_id}).mappings().first()
     except Exception as e:
-        log.exception("PeerCompare peer_financials 조회 실패 | %s", e)
+        log.exception("PeerCompare peer_companies.financial_history 조회 실패 | %s", e)
         return []
-    return [dict(r) for r in rows]
+    if not row:
+        return []
+    history = row.get("financial_history") or []
+    if isinstance(history, str):
+        try:
+            history = json.loads(history)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(history, list):
+        return []
+    return [item for item in history if isinstance(item, dict)]
 
 
 def _format_cards(cards: list[dict]) -> str:
@@ -446,7 +451,7 @@ def _format_cards(cards: list[dict]) -> str:
 
 def _format_financials(rows: list[dict]) -> str:
     if not rows:
-        return "*peer_financials 데이터 없음 (cold-start)*"
+        return "*financial_history 데이터 없음 (cold-start)*"
     lines: list[str] = []
     for r in rows[-5:]:  # 최근 5분기
         period = r.get("period") or ""
@@ -466,7 +471,7 @@ def _format_financials(rows: list[dict]) -> str:
 
 def _format_trend_deltas(deltas: list[dict]) -> str:
     if not deltas:
-        return "*peer_financials 부재 — 정량 추세 산출 불가*"
+        return "*financial_history 부재 — 정량 추세 산출 불가*"
     lines: list[str] = []
     for d in deltas:
         qoq = f"QoQ {d['qoq_pct']:+.1f}%" if d.get("qoq_pct") is not None else "QoQ N/A"

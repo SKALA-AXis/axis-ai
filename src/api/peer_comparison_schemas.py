@@ -25,7 +25,7 @@ class PeerComparisonRequest(BaseModel):
 
 
 class TrendDelta(BaseModel):
-    """Phase 2 — 정량 변화 지표. peer_financials 기반 deterministic 계산."""
+    """Phase 2 — 정량 변화 지표. peer_companies.financial_history 기반 deterministic 계산."""
 
     model_config = ConfigDict(extra="allow")
 

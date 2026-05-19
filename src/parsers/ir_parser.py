@@ -2,7 +2,8 @@
 
 IRCrawler는 PDF 파일을 직접 저장하지 않고 RawArticle 형태로 본문 텍스트와
 PDF 페이지 블록을 담는다. 이 파서는 그 RawArticle 결과를 받아
-FinancialLinkerAgent/peer_financials 적재에 사용할 수 있는 핵심 재무 후보를 만든다.
+peer_companies.financial_history와 raw_articles.financial_metrics에 붙일 수 있는
+핵심 재무 후보를 만든다.
 """
 
 from __future__ import annotations
@@ -135,7 +136,7 @@ _IR_COMPANY_SECTION_HINTS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...
 
 
 def _normalize_amount_krwbn(value: str, unit: str) -> float:
-    """금액 문자열을 기존 peer_financials 관례인 억원 단위 값으로 변환한다."""
+    """금액 문자열을 재무 read model 관례인 억원 단위 값으로 변환한다."""
     n = float(value.replace(",", ""))
     if unit in ("조원", "조"):
         return n * 10_000

@@ -1,6 +1,6 @@
 """이슈카드 대표 기사를 BGE-M3로 임베딩해 Qdrant axis_main 컬렉션에 삽입.
 
-검증 통과(`evidence_chain.pass=True`) 카드만 인덱싱한다.
+검증 통과(`card_news.validation_pass=True`) 카드만 인덱싱한다.
 페이로드는 §2.5 규약대로 메타데이터만 — 원문 본문 저장 금지.
 """
 

@@ -8,7 +8,7 @@
 1. ``LANGFUSE_*`` env 가 있으면 CallbackHandler 활성 / 없으면 silent no-op
    (개발 / CI / unit test 환경에서 부담 없이 동작).
 2. agent / phase / prompt_version metadata 를 호출별로 부착.
-3. EvidenceAgent 가 ``evidence_chain.provenance.langfuse_trace_id`` 에 적재할
+3. EvidenceAgent 가 ``card_news.evidence_payload.provenance.langfuse_trace_id`` 에 적재할
    수 있도록 handler 의 trace_id 노출.
 4. git_sha (Helm chart 가 ``AXIS_GIT_SHA`` env 로 주입) 를 module-level 캐시.
 

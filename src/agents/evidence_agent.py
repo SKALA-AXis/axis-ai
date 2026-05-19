@@ -82,7 +82,7 @@ class EvidenceAgent:
             # observability module 누락 / Langfuse 비활성 — provenance 핵심 필드는 보존
             pass
 
-        # 재무 연결 (PoC) — stub JSON 기반. peer_financials 테이블 마이그레이션 후 DB로 교체.
+        # 재무 연결 (PoC) — stub JSON 기반. V30 이후 DB read model은 peer_companies.financial_history.
         link_result = self.financial_linker.link(card)
         financial_refs: list[dict[str, Any]] = link_result.get("financial_refs", [])
         # W5 MBB·커니 크롤러가 채울 자리. 현재는 빈 컨테이너.

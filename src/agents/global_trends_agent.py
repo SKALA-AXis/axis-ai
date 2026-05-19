@@ -538,7 +538,7 @@ def _parse_and_validate(content: str, all_cards: list[dict], companies: list[str
     data["confidence"] = confidence_in_range(data.get("confidence", 0.0))
     data["sources_used"] = dedup_and_cap(data.get("sources_used") or [c["id"] for c in all_cards])
 
-    # peer_ids — for analysis_ledger carry-over
+    # peer_ids — for global_industry_trends carry-over
     data["peer_ids"] = companies
 
     data["langfuse_trace_id"] = _get_langfuse_trace_id()

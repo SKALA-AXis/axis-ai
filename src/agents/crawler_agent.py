@@ -21,12 +21,7 @@ _LOAD_SQL = text("""
       AND (:collected_since IS NULL OR ra.collected_at >= CAST(:collected_since AS timestamptz))
       AND (
           :crawl_run_id IS NULL
-          OR EXISTS (
-              SELECT 1
-              FROM crawl_run_articles cra
-              WHERE cra.raw_article_id = ra.id
-                AND cra.crawl_run_id = CAST(:crawl_run_id AS uuid)
-          )
+          OR ra.crawl_run_id = CAST(:crawl_run_id AS uuid)
       )
     ORDER BY ra.published_at DESC NULLS LAST
     LIMIT :limit

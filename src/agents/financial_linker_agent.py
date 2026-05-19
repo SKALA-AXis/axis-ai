@@ -4,7 +4,7 @@
 시사점(implication)을 대체하는 "숫자로 설명되는 팩트"를 생성하는 것이 목적.
 
 PoC 단계 데이터 소스: data/peer_financials/{peer_id}.json (stub).
-W4 후반: peer_financials 테이블이 axis-backend Flyway로 생성되면 DB 조회로 교체.
+V30 이후 운영 DB read model은 peer_companies.financial_history.
 
 핵심 로직:
   1. 카드의 sector + event_type + 제목·요약을 segment 키워드와 매칭

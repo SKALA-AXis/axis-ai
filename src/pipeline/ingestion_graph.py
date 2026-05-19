@@ -6,7 +6,7 @@ v3 변경:
 - ImplicationAgent 보류 → implication_node 제거
 - ValidationAgent (SC 검증) 보류 → EvidenceAgent (근거 첨부)로 전환
 - ClassificationAgent v3: sector + 결정적 노출도
-- evidence_chain 테이블 persist + vector_index 노드 + pipeline_logs 누적
+- card_news.evidence_payload persist + vector_index 노드 + legacy_records 실행 통계 누적
 """
 
 import json
@@ -91,7 +91,7 @@ def _logged_step(
     input_key: str,
     output_key: str,
 ) -> Callable[[Callable], Callable]:
-    """노드 함수를 감싸 elapsed_ms·input/output 카운트를 pipeline_logs에 기록."""
+    """노드 함수를 감싸 elapsed_ms·input/output 카운트를 legacy_records에 기록."""
 
     def decorator(func: Callable) -> Callable:
         def wrapper(state: IngestionState) -> IngestionState:
@@ -223,7 +223,7 @@ def crawl_node(state: IngestionState) -> IngestionState:
 
 @_logged_step("credibility", "raw_article_ids", "credible_ids")
 def credibility_node(state: IngestionState) -> IngestionState:
-    """Gate 2: credibility_score 기준 신뢰도 필터."""
+    """Gate 2: source_type 기준 신뢰도 유효성 필터."""
     from src.agents.credibility_agent import CredibilityAgent
 
     credible_ids, skipped = CredibilityAgent().filter(state["raw_article_ids"])
@@ -553,7 +553,7 @@ def card_news_node(state: IngestionState) -> IngestionState:
 
 @_logged_step("evidence", "card_news", "evidence_results")
 def evidence_node(state: IngestionState) -> IngestionState:
-    """v3 검증 체인 첨부 + 카드 DB 저장 + evidence_chain 테이블 persist."""
+    """v3 검증 체인 첨부 + 카드 DB 저장 + card_news.evidence_payload persist."""
     from src.agents.evidence_agent import EvidenceAgent
     from src.db.article_store import save_card_news, save_evidence_chain
 

@@ -51,12 +51,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="DB 저장과 crawl_runs/crawl_cursors 갱신 없이 window 실행 흐름만 확인한다.",
+        help="DB 저장과 crawl_cursors 갱신 없이 window 실행 흐름만 확인한다.",
     )
     parser.add_argument(
         "--no-state",
         action="store_true",
-        help="crawl_runs/crawl_cursors를 사용하지 않는다. raw_articles 저장은 유지된다.",
+        help="crawl_cursors를 사용하지 않는다. raw_articles 저장은 유지된다.",
     )
     parser.add_argument(
         "--skip-preprocess",
@@ -74,12 +74,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--init-state-schema",
         action="store_true",
-        help="현재 연결 DB에 crawl_runs/crawl_cursors 테이블을 생성한다. 로컬 검증용.",
+        help="현재 연결 DB에 crawl_cursors 테이블을 생성한다. 로컬 검증용.",
     )
     parser.add_argument(
         "--show-state",
         action="store_true",
-        help="현재 crawl_cursors와 최근 crawl_runs를 출력하고 종료한다.",
+        help="현재 crawl_cursors를 출력하고 종료한다.",
     )
     return parser.parse_args()
 
@@ -167,7 +167,7 @@ def _print_state(cursors: list[dict], runs: list[dict]) -> None:
         )
 
     print("\n" + "=" * 78)
-    print("recent crawl_runs")
+    print("recent synthetic crawl run ids")
     print("=" * 78)
     if not runs:
         print("(empty)")

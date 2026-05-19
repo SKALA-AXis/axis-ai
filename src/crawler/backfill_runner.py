@@ -165,7 +165,7 @@ class BackfillRunner:
             skipped_count = max(len(articles) - inserted_count, 0)
             if self.process_after_window != "none":
                 if run_id is None:
-                    raise RuntimeError("post-window processing requires crawl_runs state")
+                    raise RuntimeError("post-window processing requires a crawl_run_id context")
                 self._run_pipeline_for_run(str(run_id))
             if run_id:
                 mark_crawl_run_success(run_id, inserted_count, skipped_count)
