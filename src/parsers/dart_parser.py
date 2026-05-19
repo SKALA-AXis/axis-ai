@@ -182,6 +182,15 @@ def _period_parts(period: str | None) -> dict[str, int | None]:
     }
 
 
+def _shift_period_year(period: str | None, offset: int) -> str | None:
+    if not period:
+        return None
+    match = re.match(r"(20\d{2})(Q[1-4])", period)
+    if not match:
+        return None
+    return f"{int(match.group(1)) + offset}{match.group(2)}"
+
+
 def _disclosure_category(report_name: str) -> str:
     cleaned = report_name.strip()
     if cleaned.startswith(_EVENT_DISCLOSURE_PREFIXES):
@@ -345,6 +354,8 @@ def _extract_dart_statement_metrics(text: str) -> dict[str, Any]:
 
         candidate = {
             "score": score,
+            "source": "document_text",
+            "unit": unit,
             "revenue_total": revenue_total,
             "revenue_raw": revenue_raw,
             "operating_profit": operating_profit,
@@ -395,6 +406,7 @@ def _extract_table_statement_metrics(tables: list[dict[str, Any]]) -> dict[str, 
             "source": "structured_table",
             "table_index": table.get("table_index"),
             "table_title": table.get("title"),
+            "unit": unit,
             "revenue_total": revenue_total,
             "revenue_raw": revenue_raw,
             "operating_profit": operating_profit,
@@ -446,6 +458,13 @@ def _infer_table_unit(table: dict[str, Any]) -> str | None:
         ]
     )
     return _dart_statement_unit(text)
+
+
+def _candidate_unit(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    match = re.search(r"\((원|천원|백만원|억원|억|조원|조)\)", raw)
+    return match.group(1) if match else None
 
 
 def _classify_table(table: dict[str, Any]) -> dict[str, Any]:
@@ -508,7 +527,14 @@ def _clean_metric_label(row: list[Any]) -> str:
     return _clean_section_text(str(row[0] if row else ""))
 
 
-def _amount_values_from_row(row: list[Any], unit: str) -> list[dict[str, Any]]:
+def _amount_values_from_row(
+    row: list[Any],
+    unit: str,
+    *,
+    headers: list[str] | None = None,
+    period: str | None = None,
+    period_type: str | None = None,
+) -> list[dict[str, Any]]:
     values: list[dict[str, Any]] = []
     for position, cell in enumerate(row[1:], start=1):
         cell_text = str(cell or "")
@@ -517,22 +543,53 @@ def _amount_values_from_row(row: list[Any], unit: str) -> list[dict[str, Any]]:
             value = _normalize_dart_amount_krwbn(raw, unit)
             if value is None or abs(value) < 1:
                 continue
+            column_header = headers[position] if headers and position < len(headers) else None
+            value_period = _statement_column_period(column_header, position, period)
+            period_parts = _period_parts(value_period)
             values.append(
                 {
                     "column_index": position,
+                    "column_header": column_header,
                     "raw": raw,
                     "value_krwbn": value,
+                    "period": value_period,
+                    **period_parts,
+                    "period_type": period_type,
+                    "is_historical": bool(value_period and period and value_period != period),
                 }
             )
             break
     return values
 
 
-def _normalized_statement_rows(table: dict[str, Any], unit: str | None) -> list[dict[str, Any]]:
+def _statement_column_period(
+    column_header: str | None,
+    column_index: int,
+    period: str | None,
+) -> str | None:
+    if not period:
+        return None
+
+    header = re.sub(r"\s+", "", column_header or "")
+    if "(전)" in header or "전기" in header or "전분기" in header or "전년도" in header:
+        return _shift_period_year(period, -1)
+    if "(당)" in header or "당기" in header or "당분기" in header or column_index == 1:
+        return period
+    return _shift_period_year(period, -(column_index - 1))
+
+
+def _normalized_statement_rows(
+    table: dict[str, Any],
+    unit: str | None,
+    *,
+    period: str | None = None,
+    period_type: str | None = None,
+) -> list[dict[str, Any]]:
     rows = table.get("rows")
     if not isinstance(rows, list) or not unit:
         return []
 
+    headers = _table_header_row(rows)
     normalized_rows: list[dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, list):
@@ -546,7 +603,13 @@ def _normalized_statement_rows(table: dict[str, Any], unit: str | None) -> list[
         if not metric_key:
             continue
 
-        values = _amount_values_from_row(row_values, unit)
+        values = _amount_values_from_row(
+            row_values,
+            unit,
+            headers=headers,
+            period=period,
+            period_type=period_type,
+        )
         if not values:
             continue
 
@@ -563,11 +626,28 @@ def _normalized_statement_rows(table: dict[str, Any], unit: str | None) -> list[
     return normalized_rows
 
 
+def _table_header_row(rows: list[Any]) -> list[str] | None:
+    for row in rows[:3]:
+        if not isinstance(row, list):
+            continue
+        values = [str(value or "") for value in row]
+        if len(values) >= 2 and any(token in values[0] for token in ("과", "구분", "계정")):
+            return values
+        if len(values) >= 3 and any("20" in value or "제" in value for value in values[1:]):
+            return values
+    return None
+
+
 def _classify_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [_classify_table(table) for table in tables]
 
 
-def _extract_financial_statements(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _extract_financial_statements(
+    tables: list[dict[str, Any]],
+    *,
+    period: str | None = None,
+    period_type: str | None = None,
+) -> list[dict[str, Any]]:
     statements: list[dict[str, Any]] = []
 
     for table in tables:
@@ -575,7 +655,12 @@ def _extract_financial_statements(tables: list[dict[str, Any]]) -> list[dict[str
         if classified["table_type"] == "unclassified":
             continue
 
-        normalized_rows = _normalized_statement_rows(table, classified.get("unit"))
+        normalized_rows = _normalized_statement_rows(
+            table,
+            classified.get("unit"),
+            period=period,
+            period_type=period_type,
+        )
         if not normalized_rows:
             continue
 
@@ -591,6 +676,152 @@ def _extract_financial_statements(tables: list[dict[str, Any]]) -> list[dict[str
         )
 
     return statements
+
+
+def _extract_business_segment_candidates(
+    tables: list[dict[str, Any]],
+    *,
+    peer_id: str | None,
+    period: str | None,
+    period_type: str | None,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for table in tables:
+        rows = table.get("rows")
+        if not isinstance(rows, list):
+            continue
+        combined = _clean_section_text(
+            " ".join([str(table.get("title") or ""), str(table.get("text") or "")[:1000]])
+        )
+        if not any(token in combined for token in ("주요 제품", "주요제품", "제품 및 서비스")):
+            continue
+
+        unit = _dart_statement_unit(combined) or _infer_table_unit(table) or "백만원"
+        header = _segment_header_row(rows)
+        if not header:
+            continue
+        segment_index, item_index, value_index = header
+        current_segment = ""
+
+        for row in rows[1:]:
+            if not isinstance(row, list):
+                continue
+            values = [str(value or "").strip() for value in row]
+            if len(values) <= value_index:
+                continue
+
+            segment = values[segment_index] if segment_index < len(values) else ""
+            item = values[item_index] if item_index < len(values) else ""
+            if segment:
+                current_segment = segment
+            if _is_total_segment(segment, item):
+                continue
+
+            segment_label = _segment_label(current_segment, item)
+            if not segment_label:
+                continue
+
+            amount_match = _DART_AMOUNT_PATTERN.search(values[value_index])
+            if not amount_match:
+                continue
+            raw_amount = amount_match.group(0)
+            value_krwbn = _normalize_dart_amount_krwbn(raw_amount, unit)
+            if value_krwbn is None:
+                continue
+
+            standard_area = _standard_business_area(
+                segment_label=segment_label,
+                parent_segment=current_segment,
+                peer_id=peer_id,
+            )
+            period_parts = _period_parts(period)
+            candidates.append(
+                {
+                    "page": None,
+                    "type": "revenue_total",
+                    "value_krwbn": value_krwbn,
+                    "value_krw": value_krwbn * 100_000_000,
+                    "raw": f"{segment_label} {raw_amount} ({unit})",
+                    "source": "business_segment_table",
+                    "table_index": table.get("table_index"),
+                    "table_title": table.get("title"),
+                    "unit": unit,
+                    "confidence": 0.9,
+                    "metric_scope": "segment",
+                    "segment_label": segment_label,
+                    "business_area": segment_label,
+                    "standard_business_area": standard_area,
+                    "period": period,
+                    **period_parts,
+                    "period_type": period_type,
+                }
+            )
+
+    return candidates
+
+
+def _segment_header_row(rows: list[Any]) -> tuple[int, int, int] | None:
+    for row in rows[:3]:
+        if not isinstance(row, list):
+            continue
+        values = [str(value or "") for value in row]
+        segment_index = next(
+            (index for index, value in enumerate(values) if "사업부문" in value or "부문" in value),
+            None,
+        )
+        item_index = next(
+            (index for index, value in enumerate(values) if "품목" in value or "제품" in value),
+            None,
+        )
+        value_index = next(
+            (
+                index
+                for index, value in enumerate(values)
+                if index not in {segment_index, item_index}
+                and ("20" in value or "매출" in value or "분기" in value or "당기" in value)
+            ),
+            None,
+        )
+        if segment_index is not None and value_index is not None:
+            return (
+                segment_index,
+                item_index if item_index is not None else segment_index,
+                value_index,
+            )
+    return None
+
+
+def _is_total_segment(segment: str, item: str) -> bool:
+    joined = re.sub(r"\s+", "", f"{segment}{item}")
+    return joined in {"합계", "총계", "계"} or joined.startswith("합계")
+
+
+def _segment_label(segment: str, item: str) -> str | None:
+    cleaned_item = _clean_section_text(item)
+    cleaned_segment = _clean_section_text(segment)
+    if cleaned_item and cleaned_item not in {"소계", "합계", "계"}:
+        return cleaned_item
+    if cleaned_segment:
+        return cleaned_segment
+    return cleaned_item or None
+
+
+def _standard_business_area(
+    *,
+    segment_label: str,
+    parent_segment: str,
+    peer_id: str | None,
+) -> str | None:
+    combined = f"{segment_label} {parent_segment}".lower()
+    if peer_id == "sk_ax" and any(token in combined for token in ("c&c", "씨앤씨", "sk주식회사")):
+        return "sk_ax"
+    if any(token in combined for token in ("클라우드", "cloud", "msp")):
+        return "cloud"
+    if any(token in combined for token in ("물류", "logistics", "cello")):
+        return "logistics"
+    if any(token in combined for token in ("si", "ito", "it서비스", "it 서비스", "enterprise")):
+        return "enterprise_it"
+    return None
 
 
 def _compact_tables_for_parser_result(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -980,6 +1211,123 @@ def _topic_snippet(text: str, term: str, radius: int = 180) -> str:
     return _clean_section_text(text[start:end])
 
 
+def _enrich_document_chunks(
+    chunks: list[dict[str, Any]],
+    *,
+    peer_id: str | None,
+    period: str | None,
+    rcept_no: str | None,
+) -> list[dict[str, Any]]:
+    for chunk in chunks:
+        chunk["peer_id"] = peer_id
+        chunk["period"] = period
+        chunk["rcept_no"] = rcept_no
+        matched_keywords: list[str] = []
+        for signal in chunk.get("topic_signals") or []:
+            if isinstance(signal, dict):
+                matched_keywords.extend(str(term) for term in signal.get("matched_terms") or [])
+        chunk["matched_keywords"] = list(dict.fromkeys(matched_keywords))
+    return chunks
+
+
+def _metric_details(candidates: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    details: dict[str, dict[str, Any]] = {}
+    for candidate in candidates:
+        metric_type = candidate.get("type")
+        if not metric_type or metric_type in details:
+            continue
+        details[str(metric_type)] = {
+            key: value
+            for key, value in candidate.items()
+            if key
+            in {
+                "page",
+                "raw",
+                "value_krwbn",
+                "value_krw",
+                "metric_scope",
+                "business_area",
+                "standard_business_area",
+                "segment_label",
+                "confidence",
+                "source",
+                "table_index",
+                "table_title",
+                "unit",
+                "period",
+                "period_year",
+                "period_quarter",
+                "period_type",
+            }
+        }
+    return details
+
+
+def _analysis_facts(
+    *,
+    financial_statements: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    document_chunks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+    seen_metrics: set[tuple[str, Any]] = set()
+    for statement in financial_statements:
+        for row in statement.get("rows") or []:
+            if not isinstance(row, dict):
+                continue
+            metric = str(row.get("metric_key") or "")
+            key = (metric, statement.get("table_index"))
+            if not metric or key in seen_metrics:
+                continue
+            seen_metrics.add(key)
+            facts.append(
+                {
+                    "fact_type": "financial_metric",
+                    "metric": metric,
+                    "value_krwbn": row.get("current_value_krwbn"),
+                    "table_index": statement.get("table_index"),
+                    "source": "financial_statement",
+                }
+            )
+
+    for candidate in candidates:
+        if candidate.get("source") != "business_segment_table":
+            continue
+        facts.append(
+            {
+                "fact_type": "financial_metric",
+                "metric": candidate.get("type"),
+                "value_krwbn": candidate.get("value_krwbn"),
+                "business_area": candidate.get("business_area"),
+                "standard_business_area": candidate.get("standard_business_area"),
+                "source": "business_segment_table",
+            }
+        )
+
+    seen_topics: set[tuple[str, str]] = set()
+    for chunk in document_chunks:
+        for signal in chunk.get("topic_signals") or []:
+            if not isinstance(signal, dict):
+                continue
+            topic = str(signal.get("topic") or "")
+            key = (str(chunk.get("chunk_id") or ""), topic)
+            if not topic or key in seen_topics:
+                continue
+            seen_topics.add(key)
+            facts.append(
+                {
+                    "fact_type": "business_context",
+                    "topic": topic,
+                    "topic_name_ko": signal.get("topic_name_ko"),
+                    "matched_keywords": signal.get("matched_terms") or [],
+                    "chunk_id": chunk.get("chunk_id"),
+                    "section_key": chunk.get("section_key"),
+                    "snippet": signal.get("snippet"),
+                }
+            )
+    return facts
+
+
 class DartParser:
     """DartCrawler가 만든 RawArticle 또는 dict 결과를 파싱한다."""
 
@@ -1000,7 +1348,14 @@ class DartParser:
             period = _extract_period(" ".join([report_name, text[:5000]]))
 
         period_parts = _period_parts(period)
+        rcept_no = str(extra.get("rcept_no") or extra.get("receipt_no") or "")
         sections, document_chunks = _extract_sections_and_chunks(text)
+        document_chunks = _enrich_document_chunks(
+            document_chunks,
+            peer_id=peer_id,
+            period=period,
+            rcept_no=rcept_no or None,
+        )
         section_tree = _extract_section_tree(text)
         topic_signals = _extract_topic_signals(text)
         warnings: list[str] = []
@@ -1013,7 +1368,11 @@ class DartParser:
             else []
         )
         classified_tables = _classify_tables(tables)
-        financial_statements = _extract_financial_statements(tables)
+        financial_statements = _extract_financial_statements(
+            tables,
+            period=period,
+            period_type=period_type,
+        )
 
         table_metrics = _extract_table_statement_metrics(tables)
         statement_metrics = table_metrics or _extract_dart_statement_metrics(text)
@@ -1028,9 +1387,15 @@ class DartParser:
                     "page": None,
                     "type": "revenue_total",
                     "value_krwbn": revenue_total,
+                    "value_krw": revenue_total * 100_000_000,
                     "raw": revenue_raw,
                     "source": statement_metrics.get("source", "document_text"),
                     "table_index": statement_metrics.get("table_index"),
+                    "unit": statement_metrics.get("unit") or _candidate_unit(revenue_raw),
+                    "confidence": 0.94
+                    if statement_metrics.get("source") == "structured_table"
+                    else 0.82,
+                    "metric_scope": "company_total",
                 }
             )
 
@@ -1047,11 +1412,26 @@ class DartParser:
                     "page": None,
                     "type": "operating_profit",
                     "value_krwbn": operating_profit,
+                    "value_krw": operating_profit * 100_000_000,
                     "raw": operating_profit_raw,
                     "source": statement_metrics.get("source", "document_text"),
                     "table_index": statement_metrics.get("table_index"),
+                    "unit": statement_metrics.get("unit") or _candidate_unit(operating_profit_raw),
+                    "confidence": 0.94
+                    if statement_metrics.get("source") == "structured_table"
+                    else 0.82,
+                    "metric_scope": "company_total",
                 }
             )
+
+        candidates.extend(
+            _extract_business_segment_candidates(
+                tables,
+                peer_id=peer_id,
+                period=period,
+                period_type=period_type,
+            )
+        )
 
         if not text:
             warnings.append("content 없음")
@@ -1064,7 +1444,11 @@ class DartParser:
         if document_fetched and operating_profit is None:
             warnings.append("operating_profit 추출 실패")
 
-        rcept_no = str(extra.get("rcept_no") or extra.get("receipt_no") or "")
+        analysis_facts = _analysis_facts(
+            financial_statements=financial_statements,
+            candidates=candidates,
+            document_chunks=document_chunks,
+        )
         financial_record = {
             "peer_id": peer_id,
             "period": period,
@@ -1088,6 +1472,7 @@ class DartParser:
                 statement_metrics.get("source")
                 or ("dart_document_text" if document_fetched else "not_available_without_document")
             ),
+            "metric_details": _metric_details(candidates),
         }
 
         result = {
@@ -1135,6 +1520,7 @@ class DartParser:
             "topic_signals": topic_signals,
             "topics": [signal["topic"] for signal in topic_signals],
             "financial_record": financial_record,
+            "analysis_facts": analysis_facts,
             "warnings": warnings,
         }
 
