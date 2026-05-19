@@ -183,6 +183,66 @@ def test_ir_parser_does_not_treat_margin_as_business_area() -> None:
     assert candidate["business_area"] == "company_total"
 
 
+def test_ir_parser_does_not_apply_amount_unit_to_margin_rows() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="테스트사 2026년 1분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="test_peer",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 7,
+                    "blocks": [
+                        {"text": "Hi-tech"},
+                        {"text": "(단위: 십억원)"},
+                        {"text": "구분 1Q25 2Q25 3Q25 4Q25 1Q26"},
+                        {"text": "OP Margin"},
+                        {"text": "솔루션 864 973 11.2% 972 11.1%"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    margin_candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("type") == "operating_margin"
+    ]
+
+    assert [candidate["period"] for candidate in margin_candidates] == ["2025Q3", "2026Q1"]
+    assert [candidate["value_pct"] for candidate in margin_candidates] == [11.2, 11.1]
+    assert all(candidate["unit"] == "%" for candidate in margin_candidates)
+    assert all("십억원" not in candidate["evidence_text"] for candidate in margin_candidates)
+    assert margin_candidates[0]["business_area"] == "솔루션"
+
+    metrics = _metrics_from_parser_result(
+        {
+            "id": 103,
+            "company": ["test_peer"],
+            "title": article.title,
+            "url": article.url,
+            "source_name": article.source_name,
+            "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+        },
+        parsed,
+        {"period": "2026Q1", "peer_id": "test_peer"},
+    )
+    margin_metrics = [
+        metric for metric in metrics if metric["metric_name"] == "operating_margin"
+    ]
+    assert all(metric["value_krwbn"] is None for metric in margin_metrics)
+    assert all(metric["unit"] == "%" for metric in margin_metrics)
+
+
 def test_ir_parser_uses_table_page_context_for_generic_metric_rows() -> None:
     article = RawArticle(
         url="https://example.com/ir.pdf",

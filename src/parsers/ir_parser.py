@@ -744,6 +744,7 @@ def _extract_financial_table_candidates(
                     if table_rows:
                         break
                     continue
+                display_unit = _table_display_unit(unit=unit, value_kind=value_kind)
                 row_evidence = _table_row_evidence(
                     table_title=table_title,
                     context_business_area=table_context_business_area,
@@ -751,7 +752,7 @@ def _extract_financial_table_candidates(
                     row_label=row_label,
                     columns=columns,
                     row_values=row_values,
-                    unit=unit,
+                    unit=display_unit,
                 )
                 business_area = _table_business_area(
                     row_label,
@@ -767,13 +768,19 @@ def _extract_financial_table_candidates(
                     normalized = _table_value(raw_value, unit=unit, value_kind=value_kind)
                     if normalized is None:
                         continue
+                    cell_unit = _table_cell_unit(
+                        raw_value,
+                        table_unit=unit,
+                        value_kind=value_kind,
+                    )
                     period = column["period"]
                     candidate: dict[str, Any] = {
                         "page": page_no,
                         "type": metric_name,
                         "value_kind": value_kind,
                         _candidate_value_key(value_kind): normalized,
-                        "raw": f"{row_label} {column['label']} {raw_value} ({unit})",
+                        "unit": cell_unit,
+                        "raw": f"{row_label} {column['label']} {raw_value} ({cell_unit})",
                         "source": "ir_table_matrix",
                         "source_table_uid": table_uid,
                         "table_title": table_title,
@@ -784,7 +791,7 @@ def _extract_financial_table_candidates(
                         "column_label": column["label"],
                         "row_evidence": row_evidence,
                         "evidence_text": (
-                            f"{row_evidence} | 선택 셀: {column['label']}={raw_value} ({unit})"
+                            f"{row_evidence} | 선택 셀: {column['label']}={raw_value} ({cell_unit})"
                         ),
                         "period": period,
                         "period_year": column.get("period_year"),
@@ -1024,12 +1031,27 @@ def _table_value(raw_value: str, *, unit: str, value_kind: str) -> float | None:
     value = raw_value.strip()
     if not value:
         return None
-    if value_kind == "percentage" or value.endswith("%"):
+    has_pct_marker = value.endswith("%")
+    if value_kind == "percentage" and unit != "%" and not has_pct_marker:
+        return None
+    if value_kind == "percentage" or has_pct_marker:
         try:
             return float(value.rstrip("%").replace(",", ""))
         except ValueError:
             return None
     return _normalize_table_amount_krwbn(value.strip("()"), unit)
+
+
+def _table_display_unit(*, unit: str, value_kind: str) -> str:
+    if value_kind == "percentage":
+        return "%"
+    return unit
+
+
+def _table_cell_unit(raw_value: str, *, table_unit: str, value_kind: str) -> str:
+    if value_kind == "percentage" or raw_value.strip().endswith("%"):
+        return "%"
+    return table_unit
 
 
 def _normalize_table_amount_krwbn(value: str, unit: str) -> float:

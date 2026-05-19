@@ -322,7 +322,7 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
                        raw_articles.source_name, raw_articles.published_at,
                        raw_articles.collected_at,
                        raw_articles.metadata,
-                       COALESCE(pr.parser_result, '{}'::jsonb) AS parser_result,
+                       COALESCE(pr.raw_result, '{}'::jsonb) AS parser_result,
                        COALESCE(pr.financial_record, '{}'::jsonb) AS financial_record,
                        COALESCE(pr.warnings, '[]'::jsonb) AS parser_warnings
                 FROM raw_articles
@@ -352,7 +352,7 @@ def list_dart_documents(
         select_sql="""
             SELECT r.id, r.company, r.title, r.url, r.published_at, r.collected_at,
                    r.processing_status, r.metadata,
-                   COALESCE(pr.parser_result, '{}'::jsonb) AS parser_result,
+                   COALESCE(pr.raw_result, '{}'::jsonb) AS parser_result,
                    COALESCE(pr.financial_record, '{}'::jsonb) AS financial_record,
                    COALESCE(pr.warnings, '[]'::jsonb) AS parser_warnings
             FROM raw_articles r
@@ -380,7 +380,7 @@ def get_dart_document_detail(article_id: int) -> dict[str, Any] | None:
         select_sql="""
             SELECT r.id, r.company, r.title, r.content, r.url, r.published_at, r.collected_at,
                    r.processing_status, r.metadata,
-                   COALESCE(pr.parser_result, '{}'::jsonb) AS parser_result,
+                   COALESCE(pr.raw_result, '{}'::jsonb) AS parser_result,
                    COALESCE(pr.financial_record, '{}'::jsonb) AS financial_record,
                    COALESCE(pr.warnings, '[]'::jsonb) AS parser_warnings
             FROM raw_articles r
@@ -1238,11 +1238,18 @@ def _parse_result_payload(metadata: dict[str, Any]) -> dict[str, Any]:
     }
     return {
         "parser_version": parser_result.get("parser_version"),
-        "parse_status": "ok" if parser_result.get("ok") else "failed",
+        "parser_ok": bool(parser_result.get("ok")),
         "parser_quality_label": metadata.get("parser_quality_label"),
+        "parser_quality_score": metadata.get("parser_quality_score"),
+        "parser_quality_reason": metadata.get("parser_quality_reason"),
+        "period": metadata.get("period") or parser_result.get("period"),
+        "period_year": metadata.get("period_year") or parser_result.get("period_year"),
+        "period_quarter": metadata.get("period_quarter") or parser_result.get("period_quarter"),
+        "period_type": metadata.get("period_type") or parser_result.get("period_type"),
+        "published_at": parser_result.get("published_at"),
         "parser_result": parser_result,
         "financial_record": financial_record if isinstance(financial_record, dict) else {},
-        "raw_payload": raw_payload,
+        "result_metadata": raw_payload,
         "warnings": warnings if isinstance(warnings, list) else [warnings],
     }
 
@@ -1257,44 +1264,62 @@ def _upsert_parse_result(
     db.execute(
         text("""
             INSERT INTO raw_article_parse_results (
-                raw_article_id, parser_version, parse_status,
-                parser_quality_label, parser_result, financial_record,
-                raw_payload, warnings
+                raw_article_id, source_type, parser, parser_ok,
+                period, period_year, period_quarter, period_type, published_at,
+                parser_quality_score, parser_quality_label, parser_quality_reason,
+                financial_record, result_metadata, warnings, raw_result
             ) VALUES (
-                :raw_article_id, :parser_version, :parse_status,
-                :parser_quality_label, CAST(:parser_result AS jsonb),
-                CAST(:financial_record AS jsonb), CAST(:raw_payload AS jsonb),
-                CAST(:warnings AS jsonb)
+                :raw_article_id, :source_type, :parser, :parser_ok,
+                :period, :period_year, :period_quarter, :period_type, :published_at,
+                :parser_quality_score, :parser_quality_label, :parser_quality_reason,
+                CAST(:financial_record AS jsonb), CAST(:result_metadata AS jsonb),
+                CAST(:warnings AS jsonb), CAST(:raw_result AS jsonb)
             )
             ON CONFLICT (raw_article_id) DO UPDATE SET
-                parser_version = EXCLUDED.parser_version,
-                parse_status = EXCLUDED.parse_status,
+                source_type = EXCLUDED.source_type,
+                parser = EXCLUDED.parser,
+                parser_ok = EXCLUDED.parser_ok,
+                period = EXCLUDED.period,
+                period_year = EXCLUDED.period_year,
+                period_quarter = EXCLUDED.period_quarter,
+                period_type = EXCLUDED.period_type,
+                published_at = EXCLUDED.published_at,
+                parser_quality_score = EXCLUDED.parser_quality_score,
                 parser_quality_label = EXCLUDED.parser_quality_label,
-                parser_result = EXCLUDED.parser_result,
+                parser_quality_reason = EXCLUDED.parser_quality_reason,
                 financial_record = EXCLUDED.financial_record,
-                raw_payload = raw_article_parse_results.raw_payload || EXCLUDED.raw_payload,
+                result_metadata = raw_article_parse_results.result_metadata || EXCLUDED.result_metadata,
                 warnings = EXCLUDED.warnings,
+                raw_result = EXCLUDED.raw_result,
                 updated_at = NOW()
         """),
         {
             "raw_article_id": article_id,
-            "parser_version": payload.get("parser_version") or f"{source_type}_parser",
-            "parse_status": payload.get("parse_status"),
+            "source_type": source_type,
+            "parser": payload.get("parser_version") or f"{source_type}_parser",
+            "parser_ok": payload.get("parser_ok"),
+            "period": payload.get("period"),
+            "period_year": payload.get("period_year"),
+            "period_quarter": payload.get("period_quarter"),
+            "period_type": payload.get("period_type"),
+            "published_at": payload.get("published_at"),
+            "parser_quality_score": payload.get("parser_quality_score"),
             "parser_quality_label": payload.get("parser_quality_label"),
-            "parser_result": json.dumps(
-                _sanitize_jsonish(payload.get("parser_result") or {}),
-                ensure_ascii=False,
-            ),
+            "parser_quality_reason": payload.get("parser_quality_reason"),
             "financial_record": json.dumps(
                 _sanitize_jsonish(payload.get("financial_record") or {}),
                 ensure_ascii=False,
             ),
-            "raw_payload": json.dumps(
-                _sanitize_jsonish(payload.get("raw_payload") or {}),
+            "result_metadata": json.dumps(
+                _sanitize_jsonish(payload.get("result_metadata") or {}),
                 ensure_ascii=False,
             ),
             "warnings": json.dumps(
                 _sanitize_jsonish(payload.get("warnings") or []),
+                ensure_ascii=False,
+            ),
+            "raw_result": json.dumps(
+                _sanitize_jsonish(payload.get("parser_result") or {}),
                 ensure_ascii=False,
             ),
         },
