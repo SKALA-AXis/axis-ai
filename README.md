@@ -24,6 +24,8 @@ axis-ai 는 **DB 는 클러스터에서, 코드는 로컬에서** 가 일상 권
 
 DB / 임베딩 데이터는 클러스터에 항상 떠 있고, 본인은 로컬에서 코드 iterating. 다른 팀원과 같은 DB 를 보면서 개발 — 데이터 일관성·격리 둘 다.
 
+> 💡 **빠른 시작**: axis-ai 만 host 에서 돌리고 싶지 않고 backend / frontend 도 함께 한 번에 띄우려면 [`axis-infra` 의 `make up-cluster`](../axis-infra/README.md#mode-a--cluster-db--docker-compose--권장) — port-forward 자동 + docker compose 한 줄로 풀 스택 (cluster DB 연결). 본 Mode 1 은 *axis-ai 만 host 에서 직접 iterate* 하는 경우 (HMR / debugger / 빠른 빌드 사이클).
+
 #### 0. (1회) kubectl 클러스터 접속
 
 axis-infra README 참고 — `aws eks update-kubeconfig --region ap-northeast-2 --name skala-2025`. 매니저로부터 받은 자격증명 사용.
