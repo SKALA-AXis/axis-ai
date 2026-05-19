@@ -105,11 +105,16 @@ async def _main() -> None:
         ensure_backfill_state_schema,
         list_cursors,
         list_recent_runs,
+        validate_backfill_state_schema,
     )
 
-    if args.init_state_schema:
+    state_enabled = not (args.dry_run or args.no_state)
+
+    if args.init_state_schema or (state_enabled and profile == "local"):
         ensure_backfill_state_schema()
         log.info("backfill 상태 테이블 생성/확인 완료")
+    elif state_enabled:
+        validate_backfill_state_schema()
 
     if args.show_state:
         _print_state(list_cursors(), list_recent_runs())
@@ -133,7 +138,7 @@ async def _main() -> None:
     print("AXIS backfill crawler")
     print("=" * 78)
     print(f"profile={profile} sources={[config.source_name for config in configs]}")
-    print(f"persist={not args.dry_run} use_state={not (args.dry_run or args.no_state)}")
+    print(f"persist={not args.dry_run} use_state={state_enabled}")
     print(f"process_after_window={process_after_window}")
     print(f"run_to_end={args.run_to_end} max_windows={args.max_windows}")
 
