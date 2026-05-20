@@ -1050,9 +1050,17 @@ def save_pipeline_log(
     llm_tokens_used: int = 0,
     error_msg: Optional[str] = None,
 ) -> None:
-    """파이프라인 단계별 실행 통계를 pipeline_logs에 기록."""
+    """파이프라인 단계별 실행 통계를 기록한다.
+
+    backend V30 이후 운영 DB에서는 legacy pipeline_logs 테이블이 제거되었다.
+    테이블이 남아 있는 로컬/구버전 DB에서는 기록하고, 없는 DB에서는 조용히 건너뛴다.
+    """
     try:
         with SessionLocal() as db:
+            exists = db.execute(text("SELECT to_regclass('public.pipeline_logs')")).scalar()
+            if exists is None:
+                log.debug("pipeline_logs 테이블 없음. 단계 로그 저장 생략 | step=%s", step)
+                return
             db.execute(
                 _INSERT_PIPELINE_LOG,
                 {

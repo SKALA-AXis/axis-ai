@@ -520,6 +520,15 @@ def _classify_metric_context(
             "business_area": "portfolio",
             "entity_name": portfolio_entity,
             "confidence": 0.78,
+            "classification_reason": (
+                f"metric 주변 문맥에서 SK 포트폴리오 회사 '{portfolio_entity}'가 확인되어 "
+                "SK AX/피어 본체 지표가 아닌 portfolio_company로 분류"
+            ),
+            "context_evidence": _metric_context_evidence(
+                current_line_text=current_line_text,
+                metric_window=metric_window,
+                metric_text=metric_text,
+            ),
         }
 
     if metric_segment_area:
@@ -528,6 +537,15 @@ def _classify_metric_context(
             "business_area": metric_segment_area,
             "entity_name": peer_id,
             "confidence": 0.78,
+            "classification_reason": (
+                f"metric가 있는 행/주변 문맥에서 '{metric_segment_area}' 사업 키워드가 "
+                "직접 확인되어 segment 지표로 분류"
+            ),
+            "context_evidence": _metric_context_evidence(
+                current_line_text=current_line_text,
+                metric_window=metric_window,
+                metric_text=metric_text,
+            ),
         }
 
     if segment_area and not has_total:
@@ -536,6 +554,15 @@ def _classify_metric_context(
             "business_area": segment_area,
             "entity_name": peer_id,
             "confidence": 0.72,
+            "classification_reason": (
+                f"페이지 문맥에서 '{segment_area}' 사업 키워드가 확인되고 전사/연결/전체 "
+                "표현은 없어 segment 지표로 분류"
+            ),
+            "context_evidence": _metric_context_evidence(
+                current_line_text=current_line_text,
+                metric_window=metric_window,
+                metric_text=metric_text,
+            ),
         }
 
     if has_total:
@@ -544,6 +571,15 @@ def _classify_metric_context(
             "business_area": "company_total",
             "entity_name": peer_id,
             "confidence": 0.85,
+            "classification_reason": (
+                "페이지 또는 표 문맥에서 연결/전사/전체/경영실적 등 회사 전체를 나타내는 "
+                "표현이 확인되어 company_total 지표로 분류"
+            ),
+            "context_evidence": _metric_context_evidence(
+                current_line_text=current_line_text,
+                metric_window=metric_window,
+                metric_text=metric_text,
+            ),
         }
 
     return {
@@ -551,7 +587,28 @@ def _classify_metric_context(
         "business_area": segment_area or "company_total",
         "entity_name": peer_id,
         "confidence": 0.55,
+        "classification_reason": (
+            "metric 주변에서 전사/사업부문 판단 근거가 충분하지 않아 unknown으로 분류"
+        ),
+        "context_evidence": _metric_context_evidence(
+            current_line_text=current_line_text,
+            metric_window=metric_window,
+            metric_text=metric_text,
+        ),
     }
+
+
+def _metric_context_evidence(
+    *,
+    current_line_text: str,
+    metric_window: str,
+    metric_text: str,
+) -> str:
+    evidence_parts = [
+        f"metric 행: {current_line_text}" if current_line_text else "",
+        f"주변 문맥: {metric_text or metric_window}" if metric_text or metric_window else "",
+    ]
+    return " | ".join(part for part in evidence_parts if part)[:1200]
 
 
 def _metric_context_text(page_text: str, raw_match: str | None) -> str:
@@ -862,6 +919,15 @@ def _extract_financial_table_candidates(
                     active_metric_parent_label=active_metric_parent_label,
                 )
                 metric_scope = "company_total" if business_area == "company_total" else "segment"
+                classification_reason = _table_classification_reason(
+                    business_area=business_area,
+                    metric_scope=metric_scope,
+                    row_label=row_label,
+                    table_title=table_title,
+                    context_business_area=table_context_business_area,
+                    metric_parent_label=active_metric_parent_label if not explicit_metric else None,
+                    explicit_metric=explicit_metric,
+                )
                 table_cells: list[dict[str, Any]] = []
                 for column, raw_value in zip(columns, row_values, strict=False):
                     normalized = _table_value(raw_value, unit=unit, value_kind=value_kind)
@@ -890,8 +956,11 @@ def _extract_financial_table_candidates(
                         "column_label": column["label"],
                         "row_evidence": row_evidence,
                         "evidence_text": (
-                            f"{row_evidence} | 선택 셀: {column['label']}={raw_value} ({cell_unit})"
+                            f"{row_evidence} | 선택 셀: {column['label']}={raw_value} "
+                            f"({cell_unit}) | 분류 근거: {classification_reason}"
                         ),
+                        "classification_reason": classification_reason,
+                        "context_evidence": row_evidence,
                         "period": period,
                         "period_year": column.get("period_year"),
                         "period_quarter": column.get("period_quarter"),
@@ -983,6 +1052,42 @@ def _table_row_evidence(
     ]
     prefix = " > ".join(path) if path else row_label
     return f"{prefix} | {' | '.join(series)} ({unit})"
+
+
+def _table_classification_reason(
+    *,
+    business_area: str | None,
+    metric_scope: str,
+    row_label: str,
+    table_title: str | None,
+    context_business_area: str | None,
+    metric_parent_label: str | None,
+    explicit_metric: bool,
+) -> str:
+    table_part = f"표 제목 '{table_title}'" if table_title else "표 제목 없음"
+    if metric_scope == "company_total":
+        if context_business_area:
+            return (
+                f"{table_part}, 상위 문맥 '{context_business_area}' 아래의 전체/합계성 행 "
+                f"'{row_label}'로 판단되어 company_total로 분류"
+            )
+        if _is_company_total_table_label(row_label):
+            return (
+                f"{table_part}, 행 라벨 '{row_label}'이 전체/합계성 라벨이라 company_total로 분류"
+            )
+        if explicit_metric:
+            return (
+                f"{table_part}, 행 라벨 '{row_label}'이 별도 사업부문명이 아닌 metric 라벨이라 "
+                "company_total로 분류"
+            )
+        return f"{table_part}, 사업부문 라벨이 확인되지 않아 company_total로 분류"
+
+    parent_part = f", 상위 metric '{metric_parent_label}'" if metric_parent_label else ""
+    context_part = f", 표 문맥 '{context_business_area}'" if context_business_area else ""
+    return (
+        f"{table_part}{context_part}{parent_part}, 행 라벨 '{row_label}'을 "
+        f"사업부문/서비스 라벨로 판단해 business_area='{business_area}' segment로 분류"
+    )
 
 
 def _normalize_table_period(label: str) -> tuple[str | None, int | None, int | None, str | None]:
@@ -1616,6 +1721,8 @@ def _build_financial_record(
                 "column_label",
                 "row_evidence",
                 "evidence_text",
+                "classification_reason",
+                "context_evidence",
                 "period",
                 "period_year",
                 "period_quarter",

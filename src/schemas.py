@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,6 +15,8 @@ class PipelineRunRequest(BaseModel):
     company: list[str]
     track: str = "A"
     trigger_type: str = "scheduled"
+    window_start: Optional[datetime] = None
+    window_end: Optional[datetime] = None
 
 
 class PipelineRunResponse(BaseModel):

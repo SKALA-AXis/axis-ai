@@ -513,7 +513,7 @@ def _metrics_from_financial_record(
                 "source_page": detail.get("page") or financial_record.get("ir_page"),
                 "confidence": confidence,
                 "extraction_method": "ir_parser.financial_record",
-                "evidence_text": detail.get("raw"),
+                "evidence_text": _metric_evidence_text(detail, fallback=detail.get("raw")),
                 "payload": {
                     "financial_record": financial_record,
                     "metric_detail": detail,
@@ -629,7 +629,10 @@ def _metrics_from_parser_result(
                 "source_chunk_uid": candidate.get("source_chunk_uid"),
                 "confidence": confidence,
                 "extraction_method": extraction_method,
-                "evidence_text": candidate.get("evidence_text") or candidate.get("raw"),
+                "evidence_text": _metric_evidence_text(
+                    candidate,
+                    fallback=candidate.get("evidence_text") or candidate.get("raw"),
+                ),
                 "payload": {
                     "financial_record": financial_record,
                     "metric_candidate": candidate,
@@ -640,6 +643,24 @@ def _metrics_from_parser_result(
         )
 
     return metrics
+
+
+def _metric_evidence_text(metric_source: dict[str, Any], *, fallback: Any = None) -> str | None:
+    parts = [
+        str(fallback or "").strip(),
+        (
+            f"분류 근거: {metric_source.get('classification_reason')}"
+            if metric_source.get("classification_reason")
+            else ""
+        ),
+        (
+            f"판단 문맥: {metric_source.get('context_evidence')}"
+            if metric_source.get("context_evidence")
+            else ""
+        ),
+    ]
+    value = " | ".join(part for part in parts if part)
+    return value[:2000] if value else None
 
 
 def _metric_scope_key(

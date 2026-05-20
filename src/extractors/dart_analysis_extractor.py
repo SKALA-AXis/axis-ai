@@ -183,12 +183,23 @@ def financial_metrics_from_dart(
     """DART 재무제표 구조화 결과를 raw_article_financial_metrics row로 변환한다."""
     article_id = int(article["id"])
     peer_id = _peer_id(article, parser_result)
-    if peer_id == "sk_ax":
-        return []
     period = _period(article, parser_result)
     period_year = parser_result.get("period_year") or article["extra"].get("period_year")
     period_quarter = parser_result.get("period_quarter") or article["extra"].get("period_quarter")
     period_type = parser_result.get("period_type") or article["extra"].get("period_type")
+
+    if peer_id == "sk_ax":
+        return _metrics_from_candidates(
+            article=article,
+            parser_result=parser_result,
+            article_id=article_id,
+            peer_id=peer_id,
+            period=period,
+            period_year=period_year,
+            period_quarter=period_quarter,
+            period_type=period_type,
+            candidate_filter=_is_sk_ax_financial_metric_candidate,
+        )
 
     metrics: list[dict[str, Any]] = []
     statements = parser_result.get("financial_statements")
@@ -513,6 +524,7 @@ def _metrics_from_candidates(
     period_year: Any,
     period_quarter: Any,
     period_type: Any,
+    candidate_filter: Any | None = None,
 ) -> list[dict[str, Any]]:
     candidates = parser_result.get("candidates")
     if not isinstance(candidates, list):
@@ -521,6 +533,8 @@ def _metrics_from_candidates(
     metrics: list[dict[str, Any]] = []
     for index, candidate in enumerate(candidates, start=1):
         if not isinstance(candidate, dict):
+            continue
+        if candidate_filter is not None and not candidate_filter(candidate):
             continue
         metric_name = str(candidate.get("type") or "")
         value = candidate.get("value_krwbn")
@@ -539,7 +553,7 @@ def _metrics_from_candidates(
                 metric_name=metric_name,
                 metric_label=_DART_METRIC_LABELS[metric_name],
                 metric_scope=str(candidate.get("metric_scope") or "company_total"),
-                business_area=str(candidate.get("business_area") or "company_total"),
+                business_area=_candidate_business_area(candidate, peer_id=peer_id),
                 value_numeric=float(value),
                 source_table_uid=(
                     f"dart-table-{candidate.get('table_index')}"
@@ -553,6 +567,25 @@ def _metrics_from_candidates(
         )
 
     return metrics
+
+
+def _is_sk_ax_financial_metric_candidate(candidate: dict[str, Any]) -> bool:
+    if candidate.get("metric_scope") != "segment":
+        return False
+    if candidate.get("standard_business_area") == "sk_ax":
+        return True
+
+    evidence = " ".join(
+        str(candidate.get(key) or "")
+        for key in ("business_area", "segment_label", "raw", "table_title")
+    )
+    return _is_sk_ax_relevant_sentence(evidence)
+
+
+def _candidate_business_area(candidate: dict[str, Any], *, peer_id: str | None) -> str:
+    if peer_id == "sk_ax" and candidate.get("standard_business_area") == "sk_ax":
+        return "sk_ax"
+    return str(candidate.get("business_area") or "company_total")
 
 
 def _metric_row(
