@@ -15,6 +15,3 @@ htmlcov/
 .coverage
 dist/
 src/crawler/crawler_results/
-
-
-graphify/
