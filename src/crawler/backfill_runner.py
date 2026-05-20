@@ -200,6 +200,7 @@ class BackfillRunner:
             classify_node,
             crawl_node,
             dedup_node,
+            document_analysis_node,
             ingestion_graph,
             preprocess_route_node,
         )
@@ -215,6 +216,11 @@ class BackfillRunner:
             "parsed_document_ids": [],
             "industry_document_ids": [],
             "structured_signal_ids": [],
+            "analysis_document_ids": [],
+            "analysis_source_counts": {},
+            "analysis_metric_count": 0,
+            "analysis_signal_count": 0,
+            "analysis_errors": [],
             "skipped_preprocess_ids": [],
             "cluster_map": {},
             "representative_ids": [],
@@ -231,6 +237,7 @@ class BackfillRunner:
         else:
             result = crawl_node(state)
             result = preprocess_route_node(result)
+            result = document_analysis_node(result)
             result = dedup_node(result)
             result = classify_node(result)
 

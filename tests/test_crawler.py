@@ -9,8 +9,8 @@ import pytest
 from bs4 import BeautifulSoup
 
 from src.crawler.backfill_runner import BackfillRunner
-from src.crawler.base import CrawlWindow, RawArticle
-from src.crawler.batch_processor import _window_months
+from src.crawler.base import CrawlRunContext, CrawlWindow, RawArticle
+from src.crawler.batch_processor import _effective_source_window, _window_months
 from src.crawler.sources.bcg import match_bcg_core_sectors
 from src.crawler.sources.keyword import (
     load_naver_credential_pairs as load_datalab_credentials,
@@ -71,6 +71,38 @@ def test_raw_article_fields():
     )
     assert article.url
     assert article.company == ["samsung_sds"]
+
+
+def test_realtime_source_window_expands_by_source_policy():
+    base_window = CrawlWindow(
+        start=datetime(2026, 5, 19, tzinfo=timezone.utc),
+        end=datetime(2026, 5, 20, tzinfo=timezone.utc),
+    )
+
+    window = _effective_source_window(
+        ("naver_datalab",),
+        base_window,
+        CrawlRunContext(collection_mode="realtime", track="D"),
+    )
+
+    assert window is not None
+    assert window.start.date() == date(2026, 5, 13)
+    assert window.end == base_window.end
+
+
+def test_backfill_source_window_keeps_requested_window():
+    base_window = CrawlWindow(
+        start=datetime(2026, 5, 19, tzinfo=timezone.utc),
+        end=datetime(2026, 5, 20, tzinfo=timezone.utc),
+    )
+
+    window = _effective_source_window(
+        ("ir",),
+        base_window,
+        CrawlRunContext(collection_mode="backfill", track="D"),
+    )
+
+    assert window == base_window
 
 
 def test_naver_credentials_support_multiple_keys(monkeypatch):

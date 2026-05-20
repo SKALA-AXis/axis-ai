@@ -36,6 +36,11 @@ class IngestionState(TypedDict):
     parsed_document_ids: list[int]
     industry_document_ids: list[int]
     structured_signal_ids: list[int]
+    analysis_document_ids: list[int]
+    analysis_source_counts: dict[str, int]
+    analysis_metric_count: int
+    analysis_signal_count: int
+    analysis_errors: list[str]
     skipped_preprocess_ids: list[int]
     cluster_map: dict  # {cluster_id: [article_ids]}
     representative_ids: list[int]
@@ -125,6 +130,15 @@ def preprocess_route_node(state: IngestionState) -> IngestionState:
 
     route_result = PreprocessingService().route_by_source(state.get("raw_article_ids", []))
     return cast(IngestionState, {**state, **route_result})
+
+
+@_logged_step("document_analysis", "parsed_document_ids", "analysis_document_ids")
+def document_analysis_node(state: IngestionState) -> IngestionState:
+    """파싱 완료 문서를 재무 metric / business signal 테이블로 정규화한다."""
+    from src.analysis.document_analysis_materializer import materialize_document_analysis
+
+    result = materialize_document_analysis(state.get("parsed_document_ids", []))
+    return cast(IngestionState, {**state, **result})
 
 
 @_logged_step("dedup", "relevant_ids", "representative_ids")
@@ -245,6 +259,7 @@ def build_ingestion_graph() -> StateGraph:
 
     graph.add_node("crawl", crawl_node)
     graph.add_node("preprocess_route", preprocess_route_node)
+    graph.add_node("document_analysis", document_analysis_node)
     graph.add_node("dedup", dedup_node)
     graph.add_node("classify", classify_node)
     graph.add_node("card_news", card_news_node)
@@ -252,7 +267,8 @@ def build_ingestion_graph() -> StateGraph:
 
     graph.set_entry_point("crawl")
     graph.add_edge("crawl", "preprocess_route")
-    graph.add_edge("preprocess_route", "dedup")
+    graph.add_edge("preprocess_route", "document_analysis")
+    graph.add_edge("document_analysis", "dedup")
     graph.add_edge("dedup", "classify")
     graph.add_edge("classify", "card_news")
     graph.add_edge("card_news", "vector_index")
