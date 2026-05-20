@@ -114,7 +114,7 @@ def main() -> None:
             article["extra"] = {**article["extra"], "parser_result": parser_result}
             update_preprocess_status(
                 int(article["id"]),
-                "PRESERVED",
+                "PROCESSED",
                 {
                     "parser_result": parser_result,
                     "status_detail": "parsed_document",
@@ -408,7 +408,7 @@ def _reparse_dart_article(article: dict[str, Any]) -> dict[str, Any]:
 
     update_preprocess_status(
         int(article["id"]),
-        "PRESERVED" if ok else "SKIPPED",
+        "PROCESSED" if ok else "SKIPPED",
         {
             **metadata_patch,
             "status_detail": "parsed_document" if ok else "parser_quality_failed",

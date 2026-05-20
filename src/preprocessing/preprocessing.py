@@ -22,7 +22,6 @@ from src.config.preprocessing import (
     OFFICIAL_SOURCE_TYPES,
     PARSED_DOCUMENT_SOURCE_TYPES,
     STATUS_FAILED,
-    STATUS_PRESERVED,
     STATUS_PROCESSED,
     STATUS_RAW,
     STATUS_SKIPPED,
@@ -320,7 +319,7 @@ class PreprocessingService:
                 official_document_ids.append(article_id)
                 update_preprocess_status(
                     article_id,
-                    STATUS_PRESERVED,
+                    STATUS_PROCESSED,
                     {
                         "document_scope": "company_official",
                         "preprocess_kind": "official_signal",
@@ -337,7 +336,7 @@ class PreprocessingService:
                 official_document_ids.append(article_id)
                 update_preprocess_status(
                     article_id,
-                    STATUS_PRESERVED,
+                    STATUS_PROCESSED,
                     {
                         "document_scope": "company_site",
                         "status_detail": "company_site_document",
@@ -364,7 +363,7 @@ class PreprocessingService:
                     parsed_document_ids.append(article_id)
                     update_preprocess_status(
                         article_id,
-                        STATUS_PRESERVED,
+                        STATUS_PROCESSED,
                         {
                             **metadata_patch,
                             "document_scope": "company_document",
@@ -394,7 +393,7 @@ class PreprocessingService:
                 industry_document_ids.append(article_id)
                 update_preprocess_status(
                     article_id,
-                    STATUS_PRESERVED,
+                    STATUS_PROCESSED,
                     {
                         "parser_result": parser_result,
                         "document_scope": "industry_trend",
@@ -411,7 +410,7 @@ class PreprocessingService:
                 structured_signal_ids.append(article_id)
                 update_preprocess_status(
                     article_id,
-                    STATUS_PRESERVED,
+                    STATUS_PROCESSED,
                     {
                         "signal_scope": source_type,
                         "status_detail": "structured_signal",

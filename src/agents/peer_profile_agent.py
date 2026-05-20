@@ -62,7 +62,6 @@ _MAX_RECENCY_FOCUS_DAYS = 730
 _PROCESSING_STATUS_BUCKETS: Final[tuple[str, ...]] = (
     "RAW",
     "PROCESSED",
-    "PRESERVED",
     "SKIPPED",
     "FAILED",
     "OTHER",
@@ -783,7 +782,6 @@ selected_sector_config:
       "by_processing_status": {
         "RAW": 0,
         "PROCESSED": 0,
-        "PRESERVED": 0,
         "SKIPPED": 0,
         "FAILED": 0,
         "OTHER": 0
@@ -1610,7 +1608,7 @@ def collect_processing_status_counts(
         text("""
             SELECT
                 CASE
-                    WHEN processing_status IN ('RAW', 'PROCESSED', 'PRESERVED', 'SKIPPED', 'FAILED')
+                    WHEN processing_status IN ('RAW', 'PROCESSED', 'SKIPPED', 'FAILED')
                         THEN processing_status
                     ELSE 'OTHER'
                 END AS status_bucket,

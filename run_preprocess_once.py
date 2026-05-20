@@ -178,7 +178,7 @@ def _preprocess(articles: list[dict[str, Any]]) -> dict[str, Any]:
             continue
 
         if is_relevant:
-            item["processing_status"] = "PREPROCESSED"
+            item["processing_status"] = "PROCESSED"
             enriched.append(item)
         else:
             skipped_items.append(item)
@@ -239,7 +239,8 @@ def _preprocess_route(article: dict[str, Any]) -> str:
 
 def _mark_official_document(article: dict[str, Any]) -> dict[str, Any]:
     item = dict(article)
-    item["processing_status"] = "PREPROCESSED_OFFICIAL_DOCUMENT"
+    item["processing_status"] = "PROCESSED"
+    item["status_detail"] = "official_document"
     item["document_scope"] = "company_official"
     item["matched_companies"] = _normalize_company(item.get("company"))
     item["matched_sectors"] = _matched_sectors_from_article(item)
@@ -254,7 +255,8 @@ def _mark_parsed_document(article: dict[str, Any]) -> dict[str, Any]:
     item = dict(article)
     source_type = _source_type(item)
 
-    item["processing_status"] = "PREPROCESSED_PARSED_DOCUMENT"
+    item["processing_status"] = "PROCESSED"
+    item["status_detail"] = "parsed_document"
     item["document_scope"] = "company_document"
     item["preprocess_note"] = (
         f"{source_type} 문서는 parser quality check 후 보존. "
@@ -268,7 +270,8 @@ def _mark_parsed_document(article: dict[str, Any]) -> dict[str, Any]:
 def _mark_industry_document(article: dict[str, Any]) -> dict[str, Any]:
     item = dict(article)
     parser_result = DocumentParserRouter().parse_article(item)
-    item["processing_status"] = "PREPROCESSED_INDUSTRY_DOCUMENT"
+    item["processing_status"] = "PROCESSED"
+    item["status_detail"] = "industry_document"
     item["document_scope"] = "industry_trend"
     item["parser_result"] = parser_result
     item["matched_sectors"] = _matched_sectors_from_article(item)
@@ -281,7 +284,8 @@ def _mark_industry_document(article: dict[str, Any]) -> dict[str, Any]:
 def _mark_structured_signal(article: dict[str, Any]) -> dict[str, Any]:
     item = dict(article)
     source_type = _source_type(item)
-    item["processing_status"] = "PREPROCESSED_STRUCTURED_SIGNAL"
+    item["processing_status"] = "PROCESSED"
+    item["status_detail"] = "structured_signal"
     item["signal_scope"] = source_type
     item["matched_companies"] = _normalize_company(item.get("company"))
     item["preprocess_note"] = (
@@ -294,7 +298,8 @@ def _mark_structured_signal(article: dict[str, Any]) -> dict[str, Any]:
 def _mark_unsupported_source(article: dict[str, Any]) -> dict[str, Any]:
     item = dict(article)
     source_type = _source_type(item) or "unknown"
-    item["processing_status"] = "SKIPPED_PREPROCESS_UNSUPPORTED_SOURCE"
+    item["processing_status"] = "SKIPPED"
+    item["status_detail"] = "unsupported_source"
     item["skip_reason"] = (
         f"{source_type} source_type은 현재 전처리 대상이 아님. "
         "급변/급증 탐지 단계에서 별도 처리 예정"

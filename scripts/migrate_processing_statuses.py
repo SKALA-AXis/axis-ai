@@ -35,13 +35,14 @@ _UPDATE_SQL = text("""
             'RELEVANCE_PASSED',
             'CREDIBILITY_SCORED'
         ) THEN 'PROCESSED'
-        WHEN processing_status LIKE 'PREPROCESSED_%' THEN 'PRESERVED'
+        WHEN processing_status LIKE 'PREPROCESSED_%' THEN 'PROCESSED'
+        WHEN processing_status = 'PRESERVED' THEN 'PROCESSED'
         WHEN processing_status LIKE 'SKIPPED_%' THEN 'SKIPPED'
-        WHEN processing_status IN ('RAW', 'PROCESSED', 'PRESERVED', 'SKIPPED', 'FAILED')
+        WHEN processing_status IN ('RAW', 'PROCESSED', 'SKIPPED', 'FAILED')
             THEN processing_status
         ELSE 'FAILED'
     END
-    WHERE processing_status NOT IN ('RAW', 'PROCESSED', 'PRESERVED', 'SKIPPED', 'FAILED')
+    WHERE processing_status NOT IN ('RAW', 'PROCESSED', 'SKIPPED', 'FAILED')
 """)
 
 
@@ -67,7 +68,7 @@ def main() -> None:
                     SELECT COUNT(*)
                     FROM raw_articles
                     WHERE processing_status NOT IN (
-                        'RAW', 'PROCESSED', 'PRESERVED', 'SKIPPED', 'FAILED'
+                        'RAW', 'PROCESSED', 'SKIPPED', 'FAILED'
                     )
                 """)
             ).scalar_one()
