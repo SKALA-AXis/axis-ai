@@ -3,6 +3,7 @@
 import json
 import logging
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from typing import Any, Protocol
 
@@ -340,6 +341,7 @@ class BatchProcessor:
                 log.error("source 크롤 오류 | source=%s error=%s", name, e)
 
         run_id = None
+        effective_run_context = run_context
         if persist and run_context and not run_context.crawl_run_id:
             run_source_name = run_context.source_name or ",".join(source_names)
             window_start = _window_date(crawl_window, "start") or datetime.now().date()
@@ -350,14 +352,19 @@ class BatchProcessor:
                 window_end,
                 run_type=run_context.collection_mode,
             )
-            run_context.crawl_run_id = str(run_id)
-            run_context.source_name = run_source_name
+            effective_run_context = replace(
+                run_context,
+                crawl_run_id=str(run_id),
+                source_name=run_source_name,
+            )
 
         try:
             articles = _filter_window(articles, crawl_window)
             accessible, rejected = await self.link_checker.filter_accessible(articles)
             new_articles = self.dedup.filter_new(accessible)
-            inserted = save_articles(new_articles, run_context=run_context) if persist else 0
+            inserted = (
+                save_articles(new_articles, run_context=effective_run_context) if persist else 0
+            )
             self.last_inserted_count = inserted
             if run_id:
                 mark_crawl_run_success(
