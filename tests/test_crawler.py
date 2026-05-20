@@ -456,6 +456,8 @@ def test_multi_peer_sector_article_keeps_company_and_gets_industry_topic_scope()
         "topic_scope": "industry_trend",
         "matched_companies": ["samsung_sds", "lg_cns"],
         "matched_sectors": ["ai"],
+        "matched_sector_details": [],
+        "status_detail": "relevance_passed",
         "primary_company": None,
     }
 

@@ -175,15 +175,7 @@ async def _run_collection_track(
     from src.config.companies import COMPANY_ALIASES
     from src.config.global_companies import GLOBAL_COMPANY_ALIASES, GLOBAL_COMPANY_IDS
     from src.crawler.batch_processor import BatchProcessor
-    from src.pipeline.ingestion_graph import (
-        card_news_node,
-        classify_node,
-        crawl_node,
-        dedup_node,
-        document_analysis_node,
-        preprocess_route_node,
-        vector_index_node,
-    )
+    from src.preprocessing.preprocessing import PreprocessingService
 
     all_aliases = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
     selected = companies or [*COMPANY_ALIASES, *GLOBAL_COMPANY_IDS]
@@ -218,42 +210,16 @@ async def _run_collection_track(
                 crawl_window=crawl_window,
             )
 
-        state: dict = {
-            "company": selected,
-            "trigger_type": trigger_type,
-            "collected_since": started_at,
-            "crawl_run_id": None,
-            "raw_article_ids": [],
-            "relevant_ids": [],
-            "official_document_ids": [],
-            "parsed_document_ids": [],
-            "industry_document_ids": [],
-            "structured_signal_ids": [],
-            "analysis_document_ids": [],
-            "analysis_source_counts": {},
-            "analysis_metric_count": 0,
-            "analysis_signal_count": 0,
-            "analysis_errors": [],
-            "skipped_preprocess_ids": [],
-            "cluster_map": {},
-            "representative_ids": [],
-            "classified_clusters": [],
-            "card_news": [],
-            "indexed_vector_ids": [],
-            "errors": [],
-            "human_review_flags": [],
-        }
-        result = crawl_node(state)
-        result = preprocess_route_node(result)
-        result = document_analysis_node(result)
-        result = dedup_node(result)
-        result = classify_node(result)
-        result = card_news_node(result)
-        result = vector_index_node(result)
+        result = PreprocessingService().run(
+            company=selected,
+            trigger_type=trigger_type,
+            collected_since=started_at,
+            crawl_run_id=None,
+        )
         log.info(
             (
                 "수집 파이프라인 완료 | task_id=%s track=%s raw=%d "
-                "analysis_metrics=%d analysis_signals=%d classified=%d cards=%d indexed=%d"
+                "analysis_metrics=%d analysis_signals=%d classified=%d"
             ),
             task_id,
             track,
@@ -261,8 +227,6 @@ async def _run_collection_track(
             result.get("analysis_metric_count", 0),
             result.get("analysis_signal_count", 0),
             len(result.get("classified_clusters", [])),
-            len(result.get("card_news", [])),
-            len(result.get("indexed_vector_ids", [])),
         )
     except Exception:
         log.exception("수집 파이프라인 실패 | task_id=%s track=%s", task_id, track)

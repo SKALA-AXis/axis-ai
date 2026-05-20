@@ -40,6 +40,11 @@ STRUCTURED_SIGNAL_SOURCE_TYPES = {"job", "market_data", "search_trend", "social"
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="DB 없이 저장된 crawler JSON 전처리 결과 확인")
     parser.add_argument(
+        "--db",
+        action="store_true",
+        help="crawler JSON 대신 DB raw_articles의 RAW row를 전처리하고 DB에 반영",
+    )
+    parser.add_argument(
         "--input",
         default=None,
         help="전처리할 crawler JSON 파일. 생략하면 src/crawler/crawler_results/*.json 전체를 읽음",
@@ -54,6 +59,7 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    parser.add_argument("--limit", type=int, default=500, help="DB 모드에서 처리할 최대 RAW row 수")
     return parser.parse_args()
 
 
@@ -413,6 +419,40 @@ def _source_label(args: argparse.Namespace) -> str:
 
 def _run() -> None:
     args = _parse_args()
+
+    if args.db:
+        from src.preprocessing.preprocessing import PreprocessingService
+
+        result = PreprocessingService().run(
+            company=[],
+            source_types=args.source_type,
+            trigger_type="manual:run_preprocess_once",
+            limit=args.limit,
+        )
+        counts = {
+            "raw": len(result.get("raw_article_ids", [])),
+            "relevant": len(result.get("relevant_ids", [])),
+            "official_documents": len(result.get("official_document_ids", [])),
+            "parsed_documents": len(result.get("parsed_document_ids", [])),
+            "industry_documents": len(result.get("industry_document_ids", [])),
+            "structured_signals": len(result.get("structured_signal_ids", [])),
+            "skipped": len(result.get("skipped_preprocess_ids", [])),
+            "clusters": len(result.get("cluster_map", {})),
+            "representatives": len(result.get("representative_ids", [])),
+        }
+        print("\n" + "=" * 78)
+        print("DB 전처리 결과")
+        print("=" * 78)
+        print(f"  raw:             {counts['raw']}건")
+        print(f"  relevant:        {counts['relevant']}건")
+        print(f"  official_docs:   {counts['official_documents']}건")
+        print(f"  parsed_docs:     {counts['parsed_documents']}건")
+        print(f"  skipped:         {counts['skipped']}건")
+        print(f"  industry_docs:   {counts['industry_documents']}건")
+        print(f"  structured:      {counts['structured_signals']}건")
+        print(f"  clusters:        {counts['clusters']}개")
+        print(f"  representatives: {counts['representatives']}건")
+        return
 
     articles = _load_articles(args)
     if args.input:

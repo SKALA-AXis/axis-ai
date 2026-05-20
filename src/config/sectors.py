@@ -10,6 +10,12 @@ class SectorInfo(TypedDict):
     keywords: list[str]
 
 
+class SectorMatch(TypedDict):
+    sector_id: str
+    sector_name_ko: str
+    keyword: str
+
+
 SECTOR_KEYWORDS: Final[dict[str, SectorInfo]] = {
     "ax": {
         "name_ko": "AX",
@@ -135,19 +141,42 @@ SECTOR_IDS: Final[list[str]] = list(SECTOR_KEYWORDS.keys()) + ["other"]
 
 
 def match_sectors(text: str) -> list[str]:
+    matched: list[str] = []
+
+    for detail in match_sector_details(text):
+        sector_id = detail["sector_id"]
+        if sector_id not in matched:
+            matched.append(sector_id)
+
+    return matched if matched else ["other"]
+
+
+def match_sector_details(text: str) -> list[SectorMatch]:
+    """큰 sector와 실제 매칭된 세부 keyword를 함께 반환한다."""
     if not text:
-        return ["other"]
+        return []
 
     lowered = text.lower()
-    matched: list[str] = []
+    matched: list[SectorMatch] = []
+    seen: set[tuple[str, str]] = set()
 
     for sector_id, info in SECTOR_KEYWORDS.items():
         for keyword in info["keywords"]:
-            if keyword.lower() in lowered:
-                matched.append(sector_id)
-                break
+            if keyword.lower() not in lowered:
+                continue
+            key = (sector_id, keyword.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            matched.append(
+                {
+                    "sector_id": sector_id,
+                    "sector_name_ko": info["name_ko"],
+                    "keyword": keyword,
+                }
+            )
 
-    return matched if matched else ["other"]
+    return matched
 
 
 def primary_sector(text: str) -> str:

@@ -65,6 +65,7 @@ _SOURCE_METADATA_EXCLUDED_KEYS = {
     "window_end",
     "matched_companies",
     "matched_sectors",
+    "matched_sector_details",
 }
 
 _UPSERT_FINANCIAL_METRIC_SQL = text("""
@@ -319,6 +320,7 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
                        raw_articles.relevance_score, raw_articles.relevance_label,
                        raw_articles.relevance_reason,
                        raw_articles.matched_companies, raw_articles.matched_sectors,
+                       raw_articles.matched_sector_details,
                        raw_articles.source_name, raw_articles.published_at,
                        raw_articles.collected_at,
                        raw_articles.metadata,
@@ -542,7 +544,7 @@ def list_card_news_cluster_candidates(
         WHERE r.source_type = 'news'
           AND r.is_representative = true
           AND r.cluster_id IS NOT NULL
-          AND r.processing_status = 'CLASSIFIED'
+          AND r.processing_status IN ('PROCESSED', 'CLASSIFIED')
           {where_today}
         GROUP BY
             r.cluster_id, r.id, r.company, r.title, r.url,
@@ -844,7 +846,7 @@ def update_cluster(
     is_representative: bool,
 ) -> None:
     """cluster_id, is_representative, processing_status를 업데이트한다."""
-    status = "CLUSTERED_REP" if is_representative else "CLUSTERED_DUPE"
+    status = "PROCESSED"
     with SessionLocal() as db:
         db.execute(
             text("""
@@ -877,7 +879,7 @@ def update_classification(
                 UPDATE raw_articles
                 SET importance_level = :importance,
                     importance_score = :score,
-                    processing_status = 'CLASSIFIED',
+                    processing_status = 'PROCESSED',
                     qdrant_vector_id = CAST(:qdrant_id AS uuid)
                 WHERE id = :id
             """),

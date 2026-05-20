@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from typing import Any
 
@@ -20,21 +19,37 @@ from sqlalchemy import text
 
 from src.config.companies import COMPANY_ALIASES
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES
-from src.config.sectors import SECTOR_IDS, match_sectors
+from src.config.preprocessing import (
+    COMPANY_SITE_SOURCE_TYPES,
+    INDUSTRY_DOCUMENT_SOURCE_TYPES,
+    OFFICIAL_SOURCE_TYPES,
+    PARSED_DOCUMENT_SOURCE_TYPES,
+    STRUCTURED_SIGNAL_SOURCE_TYPES,
+)
+from src.config.relevance_policy import (
+    DIRECT_COMPANY_ROLE_KEYWORDS,
+    EVENT_LISTING_KEYWORDS,
+    FAST_PASS_ACTION_KEYWORDS,
+    FAST_PASS_SOURCE_TYPES,
+    LISTING_CONTEXT_KEYWORDS,
+    MARKET_LISTING_KEYWORDS,
+    MARKET_METRIC_PATTERN,
+    MARKET_PRICE_PATTERN,
+    MIN_PEER_MENTIONS,
+    PEER_CONTEXT_LIMIT,
+    RELEVANCE_THRESHOLD,
+    ROLE_CONTEXT_WINDOW,
+    STRATEGIC_ACTION_KEYWORDS,
+    STRONG_STRATEGIC_ACTION_KEYWORDS,
+    SUBJECT_MARKERS,
+    UNCERTAIN_CANDIDATE_THRESHOLD,
+)
+from src.config.sectors import SECTOR_IDS, match_sector_details, match_sectors
 from src.db.article_store import INDUSTRY_TREND_COMPANY
 from src.db.postgres import SessionLocal
 
 log = logging.getLogger(__name__)
 
-RELEVANCE_THRESHOLD = 0.60
-UNCERTAIN_CANDIDATE_THRESHOLD = 0.45
-PEER_CONTEXT_LIMIT = 1800
-
-# 본문에서 peer alias 언급 *최소 횟수* — 이 횟수 미만이면 "단순 언급" 으로 drop.
-#   default 1 (완화) — 1주 카드 누적량 ↑ 목적.
-#   과거 값은 2 였으나, cycle 마다 relevance 통과량이 적어 classify=0 이 지배적.
-#   noise 증가 시 env 로 2 또는 3 으로 상향 가능.
-_MIN_PEER_MENTIONS = int(os.getenv("RELEVANCE_MIN_PEER_MENTIONS", "1"))
 ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
 
 _llm: ChatOpenAI | None = None
@@ -201,6 +216,8 @@ class RelevanceEvaluator:
                 """),
                 {"ids": raw_article_ids},
             ).fetchall()
+            rows = sorted(rows, key=lambda row: int(row.id))
+            db.commit()
 
             for row in rows:
                 log.info(
@@ -212,6 +229,10 @@ class RelevanceEvaluator:
                 result = self._analyze(row)
 
                 is_relevant = _is_relevant(result)
+                result["matched_sector_details"] = _matched_sector_details_for_result(
+                    row,
+                    result["matched_sectors"],
+                )
                 metadata_patch = _metadata_patch_for_relevance(row, result, is_relevant)
 
                 db.execute(
@@ -222,9 +243,10 @@ class RelevanceEvaluator:
                             relevance_reason = :relevance_reason,
                             matched_companies = CAST(:matched_companies AS jsonb),
                             matched_sectors = CAST(:matched_sectors AS jsonb),
+                            matched_sector_details = CAST(:matched_sector_details AS jsonb),
                             processing_status = CASE
                                 WHEN :is_relevant THEN processing_status
-                                ELSE 'SKIPPED_RELEVANCE'
+                                ELSE 'SKIPPED'
                             END
                         WHERE id = :id
                     """),
@@ -240,6 +262,10 @@ class RelevanceEvaluator:
                             result["matched_sectors"],
                             ensure_ascii=False,
                         ),
+                        "matched_sector_details": json.dumps(
+                            result["matched_sector_details"],
+                            ensure_ascii=False,
+                        ),
                         "is_relevant": is_relevant,
                         "id": row.id,
                     },
@@ -253,6 +279,7 @@ class RelevanceEvaluator:
                         source_type=row.source_type,
                         source_metadata=json.dumps(metadata_patch, ensure_ascii=False),
                     )
+                db.commit()
 
                 if is_relevant:
                     relevant_ids.append(row.id)
@@ -273,8 +300,6 @@ class RelevanceEvaluator:
                         result["relevance_score"],
                         result["reason"],
                     )
-
-            db.commit()
 
         log.info(
             "관련성 판단 완료 | total=%d relevant=%d skipped=%d",
@@ -503,7 +528,7 @@ def analyze_relevance_article(article: dict[str, Any]) -> tuple[dict[str, Any], 
     )
 
     if not is_relevant:
-        item["processing_status"] = "SKIPPED_RELEVANCE"
+        item["processing_status"] = "SKIPPED"
 
     return item, is_relevant
 
@@ -558,7 +583,12 @@ def _precheck(
 ) -> dict[str, Any]:
     has_company = bool(matched_companies)
     has_sector = bool(matched_sectors and matched_sectors != ["other"])
-    is_company_source = source_type in {"dart", "ir", "official", "company_site"} and bool(company)
+    source_type_value = str(source_type or "").strip().lower()
+    is_company_source = (
+        source_type_value
+        in {*PARSED_DOCUMENT_SOURCE_TYPES, *OFFICIAL_SOURCE_TYPES, *COMPANY_SITE_SOURCE_TYPES}
+        and bool(company)
+    )
 
     if not has_company and not has_sector and not is_company_source:
         return {
@@ -588,112 +618,8 @@ def _precheck(
     }
 
 
-_MARKET_PRICE_RE = re.compile(
-    r"(주가|종가|장중|상승\s*마감|하락\s*마감|강세|약세|급등|급락|상한가|하한가|시가총액)"
-)
-_MARKET_METRIC_RE = re.compile(r"(\d+(?:\.\d+)?\s*%|\d{1,3}(?:,\d{3})+\s*원)")
-_EVENT_LISTING_KEYWORDS = [
-    "전시회",
-    "박람회",
-    "컨퍼런스",
-    "세미나",
-    "포럼",
-    "행사",
-    "코엑스",
-    "개최",
-    "참가",
-    "총집결",
-    "부스",
-    "시상식",
-]
-_STRATEGIC_ACTION_KEYWORDS = [
-    "수주",
-    "계약",
-    "구축",
-    "선정",
-    "우선협상",
-    "협약",
-    "업무협약",
-    "제휴",
-    "공동",
-    "출시",
-    "공개",
-    "개발",
-    "투자",
-    "인수",
-    "합병",
-    "실적",
-    "공시",
-    "조직개편",
-    "채용",
-]
-_STRONG_STRATEGIC_ACTION_KEYWORDS = [
-    "수주",
-    "계약",
-    "구축",
-    "우선협상",
-    "협약",
-    "업무협약",
-    "제휴",
-    "투자",
-    "인수",
-    "합병",
-    "실적",
-    "공시",
-    "조직개편",
-    "채용",
-]
-_DIRECT_COMPANY_ROLE_KEYWORDS = [
-    *_STRONG_STRATEGIC_ACTION_KEYWORDS,
-    "선정",
-    "참여",
-    "맡",
-    "적용",
-    "실증",
-    "운영",
-    "공급",
-    "제공",
-    "등록",
-    "할당",
-    "도입",
-    "확정",
-    "추진",
-]
-_FAST_PASS_ACTION_KEYWORDS = [
-    *_STRONG_STRATEGIC_ACTION_KEYWORDS,
-    "출시",
-    "공개",
-    "선정",
-    "개발",
-    "고도화",
-    "플랫폼",
-]
-_FAST_PASS_SOURCE_TYPES = {"news"}
-_ROLE_CONTEXT_WINDOW = 100
-_LISTING_CONTEXT_KEYWORDS = [
-    "etf",
-    "펀드",
-    "포트폴리오",
-    "편입",
-    "구성종목",
-    "관련주",
-    "테마주",
-    "수익률",
-    "종목",
-    "시황",
-]
-_MARKET_LISTING_KEYWORDS = [
-    *_LISTING_CONTEXT_KEYWORDS,
-    "특징주",
-    "목표가",
-    "투자의견",
-    "시가총액",
-    "per",
-    "주가수익비율",
-    "코스피",
-    "코스닥",
-]
-_SUBJECT_MARKERS = ["은", "는", "이", "가"]
+_MARKET_PRICE_RE = re.compile(MARKET_PRICE_PATTERN)
+_MARKET_METRIC_RE = re.compile(MARKET_METRIC_PATTERN)
 
 
 def _noise_reject_result(
@@ -723,7 +649,6 @@ def _noise_reject_result(
         matched_sectors=matched_sectors,
     )
     has_market_listing_noise = _is_market_listing_noise(title=title, content=content)
-    has_sector = bool(matched_sectors and matched_sectors != ["other"])
     is_company_market_signal = _is_company_market_signal(
         title=title,
         content=content,
@@ -751,17 +676,6 @@ def _noise_reject_result(
             reason=(
                 "특정 피어사 1곳의 주가·거래·밸류에이션을 직접 다루는 기사라 "
                 "company 상황 신호로 판단"
-            ),
-        )
-
-    if _is_market_price_noise(text) and (not has_sector or not has_peer_strategy_signal):
-        return _result(
-            label="irrelevant",
-            score=0.20,
-            companies=matched_companies,
-            sectors=matched_sectors,
-            reason=(
-                "주가 등락/시황 중심 기사라 뉴스 relevance 대상에서 제외하고 market_data에서 처리"
             ),
         )
 
@@ -827,7 +741,7 @@ def _has_peer_strategy_signal(
 
     text_compact = _compact(f"{title} {content}")
     has_sector = bool(matched_sectors and matched_sectors != ["other"])
-    has_action = any(_compact(keyword) in text_compact for keyword in _STRATEGIC_ACTION_KEYWORDS)
+    has_action = any(_compact(keyword) in text_compact for keyword in STRATEGIC_ACTION_KEYWORDS)
     if not has_action:
         return False
 
@@ -857,7 +771,7 @@ def _fast_pass_result(
     matched_companies: list[str],
     matched_sectors: list[str],
 ) -> dict[str, Any] | None:
-    if str(source_type or "").strip().lower() not in _FAST_PASS_SOURCE_TYPES:
+    if str(source_type or "").strip().lower() not in FAST_PASS_SOURCE_TYPES:
         return None
 
     if not matched_companies:
@@ -875,7 +789,7 @@ def _fast_pass_result(
         return None
 
     has_strong_action = any(
-        _compact(keyword) in text_compact for keyword in _FAST_PASS_ACTION_KEYWORDS
+        _compact(keyword) in text_compact for keyword in FAST_PASS_ACTION_KEYWORDS
     )
     if not has_strong_action:
         return None
@@ -959,7 +873,7 @@ def _weak_company_mention_reject_result(
         if company_in_title:
             return None
 
-        if _alias_mention_count(content_compact, aliases) >= _MIN_PEER_MENTIONS:
+        if _alias_mention_count(content_compact, aliases) >= MIN_PEER_MENTIONS:
             return None
 
     return _result(
@@ -969,7 +883,7 @@ def _weak_company_mention_reject_result(
         sectors=matched_sectors,
         reason=(
             f"제목에 피어사가 없고 본문/부제목의 피어사 언급이 "
-            f"{_MIN_PEER_MENTIONS}회 미만이라 단순 언급으로 판단"
+            f"{MIN_PEER_MENTIONS}회 미만이라 단순 언급으로 판단"
         ),
     )
 
@@ -1021,11 +935,11 @@ def _company_has_core_role(
 
 
 def _alias_appears_as_subject(text_compact: str, alias_compact: str) -> bool:
-    return any(f"{alias_compact}{marker}" in text_compact for marker in _SUBJECT_MARKERS)
+    return any(f"{alias_compact}{marker}" in text_compact for marker in SUBJECT_MARKERS)
 
 
 def _has_action_keyword_near_alias(text_compact: str, alias_compact: str) -> bool:
-    action_keywords = [_compact(keyword) for keyword in _STRATEGIC_ACTION_KEYWORDS]
+    action_keywords = [_compact(keyword) for keyword in STRATEGIC_ACTION_KEYWORDS]
     return _has_keywords_near_alias(
         text_compact,
         alias_compact,
@@ -1035,7 +949,7 @@ def _has_action_keyword_near_alias(text_compact: str, alias_compact: str) -> boo
 
 
 def _has_direct_role_keyword_near_alias(text_compact: str, alias_compact: str) -> bool:
-    role_keywords = [_compact(keyword) for keyword in _DIRECT_COMPANY_ROLE_KEYWORDS]
+    role_keywords = [_compact(keyword) for keyword in DIRECT_COMPANY_ROLE_KEYWORDS]
     return _has_keywords_near_alias(
         text_compact,
         alias_compact,
@@ -1057,12 +971,12 @@ def _has_keywords_near_alias(
         if pos < 0:
             return False
 
-        left = max(0, pos - _ROLE_CONTEXT_WINDOW)
-        right = min(len(text_compact), pos + len(alias_compact) + _ROLE_CONTEXT_WINDOW)
+        left = max(0, pos - ROLE_CONTEXT_WINDOW)
+        right = min(len(text_compact), pos + len(alias_compact) + ROLE_CONTEXT_WINDOW)
         context = text_compact[left:right]
 
         if skip_listing_context and any(
-            keyword in context for keyword in _LISTING_CONTEXT_KEYWORDS
+            keyword in context for keyword in LISTING_CONTEXT_KEYWORDS
         ):
             start = pos + len(alias_compact)
             continue
@@ -1090,7 +1004,7 @@ def _alias_mention_count(text_compact: str, aliases: list[str]) -> int:
 
 
 def _has_listing_context_near_alias(text_compact: str, alias_compact: str) -> bool:
-    listing_keywords = [_compact(keyword) for keyword in _MARKET_LISTING_KEYWORDS]
+    listing_keywords = [_compact(keyword) for keyword in MARKET_LISTING_KEYWORDS]
 
     start = 0
     while True:
@@ -1098,8 +1012,8 @@ def _has_listing_context_near_alias(text_compact: str, alias_compact: str) -> bo
         if pos < 0:
             return False
 
-        left = max(0, pos - _ROLE_CONTEXT_WINDOW)
-        right = min(len(text_compact), pos + len(alias_compact) + _ROLE_CONTEXT_WINDOW)
+        left = max(0, pos - ROLE_CONTEXT_WINDOW)
+        right = min(len(text_compact), pos + len(alias_compact) + ROLE_CONTEXT_WINDOW)
         context = text_compact[left:right]
         if any(keyword in context for keyword in listing_keywords):
             return True
@@ -1114,7 +1028,7 @@ def _is_market_price_noise(text: str) -> bool:
 def _is_market_listing_noise(*, title: str, content: str) -> bool:
     compact_text = _compact(f"{title} {content}")
     title_compact = _compact(title)
-    listing_keywords = [_compact(keyword) for keyword in _MARKET_LISTING_KEYWORDS]
+    listing_keywords = [_compact(keyword) for keyword in MARKET_LISTING_KEYWORDS]
 
     if any(keyword in title_compact for keyword in listing_keywords):
         return True
@@ -1141,7 +1055,7 @@ def _is_event_listing_noise(
     matched_companies: list[str],
 ) -> bool:
     has_event_keyword = any(
-        _compact(keyword) in compact_text for keyword in _EVENT_LISTING_KEYWORDS
+        _compact(keyword) in compact_text for keyword in EVENT_LISTING_KEYWORDS
     )
     if not has_event_keyword:
         return False
@@ -1152,18 +1066,18 @@ def _is_event_listing_noise(
         for company_id in matched_companies
         for alias in ALL_COMPANY_ALIASES.get(company_id, [company_id])
     )
-    event_in_title = any(_compact(keyword) in title_compact for keyword in _EVENT_LISTING_KEYWORDS)
+    event_in_title = any(_compact(keyword) in title_compact for keyword in EVENT_LISTING_KEYWORDS)
     if event_in_title and not company_in_title:
         return True
 
     has_strong_action_keyword = any(
-        _compact(keyword) in compact_text for keyword in _STRONG_STRATEGIC_ACTION_KEYWORDS
+        _compact(keyword) in compact_text for keyword in STRONG_STRATEGIC_ACTION_KEYWORDS
     )
     if not company_in_title and not has_strong_action_keyword:
         return True
 
     has_action_keyword = any(
-        _compact(keyword) in compact_text for keyword in _STRATEGIC_ACTION_KEYWORDS
+        _compact(keyword) in compact_text for keyword in STRATEGIC_ACTION_KEYWORDS
     )
     return not has_action_keyword
 
@@ -1195,34 +1109,60 @@ def _metadata_patch_for_relevance(
     is_relevant: bool,
 ) -> dict[str, Any]:
     if not is_relevant:
-        return {}
+        return {
+            "status_detail": "relevance_failed",
+            "skip_reason": result.get("reason", ""),
+        }
 
     companies = _normalize_company(row.company)
     matched_companies = result.get("matched_companies") or []
     matched_sectors = result.get("matched_sectors") or []
     has_sector = bool(matched_sectors and matched_sectors != ["other"])
 
-    if not has_sector and row.source_type not in {"search_trend", "trend_report"}:
-        return {}
+    sector_details = result.get("matched_sector_details") or []
 
     is_industry_bucket = INDUSTRY_TREND_COMPANY in companies
     is_companyless_sector = has_sector and not matched_companies
     is_multi_peer_sector = has_sector and len(matched_companies) >= 2
-    is_trend_source = row.source_type in {"search_trend", "trend_report"}
+    source_type = str(row.source_type or "").strip().lower()
+    is_trend_source = source_type in {*STRUCTURED_SIGNAL_SOURCE_TYPES, *INDUSTRY_DOCUMENT_SOURCE_TYPES}
 
-    if not (is_industry_bucket or is_companyless_sector or is_multi_peer_sector or is_trend_source):
+    if not (
+        sector_details
+        or is_industry_bucket
+        or is_companyless_sector
+        or is_multi_peer_sector
+        or is_trend_source
+    ):
         return {}
 
     patch: dict[str, Any] = {
-        "topic_scope": "industry_trend",
         "matched_companies": matched_companies,
         "matched_sectors": matched_sectors,
+        "matched_sector_details": sector_details,
+        "status_detail": "relevance_passed",
     }
+
+    if is_industry_bucket or is_companyless_sector or is_multi_peer_sector or is_trend_source:
+        patch["topic_scope"] = "industry_trend"
 
     if is_multi_peer_sector:
         patch["primary_company"] = None
 
     return patch
+
+
+def _matched_sector_details_for_result(row: Any, matched_sectors: list[str]) -> list[dict[str, str]]:
+    allowed = {sector for sector in matched_sectors if sector != "other"}
+    if not allowed:
+        return []
+
+    text_value = f"{getattr(row, 'title', '') or ''} {getattr(row, 'content', '') or ''}"
+    return [
+        detail
+        for detail in match_sector_details(text_value)
+        if detail["sector_id"] in allowed
+    ]
 
 
 def _peer_context_snippets(

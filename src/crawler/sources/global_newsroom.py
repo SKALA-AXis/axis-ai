@@ -48,7 +48,7 @@ REQUEST_TIMEOUT = 20
 MIN_CONTENT_LENGTH = 120
 MAX_CONTENT_LENGTH = 20000
 OFFICIAL_MAX_AGE_DAYS = 30
-BACKFILL_MAX_LIST_PAGES = int(os.getenv("GLOBAL_NEWSROOM_BACKFILL_MAX_LIST_PAGES", "15"))
+BACKFILL_MAX_LIST_PAGES = int(os.getenv("GLOBAL_NEWSROOM_BACKFILL_MAX_LIST_PAGES", "60"))
 GLOBAL_BLOCKED_PATH_KEYWORDS = (
     "/_gallery/",
     "/wp-content/",
@@ -1082,6 +1082,10 @@ def newsroom_page_url(url: str, page_no: int) -> str:
     return urlunparse(parsed._replace(path=path))
 
 
+def newsroom_query_page_url(url: str, page_no: int) -> str:
+    return _with_query_param(url, "page", str(page_no))
+
+
 def newsroom_archive_urls(
     base_url: str,
     start_date: date | None,
@@ -1106,6 +1110,40 @@ def newsroom_archive_urls(
             )
         )
         urls.append(_with_query_param(base_url, "date", f"{cursor.year}-{cursor.month:02d}"))
+        cursor = _next_month(cursor)
+
+    return urls
+
+
+def newsroom_company_archive_urls(
+    source: OfficialSource,
+    start_date: date | None,
+    end_date: date | None,
+) -> list[str]:
+    if not start_date or not end_date:
+        return []
+
+    parsed = urlparse(source.url)
+    host = (parsed.hostname or "").lower()
+    urls: list[str] = []
+    cursor = start_date.replace(day=1)
+    end_month = end_date.replace(day=1)
+
+    while cursor <= end_month:
+        year = cursor.year
+        month = cursor.month
+
+        if host == "aws.amazon.com":
+            urls.append(f"https://aws.amazon.com/blogs/aws/{year}/{month:02d}/")
+        elif host == "blogs.nvidia.com":
+            urls.append(f"https://blogs.nvidia.com/blog/{year}/{month:02d}/")
+        elif host == "about.fb.com":
+            urls.append(f"https://about.fb.com/news/{year}/{month:02d}/")
+        elif host == "azure.microsoft.com":
+            urls.append(f"https://azure.microsoft.com/en-us/blog/{year}/{month:02d}/")
+        elif host == "news.microsoft.com":
+            urls.append(f"https://news.microsoft.com/source/{year}/{month:02d}/")
+
         cursor = _next_month(cursor)
 
     return urls
@@ -1238,7 +1276,10 @@ class _SyncGlobalNewsroomCrawler:
                     candidate.text,
                 )
 
-        for candidate in candidates:
+        in_window_candidates = self._filter_candidates_for_window(candidates)
+        self._log_candidate_coverage(source, candidates, in_window_candidates)
+
+        for candidate in in_window_candidates:
             if self.max_pages is not None and len(articles) >= self.max_pages:
                 break
 
@@ -1291,11 +1332,56 @@ class _SyncGlobalNewsroomCrawler:
         if not (self.start_date or self.end_date):
             return urls
 
+        urls.extend(newsroom_company_archive_urls(source, self.start_date, self.end_date))
         urls.extend(newsroom_archive_urls(source.url, self.start_date, self.end_date))
         for page_no in range(2, self._max_listing_pages() + 1):
             urls.append(newsroom_page_url(source.url, page_no))
+            urls.append(newsroom_query_page_url(source.url, page_no))
 
         return unique_urls(urls)
+
+    def _filter_candidates_for_window(
+        self,
+        candidates: list[LinkCandidate],
+    ) -> list[LinkCandidate]:
+        if not (self.start_date or self.end_date):
+            return candidates
+
+        filtered = [
+            candidate
+            for candidate in candidates
+            if self._is_in_collection_window(candidate.published_at)
+        ]
+
+        return filtered if filtered else candidates
+
+    def _log_candidate_coverage(
+        self,
+        source: OfficialSource,
+        candidates: list[LinkCandidate],
+        in_window_candidates: list[LinkCandidate],
+    ) -> None:
+        dated_candidates = [candidate for candidate in candidates if candidate.published_at]
+        oldest = min(
+            (candidate.published_at for candidate in dated_candidates),
+            default=None,
+        )
+        latest = max(
+            (candidate.published_at for candidate in dated_candidates),
+            default=None,
+        )
+        log.info(
+            "글로벌 뉴스룸 후보 범위 | company=%s source=%s total=%s "
+            "in_window=%s oldest=%s latest=%s window=%s~%s",
+            self.config.company,
+            source.name,
+            len(candidates),
+            len(in_window_candidates),
+            oldest,
+            latest,
+            self.start_date,
+            self.end_date,
+        )
 
     def _page_is_older_than_window(self, candidates: list[LinkCandidate]) -> bool:
         if not self.start_date or not candidates:

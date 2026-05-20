@@ -7,175 +7,20 @@ from typing import Any
 
 from langchain_openai import ChatOpenAI
 
-from src.config.global_companies import GLOBAL_COMPANY_ALIASES
+from src.config.companies import company_aliases
+from src.config.event_types import (
+    EVENT_TYPE_KEYWORDS,
+    EVENT_TYPE_TIE_BREAK_PRIORITY,
+    EVENT_TYPES,
+    HIGH_IMPACT_KEYWORDS,
+    MEDIUM_IMPACT_KEYWORDS,
+    event_type_values,
+)
+from src.config.global_companies import global_company_aliases
 from src.config.sectors import SECTOR_IDS, match_sectors, primary_sector
 from src.db.article_store import get_articles_by_ids, update_classification
 
 log = logging.getLogger(__name__)
-
-EVENT_TYPES = [
-    "partnership",
-    "ma",
-    "personnel",
-    "tech_release",
-    "regulation",
-    "contract",
-    "financial",
-    "expansion",
-    "company",
-]
-
-EVENT_TYPE_PRIORITY = {
-    "ma": 0,
-    "contract": 1,
-    "financial": 2,
-    "partnership": 3,
-    "regulation": 4,
-    "expansion": 5,
-    "personnel": 6,
-    "tech_release": 7,
-    "company": 8,
-}
-
-EVENT_TYPE_KEYWORDS: dict[str, list[str]] = {
-    "partnership": [
-        "협약",
-        "업무협약",
-        "MOU",
-        "파트너십",
-        "제휴",
-        "협력",
-        "공동 개발",
-        "공동사업",
-        "컨소시엄",
-    ],
-    "ma": [
-        "인수",
-        "합병",
-        "인수합병",
-        "지분 인수",
-        "지분 투자",
-        "투자 유치",
-        "피인수",
-        "매각",
-    ],
-    "personnel": [
-        "채용",
-        "인사",
-        "임원",
-        "대표이사",
-        "CEO",
-        "선임",
-        "영입",
-        "조직개편",
-        "조직 개편",
-    ],
-    "tech_release": [
-        "출시",
-        "공개",
-        "선보",
-        "런칭",
-        "상용화",
-        "정식 출시",
-        "신제품",
-        "신기술",
-        "신서비스",
-        "업그레이드",
-        "적용",
-        "실증",
-        "PoC",
-        "상용화 성과",
-        "현장 점검",
-    ],
-    "regulation": [
-        "규제",
-        "정책",
-        "법안",
-        "가이드라인",
-        "정부 인증",
-        "국제표준",
-        "표준 인증",
-        "컴플라이언스",
-    ],
-    "contract": [
-        "수주",
-        "계약",
-        "선정",
-        "공급 계약",
-        "구축 사업",
-        "사업자 선정",
-        "우선협상대상자",
-        "프로젝트 수주",
-    ],
-    "financial": [
-        "매출",
-        "영업이익",
-        "실적",
-        "잠정실적",
-        "분기 실적",
-        "연간 실적",
-        "흑자",
-        "적자",
-        "가이던스",
-    ],
-    "expansion": [
-        "해외 진출",
-        "글로벌 진출",
-        "시장 확대",
-        "사업 확대",
-        "센터 설립",
-        "법인 설립",
-        "신시장",
-        "현지화",
-    ],
-    "company": [
-        "경영 전략",
-        "사업 전략",
-        "중장기",
-        "비전",
-        "기업가치",
-        "지배구조",
-        "그룹 내",
-        "CEO 메시지",
-        "주주총회",
-    ],
-}
-
-HIGH_IMPACT_KEYWORDS = [
-    "대규모 수주",
-    "대형 수주",
-    "메가딜",
-    "우선협상대상자",
-    "단일판매",
-    "공급계약",
-    "공시",
-    "인수합병",
-    "M&A",
-    "지분 인수",
-    "지분 투자",
-    "전략적 제휴",
-    "해외 진출",
-    "신규 법인",
-    "실적 발표",
-    "영업이익",
-    "흑자전환",
-    "적자전환",
-]
-
-MEDIUM_IMPACT_KEYWORDS = [
-    "수주",
-    "계약",
-    "협약",
-    "MOU",
-    "출시",
-    "공개",
-    "고도화",
-    "조직개편",
-    "임원",
-    "채용",
-    "시장 확대",
-    "투자계획",
-]
 
 _llm: ChatOpenAI | None = None
 _PROMPT_VERSION = "classify-v3.0"
@@ -210,7 +55,7 @@ regulation, contract, financial, expansion을 우선하세요.
 
 JSON으로만 응답:
 {"event_type": "EVENT_TYPES_PLACEHOLDER", "reasoning": "1줄 근거"}\
-""".replace("EVENT_TYPES_PLACEHOLDER", "|".join(EVENT_TYPES))
+""".replace("EVENT_TYPES_PLACEHOLDER", event_type_values())
 
 
 _HIGH_THRESHOLD = 0.65
@@ -235,12 +80,12 @@ def compute_exposure(
     cluster_size = len(cluster_articles)
     cluster_size_score = min(cluster_size / _CLUSTER_SIZE_SATURATION, 1.0)
 
-    company_aliases = _company_aliases(company)
+    aliases = _configured_company_aliases(company)
     company_mention_count = sum(
         1
         for a in cluster_articles
         if any(
-            alias in f"{a.get('title') or ''} {a.get('content') or ''}" for alias in company_aliases
+            alias in f"{a.get('title') or ''} {a.get('content') or ''}" for alias in aliases
         )
     )
     company_mention_score = min(company_mention_count / max(cluster_size, 1), 1.0)
@@ -309,25 +154,12 @@ def compute_article_impact(
     }
 
 
-def _company_aliases(company: str) -> list[str]:
-    aliases = {
-        "삼성SDS": ["삼성SDS", "삼성 SDS", "Samsung SDS", "삼성에스디에스"],
-        "samsung_sds": ["삼성SDS", "삼성 SDS", "Samsung SDS", "삼성에스디에스"],
-        "LG CNS": ["LG CNS", "LGCNS", "엘지씨엔에스"],
-        "lg_cns": ["LG CNS", "LGCNS", "엘지씨엔에스"],
-        "현대오토에버": ["현대오토에버", "현대 오토에버", "Hyundai Autoever"],
-        "hyundai_autoever": ["현대오토에버", "현대 오토에버", "Hyundai Autoever"],
-        "포스코DX": ["포스코DX", "포스코 DX", "POSCO DX"],
-        "posco_dx": ["포스코DX", "포스코 DX", "POSCO DX"],
-        "SK AX": ["SK AX", "SK에이엑스", "SK C&C", "SK㈜ C&C", "에스케이 씨앤씨"],
-        "sk_ax": ["SK AX", "SK에이엑스", "SK C&C", "SK㈜ C&C", "에스케이 씨앤씨"],
-        **GLOBAL_COMPANY_ALIASES,
-    }
-
+def _configured_company_aliases(company: str) -> list[str]:
     if not company:
         return []
 
-    return aliases.get(company, [company])
+    aliases = [*company_aliases(company), *global_company_aliases(company)]
+    return list(dict.fromkeys(alias for alias in aliases if alias))
 
 
 def _matched_sectors(article: dict[str, Any], *, title: str, content: str) -> list[str]:
@@ -454,14 +286,6 @@ class ClusterClassifier:
         rep_article: dict[str, Any],
         exposure: dict[str, Any],
     ) -> tuple[str, str]:
-        rule_event_type, rule_reasoning = _classify_event_type_rule_based(
-            title=str(rep_article.get("title") or ""),
-            content=str(rep_article.get("content") or ""),
-        )
-
-        if rule_event_type:
-            return rule_event_type, rule_reasoning
-
         articles_text = _format_articles([rep_article])
         company_mention_text = (
             f"{exposure['company_mention_count']}건 (cluster_size={exposure['cluster_size']})"
@@ -497,6 +321,18 @@ class ClusterClassifier:
             return event_type, data.get("reasoning", "")
 
         except Exception as e:
+            rule_event_type, rule_reasoning = _classify_event_type_rule_based(
+                title=str(rep_article.get("title") or ""),
+                content=str(rep_article.get("content") or ""),
+            )
+            if rule_event_type:
+                log.warning(
+                    "event_type LLM 분류 실패, 규칙 fallback 사용 | event_type=%s error=%s",
+                    rule_event_type,
+                    e,
+                )
+                return rule_event_type, rule_reasoning
+
             log.warning("event_type 분류 실패, company 기본값 | error=%s", e)
             return "company", ""
 
@@ -539,7 +375,7 @@ def _event_type_matches(text: str) -> list[tuple[str, int]]:
         if count > 0:
             matched.append((event_type, count))
 
-    matched.sort(key=lambda x: (EVENT_TYPE_PRIORITY.get(x[0], 99), -x[1]))
+    matched.sort(key=lambda x: (EVENT_TYPE_TIE_BREAK_PRIORITY.get(x[0], 99), -x[1]))
     return matched
 
 
@@ -551,7 +387,7 @@ def _select_content_event_type(matches: list[tuple[str, int]]) -> tuple[str, int
         if event_type in strong_event_types and count >= 2
     ]
     if strong_matches:
-        strong_matches.sort(key=lambda x: (EVENT_TYPE_PRIORITY.get(x[0], 99), -x[1]))
+        strong_matches.sort(key=lambda x: (EVENT_TYPE_TIE_BREAK_PRIORITY.get(x[0], 99), -x[1]))
         tech_count = next(
             (count for event_type, count in matches if event_type == "tech_release"),
             0,
@@ -560,7 +396,10 @@ def _select_content_event_type(matches: list[tuple[str, int]]) -> tuple[str, int
             return "tech_release", tech_count
         return strong_matches[0]
 
-    count_first = sorted(matches, key=lambda x: (-x[1], EVENT_TYPE_PRIORITY.get(x[0], 99)))
+    count_first = sorted(
+        matches,
+        key=lambda x: (-x[1], EVENT_TYPE_TIE_BREAK_PRIORITY.get(x[0], 99)),
+    )
     return count_first[0]
 
 

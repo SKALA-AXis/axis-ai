@@ -51,7 +51,7 @@ class ArticleDeduplicator:
 
         Returns:
             (cluster_map, representative_ids)
-            cluster_map: {cluster_id: [article_ids]}
+            cluster_map: {representative_article_id: [article_ids]}
         """
         if not article_ids:
             return {}, []
@@ -73,6 +73,7 @@ class ArticleDeduplicator:
             articles=articles,
             embeddings=embeddings,
         )
+        cluster_map = _with_representative_cluster_ids(cluster_map, representative_ids)
 
         _persist(cluster_map, representative_ids)
 
@@ -193,12 +194,10 @@ def _build_embedding_text(article: dict[str, Any]) -> str:
     entity_lines = [
         _entity_line("companies", entities["companies"]),
         _entity_line("sectors", entities["sectors"]),
-        _entity_line("customers", entities["customers"]),
         _entity_line("issues", entities["canonical_issues"]),
         _entity_line("products", entities["quoted_terms"]),
         _entity_line("proper_terms", entities["proper_terms"]),
         _entity_line("numbers", entities["numbers"]),
-        _entity_line("business_terms", entities["business_terms"]),
     ]
 
     return "\n".join(
@@ -303,9 +302,18 @@ def _cluster(
         ids for ids in groups.values() if not _support_only_singleton(ids, id_to_article)
     ]
 
-    # TODO: 운영 환경에서는 batch마다 0부터 시작하는 local cluster_id 대신
-    # article_clusters 테이블 또는 batch_id 기반 cluster_key를 사용하는 방식 검토.
     return {cluster_id: ids for cluster_id, ids in enumerate(cluster_values)}
+
+
+def _with_representative_cluster_ids(
+    cluster_map: dict[int, list[int]],
+    representative_ids: list[int],
+) -> dict[int, list[int]]:
+    """DB 파이프라인에서는 run-local index 대신 대표 기사 ID를 cluster_id로 사용한다."""
+    return {
+        representative_id: article_ids
+        for representative_id, article_ids in zip(representative_ids, cluster_map.values())
+    }
 
 
 def _should_merge_articles(
@@ -337,7 +345,7 @@ def _same_issue(left: dict[str, Any], right: dict[str, Any]) -> bool:
     if left_key and left_key == _issue_dedup_key(right):
         return True
 
-    return _same_company_customer_business_issue(left, right)
+    return _same_company_business_issue(left, right)
 
 
 def _same_company_context(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -418,12 +426,10 @@ def _issue_entities(article: dict[str, Any]) -> dict[str, list[str]]:
     return {
         "companies": _company_key(article),
         "sectors": _sector_key(article),
-        "customers": _matched_alias_keys(_CUSTOMER_ALIASES, text),
         "canonical_issues": _matched_alias_keys(_CANONICAL_ISSUE_TERMS, text),
         "quoted_terms": _quoted_product_terms(article),
         "proper_terms": _proper_terms(article),
         "numbers": _number_terms(article),
-        "business_terms": sorted(_business_terms(text)),
     }
 
 
@@ -631,37 +637,7 @@ def _number_terms(article: dict[str, Any]) -> list[str]:
     return numbers
 
 
-_CUSTOMER_ALIASES = {
-    "한국전력": ("한국전력", "한전", "kepco"),
-    "현대차그룹": ("현대차그룹", "현대자동차그룹", "현대차"),
-    "삼성전자": ("삼성전자",),
-    "LG전자": ("LG전자",),
-    "SK그룹": ("SK그룹",),
-}
-_BUSINESS_ISSUE_TERMS = (
-    "차세대",
-    "영업배전",
-    "전력관리",
-    "시스템",
-    "isp",
-    "컨설팅",
-    "구축",
-    "수주",
-    "재설계",
-    "전환",
-    "ai",
-    "ax",
-    "클라우드",
-    "플랫폼",
-    "로봇",
-    "휴머노이드",
-    "보안",
-)
-_MIN_SHARED_BUSINESS_TERMS = 2
-_MIN_BUSINESS_TERMS_PER_ARTICLE = 2
-
-
-def _same_company_customer_business_issue(left: dict[str, Any], right: dict[str, Any]) -> bool:
+def _same_company_business_issue(left: dict[str, Any], right: dict[str, Any]) -> bool:
     if not _company_key(left) or _company_key(left) != _company_key(right):
         return False
 
@@ -684,24 +660,7 @@ def _same_company_customer_business_issue(left: dict[str, Any], right: dict[str,
     ):
         return True
 
-    shared_customers = _shared(left_entities["customers"], right_entities["customers"])
-    if not shared_customers:
-        return False
-
-    shared_business_terms = set(left_entities["business_terms"]) & set(
-        right_entities["business_terms"]
-    )
-    if len(shared_business_terms) >= _MIN_SHARED_BUSINESS_TERMS:
-        return True
-
-    if shared_business_terms and _shared(left_entities["sectors"], right_entities["sectors"]):
-        return True
-
-    return (
-        bool(shared_business_terms)
-        and len(left_entities["business_terms"]) >= _MIN_BUSINESS_TERMS_PER_ARTICLE
-        and len(right_entities["business_terms"]) >= _MIN_BUSINESS_TERMS_PER_ARTICLE
-    )
+    return False
 
 
 def _issue_text(article: dict[str, Any]) -> str:
@@ -721,12 +680,6 @@ def _shared(left: list[str], right: list[str]) -> bool:
 
 def _terms_have_relation(left: list[str], right: list[str]) -> bool:
     return any(_terms_related(left_term, right_term) for left_term in left for right_term in right)
-
-
-def _business_terms(text: str) -> set[str]:
-    return {
-        term for term in (_compact_text(term) for term in _BUSINESS_ISSUE_TERMS) if term in text
-    }
 
 
 def _compact_text(value: str) -> str:
