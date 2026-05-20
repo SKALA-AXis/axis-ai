@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.analysis.models import AnalysisInputBundle
+
 
 class ImplicationGenerator:
-    """Generate reusable implication output from summary and analysis results."""
+    """Generate reusable implication output from integrated issue and analysis results."""
 
     def generate(
         self,
@@ -14,6 +16,8 @@ class ImplicationGenerator:
         summary: dict[str, Any],
         analysis: dict[str, Any],
         classification: dict[str, Any] | None = None,
+        input_bundle: AnalysisInputBundle | dict[str, Any] | None = None,
+        profile_context: dict[str, Any] | None = None,
         peer_profile_context: dict[str, Any] | None = None,
         skax_profile_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -23,8 +27,17 @@ class ImplicationGenerator:
         while richer peer/SKAX perspective agents can later replace this component.
         """
         classification = classification or {}
+        profile_context = profile_context or {}
         peer_profile_context = peer_profile_context or {}
         skax_profile_context = skax_profile_context or {}
+        if profile_context:
+            peer_profile_context = peer_profile_context or profile_context.get("peer_profiles", {})
+            skax_profile_context = skax_profile_context or profile_context.get("skax_profile", {})
+        input_payload = (
+            input_bundle.to_dict()
+            if isinstance(input_bundle, AnalysisInputBundle)
+            else input_bundle or {}
+        )
 
         risk_or_opportunity = str(analysis.get("risk_or_opportunity") or "neutral")
         impact_level = str(
@@ -53,8 +66,10 @@ class ImplicationGenerator:
             "confidence": _confidence(summary, analysis),
             "provenance": {
                 "generator": "ImplicationGenerator",
+                "uses_input_bundle": bool(input_payload),
                 "uses_peer_profile_context": bool(peer_profile_context),
                 "uses_skax_profile_context": bool(skax_profile_context),
+                "bundle_id": input_payload.get("bundle_id"),
             },
         }
 
@@ -65,11 +80,23 @@ def _peer_implication(
     impact_level: str,
     peer_profile_context: dict[str, Any],
 ) -> str:
-    peer_name = peer_profile_context.get("company_name") or peer_profile_context.get("peer_id")
+    peer_profile = _primary_peer_profile(peer_profile_context)
+    peer_name = peer_profile.get("company_name") or peer_profile.get("peer_id")
     prefix = f"{peer_name} 관점에서는 " if peer_name else "피어사 관점에서는 "
     if analysis_summary:
         return f"{prefix}{analysis_summary} 신호를 {impact_level} 영향도로 추적할 필요가 있습니다."
     return f"{prefix}추가 근거가 쌓일 때까지 제한적으로 관찰하는 편이 적절합니다."
+
+
+def _primary_peer_profile(peer_profile_context: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(peer_profile_context, dict):
+        return {}
+    if peer_profile_context.get("company_name") or peer_profile_context.get("peer_id"):
+        return peer_profile_context
+    for value in peer_profile_context.values():
+        if isinstance(value, dict) and (value.get("company_name") or value.get("peer_id")):
+            return value
+    return {}
 
 
 def _skax_implication(

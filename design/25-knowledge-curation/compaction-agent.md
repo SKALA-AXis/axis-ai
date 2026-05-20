@@ -120,7 +120,7 @@ class QuarterlyCanon(TypedDict):
     quantitative_anchors: list[QuantitativeAnchor]
     delta_vs_prev_quarter: list[str]
     business_segment_breakdown: list[dict]   # DART 사업 segment 별 매출 / 영업이익
-    forward_signals: list[str]       # 다음 분기 시그널 (PeerComparison forecast 의 input 후보)
+    forward_signals: list[str]       # 다음 분석/리포트에서 이어 볼 변화 시그널
     carry_forward_keyfacts: list[str]
     confidence: float
     source_monthly_profile_ids: list[str]

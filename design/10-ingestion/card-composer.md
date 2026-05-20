@@ -1,331 +1,132 @@
-# CardComposerAgent — Design Plan
+# CardNewsAgent — Design Plan
 
-## 1. 메타
+## 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `CardComposerAgent` (3-phase: summarize → analyze → compose) |
-| **Supervisor** | Ingestion |
-| **LangGraph node** | `card_news` (#6) |
-| **상태** | ✅ 구현 (v1: 3 파일 분리 — IssueCardAgent + NewsSummaryAgent + NewsAnalysisAgent) → v2 통합 권장 |
-| **현재 클래스** | `IssueCardAgent` (`src/agents/issue_card_agent.py`) — DB 테이블만 V9 에서 `card_news` 로 rename, **클래스 명은 function-named 라 유지** |
-| **Trigger** | ClassificationAgent 후 — cluster 마다 1회 |
+| 권장 이름 | `CardNewsAgent` |
+| 단계 | 1단계 데이터 수집·정제·통합·분석·시사점·카드뉴스 생성 |
+| 위치 | `src/agents/card_news_agent.py` |
+| 입력 | `AnalysisPackage` |
+| 출력 | 기존 카드뉴스 저장/API 구조 |
 
-## 2. 책임
+## 책임
 
-**한 줄**: classified cluster 로부터 frontend 가 표시할 card (title / 3줄 summary / implication / sources) 를 LLM 으로 생성하여 `card_news` 테이블에 INSERT.
+`CardNewsAgent`는 최종 결과를 카드뉴스 형태로 재가공하는 presentation Agent이다.
+원문 통합이나 전략 분석을 수행하지 않는다.
 
-**구체적 (3-phase)**:
+주요 책임:
+- 카드 제목 생성
+- 카드뉴스용 3줄 요약 생성
+- 핵심 포인트 생성
+- 시사점 문장 재가공
+- sources / validation 구성
+- 기존 `save_card_news` 경로에 맞는 payload 생성
 
-1. **Phase 1 — Summarize** (`NewsSummaryAgent.summarize`) — 클러스터 article 3~5건의 사실만 추출. validation 플래그 (`is_valid_summary`) 부여.
-2. **Phase 2 — Analyze** (`NewsAnalysisAgent.analyze`) — summary + classification + cluster metadata → SK AX 관점 가설/영향도 평가.
-3. **Phase 3 — Compose** (`IssueCardAgent.generate`) — 위 결과를 frontend display schema (`CardNewsItem`) 로 조립.
-
-산출물 = `card_news` row + `card_news_articles` 후보 관계 + 이후 EvidenceAgent 가 evidence_chain 부착.
-
-## 3. 책임 NOT
-
-- evidence_chain 부착 — EvidenceAgent (다음 노드)
-- DB INSERT 자체는 EvidenceAgent 가 `save_card_news` 호출 (transactional)
-- frontend display 변환 — **`CardNewsAgent` (`src/agents/card_news_agent.py`)** 가 별개 책임. CardComposerAgent (= 본 design 의 IssueCardAgent 3-phase) 가 DB row 를 만들고, CardNewsAgent 는 그 row 를 frontend `CardNewsItem` 스키마 (`axis-frontend/src/features/card-news/model/cardNews.ts`) 로 직렬화. 두 클래스 동시 존재 — 합치지 않음 (책임 분리)
-- backend 의 CardNewsResponse 는 frontend 와 정합 보장
-
-## 4. 입력 스펙
+## 입력
 
 ```python
-class CardComposerInput(TypedDict):
-    classified_clusters: list[ClassifiedCluster]   # ClassificationAgent output
-    cluster_map: dict[int, list[int]]              # DedupAgent output (article_ids)
+class AnalysisPackage:
+    bundle_id: str
+    input_bundle: AnalysisInputBundle
+    integrated_issue: dict
+    analysis: dict
+    implication: dict
+    sources: list[dict]
+    validation: dict
 ```
 
-내부 fetch:
-- 각 cluster 의 article 3건 (`get_articles_by_ids`, credibility DESC + published_at DESC 5건 까지)
+입력 의미:
+- `integrated_issue`: IssueIntegrationAgent가 만든 통합 이슈
+- `analysis`: AnalysisAgent가 만든 전략 의미 분석
+- `implication`: ImplicationAgent가 만든 SK AX 관점 시사점
+- `sources`: 원문 출처
+- `validation`: 분석 패키지 검증 정보
 
-## 5. 출력 스펙
+## 출력
+
+기존 DB/API 저장 구조를 유지한다.
 
 ```python
-class CardNewsRow(TypedDict):
-    id: str                          # 'IC-YYYYMMDD-NNN' 또는 'CN-YYYYMMDD-NNN'
-    cluster_id: int
-    raw_article_ids: list[int]        # V20: card_news_articles 로 정규화
-    company: str                     # peer_id (jsonb varchar)
-    title: str                       # ≤ 500 chars
-    summary_lines: list[str]         # 정확히 3줄
-    event_type: str
-    importance: str                  # exposure_band (legacy field name)
-    importance_score: float          # exposure_score
-    implication: dict                # v3 통합 jsonb (아래 §6.4)
-    sources: list[dict]              # [{title, url, source_name, credibility, ...}]
-    validation_pass: bool            # 첫 단계 validation (Phase 1)
-    validation_sc_score: float       # 0 (current — SC 폐기됨, evidence_chain 으로 대체)
-
-class CardComposerOutput(TypedDict):
-    card_news: list[CardNewsRow]
+class CardNews:
+    card_id: str
+    title: str
+    summary_lines: list[str]
+    key_points: list[str]
+    implication: str
+    sources: list[dict]
+    validation: dict
+    company: list[str]
+    sector: list[str]
+    event_type: str | None
 ```
 
-## 6. 알고리즘
+## 처리 흐름
 
-### 6.1 ID 생성
-
-```python
-def generate_card_id(date: date) -> str:
-    """Format: 'CN-YYYYMMDD-NNN' — N is sequence within day"""
-    prefix = f"CN-{date.strftime('%Y%m%d')}"
-    seq = count_today_cards(prefix) + 1
-    return f"{prefix}-{seq:03d}"
+```text
+IntegratedIssue
++ AnalysisResult
++ ImplicationResult
++ sources
++ validation
+        │
+        ▼
+CardNewsAgent
+        │
+        ├─ title
+        ├─ summary_lines
+        ├─ key_points
+        ├─ implication
+        ├─ sources
+        └─ validation
+        │
+        ▼
+기존 save_card_news 경로
+        │
+        ▼
+card_news / card_news_articles / evidence_chain
 ```
 
-### 6.2 Phase 1 — Summarize (LLM gpt-4o-mini)
+## 카드뉴스용 3줄 요약
 
-~~~text
-# SK AX 사실 추출 분석가
+카드뉴스용 3줄 요약은 여기서 생성한다.
 
-당신은 SK AX 사업전략팀의 사실 추출 분석가입니다.
-**클러스터의 기사 (같은 이벤트 보도) 를 사실 위주 3줄로 요약** + 추출 fact 분리합니다.
-출처에 없는 수치/날짜 추가 절대 금지.
+기준:
+1. 핵심 사건 또는 상태
+2. 연결된 제품·서비스·기술·업무·고객·산업 영역
+3. 수치·적용 사례·후속 단계·시장 반응·불확실성 중 가장 구체적인 사실
 
-## 입력 데이터
-- **대표 기사**: {title}
-- **참고 기사 (최대 3)**: {others_titles}
-- **본문 (대표)**: {content_preview_1500}
+주의:
+- `IssueIntegrationAgent`의 `integrated_text`를 그대로 복사하지 않는다.
+- 원문에 없는 수치, 제품명, 고객명, 원인을 만들지 않는다.
+- 시사점 문장을 사실 요약에 섞지 않는다.
+- 카드뉴스 문장은 사용자 화면에서 읽기 좋은 presentation 문장으로 재작성한다.
 
-## 작성 규칙
+## 책임 NOT
 
-### 절대 규칙 (위반 시 응답 무효)
-- **환각 금지**: 본문에 없는 수치/이름/날짜 추가 시 즉시 `is_valid_summary=false`
-- **추출 fact 분리**: amounts / dates / entities 는 *반드시 본문에 등장한* 값만
+- 데이터 수집
+- 원문 저장
+- 전처리·적합성 판단
+- 기업·섹터·이벤트 매칭
+- 이슈 통합
+- 전략 분석
+- 프로필 context 생성
+- 시사점 원문 생성
+- DB schema 변경
+- `src/schemas.py` 변경
 
-### 일반 규칙 (17 요소 매핑)
-1. **(#11 정량 우선)** 3번째 줄은 핵심 수치 또는 차별점
-2. **(#12 출처 검증)** 추출 fact 가 본문 trace 가능해야 함
+## Validation
 
-### 3줄 구조 (순서 고정)
-1. **1번째 줄 — WHO + WHAT**: `"삼성SDS가 LG CNS 와 AX 협약 체결"`
-2. **2번째 줄 — WHEN + WHERE / HOW**: `"5월 13일 서울 본사에서 발표"`
-3. **3번째 줄 — 핵심 수치 / 차별점**: `"3년간 1,000억원 규모 공동 R&D"`
+검증 항목:
+- 제목이 비어 있지 않은가
+- `summary_lines`가 정확히 3문장인가
+- 핵심 포인트가 `IntegratedIssue`, `AnalysisResult`, `ImplicationResult`와 일관되는가
+- sources가 비어 있지 않은가
+- 기존 카드뉴스 저장/API schema와 맞는가
 
-## 출력 형식 (strict JSON)
+## 설계 원칙
 
-```json
-{
-  "summary_lines": ["1번째 줄", "2번째 줄", "3번째 줄"],
-  "is_valid_summary": true,
-  "extracted_facts": {
-    "amounts": ["1,000억원"],
-    "dates": ["5월 13일"],
-    "entities": ["삼성SDS", "LG CNS"]
-  }
-}
-```
-~~~
-
-### 6.3 Phase 2 — Analyze (LLM gpt-4o-mini)
-
-~~~text
-# SK AX 시사점 분석가
-
-당신은 SK AX 사업전략팀의 시사점 분석가입니다.
-**사실 요약 + 분류 결과** 를 보고 SK AX 관점의 시사점을 도출합니다.
-
-## 입력 데이터
-- **요약 (3줄)**: {summary_lines}
-- **event_type**: {event_type}
-- **sector**: {sector}
-- **exposure_band**: {exposure_band}
-- **클러스터 메타**: cluster_size={N}, source_count={M}, credibility_max={c}
-
-## 작성 규칙
-
-### 절대 규칙 (위반 시 응답 무효)
-- **본문 trace**: 모든 주장이 입력 요약/메타에 trace 가능. 본문에 없는 가정은 `out_of_evidence[]` 분리
-- **SK AX 화자**: `"왜 SK AX 가 주목해야 하는가"` / `"SK AX 의 ___ 에 영향"` pattern
-
-### 일반 규칙 (17 요소 매핑)
-1. **(#10 수익화 관점)** potential_impact 에 매출/마진 영향 함의 포함
-2. **(#13 SK AX 화자)** 절대 규칙 참조
-3. **(#15 우선순위)** suggested_actions 는 영향 큰 순으로 정렬
-4. **(#17 반복 추적)** follow_up_questions 1~3개
-
-## 출력 형식 (strict JSON)
-
-```json
-{
-  "why_important": "한 문장 (왜 SK AX 가 주목해야 하는가)",
-  "potential_impact": "한 문장 (어떤 영향을 줄 수 있는가)",
-  "follow_up_questions": ["...", "..."],
-  "suggested_actions": ["...", "...", "..."],
-  "confidence": 0.0,
-  "out_of_evidence": ["본문에 없는 가정"]
-}
-```
-~~~
-
-### 6.4 Phase 3 — Compose
-
-```python
-def compose(cluster, summary, analysis, articles) -> CardNewsRow:
-    return {
-        "id": generate_card_id(today),
-        "cluster_id": cluster.cluster_id,
-        "company": cluster.company[0] if cluster.company else "unknown",
-        "title": summary["summary_lines"][0][:500],
-        "summary_lines": summary["summary_lines"],
-        "event_type": cluster.event_type,
-        "importance": cluster.exposure_band,        # legacy field name
-        "importance_score": cluster.exposure_score,
-        "implication": {
-            "sector": cluster.sector,
-            "sectors": cluster.sectors,
-            "exposure_score": cluster.exposure_score,
-            "exposure_band": cluster.exposure_band,
-            "why_important": analysis["why_important"],
-            "potential_impact": analysis["potential_impact"],
-            "follow_up_questions": analysis["follow_up_questions"],
-            "suggested_actions": analysis["suggested_actions"],
-            "confidence": analysis["confidence"],
-            "signals": cluster.signals,             # exposure_score 산식 입력 보존
-            # evidence_chain 은 다음 노드 (EvidenceAgent) 가 채움
-        },
-        "sources": [
-            {
-                "title": a.title,
-                "url": a.url,
-                "source_name": a.source_name,
-                "credibility_score": a.credibility_score,
-                "published_at": a.published_at.isoformat(),
-            }
-            for a in articles
-        ],
-        "validation_pass": summary["is_valid_summary"],
-        "validation_sc_score": 0.0,  # SC 폐기됨, evidence_chain 으로 대체
-    }
-```
-
-### 6.5 Prompt audit — 02-prompt-design-checklist 17 요소
-
-CardComposer 는 3 phase 통합 — 필수 1, 2, 4, 6, 7, 11, 12, 14 / 권장 13, 15, 17.
-
-| # | 요소 | 충족 위치 | 비고 |
-|---|---|---|---|
-| **1** | 역할 정의 | Phase 1/2 prompt 도입부 ← 보강 필요 | Phase 1: "당신은 SK AX 사업전략팀의 사실 추출 분석가. 출처에 없는 수치/날짜 추가 금지." / Phase 2: "당신은 SK AX 사업전략팀의 시사점 분석가." 로 명시 추가 |
-| **2** | 추적 대상 기업 | cluster.company (4 peer + sk_ax_self enum) carry | OK |
-| **4** | 출처 우선순위 | sources[] 의 credibility_score carry + cluster.signals.tier1_diversity 보존 | EvidenceAgent 가 검증 |
-| **6** | 최신성 검증 | sources[].published_at (KST 변환 필수) | UI 카드 표시 시 절대 기준 |
-| **7** | 단순 뉴스 요약 금지 | Phase 2 가 event_type taxonomy 강제 + why_important / potential_impact 강제 | "기사 N개 요약" 패턴 차단 |
-| **11** | 정량 수치 우선 | Phase 1 `extracted_facts.amounts/dates` 분리 추출 | EvidenceAgent 가 본문 대조 |
-| **12** | 공식 vs 추정 구분 | `out_of_evidence[]` 필드로 본문 외 가정 마킹 | confidence ↓ + UI 경고 |
-| **13** | 전략적 시사점 (SK AX 화자) | Phase 2 prompt 명시 "SK AX 사업전략팀 관점" | 화자 일관성 OK |
-| **14** | 출력 형식 | CardNewsRow TypedDict | 필수 |
-| **15** | 우선순위 판단 | suggested_actions 2~4개 (가장 영향 큰 순) ← prompt 보강 권장 | 현재 자유형 → "영향 큰 순으로 정렬" 명시 추가 권장 |
-| **17** | 반복 추적 구조 | `follow_up_questions[]` 1~3개 | OK |
-
-→ **9/9 필수 충족** (1 보강 후) + 권장 3/3 충족. 단순 뉴스 요약 패턴 (PDF 1 페이지 강한 지적) 의 1차 방어선.
-
-## 7. LLM 모델 + token 예산
-
-| Phase | 모델 | token (in+out) | 일일 호출 | 일일 비용 |
-|---|---|---|---|---|
-| Summarize | gpt-4o-mini | ~2,000 | ~80 (cluster 수) | ₩200 |
-| Analyze | gpt-4o-mini | ~1,500 | ~80 | ₩150 |
-| Compose | (LLM 없음, 산식) | — | — | ₩0 |
-| **합계** | | | | **₩350/일** |
-
-## 8. 에러 처리
-
-| 시나리오 | 대응 |
-|---|---|
-| Summarize 가 `is_valid_summary=false` | `validation_pass=false` 로 마킹 + downstream (BriefingService) 가 skip 또는 human_review |
-| Analyze JSON parse 실패 | retry 1회 → 실패 시 minimal stub (`why_important="(분석 실패)"`, confidence=0.0) |
-| LLM 타임아웃 (5초/phase) | phase 별 retry 1회 → 실패 시 stub |
-| `extracted_facts` 가 본문에 없는 수치 포함 | EvidenceAgent 의 validation 단계에서 `out_of_evidence` 표면화 — 카드는 생성하되 confidence ↓ |
-| 클러스터 article 0건 | skip (예외 상황) |
-
-## 9. 외부 의존성
-
-- **DB**: `raw_articles` (READ), `card_news` (INSERT — EvidenceAgent 가 호출)
-- **DB**: `card_news_articles` (V20, card_news ↔ raw_articles N:M. evidence provenance 로 백필되며 신규 writer 는 직접 upsert)
-- **DB**: `card_news.peer_company_id` (V20 nullable alias. 기존 `company` writer 컬럼은 후속 전환 전까지 유지)
-- **외부 API**: OpenAI gpt-4o-mini
-- **lib**: `openai`, `langchain_openai`
-
-## 10. State 흐름 (LangGraph)
-
-**소비**: `classified_clusters`, `cluster_map`
-**생산**: `card_news: list[CardNewsRow]` (다음 노드 EvidenceAgent 가 evidence_chain 부착 + DB INSERT + `card_news_articles` upsert)
-
-```python
-@_logged_step("card_news", "classified_clusters", "card_news")
-def card_news_node(state):
-    from src.agents.issue_card_agent import IssueCardAgent
-    from src.agents.news_summary_agent import PeerNewsSummaryAgent
-    from src.agents.news_analysis_agent import PeerNewsAnalysisAgent
-    agent = IssueCardAgent()
-    summary_agent = PeerNewsSummaryAgent()
-    analysis_agent = PeerNewsAnalysisAgent()
-    ...
-    return {**state, "card_news": cards}
-```
-
-## 11. Provenance + Confidence
-
-- **Provenance**:
-  ```json
-  {
-    "raw_article_ids": [123, 124, 125],
-    "llm_model": "gpt-4o-mini",
-    "prompt_version": "v3.0",
-    "evidence_version": "v3.0",
-    "run_at": "2026-05-13T09:00:00Z",
-    "agent": "CardComposerAgent"
-  }
-  ```
-- **Confidence**: `analysis["confidence"]` (Phase 2 출력). UI 가 < 0.6 일 때 경고 표시.
-
-## 12. 테스트 시나리오
-
-| 유형 | 시나리오 | 검증 |
-|---|---|---|
-| Unit (Summarize) | "삼성SDS-LG CNS MOU" 본문 3건 | summary_lines 3줄 + is_valid_summary=true + amounts/dates 추출 |
-| Unit (Analyze) | summary + sector='deal' | why_important / potential_impact 비어있지 않음, confidence ≥ 0.5 |
-| Unit (Compose) | Phase 1+2 결과 입력 | CardNewsRow schema 완벽 매핑 |
-| Edge | 본문이 광고/SKIPPED_QUALITY 가 섞임 | is_valid_summary=false |
-| Edge | Analyze 가 본문에 없는 수치 (환각) 포함 | `out_of_evidence` 에 등록, EvidenceAgent 가 처리 |
-| Integration | cluster 5개 → 5 card 생성 | 모든 card 의 implication 필드 채워짐 |
-
-## 13. 모니터링
-
-- **pipeline_logs.step**: `card_news`
-- **KPI**:
-  - 카드 생성 성공률 ≥ 95%
-  - `is_valid_summary=false` 비율 ≤ 10%
-  - 평균 confidence ≥ 0.70
-  - `out_of_evidence` 발생 비율 ≤ 5% (환각 모니터)
-- **token 예산**: ₩350/일
-
-## 14. 구현 메모 + Changelog
-
-### 의존 lib
-
-```toml
-openai = ">=1.30"
-langchain-openai = ">=1.1"
-```
-
-### 핵심 파일 (v1 — 3 파일 분리)
-
-- `src/agents/issue_card_agent.py` — Phase 3 (Compose) + 진입점
-- `src/agents/news_summary_agent.py` — Phase 1 (`PeerNewsSummaryAgent`)
-- `src/agents/news_analysis_agent.py` — Phase 2 (`PeerNewsAnalysisAgent`)
-- LangGraph 호출 → `src/pipeline/ingestion_graph.py` `card_news_node`
-
-### v2 통합 권장 (P9)
-
-3 phase 를 단일 `CardComposerAgent` class 의 internal method 로 통합 — boilerplate 감소 + 일관 LLM client 관리. 다만 v1 처럼 phase 별 unit test 가능성 유지.
-
-### Changelog
-
-- **v1 (2026-04-W2)** — 3-phase 분리 구현
-- **v2 (2026-04-W3)** — v3 메타데이터 (implication jsonb 통합)
-- **v3 (2026-05-12)** — DB 테이블 `issue_cards` → `card_news` rename (V9). **클래스 명 `IssueCardAgent` 는 function-named 라 유지**, `card_news_agent.py` (frontend display 생성기) 와 collision 회피
-- **v3.1 (2026-05-15)** — DB 관계 정비 반영: 다중 기사 기반 카드뉴스는 `card_news_articles` 로 정규화, `card_news.peer_company_id` nullable alias 추가
-- **v4 (proposed, P9)** — 3 파일 → 1 CardComposerAgent 통합
+1. `CardNewsAgent`는 `AnalysisPackage`를 재가공한다.
+2. raw item을 직접 분석하지 않는다.
+3. 카드뉴스용 3줄 요약은 여기서 만든다.
+4. 기존 DB schema와 API schema는 유지한다.

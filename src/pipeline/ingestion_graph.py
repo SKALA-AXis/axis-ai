@@ -151,17 +151,15 @@ def classify_node(state: IngestionState) -> IngestionState:
 
 @_logged_step("card_news", "classified_clusters", "card_news")
 def card_news_node(state: IngestionState) -> IngestionState:
-    """카드 뉴스 생성 — 클러스터 사실 요약 결과 기반. (구 issue_card_node)"""
-    from src.agents.card_news_agent import CardNewsAgent
-    from src.analysis.summarizer import SourceSummarizer
+    """분석 대상 전체를 AnalysisPipelineRunner로 실행해 카드뉴스를 생성한다."""
     from src.config.company_tiers import SELF_COMPANY_IDS
     from src.db.article_store import save_card_news
+    from src.pipeline.analysis_pipeline import AnalysisPipelineRunner
 
-    agent = CardNewsAgent()
-    summary_agent = SourceSummarizer()
+    runner = AnalysisPipelineRunner()
     cluster_map = state["cluster_map"]
 
-    def _generate_one(cluster: dict) -> dict:
+    def _generate_cluster_card(cluster: dict) -> dict:
         if cluster.get("company") in SELF_COMPANY_IDS:
             log.info(
                 "카드뉴스 생성 제외 | cluster=%s company=%s reason=self company",
@@ -172,40 +170,99 @@ def card_news_node(state: IngestionState) -> IngestionState:
 
         cluster_id = cluster["cluster_id"]
         article_ids = cluster_map.get(cluster_id, [])
-        summary = summary_agent.summarize(
+        result = runner.run_cluster(
             cluster_id=cluster_id,
             representative_id=cluster["representative_id"],
             cluster_article_ids=article_ids,
-            max_cluster_articles=max(len(article_ids), 1),
+            classification=cluster,
+            save_card=True,
         )
-        if not summary.get("is_valid_summary"):
+        analysis_package = result.get("analysis_package") or {}
+        integrated_issue = analysis_package.get("integrated_issue") or analysis_package.get(
+            "summary",
+            {},
+        )
+        if not integrated_issue.get("is_valid_summary"):
             log.info(
                 "카드뉴스 생성 제외 | cluster=%s company=%s reason=invalid_summary:%s",
                 cluster_id,
                 cluster.get("company"),
-                summary.get("reason"),
+                integrated_issue.get("reason"),
             )
             return {}
-        return agent.generate_from_cluster(
-            cluster_id=cluster_id,
-            representative_id=cluster["representative_id"],
-            company=cluster["company"],
-            classification=cluster,
-            cluster_article_ids=article_ids,
-            summary=summary,
-        )
+        return result.get("card_news") or {}
 
+    def _generate_raw_article_card(raw_article_id: int, source_group: str) -> dict:
+        result = runner.run_raw_article(raw_article_id=raw_article_id, save_card=False)
+        card = result.get("card_news") or {}
+        if not card:
+            log.info(
+                "문서/신호 카드뉴스 생성 제외 | raw_article_id=%s group=%s reason=no_card",
+                raw_article_id,
+                source_group,
+            )
+            return {}
+        if card.get("company") in SELF_COMPANY_IDS or card.get("peer_id") in SELF_COMPANY_IDS:
+            log.info(
+                "문서/신호 카드뉴스 생성 제외 | "
+                "raw_article_id=%s group=%s company=%s reason=self company",
+                raw_article_id,
+                source_group,
+                card.get("company") or card.get("peer_id"),
+            )
+            return {}
+        save_card_news(card)
+        card.setdefault("source_group", source_group)
+        return card
+
+    document_targets = _document_analysis_targets(state)
     cards: list[dict] = []
     with ThreadPoolExecutor(max_workers=_GPT_WORKERS) as ex:
-        futures = [ex.submit(_generate_one, c) for c in state["classified_clusters"]]
+        futures = [
+            *[ex.submit(_generate_cluster_card, c) for c in state["classified_clusters"]],
+            *[
+                ex.submit(_generate_raw_article_card, raw_article_id, source_group)
+                for source_group, raw_article_ids in document_targets.items()
+                for raw_article_id in raw_article_ids
+            ],
+        ]
         for future in as_completed(futures):
             card = future.result()
             if card:
-                save_card_news(card)
                 cards.append(card)
 
-    log.info("카드 뉴스 생성 완료 | cards=%d", len(cards))
+    log.info(
+        "카드 뉴스 생성 완료 | news_clusters=%d document_targets=%d cards=%d",
+        len(state["classified_clusters"]),
+        sum(len(ids) for ids in document_targets.values()),
+        len(cards),
+    )
     return {**state, "card_news": cards}
+
+
+def _document_analysis_targets(state: IngestionState) -> dict[str, list[int]]:
+    """뉴스 클러스터 외 분석 대상 문서/구조화 신호 ID를 모은다."""
+    return {
+        "official_document": _dedupe_positive_ints(state.get("official_document_ids", [])),
+        "parsed_document": _dedupe_positive_ints(state.get("parsed_document_ids", [])),
+        "industry_document": _dedupe_positive_ints(state.get("industry_document_ids", [])),
+        "structured_signal": _dedupe_positive_ints(state.get("structured_signal_ids", [])),
+    }
+
+
+def _dedupe_positive_ints(values: list[int]) -> list[int]:
+    result: list[int] = []
+    seen: set[int] = set()
+    for value in values:
+        try:
+            item = int(value)
+        except (TypeError, ValueError):
+            continue
+        if item <= 0 or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
 
 
 @_logged_step("vector_index", "card_news", "indexed_vector_ids")

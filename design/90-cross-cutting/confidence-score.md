@@ -30,7 +30,7 @@
 
 ```python
 class ConfidenceContext(TypedDict):
-    agent_name: str                    # "CardComposerAgent" 등
+    agent_name: str                    # "CardNewsAgent" 등
     phase: str | None                  # 다단계 agent 의 phase (예: "Summarize")
     inputs: dict                       # 산출에 사용한 입력 (raw_article_ids, cluster_size 등)
     raw_output: dict                   # LLM 또는 산식의 원시 출력

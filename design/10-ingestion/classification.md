@@ -24,7 +24,7 @@
 
 ## 3. 책임 NOT
 
-- card 생성 (title/summary) — CardComposerAgent (다음 노드)
+- card 생성 (title/summary) — CardNewsAgent (다음 노드)
 - evidence 부착 — EvidenceAgent
 - 자유형 importance 분류 (v1 의 urgent/notable/reference) — 폐기 (v3 부터 exposure_band 단일)
 

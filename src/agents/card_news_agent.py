@@ -1,4 +1,8 @@
-"""카드뉴스 생성 에이전트 — 뉴스 요약 결과 기반 카드 생성."""
+"""카드뉴스 생성 에이전트.
+
+AnalysisPackage를 사용자에게 보여줄 카드뉴스/API 응답 형태로 재가공한다.
+기존 raw cluster 기반 생성 메서드는 호환용으로 유지한다.
+"""
 
 import json
 import logging
@@ -8,6 +12,7 @@ from typing import Any
 
 from langchain_openai import ChatOpenAI
 
+from src.analysis.models import AnalysisPackage
 from src.config.companies import company_name_ko
 from src.config.global_companies import global_company_name_ko
 from src.config.sectors import SECTOR_KEYWORDS, match_sectors
@@ -235,6 +240,50 @@ class CardNewsAgent:
             },
             "db_record": db_record,
         }
+
+    def generate_from_analysis_package(
+        self,
+        analysis_package: AnalysisPackage | dict[str, Any],
+        classification: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """AnalysisPackage를 사용자용 카드뉴스/API 스키마로 재가공한다."""
+        package = (
+            analysis_package.to_dict()
+            if isinstance(analysis_package, AnalysisPackage)
+            else analysis_package
+        )
+        input_bundle = package.get("input_bundle") or {}
+        validation = package.get("validation") or {}
+        classification = classification or validation.get("classification") or {}
+        integrated_issue = package.get("integrated_issue") or package.get("summary") or {}
+        card = self.generate(
+            summary=integrated_issue,
+            analysis=package.get("analysis") or {},
+            classification=classification,
+            articles=input_bundle.get("items") or [],
+        )
+        if not card:
+            return {}
+        implication_result = package.get("implication") or {}
+        if implication_result:
+            card["implication_result"] = implication_result
+            card["implication"] = _implication_from_result(
+                implication_result,
+                fallback=card.get("implication"),
+            )
+            card["frontend_implication"] = _frontend_implication_from_result(
+                implication_result,
+                fallback=card.get("frontend_implication"),
+            )
+        card["analysis_package"] = {
+            "bundle_id": package.get("bundle_id"),
+            "integrated_issue": integrated_issue,
+            "summary": integrated_issue,
+            "analysis": package.get("analysis") or {},
+            "implication": implication_result,
+            "validation": validation,
+        }
+        return card
 
     def generate_from_cluster(
         self,
@@ -470,6 +519,10 @@ def _list_value(value: Any) -> list[Any]:
     return []
 
 
+def _list_dicts(value: Any) -> list[dict[str, Any]]:
+    return [item for item in _list_value(value) if isinstance(item, dict)]
+
+
 def _first_non_empty(*values: Any) -> str:
     for value in values:
         text = str(value or "").strip()
@@ -535,6 +588,25 @@ def _plain_summary_lines(summary: dict[str, Any]) -> list[str]:
     lines = _list_string(summary.get("fact_summary"))[:3]
     if lines:
         return [_strip_number_prefix(line) for line in lines]
+    lines = _list_string(summary.get("summary_lines"))[:3]
+    if lines:
+        return [_strip_number_prefix(line) for line in lines]
+    facts = [
+        str(fact.get("fact") or "").strip()
+        for fact in _list_dicts(summary.get("consolidated_facts"))
+        if str(fact.get("fact") or "").strip()
+    ][:3]
+    if facts:
+        return facts
+    integrated_text = str(summary.get("integrated_text") or "").strip()
+    if integrated_text:
+        split_lines = [
+            item.strip()
+            for item in re.split(r"(?<=[.!?。！？])\s+|(?<=다)\.\s*", integrated_text)
+            if item.strip()
+        ][:3]
+        if split_lines:
+            return split_lines
     one_line = str(summary.get("one_line_summary") or "").strip()
     return [one_line] if one_line else []
 
@@ -635,6 +707,41 @@ def _frontend_implication(analysis: dict[str, Any]) -> dict[str, Any]:
 
 def _implication(analysis: dict[str, Any]) -> dict[str, Any]:
     return _frontend_implication(analysis)
+
+
+def _frontend_implication_from_result(
+    implication: dict[str, Any],
+    *,
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    fallback = fallback or {}
+    return {
+        "why_important": str(
+            implication.get("peer_implication") or fallback.get("why_important") or ""
+        ).strip(),
+        "potential_impact": str(
+            implication.get("skax_implication") or fallback.get("potential_impact") or ""
+        ).strip(),
+        "follow_up_questions": _list_string(
+            implication.get("follow_up_questions") or implication.get("watch_points")
+        )
+        or _list_string(fallback.get("follow_up_questions")),
+        "suggested_actions": _list_string(implication.get("recommended_actions"))
+        or _list_string(fallback.get("suggested_actions")),
+        "confidence": _optional_float(implication.get("confidence"))
+        if implication.get("confidence") is not None
+        else fallback.get("confidence"),
+    }
+
+
+def _implication_from_result(
+    implication: dict[str, Any],
+    *,
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = _frontend_implication_from_result(implication, fallback=fallback)
+    payload["raw"] = implication
+    return payload
 
 
 def _rich_sources(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:

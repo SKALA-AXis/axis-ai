@@ -5,9 +5,9 @@
 | 항목 | 값 |
 |---|---|
 | **이름** | `MixerAnalysisAgent` |
-| **Supervisor** | Analysis |
+| **Supervisor** | DataUsageOrchestrator |
 | **상태** | 🟡 backend fixture (`POST /api/mixer`, `GET /api/mixer/options`, `POST /api/mixer/{id}/share`), axis-ai 신규 |
-| **Trigger** | User Mixer 페이지에서 "Generate" 클릭 |
+| **Trigger** | 2단계 데이터 활용 요청: User Mixer 페이지에서 "Generate" 클릭 |
 
 ## 2. 책임
 
@@ -28,7 +28,7 @@
 
 - 카드 선택 자체 — frontend Mixer UI 가 사용자에게 위임
 - Insight 4-step 분석 — InsightCascadeAgent (별도)
-- 단일 카드 분석 — CardComposerAgent
+- 단일 카드 생성/재가공 — CardNewsAgent
 
 ## 4. 입력 스펙
 

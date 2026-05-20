@@ -1,162 +1,395 @@
-# AXIS AI — Agent Design Plans
+# AXIS AI Agent Architecture
 
-> **위치**: `axis-ai/design/`
-> **작성**: 2026-05-13 · **버전**: v1
-> **선행 문서**: `axis-infra/docs/AI_AGENT_DESIGN.md` v1.1 (전체 supervisor / agent / cost / priority 통합 설계)
->
-> 본 디렉토리는 **agent 별 개별 design plan** 을 담는다. 각 agent 의 책임 · 입출력 schema · 알고리즘 · LLM prompt · 에러 처리 · 외부 의존성 · State 흐름 · Provenance · 테스트 · 모니터링 · 구현 위치 를 깊게 기술.
+> 기준: Peer사 동향 모니터링 시스템의 2단계 Agent 아키텍처
 
-## 디렉토리 구조 (axis-ai LangGraph agent 설계만)
+AXIS AI는 뉴스, DART/IR/공시, 시장·증권 리포트, Peer사 동향, 산업 동향 브리핑을 수집하고,
+이를 기반으로 Peer사 동향을 통합·분석한 뒤 SK AX 관점의 시사점을 도출한다.
+최종적으로 카드뉴스를 생성하고, 이후 저장된 데이터를 활용해 리포트, 인사이트,
+키워드 그래프, 챗봇을 제공한다.
+
+## 전체 단계
 
 ```text
-design/
-├── README.md                          ← 본 파일 (index)
-├── 00-supervisor-topology.md          ← 5+1 supervisor 전체 흐름
-├── 02-prompt-design-checklist.md      ← PDF 2026-05-14 17 요소 + CoT 표준 (모든 LLM agent 의 prompt audit 기준)
-│
-├── 10-ingestion/                      ← @Scheduled 매시간 batch
-│   ├── crawler.md                     ← #1 외부 fetch
-│   ├── parser.md                      ← #2 HTML/PDF/JSON 정규화 (strategy)
-│   ├── credibility.md                 ← #3 출처 신뢰도
-│   ├── relevance.md                   ← #4 관련성 라우팅
-│   ├── dedup.md                       ← #5 BGE-M3 클러스터
-│   ├── classification.md              ← #6 event/sector + exposure_score
-│   ├── card-composer.md               ← #7 IssueCardAgent + NewsSummary + NewsAnalysis 통합
-│   ├── evidence.md                    ← #8 evidence_chain 4종
-│   ├── financial-linker.md            ← Evidence sub (재무 segment)
-│   ├── ir-parser.md                   ← Evidence sub (IR PDF)
-│   └── embed-index.md                 ← vector_index 노드
-│
-├── 20-enrichment/                     ← Ingestion 후 + nightly batch
-│   ├── keyword-extraction.md          ← KR-TF-IDF base
-│   ├── keyword-graph-builder.md       ← Graph nodes/edges
-│   ├── peer-word-cloud.md             ← Peer 별 카테고리 라벨링
-│   ├── search-suggest.md              ← 자동완성 추천
-│   └── derived-metrics.md             ← TopInsight + Trend + MonitoringOverview + PeerOverview (4-mode)
-│
-├── 25-knowledge-curation/             ← (신규 2026-05-14) peer narrative 압축 + Analysis Ledger
-│   ├── README.md                      ← 5 계층 (L0~L4) + Analysis Ledger 아키텍처
-│   ├── compaction-agent.md            ← weekly / monthly / quarterly LLM 압축 (3-mode 통합)
-│   ├── context-pack-builder.md        ← L0~L4 stack 을 PeerContextPack 으로 조립 (산식)
-│   └── analysis-ledger.md             ← 분석 결과 carry-over (산식, K1 우선 도입 권장)
-│
-├── 30-analysis/                       ← user POST request, on-demand
-│   ├── insight-cascade.md             ← 4단계 Cause→Change→Impact→Response + CoT
-│   ├── mixer-analysis.md              ← 2~20 카드 cross-card 신호 + CoT
-│   ├── peer-comparison.md             ← SK AX vs Peer 차별 + Forecast (1Q/6M/1Y) + CoT
-│   ├── global-trends.md               ← (신규 2026-05-14) 글로벌 6사 트렌드 → SK AX 영향 매트릭스 + Forecast + CoT
-│   └── link-verification.md           ← URL liveness + diff
-│
-├── 40-user-query/                     ← user 검색 + chat
-│   ├── hybrid-search.md               ← Dense + Sparse RRF
-│   ├── rerank.md                      ← BGE-reranker-v2-m3
-│   ├── answer.md                      ← Generative answer + SC
-│   └── chat-orchestrator.md           ← Intent + Conversation 통합
-│
-├── 50-weak-signal/                    ← @Scheduled 월 09:00, W7+
-│   └── weak-signal.md                 ← Pattern + Anomaly + AlertRouting 통합
-│
-├── 60-briefing/                       ← user-triggered async briefing 문서 생성
-│   └── briefing-generation.md         ← BriefingReport 5-phase (`/api/briefings/generate`)
-│
-└── 90-cross-cutting/                  ← 모든 axis-ai agent 에 주입 (middleware)
-    ├── confidence-score.md            ← 0~1 점수 산출/전파 표준
-    ├── db-relations.md                ← raw_articles 중심 FK/매핑 테이블 표준 (V20/V21)
-    ├── provenance-tracker.md          ← llm_model+prompt_version+git_sha+langfuse_trace_id 자동 부착
-    └── token-budget.md                ← daily envelope + circuit breaker
+1단계
+데이터 수집·정제·통합·분석·시사점 도출·카드뉴스 생성
+
+2단계
+저장된 데이터 활용·리포트·인사이트·키워드 그래프·챗봇 생성
 ```
 
-## 인프라 / 크로스시스템 spec (별도 위치)
+## 1단계 파이프라인
 
-axis-ai agent 설계 *외부* 의 spec 은 `axis-infra/docs/` 가 owner:
+```text
+수집 데이터 소스
+  ├─ 뉴스
+  ├─ DART / IR / 공시
+  ├─ 시장·증권 리포트
+  ├─ Peer사 동향
+  └─ 산업 동향 브리핑
+        │
+        ▼
+데이터 수집 크롤링
+        │
+        ▼
+원문 저장
+        │
+        ▼
+전처리·적합성 판단
+        │
+        ▼
+기업·섹터·이벤트 매칭
+        │
+        ▼
+Raw / 정제 데이터 저장소
+        │
+        ▼
+DataAnalysisSupervisorAgent
+        ├─ IssueIntegrationAgent
+        ├─ AnalysisAgent
+        ├─ ProfileAgent
+        └─ ImplicationAgent
+        │
+        ▼
+AnalysisPackage
+        │
+        ▼
+CardNewsAgent
+        │
+        ▼
+카드뉴스 / 시사점 저장소
+```
 
-| 문서 | 위치 | 책임 |
-|---|---|---|
-| API Surface | `axis-infra/docs/API_SURFACE.md` | FE ↔ BE ↔ axis-ai 의 전체 endpoint 매핑 |
-| Audit Log | `axis-infra/docs/AUDIT_LOG.md` | BE Spring AOP @Auditable + audit_logs V14 schema |
-| Observability (Langfuse) | `axis-infra/docs/OBSERVABILITY_LANGFUSE.md` | Self-host Helm + LangChain integration + 3-tier 분담 |
-| User Events | `axis-infra/docs/admin/user_events.md` | FE tracker SDK + BE INSERT + user_events V15 |
-| Feedback | `axis-infra/docs/admin/feedback.md` | BE write + Langfuse score + feedback V16 |
-| Cost Reconciliation | `axis-infra/docs/admin/cost_reconciliation.md` | Spring @Scheduled ETL + V17/V18 |
-| Metrics Exporter | `axis-infra/docs/admin/metrics_exporter.md` | Prometheus + Grafana 5 폴더 dashboard |
+### 데이터 수집 크롤링
 
-(axis-ai 의 cross-cutting 미들웨어 3종 — confidence / provenance / token-budget — 은 axis-ai agent 코드를 wrapping 하는 decorator 이므로 본 디렉토리에 유지.)
+뉴스, DART/IR/공시, 시장·증권 리포트, Peer사 동향, 산업 동향 브리핑 등 외부 데이터를 수집한다.
+이 단계는 분석 단계가 아니며 원문, URL, 제목, 출처, 발행일, 수집일, `source_type` 같은
+원천 데이터를 확보한다.
 
-## 카운트
+### 원문 저장
 
-| 그룹 | 파일 | 비고 |
-|---|---|---|
-| Ingestion | 11 | 8 top-level node + 3 sub-agent |
-| Enrichment | 5 | 모두 P6 우선순위 |
-| **KnowledgeCuration** *(신규 2026-05-14)* | **4** | **README + 3 agent (compaction / context-pack / analysis-ledger)** |
-| Analysis | 5 | P7 + global-trends (신규 2026-05-14) |
-| UserQuery | 4 | Search 3 + Dialogue 1 통합 |
-| WeakSignal | 1 | 3-phase 통합 (W7+) |
-| Briefing | 1 | async user-triggered (P7+, V12 briefing_reports) |
-| Cross-cutting (axis-ai 미들웨어만 + DB 관계) | 4 | confidence / db-relations / provenance / token-budget |
-| 구조 / 통합 | 3 | README + topology + prompt-design-checklist (신규 2026-05-14) |
-| **합계 (axis-ai/design/)** | **38** | LangGraph agent 설계 + axis-ai decorator + DB 관계 표준 + PDF 17-요소 + 5 계층 knowledge |
-| (참고) axis-infra/docs 이동분 | +7 | API_SURFACE + AUDIT_LOG + OBSERVABILITY_LANGFUSE + admin/ × 4 |
+수집된 원문과 기본 메타데이터를 저장한다.
 
-### Agent 카운트 (파일 ≠ agent)
+저장 대상 예:
+- `title`
+- `content`
+- `url`
+- `source_type`
+- `content_type`
+- `publisher`
+- `published_at`
+- `collected_at`
+- 회사 후보
+- `crawl_status`
 
-- **Top-level agents (production-tier)**: 8 (ingestion) + 5 (enrichment) + **3 (knowledge-curation)** + 5 (analysis, +global-trends) + 4 (userquery) + 1 (weak-signal) + 1 (briefing) = **27 agent**
-- **Sub-agents (ingestion 내부)**: financial-linker, ir-parser, embed-index = 3
-- **Middleware (cross-cutting)**: 3 (agent 아님, decorator)
-- 총 30 agent file + 3 middleware file = **33 design 대상 + 3 구조 doc + 1 sub-supervisor README (25-knowledge-curation/) = 37 file**
+이 단계에서는 의미 분석을 수행하지 않는다.
 
-## 설계 원칙
+### 전처리·적합성 판단
 
-본 design 디렉토리의 모든 agent 는 다음 원칙을 따른다 (v1.1 통합 design 의 §5 와 동일):
+수집된 데이터가 분석 가능한 상태인지 정리하고 판단한다.
 
-1. **Single Responsibility** — 한 agent = 한 책임 + 한 출력 schema. 책임이 두 개면 두 agent.
-2. **Function-named** — 이름은 *무엇을 만드는지* 기준. DB 테이블 명에 따라 가지 않음 (예: `IssueCardAgent` 가 `card_news` 테이블에 INSERT — 클래스명은 유지).
-3. **Deterministic-first** — LLM 없이 산식으로 가능하면 산식. exposure_score · credibility · keyword extraction · dedup 등.
-4. **State 일방향** — agent 끼리 직접 호출 X. supervisor 의 state (LangGraph TypedDict) 만 공유.
-5. **Provenance 필수** — 모든 출력에 `evidence_chain.provenance` 부착 (llm_model · prompt_version · run_at · raw_article_ids · git_sha).
-6. **Confidence 표면화** — `confidence < 0.6` 은 UI 경고 (frontend 가 그렇게 구현).
-7. **Caching aggressive** — LLM 호출은 cache 우선. 같은 입력 (card_id set hash 등) 에 같은 결과면 LLM 재호출 X.
+주요 기능:
+- 본문 추출
+- 관련성 판단
+- 중복 제거
+- 뉴스 클러스터링
+- 노이즈 제거
+- 문서 품질 확인
+- `processing_status` 관리
 
-## 파일 작성 템플릿
+관련 위치:
+- `src/preprocessing/relevance.py`
+- `src/preprocessing/dedup.py`
+- `src/preprocessing/preprocessing.py`
 
-각 agent 디자인 파일은 다음 14 section 을 포함:
+### 기업·섹터·이벤트 매칭
 
-1. **메타** — 이름 / supervisor / 상태 / owner / version / file path
-2. **책임 (Single Responsibility)** — 한 줄 + 구체적
-3. **책임 NOT** — out of scope 명시
-4. **입력 스펙** — TypedDict / Pydantic
-5. **출력 스펙** — schema + post-conditions
-6. **알고리즘** — 산식 또는 LLM prompt + chain-of-thought
-7. **LLM 모델 + token 예산** — 모델 / token / 비용
-8. **에러 처리** — timeout / retry / fallback / DLQ
-9. **외부 의존성** — DB / API / model
-10. **State 흐름** — input keys → output keys (LangGraph)
-11. **Provenance + Confidence** — 어떤 필드 채우는지 + 점수 공식
-12. **테스트 시나리오** — unit / integration / edge
-13. **모니터링** — pipeline_logs · KPI · token 예산
-14. **구현 메모 + Changelog**
+수집된 기사/문서가 어떤 기업, 어떤 섹터, 어떤 이벤트 유형에 해당하는지 라벨링한다.
 
-## 갱신 정책
+주의:
+- 이 단계는 ProfileAgent가 아니다.
+- 기업·섹터·이벤트 매칭은 raw data에 분석 가능한 라벨을 붙이는 전처리 기능이다.
+- ProfileAgent는 시사점 도출용 context provider이다.
 
-- 새 agent 추가 시 본 README 의 디렉토리 구조 + 카운트 표 + 해당 그룹 디렉토리에 신규 파일
-- agent 책임 변경 시 해당 agent 파일의 §2 책임 + Changelog 갱신
-- LLM 모델 / token 예산 변경 시 모든 영향받는 agent 파일의 §7 갱신
-- `axis-infra/docs/AI_AGENT_DESIGN.md` 통합 design 과 동기화 — 본 디렉토리가 SoT 가 아니라 상세 design 보강
-- **LLM agent 추가 시** — `02-prompt-design-checklist.md` 17 요소 audit table 을 §6 에 추가 (필수)
+관련 위치:
+- `src/preprocessing/classification.py`
 
-## Changelog
+### Raw / 정제 데이터 저장소
 
-- **2026-05-13** — v1 초기 설계 (8 ingestion + 5 enrichment + 4 analysis + 4 userquery + 1 weak + 1 briefing + 3 cross-cutting + 2 구조)
-- **2026-05-14** — PDF 사업전략팀 추가 질의 회신 반영
-  - 신규: `02-prompt-design-checklist.md` (17 요소 + CoT 표준), `30-analysis/global-trends.md` (글로벌 6사 → SK AX 영향)
-  - 갱신: mixer-analysis / insight-cascade / peer-comparison (CoT + final_one_liner + 17 audit) · chat-orchestrator (deep_dive + forecast intent) · derived-metrics (peer_overview mode) · classification / card-composer / relevance / evidence (§6 audit table)
-- **2026-05-14 (후속)** — 3-tier observability (trail / steps / langfuse_trace_id) 표준 + provenance-tracker LangfuseTraceLinker
-- **2026-05-14 (후속2)** — KnowledgeCuration supervisor 신설 (5+1 → 6+1)
-  - 신규 디렉토리 `25-knowledge-curation/`: README + compaction-agent + context-pack-builder + analysis-ledger
-  - peer 단위 narrative 의 5 계층 (L0 raw → L1 daily → L2 weekly → L3 monthly → L4 quarterly canon) + Analysis Ledger 의 carry-over
-  - 분석 4 agent 입력에 `_context_packs` 필드 추가 (in-process auto-fetch + cold_start fallback)
-  - 초기 제안 Flyway 슬롯은 후속 정정 필요: 실제 적용 기준은 V19 (`analysis_ledger`), V20/V21 (`raw_articles` 중심 DB 관계 정비). daily/weekly/monthly/quarterly canon 은 다음 빈 슬롯에서 재배치
-  - 도입 단계 K1 (ledger) → K2 (weekly) → K3 (context pack) → K4 (monthly) → K5 (quarterly) → K6 (Qdrant axis_knowledge)
-- **2026-05-15** — DB 관계 표준 추가
-  - 신규: `90-cross-cutting/db-relations.md`
-  - backend Flyway `V20`/`V21` 기준으로 `raw_articles` 중심 FK/매핑 테이블, legacy 컬럼 유지 정책, application writer 전환 순서 문서화
+현재 DB 구조 기준:
+- 원문/정제 기본 저장소는 `raw_articles`이다.
+- `raw_articles`에는 `source_type`, `content_type`, `company`, `matched_companies`,
+  `matched_sectors`, `relevance_score`, `processing_status`, `cluster_id`,
+  `is_representative` 등이 존재한다.
+- 뉴스 클러스터는 별도 `article_clusters` 테이블이 아니라
+  `raw_articles.cluster_id + is_representative`로 표현한다.
+- DART/IR/문서형 파싱 결과는 `raw_article_parse_results`에 저장된다.
+- DART/IR 등의 분석 fact는 `raw_article_financial_metrics`,
+  `raw_article_business_signals`에 저장된다.
+
+중요:
+- 새 저장 구조나 새 테이블을 만들지 않는다.
+- 분석 실행 시 기존 DB에서 `cluster_id`, `raw_article_id`, `document_group_id` 기준으로
+  데이터를 조회해 `AnalysisInputBundle`이라는 런타임 내부 DTO로 묶는다.
+
+## 1단계 Agent
+
+### DataAnalysisSupervisorAgent
+
+1단계 분석 흐름을 조율하는 Supervisor Agent이다.
+
+주요 책임:
+- Raw / 정제 데이터 저장소에서 분석 대상 데이터를 조회한다.
+- 뉴스의 경우 `raw_articles.cluster_id` 기준으로 클러스터 전체 기사를 조회한다.
+- DART/IR/리포트의 경우 `raw_articles.id` 또는 `document_group_id` 기준으로
+  `raw_article_parse_results`, `raw_article_financial_metrics`,
+  `raw_article_business_signals` 등을 함께 조회한다.
+- 조회한 데이터를 `AnalysisInputBundle`로 구성한다.
+- `IssueIntegrationAgent`, `AnalysisAgent`, `ProfileAgent`, `ImplicationAgent`를 조율한다.
+- 최종 결과를 `AnalysisPackage`로 묶어 `CardNewsAgent`에 전달한다.
+
+흐름:
+
+```text
+AnalysisInputBundle
+→ IssueIntegrationAgent
+→ IntegratedIssue
+→ AnalysisAgent
+→ AnalysisResult
+→ ProfileAgent
+→ ProfileContext
+→ ImplicationAgent
+→ ImplicationResult
+→ AnalysisPackage
+→ CardNewsAgent
+```
+
+### IssueIntegrationAgent
+
+원문/클러스터/문서/파싱 결과를 하나의 통합 이슈로 정리한다.
+
+기존 요약 중심 역할을 이 이름으로 재정의한다.
+단순히 짧게 요약하는 Agent가 아니라, 여러 원문/문서/파싱 결과를 보고 중복 내용을 합치고
+빠지면 안 되는 내용을 보존하며 핵심 사실, 주요 수치, 사업 신호, 근거 출처를 구조화한다.
+
+역할:
+- 카드뉴스용 3줄 요약 생성 X
+- 단순 요약 X
+- 원문 전체 기반 이슈 통합 O
+- 중복 내용 제거 O
+- 핵심 사실/수치/사업 신호 구조화 O
+- 분석 가능한 하나의 통합 이슈 글 생성 O
+
+뉴스 기준:
+- `raw_articles.cluster_id = X`인 기사 전체를 조회한다.
+- 대표기사만 보지 않고 클러스터 전체 원문을 본다.
+- 반복되는 내용은 하나로 합친다.
+- 기사별 추가 정보는 누락되지 않게 반영한다.
+- 여러 기사에서 공통 확인되는 내용은 `consolidated_facts`로 정리한다.
+- 일부 기사에만 있는 정보는 보조 fact 또는 uncertain point로 표시한다.
+
+출력 예:
+
+```json
+{
+  "main_issue": "삼성SDS의 Agentic AI 기반 업무 자동화 플랫폼 고도화",
+  "integrated_text": "삼성SDS는 생성형 AI 기반 업무 자동화 플랫폼을 고도화하면서 기업용 AI Agent 서비스 확대와 클라우드 기반 업무 자동화 적용을 함께 추진하고 있다.",
+  "consolidated_facts": [],
+  "key_numbers": [],
+  "business_signals": [],
+  "representative_sources": [],
+  "missing_or_uncertain_points": []
+}
+```
+
+현재 코드 기준:
+- `src/agents/issue_integration_agent.py`
+- `src/analysis/summarizer.py`
+
+### AnalysisAgent
+
+`IntegratedIssue`만을 기반으로 전략적 의미를 분석한다.
+
+입력:
+- `IntegratedIssue`
+- company / sector / event_type metadata
+- sources
+
+주요 책임:
+- 기업의 전략적 움직임 분석
+- 섹터 변화 분석
+- Peer사 경쟁 구도 해석
+- 시장 신호 분석
+- 리스크 요인 분석
+- 해당 이슈가 단순 정보인지 전략적 변화 신호인지 판단
+
+현재 코드 기준:
+- `src/agents/analysis_agent.py`
+- `src/analysis/analyzer.py`
+
+주의:
+- AnalysisAgent는 원문/클러스터/문서 전체를 다시 읽지 않는다.
+- 원문 기반 fact 통합은 IssueIntegrationAgent 책임이다.
+- AnalysisAgent는 IntegratedIssue 안의 `integrated_text`, `consolidated_facts`,
+  `key_numbers`, `business_signals`, `fact_basis`를 근거로 해석한다.
+
+### ProfileAgent
+
+시사점 도출에 필요한 SK AX와 Peer사의 context를 제공한다.
+
+주요 책임:
+- SK AX의 사업군, 역량, 전략 방향 context 제공
+- Peer사의 사업군, 주요 역량, 최근 집중 섹터 context 제공
+- 해당 이슈가 SK AX의 어떤 사업 방향과 연결되는지 판단할 수 있는 context 제공
+
+주의:
+- 전처리의 기업·섹터·이벤트 매칭과 다르다.
+- ProfileAgent는 시사점 도출용 context provider이다.
+
+현재 코드 기준:
+- `src/agents/profile_agent.py`
+- `src/services/skax_profile_context_loader.py`
+
+### ImplicationAgent
+
+분석 결과와 프로필 context를 결합해 SK AX 관점의 시사점을 도출한다.
+
+입력:
+- `AnalysisResult`
+- `ProfileContext`
+- `IntegratedIssue`
+- 필요 시 `AnalysisInputBundle` / sources
+
+주요 책임:
+- SK AX 관점 시사점 생성
+- 기회 요인 도출
+- 위협 요인 도출
+- 대응 방향 제안
+- 후속 모니터링 질문 생성
+
+현재 코드 기준:
+- `src/agents/implication_agent.py`
+- `src/analysis/implication.py`
+
+### CardNewsAgent
+
+`AnalysisPackage`를 사용자에게 보여주기 좋은 카드뉴스/API 응답 형태로 재가공한다.
+
+주요 책임:
+- 카드 제목 생성
+- 카드뉴스용 3줄 요약 생성
+- 핵심 포인트 생성
+- 시사점 문장 재가공
+- sources / validation 구성
+- 기존 card_news 저장 구조에 맞춰 저장 요청
+
+주의:
+- 원문 통합을 수행하지 않는다.
+- 전략 분석을 수행하지 않는다.
+- 카드뉴스용 3줄 요약은 여기서 생성한다.
+- 최종 저장은 기존 `card_news`, `card_news_articles`, `evidence_chain` 구조에 맞춘다.
+
+현재 코드 기준:
+- `src/agents/card_news_agent.py`
+
+## 2단계 활용 Agent
+
+2단계는 새 데이터를 수집하는 단계가 아니다.
+1단계에서 저장된 Raw / 정제 데이터와 카드뉴스 / 시사점 데이터를 활용한다.
+
+```text
+Raw / 정제 데이터 저장소
++
+카드뉴스 / 시사점 저장소
++
+ProfileContext
+        │
+        ▼
+DataUsageOrchestrator
+        ├─ MixerAgent
+        ├─ ITTrendAgent
+        ├─ ReportAgent
+        ├─ InsightAgent
+        ├─ ChatbotAgent
+        └─ KeywordGraphAgent
+```
+
+### DataUsageOrchestrator
+
+2단계 활용 흐름을 조율하는 Supervisor이다.
+
+주요 책임:
+- 사용자 요청 또는 스케줄에 따라 필요한 활용 Agent를 호출한다.
+- 리포트 요청이면 `ReportAgent` 호출
+- 여러 기업 비교 요청이면 `MixerAgent` + `InsightAgent` 호출
+- 키워드 변화 요청이면 `KeywordGraphAgent` 호출
+- 질의응답 요청이면 `ChatbotAgent` 호출
+- IT 트렌드 연결 요청이면 `ITTrendAgent` 호출
+
+현재 코드 기준:
+- `src/pipeline/data_usage_orchestrator.py`
+
+### MixerAgent
+
+여러 카드뉴스, 시사점, 분석 결과를 종합해 기업별/섹터별/기간별 흐름을 비교한다.
+
+현재 코드 기준:
+- `src/agents/mixer_analysis_agent.py`
+
+### ITTrendAgent
+
+글로벌 IT 트렌드, 산업 동향, 기술 키워드를 Peer사 동향과 연결해 해석한다.
+
+현재 코드 기준:
+- `src/agents/it_trend_agent.py`
+
+### ReportAgent
+
+저장된 카드뉴스, 시사점, 정제 데이터, MixerAgent 결과를 바탕으로 보고서를 생성한다.
+
+현재 코드 기준:
+- `src/agents/report_agent.py`
+
+### InsightAgent
+
+여러 카드뉴스와 분석 결과를 기반으로 더 큰 흐름과 전략적 의미를 도출한다.
+
+현재 코드 기준:
+- `src/agents/insight_cascade_agent.py`
+
+### ChatbotAgent
+
+저장소 기반 RAG 질의응답 Agent이다.
+
+현재 코드 기준:
+- `src/agents/chatbot_agent.py`
+
+### KeywordGraphAgent
+
+기업별·섹터별 키워드의 등장 빈도, 연결 관계, 변화 흐름을 그래프로 생성한다.
+
+현재 코드 기준:
+- `src/agents/keyword_graph_agent.py`
+
+## 내부 DTO / 모델 주의사항
+
+`src/analysis/models.py`의 모델은 DB schema가 아니다.
+Agent 간 데이터 전달을 위한 내부 DTO/dataclass이다.
+
+예:
+- `AnalysisInputBundle`
+- `IntegratedIssue`
+- `AnalysisResult`
+- `ProfileContext`
+- `ImplicationResult`
+- `AnalysisPackage`
+- `CardNews`
+
+중요:
+- `src/schemas.py`는 건드리지 않는다.
+- DB schema는 건드리지 않는다.
+- repository/save 로직은 건드리지 않는다.
+- 기존 `save_card_news` 같은 저장 경로를 그대로 사용한다.
+- `CardNews` dataclass가 있더라도 DB `card_news` 테이블 schema가 아니다.
+- 최종 저장 시에는 기존 `card_news`, `card_news_articles`, `evidence_chain` 구조에 맞춰 저장한다.
+- 근거 패키지처럼 보이는 별도 저장 구조명은 사용하지 않는다.
+- 기존 코드 호환이 필요하면 내부 DTO alias 정도만 허용한다.

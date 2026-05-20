@@ -7,7 +7,7 @@
 
 ## 1. 왜 필요한가 — 현재 구조의 한계
 
-현재 분석 agent (Mixer / Insight / PeerComparison / GlobalTrends / Briefing) 는 매 호출마다 **카드 raw → Qdrant retrieval → LLM** 으로 시간 축 컨텍스트를 *재발견* 한다. 결과적으로:
+현재 분석 agent (Mixer / Insight / ITTrend / Briefing) 는 매 호출마다 **카드 raw → Qdrant retrieval → LLM** 으로 시간 축 컨텍스트를 *재발견* 한다. 결과적으로:
 
 | 한계 | 영향 |
 |---|---|
@@ -216,7 +216,7 @@ embedding 비용: digest/profile/canon 은 raw 카드 대비 훨씬 적은 row �
 | 6 | 최신성 검증 | pack_version + dirty flag + last_recompute_at 추적 |
 | 7 | 단순 뉴스 요약 금지 | weekly digest 가 *delta_vs_prev* 강제 → 변화 패턴 추출 |
 | 8 | 회사별 비교 기준 | monthly_profile.kpi_anchored + strategy_label enum 통일 |
-| 9 | 변화 감지 기준 | weekly digest 의 ±5/10/30% band 분류 (PeerComparison 과 동일 enum) |
+| 9 | 변화 감지 기준 | weekly digest 의 ±5/10/30% band 분류 |
 | 11 | 정량 수치 우선 | digest/profile/canon 의 quantitative_anchors 필드 강제 |
 | 12 | 공식 vs 추정 구분 | quarterly_canon 이 [DART 공식] / weekly_digest 가 [기사 인용/자체 추정] 마킹 |
 | 16 | 리스크 분석 | analysis_ledger 의 superseded_by 로 과거 결론 retraction tracking |
