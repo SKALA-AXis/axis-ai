@@ -658,13 +658,13 @@ def _is_sk_ax_page(text: str) -> bool:
     if has_excluded_affiliate:
         return False
 
-    business_hits = sum(
-        1 for term in _SK_AX_PAGE_BUSINESS_TERMS if _contains_token(lowered, term)
-    )
+    business_hits = sum(1 for term in _SK_AX_PAGE_BUSINESS_TERMS if _contains_token(lowered, term))
     return business_hits >= 2
 
 
-def _filter_pages_for_peer(pages: list[dict[str, Any]], peer_id: str | None) -> list[dict[str, Any]]:
+def _filter_pages_for_peer(
+    pages: list[dict[str, Any]], peer_id: str | None
+) -> list[dict[str, Any]]:
     if peer_id != "sk_ax":
         return pages
 
@@ -678,7 +678,9 @@ def _filter_pages_for_peer(pages: list[dict[str, Any]], peer_id: str | None) -> 
         )
         return filtered
 
-    log.warning("SK AX IR 관련 페이지를 찾지 못해 원본 페이지 전체로 fallback | pages=%d", len(pages))
+    log.warning(
+        "SK AX IR 관련 페이지를 찾지 못해 원본 페이지 전체로 fallback | pages=%d", len(pages)
+    )
     return pages
 
 
