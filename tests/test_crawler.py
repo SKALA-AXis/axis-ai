@@ -1,16 +1,13 @@
 """크롤러 단위 테스트"""
 
 import json
+import os
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
+import pytest
 from bs4 import BeautifulSoup
 
-from src.preprocessing.relevance import (
-    _core_company_role_reject_result,
-    _metadata_patch_for_relevance,
-    _result,
-)
 from src.crawler.backfill_runner import BackfillRunner
 from src.crawler.base import CrawlWindow, RawArticle
 from src.crawler.batch_processor import _window_months
@@ -49,6 +46,18 @@ from src.db.article_store import (
     _metadata_json,
 )
 from src.preprocessing.preprocessing import _company_for_context
+from src.preprocessing.relevance import (
+    _core_company_role_reject_result,
+    _metadata_patch_for_relevance,
+    _result,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_naver_credentials(monkeypatch):
+    for key in list(os.environ):
+        if key.startswith(("NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET")):
+            monkeypatch.delenv(key, raising=False)
 
 
 def test_raw_article_fields():
