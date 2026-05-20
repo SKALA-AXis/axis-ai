@@ -166,7 +166,8 @@ DART 정기보고서에서 회사/사업 구조와 사업 시그널을 추출하
 
 원칙:
 - 입력은 주로 '회사의 개요'와 '사업의 내용' 섹션입니다.
-- 사업 설명, 사업 개요, 제품 및 서비스, 매출 및 수주상황, 주요계약, 연구개발, 위험 요인을 분리하세요.
+- 사업 설명, 사업 개요, 제품 및 서비스, 매출 및 수주상황을 분리하세요.
+- 주요계약, 연구개발, 위험 요인도 별도 signal로 분리하세요.
 - 재무제표 숫자는 참고용 표 요약으로만 사용하고, 명시되지 않은 수치를 만들지 마세요.
 - evidence_text에는 원문 근거 문장을 그대로 충분히 남기세요.
 - 확실하지 않은 항목은 confidence를 0.6 미만으로 두세요.
@@ -179,8 +180,8 @@ DART 정기보고서에서 회사/사업 구조와 사업 시그널을 추출하
 {{
   "business_signals": [
     {{
-      "business_area": "company_total|cloud|ai_ax|enterprise_it|orders_pipeline|rd|risk 또는 원문 사업명",
-      "signal_type": "business_overview|product_service|orders_pipeline|rd|strategy|growth|investment|efficiency|risk",
+      "business_area": "company_total|cloud|ai_ax|enterprise_it|orders_pipeline|rd|risk",
+      "signal_type": "business_overview|product_service|orders_pipeline|rd|strategy|growth",
       "sentiment": "positive|neutral|negative",
       "summary": "한 문장 요약",
       "evidence_text": "원문 근거 문장",
@@ -229,8 +230,7 @@ def _chunk_contexts(
         selected = [
             chunk
             for chunk in chunks
-            if isinstance(chunk, dict)
-            and str(chunk.get("section_key") or "") in _TARGET_SECTIONS
+            if isinstance(chunk, dict) and str(chunk.get("section_key") or "") in _TARGET_SECTIONS
         ]
 
     contexts: list[str] = []
@@ -263,7 +263,10 @@ def _financial_table_summaries(parser_result: dict[str, Any]) -> list[str]:
                     if isinstance(row, dict):
                         row_labels.append(str(row.get("label") or row.get("metric_key") or ""))
             summaries.append(
-                "[financial_statement table={table_index} type={table_type} unit={unit}]\n{rows}".format(
+                (
+                    "[financial_statement table={table_index} "
+                    "type={table_type} unit={unit}]\n{rows}"
+                ).format(
                     table_index=statement.get("table_index"),
                     table_type=statement.get("table_type"),
                     unit=statement.get("unit"),

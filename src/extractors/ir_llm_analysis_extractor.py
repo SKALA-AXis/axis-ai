@@ -329,9 +329,7 @@ def _is_sk_ax_page_text(text: str) -> bool:
     if has_portfolio_term:
         return False
 
-    business_hits = sum(
-        1 for term in _SK_AX_PAGE_BUSINESS_TERMS if _contains_term(lowered, term)
-    )
+    business_hits = sum(1 for term in _SK_AX_PAGE_BUSINESS_TERMS if _contains_term(lowered, term))
     return business_hits >= 2
 
 
