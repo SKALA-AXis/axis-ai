@@ -374,46 +374,26 @@ async def _persist_articles(source_label: str, articles: list[RawArticle]) -> No
 
 
 def _run_realtime_pipeline_for_run(crawl_run_id: str, *, trigger_type: str) -> None:
-    """Run preprocessing and downstream analysis for a realtime crawl run."""
-    from src.pipeline.ingestion_graph import ingestion_graph
+    """Run preprocessing for a realtime crawl run."""
+    from src.preprocessing.preprocessing import PreprocessingService
 
-    state: dict[str, Any] = {
-        "company": [],
-        "trigger_type": trigger_type,
-        "collected_since": None,
-        "crawl_run_id": crawl_run_id,
-        "raw_article_ids": [],
-        "relevant_ids": [],
-        "official_document_ids": [],
-        "parsed_document_ids": [],
-        "industry_document_ids": [],
-        "structured_signal_ids": [],
-        "analysis_document_ids": [],
-        "analysis_source_counts": {},
-        "analysis_metric_count": 0,
-        "analysis_signal_count": 0,
-        "analysis_errors": [],
-        "skipped_preprocess_ids": [],
-        "cluster_map": {},
-        "representative_ids": [],
-        "classified_clusters": [],
-        "card_news": [],
-        "indexed_vector_ids": [],
-        "errors": [],
-        "human_review_flags": [],
-    }
-    result = ingestion_graph.invoke(state)  # type: ignore[attr-defined]
+    result = PreprocessingService().run(
+        company=[],
+        trigger_type=trigger_type,
+        collected_since=None,
+        crawl_run_id=crawl_run_id,
+    )
     log.info(
         (
             "실시간 후처리 완료 | crawl_run_id=%s raw=%d parsed_docs=%d "
-            "analysis_metrics=%d analysis_signals=%d cards=%d"
+            "analysis_metrics=%d analysis_signals=%d classified=%d"
         ),
         crawl_run_id,
         len(result.get("raw_article_ids", [])),
         len(result.get("parsed_document_ids", [])),
         result.get("analysis_metric_count", 0),
         result.get("analysis_signal_count", 0),
-        len(result.get("card_news", [])),
+        len(result.get("classified_clusters", [])),
     )
 
 

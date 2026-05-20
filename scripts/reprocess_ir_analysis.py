@@ -401,8 +401,12 @@ def _reparse_ir_article(
 
     update_preprocess_status(
         int(article["id"]),
-        "PREPROCESSED_PARSED_DOCUMENT" if ok else "SKIPPED_PARSER_QUALITY",
-        metadata_patch,
+        "PROCESSED" if ok else "SKIPPED",
+        {
+            **metadata_patch,
+            "status_detail": "parsed_document" if ok else "parser_quality_failed",
+            **({} if ok else {"skip_reason": reason}),
+        },
         error_message=None if ok else reason,
     )
     article["extra"] = {**article["extra"], **metadata_patch}

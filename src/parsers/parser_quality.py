@@ -31,7 +31,8 @@ def analyze_parser_quality_article(
     item["parser_quality_reason"] = quality["reason"]
 
     if not quality["ok"]:
-        item["processing_status"] = "SKIPPED_PARSER_QUALITY"
+        item["processing_status"] = "SKIPPED"
+        item["status_detail"] = "parser_quality_failed"
         item["skip_reason"] = quality["reason"]
         return item, False, quality["reason"]
 
