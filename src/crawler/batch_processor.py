@@ -13,6 +13,11 @@ from src.crawler.parsers.dedup import DedupStore
 from src.crawler.parsers.link_check import LinkChecker
 from src.crawler.result_writer import DEFAULT_RESULTS_DIR
 from src.db.article_store import save_articles
+from src.db.crawl_state_store import (
+    create_crawl_run,
+    mark_crawl_run_failed,
+    mark_crawl_run_success,
+)
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +67,7 @@ class BatchProcessor:
             keywords=keywords,
             persist=persist,
             recent_hours=recent_hours,
-            run_context=run_context or CrawlRunContext(collection_mode="scheduled", track="A"),
+            run_context=run_context or CrawlRunContext(collection_mode="realtime", track="A"),
         )
 
     async def run_track_b(
@@ -78,7 +83,7 @@ class BatchProcessor:
             keywords=keywords,
             persist=persist,
             crawl_window=crawl_window,
-            run_context=run_context or CrawlRunContext(collection_mode="scheduled", track="B"),
+            run_context=run_context or CrawlRunContext(collection_mode="realtime", track="B"),
         )
 
     async def run_track_c(
@@ -94,7 +99,7 @@ class BatchProcessor:
             keywords=keywords,
             persist=persist,
             crawl_window=crawl_window,
-            run_context=run_context or CrawlRunContext(collection_mode="scheduled", track="C"),
+            run_context=run_context or CrawlRunContext(collection_mode="realtime", track="C"),
         )
 
     async def run_track_d(
@@ -110,7 +115,7 @@ class BatchProcessor:
             keywords=keywords,
             persist=persist,
             crawl_window=crawl_window,
-            run_context=run_context or CrawlRunContext(collection_mode="scheduled", track="D"),
+            run_context=run_context or CrawlRunContext(collection_mode="realtime", track="D"),
         )
 
     async def run_sources(
@@ -334,11 +339,36 @@ class BatchProcessor:
             except Exception as e:
                 log.error("source 크롤 오류 | source=%s error=%s", name, e)
 
-        articles = _filter_window(articles, crawl_window)
-        accessible, rejected = await self.link_checker.filter_accessible(articles)
-        new_articles = self.dedup.filter_new(accessible)
-        inserted = save_articles(new_articles, run_context=run_context) if persist else 0
-        self.last_inserted_count = inserted
+        run_id = None
+        if persist and run_context and not run_context.crawl_run_id:
+            run_source_name = run_context.source_name or ",".join(source_names)
+            window_start = _window_date(crawl_window, "start") or datetime.now().date()
+            window_end = _window_date(crawl_window, "end") or window_start
+            run_id = create_crawl_run(
+                run_source_name,
+                window_start,
+                window_end,
+                run_type=run_context.collection_mode,
+            )
+            run_context.crawl_run_id = str(run_id)
+            run_context.source_name = run_source_name
+
+        try:
+            articles = _filter_window(articles, crawl_window)
+            accessible, rejected = await self.link_checker.filter_accessible(articles)
+            new_articles = self.dedup.filter_new(accessible)
+            inserted = save_articles(new_articles, run_context=run_context) if persist else 0
+            self.last_inserted_count = inserted
+            if run_id:
+                mark_crawl_run_success(
+                    run_id,
+                    inserted_count=inserted,
+                    skipped_count=len(new_articles) - inserted,
+                )
+        except Exception as e:
+            if run_id:
+                mark_crawl_run_failed(run_id, f"{type(e).__name__}: {e}")
+            raise
         log.info(
             "source 크롤 완료 | sources=%s raw=%d accessible=%d "
             "rejected_links=%d new=%d db_inserted=%d",

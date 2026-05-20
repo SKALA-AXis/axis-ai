@@ -66,6 +66,16 @@ _SK_AX_STRONG_TERMS = (
     "fabrix",
     "brity",
 )
+_SK_AX_PAGE_STRONG_TERMS = (
+    "sk ax",
+    "sk에이엑스",
+    "sk㈜ c&c",
+    "sk주식회사 c&c",
+    "sk c&c",
+    "sk c & c",
+    "c&c",
+    "씨앤씨",
+)
 _SK_AX_PORTFOLIO_TERMS = (
     "sk에코플랜트",
     "에코플랜트",
@@ -88,6 +98,24 @@ _SK_AX_PORTFOLIO_TERMS = (
     "sk on",
     "sk머티리얼즈",
     "sk materials",
+    "에이닷",
+)
+_SK_AX_PAGE_BUSINESS_TERMS = (
+    "it서비스",
+    "it 서비스",
+    "it services",
+    "information technology services",
+    "enterprise it",
+    "digital service",
+    "digital services",
+    "si",
+    "ito",
+    "클라우드",
+    "cloud",
+    "데이터센터",
+    "data center",
+    "ai transformation",
+    "ax",
 )
 
 _llm: ChatOpenAI | None = None
@@ -150,7 +178,12 @@ def _build_ir_llm_prompt(
     *,
     max_pages: int | None = None,
 ) -> str:
-    pages = _page_contexts(parser_result, max_pages=max_pages or _MAX_PAGES)
+    peer_id = _peer_id(article, parser_result)
+    pages = _page_contexts(
+        parser_result,
+        max_pages=max_pages or _MAX_PAGES,
+        peer_id=peer_id,
+    )
     if not pages:
         return ""
 
@@ -160,7 +193,7 @@ def _build_ir_llm_prompt(
         "peer_id": parser_result.get("peer_id"),
         "report_period": parser_result.get("period"),
     }
-    peer_guardrail = _peer_guardrail(metadata.get("peer_id") or _peer_id(article, parser_result))
+    peer_guardrail = _peer_guardrail(metadata.get("peer_id") or peer_id)
     page_text = "\n\n".join(pages)
     return f"""
 IR 문서에서 표/차트 기반 재무 지표와 본문 기반 사업 시그널을 분리 추출하세요.
@@ -227,11 +260,17 @@ IR 문서에서 표/차트 기반 재무 지표와 본문 기반 사업 시그�
 """.strip()
 
 
-def _page_contexts(parser_result: dict[str, Any], *, max_pages: int) -> list[str]:
+def _page_contexts(
+    parser_result: dict[str, Any],
+    *,
+    max_pages: int,
+    peer_id: str | None = None,
+) -> list[str]:
     raw_pages = parser_result.get("raw_text_pages")
     pages: list[str] = []
     if isinstance(raw_pages, list):
-        for page in raw_pages[:max_pages]:
+        selected_pages = _filter_page_items_for_peer(raw_pages, peer_id=peer_id)
+        for page in selected_pages[:max_pages]:
             if not isinstance(page, dict):
                 continue
             page_no = page.get("page")
@@ -244,7 +283,8 @@ def _page_contexts(parser_result: dict[str, Any], *, max_pages: int) -> list[str
 
     chunks = parser_result.get("document_chunks")
     if isinstance(chunks, list):
-        for chunk in chunks[: max_pages * 2]:
+        selected_chunks = _filter_page_items_for_peer(chunks, peer_id=peer_id)
+        for chunk in selected_chunks[: max_pages * 2]:
             if not isinstance(chunk, dict):
                 continue
             page_no = chunk.get("page")
@@ -252,6 +292,47 @@ def _page_contexts(parser_result: dict[str, Any], *, max_pages: int) -> list[str
             if text:
                 pages.append(f"[PAGE {page_no} CHUNK {chunk.get('chunk_id')}]\n{text[:2000]}")
     return pages
+
+
+def _filter_page_items_for_peer(items: list[Any], *, peer_id: str | None) -> list[Any]:
+    if peer_id != "sk_ax":
+        return items
+
+    filtered = [
+        item
+        for item in items
+        if isinstance(item, dict) and _is_sk_ax_page_text(str(item.get("text") or ""))
+    ]
+    if filtered:
+        log.info(
+            "SK AX LLM 입력 페이지 필터 적용 | before=%d after=%d pages=%s",
+            len(items),
+            len(filtered),
+            [item.get("page") for item in filtered if isinstance(item, dict)],
+        )
+        return filtered
+
+    log.warning("SK AX LLM 입력 페이지를 찾지 못해 원본 컨텍스트로 fallback | items=%d", len(items))
+    return items
+
+
+def _is_sk_ax_page_text(text: str) -> bool:
+    lowered = " ".join(str(text or "").lower().split())
+    if not lowered:
+        return False
+
+    has_strong_ax_term = any(_contains_term(lowered, term) for term in _SK_AX_PAGE_STRONG_TERMS)
+    if has_strong_ax_term:
+        return True
+
+    has_portfolio_term = any(_contains_term(lowered, term) for term in _SK_AX_PORTFOLIO_TERMS)
+    if has_portfolio_term:
+        return False
+
+    business_hits = sum(
+        1 for term in _SK_AX_PAGE_BUSINESS_TERMS if _contains_term(lowered, term)
+    )
+    return business_hits >= 2
 
 
 def _parse_json_response(content: Any) -> dict[str, Any]:

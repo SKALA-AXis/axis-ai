@@ -268,9 +268,9 @@ _IR_COMPANY_SECTION_HINTS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...
         ("industrial_ai", "Industrial AI", ("ai", "산업", "vision", "예지", "품질")),
     ),
     "sk_ax": (
-        ("ai", "AI/Data", ("ai", "에이닷", "sapien", "data", "데이터", "생성형")),
+        ("ai", "AI/Data", ("ax", "생성형", "llm", "data", "데이터", "ai transformation")),
         ("cloud", "Cloud", ("cloud", "클라우드", "dc", "data center", "데이터센터")),
-        ("portfolio", "Portfolio", ("portfolio", "investment", "투자", "배당", "주주환원")),
+        ("enterprise_it", "Enterprise IT", ("c&c", "it서비스", "it 서비스", "si", "ito")),
     ),
 }
 _IR_COMPANY_TOTAL_TERMS = (
@@ -351,6 +351,52 @@ _IR_SEGMENT_CONTEXT_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("vehicle_sw", ("vehicle", "차량", "sdv", "내비게이션", "navigation")),
     ("enterprise_it", ("enterprise", "erp", "ito", "si", "그룹사", "it서비스")),
     ("robotics", ("robot", "로봇", "automation", "자동화")),
+)
+_SK_AX_PAGE_STRONG_TERMS = (
+    "sk ax",
+    "sk에이엑스",
+    "sk㈜ c&c",
+    "sk주식회사 c&c",
+    "sk c&c",
+    "sk c & c",
+    "c&c",
+    "씨앤씨",
+)
+_SK_AX_PAGE_BUSINESS_TERMS = (
+    "it서비스",
+    "it 서비스",
+    "it services",
+    "information technology services",
+    "enterprise it",
+    "digital service",
+    "digital services",
+    "si",
+    "ito",
+    "클라우드",
+    "cloud",
+    "데이터센터",
+    "data center",
+    "ai transformation",
+    "ax",
+)
+_SK_AX_PAGE_EXCLUDE_TERMS = (
+    "sk telecom",
+    "sk텔레콤",
+    "skt",
+    "에이닷",
+    "sk hynix",
+    "sk하이닉스",
+    "sk innovation",
+    "sk이노베이션",
+    "sk square",
+    "sk스퀘어",
+    "sk biopharmaceuticals",
+    "sk바이오팜",
+    "sk e&s",
+    "sk온",
+    "sk on",
+    "sk ecoplant",
+    "sk에코플랜트",
 )
 
 
@@ -583,6 +629,57 @@ def _detect_portfolio_entity(text: str) -> str | None:
         if any(term.lower() in text for term in terms):
             return entity_name
     return None
+
+
+def _contains_token(text: str, term: str) -> bool:
+    lowered_term = term.lower()
+    if len(lowered_term) <= 3 and re.fullmatch(r"[a-z0-9&]+", lowered_term):
+        return bool(
+            re.search(
+                rf"(?<![a-z0-9]){re.escape(lowered_term)}(?![a-z0-9])",
+                text,
+            )
+        )
+    return lowered_term in text
+
+
+def _is_sk_ax_page(text: str) -> bool:
+    lowered = " ".join(str(text or "").lower().split())
+    if not lowered:
+        return False
+
+    has_strong_term = any(_contains_token(lowered, term) for term in _SK_AX_PAGE_STRONG_TERMS)
+    if has_strong_term:
+        return True
+
+    has_excluded_affiliate = any(
+        _contains_token(lowered, term) for term in _SK_AX_PAGE_EXCLUDE_TERMS
+    )
+    if has_excluded_affiliate:
+        return False
+
+    business_hits = sum(
+        1 for term in _SK_AX_PAGE_BUSINESS_TERMS if _contains_token(lowered, term)
+    )
+    return business_hits >= 2
+
+
+def _filter_pages_for_peer(pages: list[dict[str, Any]], peer_id: str | None) -> list[dict[str, Any]]:
+    if peer_id != "sk_ax":
+        return pages
+
+    filtered = [page for page in pages if _is_sk_ax_page(str(page.get("text") or ""))]
+    if filtered:
+        log.info(
+            "SK AX IR 관련 페이지 필터 적용 | before=%d after=%d pages=%s",
+            len(pages),
+            len(filtered),
+            [page.get("page") for page in filtered],
+        )
+        return filtered
+
+    log.warning("SK AX IR 관련 페이지를 찾지 못해 원본 페이지 전체로 fallback | pages=%d", len(pages))
+    return pages
 
 
 def _article_get(article: Any, key: str, default: Any = None) -> Any:
@@ -1616,6 +1713,7 @@ class IRParser:
         text = str(_article_get(article, "content", "") or "")
         pages = _pages_from_ir_article(article, extra)
         peer_id = _article_peer_id(article)
+        pages = _filter_pages_for_peer(pages, peer_id)
         title = str(_article_get(article, "title", "") or "")
         url = str(_article_get(article, "url", "") or extra.get("pdf_url", "") or "")
         published_at = _article_published_at(article, extra)
