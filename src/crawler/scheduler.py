@@ -18,6 +18,11 @@ from src.crawler.parsers.dedup import DedupStore
 from src.crawler.parsers.link_check import LinkChecker
 from src.crawler.result_writer import DEFAULT_RESULTS_DIR
 from src.db.article_store import save_articles
+from src.db.crawl_state_store import (
+    create_crawl_run,
+    mark_crawl_run_failed,
+    mark_crawl_run_success,
+)
 
 log = logging.getLogger(__name__)
 
@@ -326,19 +331,35 @@ async def _run_shared_source(source_label: str, crawler: Any) -> None:
 
 
 async def _persist_articles(source_label: str, articles: list[RawArticle]) -> None:
+    today = datetime.now().astimezone().date()
+    run_id = create_crawl_run(
+        source_label,
+        today,
+        today,
+        run_type="realtime",
+    )
+
     if not articles:
         log.info("소스 크롤 결과 없음 | source=%s", source_label)
+        mark_crawl_run_success(run_id, inserted_count=0, skipped_count=0)
         return
 
-    accessible, rejected = await LinkChecker().filter_accessible(articles)
-    new_articles = DedupStore().filter_new(accessible)
-    inserted = save_articles(
-        new_articles,
-        run_context=CrawlRunContext(
-            collection_mode="realtime",
-            source_name=source_label,
-        ),
-    )
+    try:
+        accessible, rejected = await LinkChecker().filter_accessible(articles)
+        new_articles = DedupStore().filter_new(accessible)
+        inserted = save_articles(
+            new_articles,
+            run_context=CrawlRunContext(
+                collection_mode="realtime",
+                crawl_run_id=str(run_id),
+                source_name=source_label,
+            ),
+        )
+        skipped = len(new_articles) - inserted
+        mark_crawl_run_success(run_id, inserted_count=inserted, skipped_count=skipped)
+    except Exception as e:
+        mark_crawl_run_failed(run_id, f"{type(e).__name__}: {e}")
+        raise
 
     log.info(
         "소스 크롤 저장 완료 | source=%s raw=%d accessible=%d rejected=%d new=%d inserted=%d",
