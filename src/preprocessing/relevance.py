@@ -44,7 +44,7 @@ from src.config.relevance_policy import (
     SUBJECT_MARKERS,
     UNCERTAIN_CANDIDATE_THRESHOLD,
 )
-from src.config.sectors import SECTOR_IDS, match_sector_details, match_sectors
+from src.config.sectors import SECTOR_IDS, SectorMatch, match_sector_details, match_sectors
 from src.db.article_store import INDUSTRY_TREND_COMPANY
 from src.db.postgres import SessionLocal
 
@@ -584,11 +584,11 @@ def _precheck(
     has_company = bool(matched_companies)
     has_sector = bool(matched_sectors and matched_sectors != ["other"])
     source_type_value = str(source_type or "").strip().lower()
-    is_company_source = (
-        source_type_value
-        in {*PARSED_DOCUMENT_SOURCE_TYPES, *OFFICIAL_SOURCE_TYPES, *COMPANY_SITE_SOURCE_TYPES}
-        and bool(company)
-    )
+    is_company_source = source_type_value in {
+        *PARSED_DOCUMENT_SOURCE_TYPES,
+        *OFFICIAL_SOURCE_TYPES,
+        *COMPANY_SITE_SOURCE_TYPES,
+    } and bool(company)
 
     if not has_company and not has_sector and not is_company_source:
         return {
@@ -975,9 +975,7 @@ def _has_keywords_near_alias(
         right = min(len(text_compact), pos + len(alias_compact) + ROLE_CONTEXT_WINDOW)
         context = text_compact[left:right]
 
-        if skip_listing_context and any(
-            keyword in context for keyword in LISTING_CONTEXT_KEYWORDS
-        ):
+        if skip_listing_context and any(keyword in context for keyword in LISTING_CONTEXT_KEYWORDS):
             start = pos + len(alias_compact)
             continue
 
@@ -1054,9 +1052,7 @@ def _is_event_listing_noise(
     compact_text: str,
     matched_companies: list[str],
 ) -> bool:
-    has_event_keyword = any(
-        _compact(keyword) in compact_text for keyword in EVENT_LISTING_KEYWORDS
-    )
+    has_event_keyword = any(_compact(keyword) in compact_text for keyword in EVENT_LISTING_KEYWORDS)
     if not has_event_keyword:
         return False
 
@@ -1125,7 +1121,10 @@ def _metadata_patch_for_relevance(
     is_companyless_sector = has_sector and not matched_companies
     is_multi_peer_sector = has_sector and len(matched_companies) >= 2
     source_type = str(row.source_type or "").strip().lower()
-    is_trend_source = source_type in {*STRUCTURED_SIGNAL_SOURCE_TYPES, *INDUSTRY_DOCUMENT_SOURCE_TYPES}
+    is_trend_source = source_type in {
+        *STRUCTURED_SIGNAL_SOURCE_TYPES,
+        *INDUSTRY_DOCUMENT_SOURCE_TYPES,
+    }
 
     if not (
         sector_details
@@ -1152,17 +1151,16 @@ def _metadata_patch_for_relevance(
     return patch
 
 
-def _matched_sector_details_for_result(row: Any, matched_sectors: list[str]) -> list[dict[str, str]]:
+def _matched_sector_details_for_result(
+    row: Any,
+    matched_sectors: list[str],
+) -> list[SectorMatch]:
     allowed = {sector for sector in matched_sectors if sector != "other"}
     if not allowed:
         return []
 
     text_value = f"{getattr(row, 'title', '') or ''} {getattr(row, 'content', '') or ''}"
-    return [
-        detail
-        for detail in match_sector_details(text_value)
-        if detail["sector_id"] in allowed
-    ]
+    return [detail for detail in match_sector_details(text_value) if detail["sector_id"] in allowed]
 
 
 def _peer_context_snippets(

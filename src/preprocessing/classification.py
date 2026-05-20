@@ -84,9 +84,7 @@ def compute_exposure(
     company_mention_count = sum(
         1
         for a in cluster_articles
-        if any(
-            alias in f"{a.get('title') or ''} {a.get('content') or ''}" for alias in aliases
-        )
+        if any(alias in f"{a.get('title') or ''} {a.get('content') or ''}" for alias in aliases)
     )
     company_mention_score = min(company_mention_count / max(cluster_size, 1), 1.0)
 

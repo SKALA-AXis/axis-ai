@@ -21,9 +21,7 @@ from src.config.preprocessing import (
     NEWS_SOURCE_TYPES,
     OFFICIAL_SOURCE_TYPES,
     PARSED_DOCUMENT_SOURCE_TYPES,
-    STATUS_FAILED,
     STATUS_PROCESSED,
-    STATUS_RAW,
     STATUS_SKIPPED,
     STRUCTURED_SIGNAL_SOURCE_TYPES,
 )
@@ -430,7 +428,7 @@ class PreprocessingService:
                     "status_detail": "unsupported_source",
                     "skip_reason": (
                         f"{source_type or 'unknown'} source_type은 현재 전처리 대상이 아님"
-                    )
+                    ),
                 },
             )
 
