@@ -918,27 +918,31 @@ _INSERT_CARD_NEWS = text("""
     RETURNING id
 """)
 
+# W1-4 / W5-1 (V33 이후) — card_schema_version / evaluation_payload 컬럼이 존재할 때만
+# 사용하는 보조 UPDATE. 컬럼 미존재 환경 (pre-V33) 에서는 silent skip.
+_UPDATE_CARD_NEWS_V2_FIELDS = text("""
+    UPDATE card_news
+       SET card_schema_version = :card_schema_version,
+           evaluation_payload =
+               COALESCE(evaluation_payload, '{}'::jsonb)
+               || CAST(:evaluation_payload AS jsonb)
+     WHERE id = :id
+""")
+
 
 def save_card_news(card: dict[str, Any]) -> Optional[str]:
     """카드 뉴스를 card_news 테이블에 저장한다.
 
-    v3: implication JSONB 컬럼은 evidence_chain + sector 메타데이터의 저장소로 재사용.
-    Backend에서 evidence_chain·sector 전용 컬럼 분리 후 마이그레이션 예정.
+    W2-4 정정: ``implication`` JSONB 가 ImplicationAgent v4.0/v5.0 의 결과
+    (``peer_implication`` / ``skax_implication`` / ``recommended_actions`` 등) 를
+    유지하도록 변경. sector·exposure·evidence_chain 등의 메타데이터는 별도 키
+    네임스페이스로 함께 포함.
 
-    Returns:
-        저장된 card_news ID, 실패 시 None
+    V33 이후 환경에서는 ``card_schema_version`` / ``evaluation_payload`` 컬럼을
+    별도 UPDATE 로 갱신한다 (컬럼 미존재 환경에서는 silent skip).
     """
     try:
-        # implication JSONB에 v3 메타데이터(섹터·노출도·검증체인) 통합 저장
-        v3_payload = {
-            "sector": card.get("sector", "other"),
-            "sectors": card.get("sectors", ["other"]),
-            "exposure_score": card.get("exposure_score", 0.0),
-            "exposure_band": card.get("exposure_band", "low"),
-            "signals": card.get("signals", {}),
-            "evidence_chain": card.get("evidence_chain", {}),
-        }
-
+        implication_payload = _merge_implication_payload(card)
         with SessionLocal() as db:
             result = db.execute(
                 _INSERT_CARD_NEWS,
@@ -951,7 +955,7 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
                     "event_type": card.get("event_type", "tech"),
                     "importance": card.get("importance", "low"),
                     "importance_score": card.get("importance_score", 0.0),
-                    "implication": json.dumps(v3_payload, ensure_ascii=False),
+                    "implication": json.dumps(implication_payload, ensure_ascii=False),
                     "sources": json.dumps(card.get("sources", []), ensure_ascii=False),
                     "validation_pass": card.get("validation", {}).get("pass", False),
                     "validation_sc_score": card.get("validation", {}).get("sc_score", 0.0),
@@ -961,10 +965,67 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
             db.commit()
             if row:
                 log.info("카드 뉴스 저장 완료 | id=%s", card["id"])
+                _persist_v2_fields(card)
                 return card["id"]
     except Exception as e:
         log.error("카드 뉴스 저장 실패 | id=%s error=%s", card.get("id"), e)
     return None
+
+
+def _merge_implication_payload(card: dict[str, Any]) -> dict[str, Any]:
+    """ImplicationAgent v4.0/v5.0 결과 + 보조 메타데이터를 단일 JSONB 로 합성.
+
+    v2 schema 가 우선. legacy v3_payload (sector / exposure / signals) 는 보조 key 로
+    함께 보존하여 frontend / sidecar 가 둘 다 읽을 수 있게 한다.
+    """
+    raw_implication = card.get("implication")
+    if isinstance(raw_implication, dict) and (
+        "skax_implication" in raw_implication or "peer_implication" in raw_implication
+    ):
+        payload: dict[str, Any] = dict(raw_implication)
+    else:
+        payload = {}
+    # 보조 메타데이터 (sector / exposure / signals / evidence_chain) 는 별도 namespace.
+    payload.setdefault(
+        "sector_meta",
+        {
+            "sector": card.get("sector", "other"),
+            "sectors": card.get("sectors", ["other"]),
+            "exposure_score": card.get("exposure_score", 0.0),
+            "exposure_band": card.get("exposure_band", "low"),
+            "signals": card.get("signals", {}),
+            "evidence_chain": card.get("evidence_chain", {}),
+        },
+    )
+    return payload
+
+
+def _persist_v2_fields(card: dict[str, Any]) -> None:
+    """W1-4 + W5-1 — V33 이후 컬럼 (card_schema_version / evaluation_payload) 갱신.
+
+    컬럼 미존재 환경 (pre-V33) 에서는 silent skip.
+    """
+    schema_version = card.get("card_schema_version")
+    evaluation_payload = card.get("evaluation_payload")
+    if not schema_version and not evaluation_payload:
+        return
+    try:
+        with SessionLocal() as db:
+            db.execute(
+                _UPDATE_CARD_NEWS_V2_FIELDS,
+                {
+                    "id": card["id"],
+                    "card_schema_version": str(schema_version or "v2"),
+                    "evaluation_payload": json.dumps(evaluation_payload or {}, ensure_ascii=False),
+                },
+            )
+            db.commit()
+    except Exception as exc:  # noqa: BLE001 — pre-V33 컬럼 부재 fallback
+        log.debug(
+            "v2 fields persist skipped (likely pre-V33) | id=%s error=%s",
+            card.get("id"),
+            exc,
+        )
 
 
 # ──────────────────────────────────────────────────────────────

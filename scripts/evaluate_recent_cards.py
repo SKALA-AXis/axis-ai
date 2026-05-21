@@ -81,14 +81,24 @@ def _select_unjudged_cards(*, limit: int, hours: int) -> list[dict[str, Any]]:
         rows = db.execute(
             text(
                 """
-                SELECT id, implication, sources,
-                       COALESCE(evaluation_payload, '{}'::jsonb) AS evaluation_payload,
-                       company, peer_company_id, primary_keyword_category, created_at
-                  FROM card_news
-                 WHERE card_schema_version = 'v2'
-                   AND NOT (COALESCE(evaluation_payload, '{}'::jsonb) ? 'llm_judge')
-                   AND created_at >= NOW() - (:hours || ' hours')::interval
-                 ORDER BY created_at ASC
+                SELECT cn.id,
+                       cn.implication,
+                       cn.sources,
+                       COALESCE(cn.evaluation_payload, '{}'::jsonb) AS evaluation_payload,
+                       cn.company,
+                       cn.peer_company_id,
+                       cn.primary_keyword_category,
+                       cn.created_at,
+                       COALESCE(ec.financial_refs, '{}'::jsonb) AS evidence_financial_refs,
+                       COALESCE(ec.source_links,  '[]'::jsonb) AS evidence_source_links,
+                       COALESCE(ec.mbb_refs,      '[]'::jsonb) AS evidence_mbb_refs
+                  FROM card_news cn
+                  LEFT JOIN evidence_chain ec
+                         ON ec.issue_card_id = cn.id
+                 WHERE cn.card_schema_version = 'v2'
+                   AND NOT (COALESCE(cn.evaluation_payload, '{}'::jsonb) ? 'llm_judge')
+                   AND cn.created_at >= NOW() - (:hours || ' hours')::interval
+                 ORDER BY cn.created_at ASC
                  LIMIT :limit
                 """
             ),
@@ -163,10 +173,15 @@ def _llm_judge_card(row: dict[str, Any]) -> dict[str, Any]:
     implication = _ensure_dict(row.get("implication"))
     skax = implication.get("skax_implication") or {}
     peer = implication.get("peer_implication") or {}
-    evidence_payload = _ensure_dict(row.get("sources")) or {
-        "sources": _ensure_list(row.get("sources"))
+    # evidence_payload 우선순위: evidence_chain 테이블의 source_links/financial_refs/mbb_refs
+    # > card_news.sources (raw fallback).
+    evidence_payload = {
+        "source_links": _ensure_list(row.get("evidence_source_links"))
+        or _ensure_list(row.get("sources")),
+        "financial_refs": _ensure_dict(row.get("evidence_financial_refs")),
+        "mbb_refs": _ensure_list(row.get("evidence_mbb_refs")),
     }
-    fact_basis = []
+    fact_basis: list[Any] = []
     integrated = implication.get("integrated_issue") or {}
     if isinstance(integrated, dict):
         fact_basis = integrated.get("fact_basis", [])
