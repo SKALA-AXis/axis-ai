@@ -1,7 +1,7 @@
 """EvaluatorAgent — W5-1 rule-based 4 metric (+regression_drift Phase 2).
 
 `validate` 노드 안에서 호출. LLM 사용 X. latency 추가 <50ms 목표.
-설계: design/01-supervisor-implementation-plan.md §3.6.1, §3.6.6.
+설계: design/01-analysis-pipeline-implementation-plan.md §3.6.1, §3.6.6.
 
 Phase 1 (즉시): context_hit_ratio / evidence_claim_ratio / specificity_score /
                 actionability_score

@@ -1,6 +1,11 @@
-# 1단계 데이터 분석 Supervisor — 팀 공유본
+# 1단계 데이터 분석 Pipeline — 팀 공유본
 
-> 상세: [`01-supervisor-implementation-plan.md`](01-supervisor-implementation-plan.md) (v3.2.1)
+> 상세: [`01-analysis-pipeline-implementation-plan.md`](01-analysis-pipeline-implementation-plan.md) (v3.2.2)
+>
+> **명칭 주의 (외부 리뷰 2026-05-21 R-rename)**: 본 문서의 "Analysis Pipeline" 은
+> LLM-router 가 worker 를 동적 선택하는 multi-agent supervisor pattern 이 아니다.
+> 실제 구조는 **LangGraph 기반 고정 순서 DAG**. 단 하나의 동적 분기는 `validate` 의
+> `pass / fail` 라우팅뿐이다. 기존 `Supervisor*` 명칭은 backward-compat 으로 유지.
 >
 > ## 배포 순서 (Hard dependency, 외부 리뷰 R-6 명시)
 >

@@ -6,7 +6,7 @@ signal_type) top-5 confidence 로 압축 후 LLM 으로 business_area 별 narrat
 합성. 결과를 `peer_companies.peer_plus_payload['capability_evolution']` JSONB 에
 저장.
 
-설계: design/01-supervisor-implementation-plan.md §3.4.6.
+설계: design/01-analysis-pipeline-implementation-plan.md §3.4.6.
 """
 
 from __future__ import annotations

@@ -1,6 +1,12 @@
-"""Supervisor LangGraph StateGraph — W2-1 + W2-3 + W4-2 + W4-5 + W5-1.
+"""Analysis Flow LangGraph DAG — W2-1 + W2-3 + W4-2 + W4-5 + W5-1.
 
-design/01-supervisor-implementation-plan.md §3.1 + 외부 리뷰 (2026-05-21) 반영:
+명칭 (외부 리뷰 2026-05-21 R-rename):
+* 이 모듈의 구조는 LLM-router 가 worker 를 동적 선택하는 multi-agent supervisor pattern
+  이 아닌 **고정 순서 DAG pipeline** 이다.
+* 권장 이름은 ``AnalysisFlow*`` / ``build_analysis_flow_graph`` (본 모듈 하단 alias).
+  기존 ``Supervisor*`` 이름은 backward-compat 으로 유지.
+
+design/01-analysis-pipeline-implementation-plan.md §3.1 + 외부 리뷰 (2026-05-21) 반영:
 
     issue_integrate  →  profile_context  →  build_analysis_context
         →  strategic_analyze  →  implication  →  validate
@@ -726,13 +732,36 @@ def supervisor_run_id() -> str:
     return uuid.uuid4().hex
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 권장 이름 alias (외부 리뷰 2026-05-21 R-rename)
+#
+# 이 모듈의 구조는 LLM-router (multi-agent supervisor) 가 아닌 **고정 순서 DAG
+# pipeline** 이다. 그에 맞춰 외부에서 사용할 권장 이름을 alias 로 노출한다.
+# 기존 ``Supervisor*`` 이름은 backward-compat 으로 유지하되, 새 코드는 ``AnalysisFlow*``
+# / ``build_analysis_flow_graph`` 사용을 권장.
+# ─────────────────────────────────────────────────────────────────────────────
+
+AnalysisFlowState = SupervisorState
+AnalysisFlowDeps = SupervisorDeps
+build_analysis_flow_graph = build_supervisor_graph
+default_analysis_flow_graph = default_supervisor_graph
+run_analysis_flow = run_supervisor
+analysis_flow_run_id = supervisor_run_id
+
+
 __all__ = [
+    "AnalysisFlowDeps",
+    "AnalysisFlowState",
     "EvaluationMetrics",
     "ImplicationResult",
     "SupervisorDeps",
     "SupervisorState",
+    "analysis_flow_run_id",
+    "build_analysis_flow_graph",
     "build_supervisor_graph",
+    "default_analysis_flow_graph",
     "default_supervisor_graph",
+    "run_analysis_flow",
     "run_supervisor",
     "supervisor_run_id",
 ]

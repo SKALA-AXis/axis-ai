@@ -1,6 +1,6 @@
 """ImplicationAgent v4.0 — P.C.R.O 프롬프트 (W1-1).
 
-설계: `design/01-supervisor-implementation-plan.md` §3.3.
+설계: `design/01-analysis-pipeline-implementation-plan.md` §3.3.
 v5.0 (W4-5) 은 AnalysisContext block 만 추가; base 는 v4.0 그대로 재사용.
 """
 

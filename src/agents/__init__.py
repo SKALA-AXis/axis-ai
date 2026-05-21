@@ -10,6 +10,7 @@ from typing import Any
 
 _EXPORT_MODULES = {
     "AnalysisAgent": "src.agents.analysis_agent",
+    "AnalysisGraphRunner": "src.agents.analysis_supervisor_agent",
     "AnalysisSupervisorAgent": "src.agents.analysis_supervisor_agent",
     "CardNewsAgent": "src.agents.card_news_agent",
     "ChatbotAgent": "src.agents.chatbot_agent",

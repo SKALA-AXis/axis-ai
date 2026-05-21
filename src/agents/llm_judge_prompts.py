@@ -1,6 +1,6 @@
 """LLM-as-Judge 프롬프트 4종 (W5-2).
 
-설계: design/01-supervisor-implementation-plan.md §3.6.1.
+설계: design/01-analysis-pipeline-implementation-plan.md §3.6.1.
 gpt-4o-mini structured output (json_mode) 으로 `{score: 0-5, reasoning: str}` 강제.
 """
 

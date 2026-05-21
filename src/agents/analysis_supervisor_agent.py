@@ -1,9 +1,18 @@
-"""DataAnalysisSupervisorAgent — thin wrapper around the supervisor LangGraph.
+"""AnalysisGraphRunner / DataAnalysisSupervisorAgent — Analysis Flow LangGraph 의
+얇은 wrapper.
 
 W2-1 이후 본 클래스는 직접 child agent 를 조율하지 않고 LangGraph 상에서 정의된
-state machine (`src.pipeline.supervisor_graph`) 을 호출하는 wrapper 다.
+고정 순서 DAG pipeline (`src.pipeline.supervisor_graph` 의
+``build_analysis_flow_graph()``) 을 호출하는 wrapper 다.
 
-기존 외부 인터페이스 (`analyze_cluster` / `analyze_input_bundle` → AnalysisPackage)
+명칭 주의 (외부 리뷰 2026-05-21):
+* "Supervisor" 이름은 LLM-router 가 worker 를 동적 선택하는 multi-agent supervisor
+  pattern 을 의미하지 않는다. 실제는 정적 DAG pipeline.
+* 새 코드는 ``AnalysisGraphRunner`` (본 모듈에서 alias 로 노출) 사용을 권장.
+* 기존 ``DataAnalysisSupervisorAgent`` / ``AnalysisSupervisorAgent`` 는 backward-compat
+  으로 유지.
+
+기존 외부 인터페이스 (``analyze_cluster`` / ``analyze_input_bundle`` → AnalysisPackage)
 는 유지하므로 호출부 변경 최소화.
 """
 
@@ -35,7 +44,13 @@ log = logging.getLogger(__name__)
 
 
 class DataAnalysisSupervisorAgent:
-    """AnalysisInputBundle 기반 1단계 분석 workflow supervisor (LangGraph wrapper)."""
+    """AnalysisInputBundle 기반 1단계 분석 workflow runner (LangGraph DAG wrapper).
+
+    명명 (외부 리뷰 2026-05-21):
+    * 정확한 역할 명은 ``AnalysisGraphRunner`` — multi-agent supervisor pattern 이 아닌
+      고정 순서 DAG pipeline 의 실행자.
+    * 본 클래스명 (``DataAnalysisSupervisorAgent``) 은 backward-compat 으로 유지.
+    """
 
     def __init__(
         self,
@@ -149,6 +164,13 @@ class AnalysisSupervisorAgent(DataAnalysisSupervisorAgent):
     """Backward compatible alias for DataAnalysisSupervisorAgent."""
 
 
+class AnalysisGraphRunner(DataAnalysisSupervisorAgent):
+    """권장 이름 (외부 리뷰 R-rename 2026-05-21).
+
+    실제 구현은 ``DataAnalysisSupervisorAgent`` 와 동일. 새 코드는 본 클래스명을 사용.
+    """
+
+
 def _cluster_fetch_ids(
     representative_id: int,
     cluster_article_ids: list[int] | None,
@@ -160,6 +182,7 @@ def _cluster_fetch_ids(
 
 
 __all__ = [
+    "AnalysisGraphRunner",
     "AnalysisSupervisorAgent",
     "DataAnalysisSupervisorAgent",
     "ProfileContext",

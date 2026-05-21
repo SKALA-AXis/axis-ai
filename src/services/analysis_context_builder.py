@@ -3,7 +3,7 @@
 4-Layer Context Model 의 Layer 4 active context 를 cluster-time 에 합성한다.
 LLM 호출 X. DB query + Qdrant retrieve 만. token budget ≤ 4,000 으로 압축.
 
-설계: design/01-supervisor-implementation-plan.md §3.4.5.
+설계: design/01-analysis-pipeline-implementation-plan.md §3.4.5.
 """
 
 from __future__ import annotations

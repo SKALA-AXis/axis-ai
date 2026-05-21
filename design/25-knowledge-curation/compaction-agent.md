@@ -7,7 +7,7 @@
 | **이름** | `CompactionAgent` (3-mode: weekly / monthly / quarterly 통합) |
 | **Supervisor** | KnowledgeCuration |
 | **상태** | 🆕 신규 (Phase K2/K4/K5 — 2026-05-14) |
-| **Trigger** | Spring @Scheduled (3 cron entry — `00-supervisor-topology.md` §6 endpoint 표 참조) |
+| **Trigger** | Spring @Scheduled (3 cron entry — `00-analysis-pipeline-topology.md` §6 endpoint 표 참조) |
 
 ## 2. 책임
 

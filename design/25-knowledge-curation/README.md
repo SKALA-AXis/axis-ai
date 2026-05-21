@@ -3,7 +3,7 @@
 > **위치**: `axis-ai/design/25-knowledge-curation/`
 > **신설**: 2026-05-14 · **버전**: v1
 > **소속**: 6+1 supervisor 중 **#6 (신규)** — 5+1 → 6+1 확장
-> **상위 문서**: `00-supervisor-topology.md` v2, `02-prompt-design-checklist.md` v2
+> **상위 문서**: `00-analysis-pipeline-topology.md` v2, `02-prompt-design-checklist.md` v2
 
 ## 1. 왜 필요한가 — 현재 구조의 한계
 

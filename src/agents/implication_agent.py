@@ -3,7 +3,7 @@
 W1-1: deprecated 코드 부활 없이 새 입력 계약 + 출력 schema.
 W4-5: AnalysisContext 지원 (signature 확장, prompt v5.0 자동 적용).
 
-설계: design/01-supervisor-implementation-plan.md §3.3 / §4 W1-1, W4-5.
+설계: design/01-analysis-pipeline-implementation-plan.md §3.3 / §4 W1-1, W4-5.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """CapabilityEvolutionAgent v1.0 — 월 1회 peer 별 business_signals → narrative.
 
-설계: design/01-supervisor-implementation-plan.md §3.4.6 / W4-3.
+설계: design/01-analysis-pipeline-implementation-plan.md §3.4.6 / W4-3.
 SQL pre-aggregation 으로 input 을 그룹별 top-5 confidence 로 압축 후 prompt 에 전달.
 """
 

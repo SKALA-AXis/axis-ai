@@ -1,16 +1,29 @@
-# Supervisor Topology
+# Analysis Pipeline Topology
 
-> 기준: 1단계 데이터 분석 Supervisor / 2단계 데이터 활용 Orchestrator
-> v3.2.1 갱신 (2026-05-21) — 실제 LangGraph 노드 순서 + W4 Context Engineering + W5 Evaluation 반영.
+> 기준: 1단계 데이터 **분석 Pipeline** / 2단계 데이터 활용 Orchestrator
+> v3.2.2 갱신 (2026-05-21) — 외부 리뷰 R-rename 반영. "Supervisor Topology" 에서 변경.
 
-## 명칭 주의 (2026-05-21)
+## 명칭 (2026-05-21 R-rename)
 
-이 문서에서 "supervisor" 는 **단계 코디네이터 / 오케스트레이터** 의 의미다 — LLM 이
-다음 worker 를 동적으로 선택하는 *multi-agent supervisor pattern* 이 아닌, **노드
-순서가 정적으로 정의된 LangGraph StateGraph (DAG pipeline)**. 단 하나의 동적 분기는
-`validate` 의 `pass / fail` 라우팅이다. 1 cluster 처리는 정해진 절차 (요약 → 분석
-→ 시사점 → 검증 → 카드) 라서 dynamic routing 가치가 낮고, deterministic pipeline 이
-운영 예측·debugging·비용 안정성 측면에서 더 적합하다.
+본 문서의 "Analysis Pipeline" 은 **LangGraph 기반 고정 순서 DAG**. 노드 순서가
+정적으로 정의되어 있고, 단 하나의 동적 분기는 `validate` 의 `pass / fail` 라우팅이다.
+LLM 이 다음 worker 를 동적으로 선택하는 *multi-agent supervisor pattern* 이 **아니다**.
+
+| 기존 명칭 (backward-compat) | 권장 명칭 (외부 리뷰 R-rename) |
+|---|---|
+| `DataAnalysisSupervisorAgent` | `AnalysisGraphRunner` |
+| `SupervisorState` | `AnalysisFlowState` |
+| `SupervisorDeps` | `AnalysisFlowDeps` |
+| `build_supervisor_graph()` | `build_analysis_flow_graph()` |
+| `default_supervisor_graph()` | `default_analysis_flow_graph()` |
+| `run_supervisor()` | `run_analysis_flow()` |
+| `Supervisor Topology` (문서) | `Analysis Pipeline Topology` |
+| `01-supervisor-implementation-plan.md` | `01-analysis-pipeline-implementation-plan.md` |
+| `SUPERVISOR_BRIEF.md` | `ANALYSIS_PIPELINE_BRIEF.md` |
+
+1 cluster 처리가 정해진 절차 (요약 → 분석 → 시사점 → 검증 → 카드) 라서 dynamic
+routing 가치가 낮고, deterministic pipeline 이 운영 예측·debugging·비용 안정성 측면에서
+더 적합하다.
 
 ## 1단계: 데이터 수집·정제·통합·분석·시사점·카드뉴스
 
@@ -108,7 +121,7 @@ elapsed_ms 기록. 부분 실패는 다음과 같이 흡수:
 - ③ DB unavailable → 빈 `AnalysisContext` (ImplicationAgent 자동 v4.0 사용)
 - ⑤ LLM fail → `ImplicationGenerator` heuristic fallback (`is_valid_implication=true` 단순 출력)
 
-LangGraph `RetryPolicy / with_retry` 정식 도입은 별도 PR (`design/01-supervisor-implementation-plan.md`
+LangGraph `RetryPolicy / with_retry` 정식 도입은 별도 PR (`design/01-analysis-pipeline-implementation-plan.md`
 의 §3.1 retry 표는 미구현 — 현재는 `_logged_step` try/except + ImplicationAgent fallback 만).
 
 ## IssueIntegrationAgent
@@ -167,17 +180,32 @@ LangGraph `RetryPolicy / with_retry` 정식 도입은 별도 PR (`design/01-supe
 
 ## ProfileAgent
 
-시사점 도출에 필요한 SK AX / Peer사 / 섹터 context를 제공한다.
+**핵심 책임: RDB 백필 데이터를 기반으로 회사별 전략 프로필을 생성하는 합성 Agent.**
 
-역할:
-- SK AX의 사업군, 역량, 전략 방향 context 제공
-- Peer사의 사업군, 주요 역량, 최근 집중 섹터 context 제공
-- 해당 이슈가 SK AX의 어떤 사업 방향과 연결되는지 판단할 context 제공
+ProfileAgent 는 단순 context provider 가 아니라 **원천 데이터 (DART / IR / 공식 newsroom
+/ 누적 뉴스 / business_signals / financial_metrics) 를 LLM 으로 합성하여 회사별 전략
+프로필을 만드는 합성 책임자** 이다. 외부 리뷰 2026-05-21 명시.
 
-주의:
-- 전처리 단계의 기업·섹터·이벤트 매칭과 다르다.
-- 기업·섹터 매칭은 raw data에 라벨을 붙이는 기능이다.
-- ProfileAgent는 시사점 도출용 context provider이다.
+### 두 단계로 분리되어 운영됨 (W2-2 2-tier)
+
+| 단계 | 시점 | 책임 | 출력 |
+|---|---|---|---|
+| **Tier A (snapshot 생성)** | 주1회 CronJob (`axis-cron-profile-refresh`) | RDB 의 6개월치 뉴스 + DART + IR + 공식 newsroom 을 회사별로 종합 → LLM (gpt-4o, `profile-v5` prompt) 으로 **회사 방향성 / 주요 사업 / 전략 변화 / 역량 평가** narrative 합성 | `peer_companies.profile_snapshot` JSONB (별도 컬럼) |
+| **Tier B (runtime loader, build_profile_context_v2)** | cluster-time (Analysis Flow ② 노드) | Tier A snapshot 을 그대로 load + 최근 30일 business_signals top-3 + 최근 분기 financial_metrics 보강 (DB query only, LLM X) | `ProfileContext` 메모리 dataclass |
+
+### 출력의 두 관점 (Peer 와 SK AX 분리)
+
+- **`ProfileContext.peer_profiles[peer_id]`** — AnalysisAgent 의 입력. peer 의 전략·역량·
+  사업 방향 자체를 해석하는 데 사용.
+- **`ProfileContext.skax_profile`** — ImplicationAgent 의 입력. SK AX 관점에서 기회/위협/
+  대응 방향을 도출하는 데 사용.
+
+### 주의
+
+- 전처리 단계의 기업·섹터·이벤트 **매칭** 과 다르다. 매칭은 raw data 에 라벨을 붙이는
+  기능. ProfileAgent 는 그 위에 **회사 전략 합성 narrative** 를 만든다.
+- Tier A 가 비어있는 환경 (CronJob 미실행) 에서 Tier B 는 빈 profile_snapshot 위에
+  recent enrichment 만 붙인다 — graceful degradation.
 
 ## ImplicationAgent
 

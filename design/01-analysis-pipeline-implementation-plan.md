@@ -1,10 +1,15 @@
-# 1단계 데이터 분석 Supervisor — 구현 계획서 (v3.2)
+# 1단계 데이터 분석 Pipeline — 구현 계획서 (v3.2.2)
 
-> 작성: 2026-05-20 KST · 갱신: 2026-05-21 v3.2 (Evaluation & Observability Layer W5 신설)
-> 대상: `axis-ai/src/agents/analysis_supervisor_agent.py` 및 산하 4 child + CardNews + Context layer + Evaluator
-> 기준 설계: [`design/00-supervisor-topology.md`](00-supervisor-topology.md)
+> 작성: 2026-05-20 KST · 갱신: 2026-05-21 v3.2.2 (외부 리뷰 R-rename 반영 — Supervisor → Analysis Pipeline / Analysis Flow)
+> 대상: `axis-ai/src/agents/analysis_supervisor_agent.py` (= `AnalysisGraphRunner` alias) 및 산하 4 child + CardNews + Context layer + Evaluator
+> 기준 설계: [`design/00-analysis-pipeline-topology.md`](00-analysis-pipeline-topology.md)
 > 교차 검증: [`docs/AGENT_ARCHITECTURE_VERIFICATION.md`](../docs/AGENT_ARCHITECTURE_VERIFICATION.md)
 > 실측 검증: `kubectl exec postgres-...` 으로 cluster DB 직접 쿼리 (2026-05-20 KST). 발견 8 critical issue 는 §2.4 참고.
+>
+> **명칭 주의 (외부 리뷰 2026-05-21 R-rename)**: 본 계획서의 "Supervisor" / "DataAnalysisSupervisorAgent"
+> 는 multi-agent supervisor pattern 이 아닌 **고정 순서 DAG pipeline** 의 일반 코디네이터 의미.
+> 새 코드에서는 `AnalysisGraphRunner` / `AnalysisFlowState` / `build_analysis_flow_graph` 사용 권장.
+> 기존 `Supervisor*` 이름은 backward-compat 으로 유지.
 
 ---
 
@@ -31,7 +36,7 @@
 └─────────────────────────────────────────────────────────────────────┘
                           ↓ (cluster trigger)
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Layer B — Analysis Supervisor Graph  (이 계획서의 작업 범위)        │
+│ Layer B — Analysis Pipeline Graph (DAG, 이 계획서의 작업 범위)      │
 │   ① context assemble  ProfileContext + AnalysisContext (DB+Qdrant)  │
 │        ↓                                                            │
 │   ② LLM reasoning     IssueIntegration → StrategicAnalysis →        │
@@ -181,7 +186,7 @@
 
 ## 3. 제안 아키텍처 (수정안)
 
-기존 design (`design/00-supervisor-topology.md`) 의 컴포넌트는 유지하되 **6가지 구조적 수정**:
+기존 design (`design/00-analysis-pipeline-topology.md`) 의 컴포넌트는 유지하되 **6가지 구조적 수정**:
 
 1. **Supervisor 를 LangGraph StateGraph 로 재구성** — `ingestion_graph` 와 동일한 패턴 (state-based, 노드별 logging, retry decorator).
 2. **ProfileContext 를 2-tier 분리** — Static snapshot (CronJob 주1회 LLM 합성) + Recent enrichment (cluster-time DB query). cluster-time LLM 호출 추가 없음.
@@ -194,7 +199,7 @@
 
 ```text
                   ┌────────────────────────────────────────────────┐
-                  │  SupervisorState                                │
+                  │  AnalysisFlowState (= SupervisorState alias)    │
                   │  - input_bundle: AnalysisInputBundle            │
                   │  - profile_context: ProfileContext              │
                   │  - analysis_context: AnalysisContext   ← W4    │
@@ -1730,7 +1735,7 @@ CREATE OR REPLACE VIEW peer_financial_trend AS ... ;  -- §3.4.3
 
 -- (f) peer_companies.peer_plus_payload JSONB key namespace 코멘트
 COMMENT ON COLUMN peer_companies.peer_plus_payload IS
-    'Namespaces: profile_snapshot (W2-2 weekly), capability_evolution (W4 monthly), snapshot_archive_ref. See design/01-supervisor-implementation-plan.md §3.4.3.';
+    'Namespaces: profile_snapshot (W2-2 weekly), capability_evolution (W4 monthly), snapshot_archive_ref. See design/01-analysis-pipeline-implementation-plan.md §3.4.3.';
 ```
 
 **파일 변경**:
@@ -2155,7 +2160,7 @@ Critical path: W1-1 → W2-1 → W2-3 → W4-0 → W4-2 → W4-5 → **W5-1** �
 - [ ] **W2-1 작업 5**: `ingestion_graph.card_news_node` 가 제거됨 (또는 thin shim 만 잔존), cluster sample 카드 INSERT 가 supervisor 의 `card_writer` 노드에서 일어남 — Langfuse trace 또는 `pipeline_logs.step='card_writer'` 로 확인
 
 ### W3 Done
-- [ ] `design/30-analysis/{00..04}.md` 5종 존재 + `00-supervisor-topology.md` 와 cross-link
+- [ ] `design/30-analysis/{00..04}.md` 5종 존재 + `00-analysis-pipeline-topology.md` 와 cross-link
 - [ ] `_deprecated/` 디렉토리 부재 (또는 `_archived/` 로 rename + import-block)
 - [ ] `tests/golden/supervisor/` 3 cluster 모두 동일 output 재현
 - [ ] Langfuse UI 에서 cluster trace 1개에 7 노드 (W4 의 `build_analysis_context` 포함) 모두 보임 (session_id = bundle_id)
@@ -2277,7 +2282,7 @@ Critical path: W1-1 → W2-1 → W2-3 → W4-0 → W4-2 → W4-5 → **W5-1** �
 
 ## 10. 참고
 
-- 설계 문서: [`design/00-supervisor-topology.md`](00-supervisor-topology.md)
+- 설계 문서: [`design/00-analysis-pipeline-topology.md`](00-analysis-pipeline-topology.md)
 - 검증 리포트: [`docs/AGENT_ARCHITECTURE_VERIFICATION.md`](../docs/AGENT_ARCHITECTURE_VERIFICATION.md)
 - 데이터 흐름: [`design/README.md`](README.md)
 - Evidence Chain 설계: [`design/10-ingestion/evidence.md`](10-ingestion/evidence.md)
