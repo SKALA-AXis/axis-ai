@@ -133,7 +133,8 @@ class AnalysisDeliveryService:
                 return {}
             if card.get("company") in SELF_COMPANY_IDS or card.get("peer_id") in SELF_COMPANY_IDS:
                 log.info(
-                    "문서/신호 카드뉴스 생성 제외 | raw_article_id=%s group=%s company=%s reason=self company",
+                    "문서/신호 카드뉴스 생성 제외 | raw_article_id=%s group=%s "
+                    "company=%s reason=self company",
                     raw_article_id,
                     source_group,
                     card.get("company") or card.get("peer_id"),
@@ -207,9 +208,7 @@ def _document_analysis_targets(preprocess_result: PreprocessingResult) -> dict[s
         "official_document": _dedupe_positive_ints(
             preprocess_result.get("official_document_ids", [])
         ),
-        "parsed_document": _dedupe_positive_ints(
-            preprocess_result.get("parsed_document_ids", [])
-        ),
+        "parsed_document": _dedupe_positive_ints(preprocess_result.get("parsed_document_ids", [])),
         "industry_document": _dedupe_positive_ints(
             preprocess_result.get("industry_document_ids", [])
         ),

@@ -327,6 +327,10 @@ def build_classification_from_articles(
     )
     company = overrides.get("company") or (companies[0] if companies else "")
     sector = overrides.get("sector") or (sectors[0] if sectors else "other")
+    signals_override = overrides.get("signals")
+    extra_signals: dict[str, Any] = (
+        dict(signals_override) if isinstance(signals_override, dict) else {}
+    )
     payload = {
         "cluster_id": cluster_id,
         "representative_id": representative_id,
@@ -343,7 +347,7 @@ def build_classification_from_articles(
             "cluster_size": len(articles),
             "source": "analysis_pipeline",
             "representative_id": representative_id,
-            **(overrides.get("signals") if isinstance(overrides.get("signals"), dict) else {}),
+            **extra_signals,
         },
     }
     return {**payload, **overrides}
