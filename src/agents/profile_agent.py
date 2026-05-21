@@ -31,7 +31,7 @@ from src.config.companies import (
     company_aliases,
     company_name_ko,
 )
-from src.config.company_tiers import SELF_COMPANY_IDS
+from src.config.company_tiers import DOMESTIC_COMPANY_IDS, SELF_COMPANY_IDS
 from src.config.env_loader import load_profile
 from src.config.sectors import SECTOR_KEYWORDS
 from src.db.postgres import SessionLocal
@@ -1091,16 +1091,89 @@ def _get_llm() -> ChatOpenAI:
     return _llm
 
 
-class PeerProfileAgent:
-    """Build a profile JSON for a peer company."""
+class ProfileAgent:
+    """Build a profile JSON for SK AX or a peer company."""
 
-    role: Literal["peer", "self"] = "peer"
+    role: Literal["peer", "self"] | None = None
+
+    def build_context(
+        self,
+        *,
+        companies: list[str],
+        sectors: list[str] | None = None,
+        event_type: str | None = None,
+        peer_profile_context: dict[str, Any] | None = None,
+        skax_profile_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return lightweight ProfileContext for the analysis workflow.
+
+        이 메서드는 DB schema나 저장 구조를 만들지 않는다. DataAnalysisSupervisorAgent가
+        시사점 생성을 위해 필요한 SK AX / Peer / sector context를 런타임 dict로 묶는
+        용도다. 무거운 회사별 프로필 생성은 ``build_profile``을 명시적으로 호출할 때만
+        수행한다.
+        """
+        normalized_companies = [
+            _normalize_company_id(company_id) for company_id in companies if company_id
+        ]
+        context_peer_ids = _profile_context_peer_ids(normalized_companies)
+        peer_profiles = dict(peer_profile_context or {})
+        for company_id in context_peer_ids:
+            if company_id in SELF_COMPANY_IDS or company_id in peer_profiles:
+                continue
+            try:
+                config = load_company_config(company_id)
+            except Exception:
+                continue
+            peer_profiles[company_id] = {
+                "peer_id": company_id,
+                "company_name": config.get("company_name", company_id),
+                "role": config.get("role"),
+                "aliases": config.get("aliases", []),
+                "event_type": event_type,
+                "matched_sectors": sectors or [],
+            }
+
+        skax_profile = dict(skax_profile_context or {})
+        sector_context: dict[str, Any] = {"selected_sector_ids": list(dict.fromkeys(sectors or []))}
+        if not skax_profile:
+            try:
+                from src.services.skax_profile_context_loader import SKAXProfileLoader
+
+                loaded = SKAXProfileLoader().load(sectors or [], use_db=False)
+                skax_profile = loaded.get("skax_profile", loaded)
+                sector_context.update(
+                    {
+                        "sector_config": loaded.get("sector_config", []),
+                        "skax_contexts": loaded.get("skax_contexts", []),
+                    }
+                )
+            except Exception as exc:
+                log.warning("SK AX profile context 로드 실패 | error=%s", exc)
+        if not skax_profile:
+            try:
+                skax_config = load_company_config("sk_ax")
+            except Exception:
+                skax_config = {"company_id": "sk_ax", "company_name": "SK AX", "role": "self"}
+            skax_profile = {
+                "company_id": "sk_ax",
+                "company_name": skax_config.get("company_name", "SK AX"),
+                "role": skax_config.get("role", "self"),
+                "aliases": skax_config.get("aliases", []),
+                "matched_sectors": sectors or [],
+            }
+
+        return {
+            "skax_profile": skax_profile,
+            "peer_profiles": peer_profiles,
+            "profile_company_ids": ["sk_ax", *context_peer_ids],
+            "sector_context": sector_context,
+        }
 
     def build_profile(self, company_id: str, lookback_days: int | None = None) -> dict[str, Any]:
         company_id = _normalize_company_id(company_id)
         company_config = load_company_config(company_id)
         role = str(company_config["role"])
-        if role != self.role:
+        if self.role is not None and role != self.role:
             raise ValueError(f"{type(self).__name__} cannot build role={role} profile")
 
         company_name = str(company_config["company_name"])
@@ -1259,6 +1332,35 @@ class PeerProfileAgent:
             summary.setdefault("source_types", stage["source_types"])
             stage_summaries.append(_sanitize_stage_summary(summary))
         return stage_summaries
+
+
+class PeerProfileAgent(ProfileAgent):
+    """Backward-compatible peer profile agent facade."""
+
+    role: Literal["peer", "self"] | None = "peer"
+
+
+class SKAXProfileAgent(ProfileAgent):
+    """Backward-compatible SK AX profile agent facade."""
+
+    role: Literal["peer", "self"] | None = "self"
+
+    def build_profile(
+        self,
+        company_id: str = "sk_ax",
+        lookback_days: int | None = None,
+    ) -> dict[str, Any]:
+        return super().build_profile(company_id=company_id, lookback_days=lookback_days)
+
+
+def _profile_context_peer_ids(company_ids: list[str]) -> list[str]:
+    """Return all domestic peer ids, with issue-related peers first."""
+    issue_peer_ids = [
+        company_id
+        for company_id in company_ids
+        if company_id in DOMESTIC_COMPANY_IDS and company_id not in SELF_COMPANY_IDS
+    ]
+    return list(dict.fromkeys([*issue_peer_ids, *sorted(DOMESTIC_COMPANY_IDS)]))
 
 
 def build_selected_sector_config() -> list[dict[str, Any]]:
@@ -3704,7 +3806,7 @@ def _ensure_aware(value: datetime) -> datetime:
 
 
 def run_peer_profile_cli(argv: list[str] | None = None) -> int:
-    """CLI entrypoint for ``python -m src.agents.peer_profile_agent``."""
+    """CLI entrypoint for peer profile generation."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
     load_runtime_env()
     args = _parse_peer_cli_args(argv)
@@ -3718,7 +3820,7 @@ def run_peer_profile_cli(argv: list[str] | None = None) -> int:
     print_selected_sector_config(sector_config)
 
     results: list[tuple[str, bool, str]] = []
-    agent = PeerProfileAgent()
+    agent = ProfileAgent()
     for company_id in company_ids:
         try:
             profile = agent.build_profile(company_id=company_id, lookback_days=args.lookback_days)
@@ -3730,6 +3832,30 @@ def run_peer_profile_cli(argv: list[str] | None = None) -> int:
 
     _print_summary(results)
     return 0 if all(ok for _, ok, _ in results) else 1
+
+
+def run_skax_profile_cli(argv: list[str] | None = None) -> int:
+    """CLI entrypoint for SK AX profile generation."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+    load_runtime_env()
+    args = _parse_skax_cli_args(argv)
+    sector_config = build_selected_sector_config()
+    print_selected_sector_config(sector_config)
+
+    company_id = args.company
+    try:
+        profile = SKAXProfileAgent().build_profile(
+            company_id=company_id,
+            lookback_days=args.lookback_days,
+        )
+        emit_profile_result(company_id=company_id, profile=profile, dry_run=args.dry_run)
+    except Exception as exc:
+        log.exception("SK AX 프로필 생성 실패 | company=%s", company_id)
+        _print_summary([(company_id, False, f"{type(exc).__name__}: {exc}")])
+        return 1
+
+    _print_summary([(company_id, True, "ok")])
+    return 0
 
 
 def _parse_peer_cli_args(argv: list[str] | None) -> argparse.Namespace:
@@ -3749,6 +3875,28 @@ def _parse_peer_cli_args(argv: list[str] | None) -> argparse.Namespace:
         type=int,
         default=None,
         help="최신성 판단 focus window 수동 override. 생략하면 DART/IR 및 전체 자료 날짜 흐름으로 자동 산정.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="파일 저장 없이 콘솔에 JSON 출력",
+    )
+    return parser.parse_args(argv)
+
+
+def _parse_skax_cli_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build SK AX company profile JSON.")
+    parser.add_argument(
+        "--company",
+        default="sk_ax",
+        choices=tuple(SELF_COMPANY_IDS),
+        help="SK AX self 회사 id",
+    )
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=None,
+        help="최신성 판단 focus window 수동 override.",
     )
     parser.add_argument(
         "--dry-run",
@@ -3881,7 +4029,9 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "ProfileAgent",
     "PeerProfileAgent",
+    "SKAXProfileAgent",
     "SOURCE_INTELLIGENCE_PROMPT",
     "COMPANY_PROFILE_PROMPT",
     "build_selected_sector_config",
@@ -3890,4 +4040,5 @@ __all__ = [
     "load_runtime_env",
     "print_selected_sector_config",
     "run_peer_profile_cli",
+    "run_skax_profile_cli",
 ]

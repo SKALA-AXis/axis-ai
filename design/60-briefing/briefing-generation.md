@@ -26,7 +26,7 @@
 ## 3. 책임 NOT
 
 - **Daily scheduled 이메일** — `BriefingService.generateAndSend()` (BE) + axis-ai `/pipeline/delivery` 의 책임. 본 agent 는 *user-triggered 화면용 briefing 문서*.
-- **카드 자체 생성** — CardComposerAgent (Ingestion).
+- **카드 자체 생성** — CardNewsAgent (1단계 카드뉴스 생성).
 - **PDF/Word export** — 별도 export service (W7+, 미구현).
 - **이메일 발송** — `BriefingService` (Java SES) — frontend 가 share link 제공.
 

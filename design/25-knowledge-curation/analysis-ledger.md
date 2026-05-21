@@ -7,7 +7,7 @@
 | **이름** | `AnalysisLedger` (write-through 미들웨어) |
 | **Supervisor** | KnowledgeCuration |
 | **상태** | 🆕 신규 (Phase K1 — 2026-05-14, **가장 우선 도입 권장**) |
-| **Trigger** | 분석 agent (Mixer / Insight / PeerComparison / GlobalTrends / Briefing) 종료 직후 — `with_provenance` decorator 와 같은 layer |
+| **Trigger** | 분석 agent (Mixer / Insight / ITTrend / Briefing) 종료 직후 — `with_provenance` decorator 와 같은 layer |
 
 ## 2. 책임
 
@@ -342,8 +342,7 @@ analysis_ledger.id
 
 - `mixer_analysis_agent.py`: `@with_ledger_writeback("MixerAnalysisAgent")`
 - `insight_cascade_agent.py`: `@with_ledger_writeback("InsightCascadeAgent")`
-- `peer_comparison_agent.py`: `@with_ledger_writeback("PeerComparisonAgent")`
-- `global_trends_agent.py`: `@with_ledger_writeback("GlobalTrendsAgent")`
+- `it_trend_agent.py`: `@with_ledger_writeback("ITTrendAgent")`
 - `briefing_generation_agent.py`: `@with_ledger_writeback("BriefingGenerationAgent")` (briefing 전체 1 ledger entry — section 별 X)
 
 ### Phase K1 — 단독 도입 가능

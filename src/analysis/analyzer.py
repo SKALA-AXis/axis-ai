@@ -1,7 +1,8 @@
 """전략 의미 분석 컴포넌트.
 
-SourceSummarizer가 만든 사실 요약을 바탕으로 피어사의 전략적 움직임과
-산업적 의미를 분석한다. SK AX 관점의 대응 제언은 별도 단계 책임으로 남긴다.
+IntegratedIssue와 분류 메타데이터를 바탕으로 피어사의 전략적 움직임과
+산업적 의미를 분석한다. 원문/클러스터/문서 전체를 다시 읽는 책임은
+IssueIntegrationAgent에 있고, SK AX 관점의 대응 제언은 별도 단계 책임이다.
 """
 
 from __future__ import annotations
@@ -36,12 +37,12 @@ _PEER_NEWS_ANALYSIS_PROMPT = """\
 당신은 피어사 전략 분석가입니다.
 
 목적:
-- 피어사 뉴스 사실 요약을 바탕으로 피어사의 전략적 움직임과 산업적 의미를 분석합니다.
+- 피어사 통합 이슈를 바탕으로 피어사의 전략적 움직임과 산업적 의미를 분석합니다.
 - SK AX 관점의 대응 전략, 권고, 실행 과제는 작성하지 않습니다.
 - 기사 요약에 없는 구체 수치, 제품명, 회사명, 고객명은 추가하지 않습니다.
 
 ## 입력
-summary:
+integrated_issue:
 {summary_json}
 
 classification:
@@ -51,7 +52,7 @@ cluster_metadata:
 {cluster_metadata_json}
 
 ## 작성 원칙
-1. fact_summary에 근거한 해석만 작성하세요.
+1. integrated_issue에 포함된 사실, 수치, business_signals, fact_basis에 기반한 해석만 작성하세요.
 2. "무슨 일이 있었나"를 반복하지 말고 "왜 의미가 있는가"를 설명하세요.
 3. 피어사의 사업 방향, 제품/서비스 전략, 시장 접근 방식을 중심으로 분석하세요.
 4. 산업 동향은 입력 사실에서 자연스럽게 도출되는 범위 안에서만 작성하세요.
@@ -79,30 +80,34 @@ cluster_metadata:
 
 
 class StrategicAnalyzer:
-    """source 요약 결과를 산업/전략 의미로 분석한다."""
+    """IntegratedIssue 기반 산업/전략 의미 분석기."""
 
     def analyze(
         self,
-        summary: dict[str, Any],
+        integrated_issue: dict[str, Any],
         classification: dict[str, Any] | None = None,
         cluster_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """요약 결과와 분류 정보를 바탕으로 의미 분석을 생성한다."""
+        """IntegratedIssue와 분류 정보를 바탕으로 의미 분석을 생성한다."""
         classification = classification or {}
         cluster_metadata = cluster_metadata or {}
 
-        if not _is_valid_summary(summary):
+        if not _is_valid_integrated_issue(integrated_issue):
             return _empty_analysis(
-                summary=summary,
+                integrated_issue=integrated_issue,
                 classification=classification,
                 cluster_metadata=cluster_metadata,
-                reason="유효한 뉴스 요약이 없어 분석을 생성하지 않았습니다.",
+                reason="유효한 통합 이슈가 없어 분석을 생성하지 않았습니다.",
             )
 
         prompt = (
             _PEER_NEWS_ANALYSIS_PROMPT.replace(
                 "{summary_json}",
-                json.dumps(_summary_for_prompt(summary), ensure_ascii=False, indent=2),
+                json.dumps(
+                    _integrated_issue_for_prompt(integrated_issue),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
             )
             .replace(
                 "{classification_json}",
@@ -136,28 +141,30 @@ class StrategicAnalyzer:
         except Exception as exc:
             log.error(
                 "피어사 뉴스 분석 실패 | cluster=%s error=%s",
-                summary.get("cluster_id"),
+                integrated_issue.get("cluster_id"),
                 exc,
             )
             return _empty_analysis(
-                summary=summary,
+                integrated_issue=integrated_issue,
                 classification=classification,
                 cluster_metadata=cluster_metadata,
                 reason=f"LLM 분석 실패: {type(exc).__name__}",
             )
 
         analysis = {
-            "cluster_id": summary.get("cluster_id"),
-            "representative_id": summary.get("representative_id"),
-            "main_company": summary.get("main_company", ""),
-            "source_article_ids": summary.get("source_article_ids", []),
+            "cluster_id": integrated_issue.get("cluster_id"),
+            "representative_id": integrated_issue.get("representative_id"),
+            "main_company": integrated_issue.get("main_company", ""),
+            "source_article_ids": integrated_issue.get("source_article_ids", []),
             "analysis_scope": "peer_and_industry",
             "model": _LLM_MODEL,
             "basis": {
-                "summary_scope": summary.get("summary_scope", ""),
+                "issue_scope": integrated_issue.get("summary_scope", ""),
                 "event_type": classification.get("event_type", ""),
                 "sector": classification.get("sector", ""),
                 "exposure_band": classification.get("exposure_band", ""),
+                "bundle_id": cluster_metadata.get("bundle_id", ""),
+                "source_type": cluster_metadata.get("source_type", ""),
                 "cluster_size": cluster_metadata.get("cluster_size")
                 or classification.get("signals", {}).get("cluster_size", 0),
             },
@@ -173,25 +180,32 @@ class StrategicAnalyzer:
         return analysis
 
 
-def _is_valid_summary(summary: dict[str, Any]) -> bool:
+def _is_valid_integrated_issue(integrated_issue: dict[str, Any]) -> bool:
     return bool(
-        summary
-        and summary.get("is_valid_summary", True)
-        and summary.get("main_company")
-        and summary.get("fact_summary")
+        integrated_issue
+        and integrated_issue.get("is_valid_summary", True)
+        and integrated_issue.get("main_company")
+        and (
+            integrated_issue.get("integrated_text")
+            or integrated_issue.get("fact_summary")
+            or integrated_issue.get("consolidated_facts")
+        )
     )
 
 
-def _summary_for_prompt(summary: dict[str, Any]) -> dict[str, Any]:
+def _integrated_issue_for_prompt(integrated_issue: dict[str, Any]) -> dict[str, Any]:
     return {
-        "cluster_id": summary.get("cluster_id"),
-        "main_company": summary.get("main_company", ""),
-        "mentioned_peer_companies": summary.get("mentioned_peer_companies", []),
-        "headline": summary.get("headline", ""),
-        "one_line_summary": summary.get("one_line_summary", ""),
-        "fact_summary": summary.get("fact_summary", []),
-        "main_event": summary.get("main_event", ""),
-        "confidence": summary.get("confidence", 0.0),
+        "cluster_id": integrated_issue.get("cluster_id"),
+        "main_company": integrated_issue.get("main_company", ""),
+        "mentioned_peer_companies": integrated_issue.get("mentioned_peer_companies", []),
+        "main_issue": integrated_issue.get("main_issue", ""),
+        "integrated_text": integrated_issue.get("integrated_text", ""),
+        "consolidated_facts": integrated_issue.get("consolidated_facts", []),
+        "key_numbers": integrated_issue.get("key_numbers", []),
+        "business_signals": integrated_issue.get("business_signals", []),
+        "missing_or_uncertain_points": integrated_issue.get("missing_or_uncertain_points", []),
+        "fact_basis": integrated_issue.get("fact_basis", []),
+        "confidence": integrated_issue.get("confidence", 0.0),
     }
 
 
@@ -210,10 +224,15 @@ def _classification_for_prompt(classification: dict[str, Any]) -> dict[str, Any]
 
 def _cluster_metadata_for_prompt(cluster_metadata: dict[str, Any]) -> dict[str, Any]:
     return {
+        "bundle_id": cluster_metadata.get("bundle_id", ""),
+        "source_type": cluster_metadata.get("source_type", ""),
         "cluster_size": cluster_metadata.get("cluster_size", 0),
         "source_count": cluster_metadata.get("source_count", 0),
         "source_names": cluster_metadata.get("source_names", []),
         "published_at_range": cluster_metadata.get("published_at_range", {}),
+        "companies": cluster_metadata.get("companies", []),
+        "sectors": cluster_metadata.get("sectors", []),
+        "event_type": cluster_metadata.get("event_type"),
     }
 
 
@@ -241,20 +260,20 @@ def _normalize_analysis_result(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _empty_analysis(
-    summary: dict[str, Any],
+    integrated_issue: dict[str, Any],
     classification: dict[str, Any],
     cluster_metadata: dict[str, Any],
     reason: str,
 ) -> dict[str, Any]:
     return {
-        "cluster_id": summary.get("cluster_id"),
-        "representative_id": summary.get("representative_id"),
-        "main_company": summary.get("main_company", ""),
-        "source_article_ids": summary.get("source_article_ids", []),
+        "cluster_id": integrated_issue.get("cluster_id"),
+        "representative_id": integrated_issue.get("representative_id"),
+        "main_company": integrated_issue.get("main_company", ""),
+        "source_article_ids": integrated_issue.get("source_article_ids", []),
         "analysis_scope": "peer_and_industry",
         "model": _LLM_MODEL,
         "basis": {
-            "summary_scope": summary.get("summary_scope", ""),
+            "issue_scope": integrated_issue.get("summary_scope", ""),
             "event_type": classification.get("event_type", ""),
             "sector": classification.get("sector", ""),
             "exposure_band": classification.get("exposure_band", ""),

@@ -1,26 +1,27 @@
-# ChatOrchestratorAgent — Design Plan
+# ChatbotAgent — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `ChatOrchestratorAgent` (Intent + Conversation 통합) |
-| **Supervisor** | UserQuery (Dialogue sub) |
+| **이름** | `ChatbotAgent` (Intent + Conversation + RAG 응답 통합) |
+| **Supervisor** | DataUsageOrchestrator |
 | **상태** | 🟡 backend fixture (`POST /api/assistant/chat`), axis-ai 신규 |
-| **Trigger** | frontend FloatingAiChat 위젯 메시지 |
+| **Trigger** | 2단계 데이터 활용 요청: frontend FloatingAiChat 위젯 메시지 |
 
 ## 2. 책임
 
-**한 줄**: FloatingAiChat 의 user message → intent 분기 → sub-agent 호출 (Search/Insight/Mixer/Peer) → 대화 응답 생성 + history 보존.
+**한 줄**: 저장된 Raw/정제 데이터, 카드뉴스, 시사점, ProfileContext를 기반으로 사용자 질문에 답한다.
 
 **구체적 (3-phase orchestration)**:
 
-1. **Intent 추출** (LLM mini, zero-shot) — search / summary / insight / mixer / peer_compare / smalltalk + entity (peer/sector/date)
+1. **Intent 추출** (LLM mini, zero-shot) — search / summary / insight / mixer / it_trend / smalltalk + entity (peer/sector/date)
 2. **Sub-agent 호출** — intent 별 위임:
    - search → HybridSearchAgent + AnswerAgent
    - insight → InsightCascadeAgent
    - mixer → MixerAnalysisAgent
-   - peer_compare → PeerComparisonAgent
+   - 기업/섹터 비교 → MixerAnalysisAgent 또는 InsightCascadeAgent
+   - it_trend → ITTrendAgent
    - smalltalk → 직접 LLM 응답
 3. **응답 생성** (LLM mini) — sub-agent 결과 + 대화 톤 + follow-up 제안
 
@@ -120,8 +121,8 @@ frontend `POST /api/assistant/chat` 응답.
 | **summary** | `"오늘 핵심 변화 알려줘"` |
 | **insight** | `"이 카드들로 인사이트 만들어줘"` |
 | **mixer** | `"카드 조합 분석"` |
-| **peer_compare** | `"삼성SDS vs LG CNS"` |
-| **forecast** | `"삼성SDS 1년 후 어떨까"` (PeerComparison forecast phase) |
+| **mixer** | `"삼성SDS vs LG CNS"` |
+| **it_trend** | `"최근 글로벌 IT 흐름과 Peer사 동향 연결해줘"` |
 | **deep_dive** | 이전 turn 주제 깊이 확장 (PDF §6 꼬리 물기), `deep_dive_context` 필수 |
 | **alternative_view** | `"재무 관점에서 다시 봐줘"` (persona 변경) |
 | **smalltalk** | 일반 대화 |
@@ -166,13 +167,9 @@ async def orchestrate(message, session_id, history, deep_dive_context=None, user
         sub_result = await MixerAnalysisAgent().analyze(
             entities["card_ids"], ratios=default_ratios(), user_guidance=user_guidance,
         )
-    elif intent in ("peer_compare", "forecast"):
-        # PDF §4 — forecast intent 는 PeerComparison 의 Phase 3 (Forecast) 까지 사용
-        peer = entities["peer_ids"][0]
-        sub_result = await PeerComparisonAgent().compare(
-            peer,
-            include_forecast=(intent == "forecast"),
-            user_guidance=user_guidance,
+    elif intent == "it_trend":
+        sub_result = await ITTrendAgent().generate(
+            build_it_trend_input(entities, user_guidance=user_guidance)
         )
     elif intent == "deep_dive":
         # PDF §6 — 같은 topic 으로 깊이 확장. parent turn 의 sub_result 를 context 로 carry-over.
@@ -232,7 +229,7 @@ async def deep_dive_handler(message, deep_dive_context, history, user_guidance):
 
     # parent_sub 의 reasoning_steps 에서 가장 confidence 낮은 step 또는 user_question 의 lens
     # 에 해당하는 sub-agent 를 다시 호출. 예:
-    #   lens=financial → PeerComparison 의 Forecast / trend_deltas 재호출 (다른 horizon)
+    #   lens=financial → Mixer/Insight 의 재무 관점 재분석
     #   lens=technical → Mixer 의 tech_investment axis 재분석
     #   lens=competitive → Insight 의 Impact + Response 만 재생성
     return await _route_by_lens(topic, lens, parent_sub, message)
@@ -243,7 +240,7 @@ def generate_typed_follow_ups(intent_result, sub_result, deep_dive_context):
     intent = intent_result["intent"]
     suggestions = []
 
-    if intent in ("insight", "mixer", "peer_compare", "forecast"):
+    if intent in ("insight", "mixer", "it_trend"):
         # 5 lens 모두 button 으로 노출 — 사용자 자유 선택
         topic = _extract_topic(sub_result)
         for lens in ("technical", "financial", "competitive", "regulatory", "customer"):
@@ -277,15 +274,15 @@ def generate_typed_follow_ups(intent_result, sub_result, deep_dive_context):
 | 5 | 분석 기간 | entity.date_range (since/until 절대 기준) | 상대 표현 ("최근") 금지 → 절대 변환 |
 | 6 | 최신성 검증 | sub-agent carry — KST timestamp | smalltalk 외 모든 intent |
 | 7 | 단순 뉴스 요약 금지 | 위임 sub-agent (Summary 도 NewsAnalysis 호출) | smalltalk 만 예외 |
-| 8 | 회사별 비교 기준 | peer_compare → PeerComparison 위임 | KPI enum 동일 |
-| 9 | 변화 감지 기준 | forecast → PeerComparison.trend_deltas | ±5/10/30% band |
+| 8 | 회사별 비교 기준 | mixer → MixerAnalysis 위임 | KPI enum 동일 |
+| 9 | 변화 감지 기준 | mixer / it_trend 결과에서 변화 시그널 표기 | ±5/10/30% band |
 | 10 | 수익화 관점 | sub_result.sk_ax_implication surface | 응답에 명시 포함 |
-| 11 | 정량 수치 우선 | sub-agent (PeerComparison / Insight) carry | reply 작성 시 prefer |
+| 11 | 정량 수치 우선 | sub-agent (Mixer / Insight / ITTrend) carry | reply 작성 시 prefer |
 | 12 | 공식 vs 추정 구분 | sub-agent carry — 그대로 reply 에 surface | `[DART 2026-1Q]` prefix |
 | 13 | 전략적 시사점 | sk_ax_implication 필드 명시 출력 | 모든 intent (smalltalk 제외) |
 | **14** | **출력 형식** | **ChatTurnOutput TypedDict 명시** | **필수** |
 | 15 | 우선순위 판단 | sub-agent (Insight / Mixer) carry | follow_up 도 top-3 만 |
-| 16 | 리스크 분석 | forecast intent → PeerComparison.forecasts.risks | deep_dive lens=regulatory 시 노출 |
+| 16 | 리스크 분석 | Insight / ITTrend risk signal | deep_dive lens=regulatory 시 노출 |
 | **17** | **반복 추적 구조** | **`follow_up_suggestions` (typed) + deep_dive_context carry-over + deep_dive_depth** | **필수 — PDF §6 꼬리 물기의 핵심** |
 
 orchestrator 자체는 routing 이므로 sub-agent 의 17 요소 충족을 reply 에 누락 없이 surface 하는 것이 책임. 위 표는 통과한다고 가정한 sub-agent 결과를 어떻게 reply 에 노출하는지의 mapping.
@@ -319,7 +316,7 @@ orchestrator 자체는 routing 이므로 sub-agent 의 17 요소 충족을 reply
 
 - **외부 API**: OpenAI gpt-4o-mini
 - **DB**: `chat_sessions` (UPSERT — 신규 **V10** migration; 현재 master V9 다음)
-- **Sub-agents**: HybridSearch, Rerank, Answer, InsightCascade, MixerAnalysis, PeerComparison
+- **Sub-agents**: HybridSearch, Rerank, Answer, InsightCascade, MixerAnalysis, ITTrend
 
 ## 10. State 흐름
 
@@ -348,7 +345,7 @@ class DialogueState(TypedDict):
 | Unit | "오늘 핵심 변화" | intent='summary' |
 | Unit | "이 카드들로 인사이트" + card_ids | intent='insight' |
 | Unit | "안녕" | intent='smalltalk' |
-| Unit | "삼성SDS 1년 후 어떨까" | intent='forecast' → PeerComparison(include_forecast=True) |
+| Unit | "글로벌 IT 흐름과 Peer사 동향 연결해줘" | intent='it_trend' → ITTrendAgent |
 | Unit | follow_up_suggestion 클릭 (lens=financial) | intent='deep_dive', deep_dive_context.iteration=2 |
 | Unit | "재무 관점에서 다시" | intent='alternative_view', persona='재무팀' |
 | Edge | 빈 메시지 | 400 BadRequest |

@@ -2,7 +2,7 @@
 
 > **버전**: v1 (2026-05-14) · **상위 문서**: `axis-infra/docs/13팀_사업전략팀 추가 질의 회신.docx.pdf`
 >
-> SK AX 사업전략팀이 1차 데모 (frontend designing → develop) 검토 후 보낸 추가 피드백을 우리 LLM agent prompt 설계에 직접 반영한 17-요소 체크리스트. 모든 LLM-driven agent (Classification / NewsSummary / NewsAnalysis / IssueCard / Insight / Mixer / PeerComparison / GlobalTrends / Chat) 의 §6 algorithm / prompt 설계 시 본 checklist 17 항 모두 답할 수 있어야 함.
+> SK AX 사업전략팀이 1차 데모 (frontend designing → develop) 검토 후 보낸 추가 피드백을 우리 LLM agent prompt 설계에 직접 반영한 17-요소 체크리스트. 모든 LLM-driven agent (Classification / IssueIntegration / Analysis / CardNews / Insight / Mixer / ITTrend / Chat) 의 §6 algorithm / prompt 설계 시 본 checklist 17 항 모두 답할 수 있어야 함.
 
 ## 1. 배경 — PDF 피드백 핵심 6
 
@@ -11,7 +11,7 @@
 | 1 | **멀티 agent 협업 과정 가시화** — 단일 agent 열거 X, 흐름 + 오케스트레이션 + CoT 루프 UI 노출 | 30-analysis/* + 60-briefing/* 의 output schema 에 `reasoning_steps[]` 추가 |
 | 2 | **출처 + 논리 + 근거 명확화** — 1차원 Sheet 도 원본 출처 + 가공 로직 + 합리적 추론 | evidence_chain (이미 적용) + UI 측 메타 표시 |
 | 3 | **Peer+ Overview** — 화면 설명 + 기준 시점 + 통합 비교 view | 20-enrichment/derived-metrics.md 에 `peer_overview` mode 추가 |
-| 4 | **PeerComparison forecast** — DART 분기 + 동향 → 1Q / 반기 / 1년 후 시나리오 | 30-analysis/peer-comparison.md 에 forecast phase 추가 |
+| 4 | **기업·섹터 흐름 비교** — 저장된 카드/분석 결과를 기업별·기간별로 비교 | Mixer / Insight 흐름에서 처리 |
 | 5 | **Mixer CoT 노출 + 최종 한 줄 결론** | 30-analysis/mixer-analysis.md output schema |
 | 6 | **꼬리 물기 + 채팅형 인사이트** — 사용자 대화 깊이 확장 + 지식모델 / 지침 주입 | 40-user-query/chat-orchestrator.md 의 `deep_dive` mode |
 
@@ -22,18 +22,18 @@
 | # | 요소 | 의미 | Agent 별 적용 |
 |---|---|---|---|
 | **1** | **역할 정의 (Role)** | "당신은 SK AX 사업전략팀의 ___" 으로 시작. 일반 도우미가 아닌 도메인 전문가로 정의 | **필수 — 모든 agent** |
-| **2** | **추적 대상 기업** | 4 Peer (samsung_sds / lg_cns / hyundai_autoever / posco_dx) + 6 글로벌 (nvidia / apple / microsoft / google / amazon / meta) + SK AX 자체 | **필수 — Classification / NewsAnalysis / PeerComparison / GlobalTrends** |
+| **2** | **추적 대상 기업** | 4 Peer (samsung_sds / lg_cns / hyundai_autoever / posco_dx) + 6 글로벌 (nvidia / apple / microsoft / google / amazon / meta) + SK AX 자체 | **필수 — Classification / IssueIntegration / Analysis / ITTrend** |
 | **3** | **추적 범위** | 6 event_type taxonomy (partnership / ma / personnel / tech / regulation / new_biz) × 5 sector (ax / security / infra / deal / other) | **필수 — Classification** |
 | **4** | **정보 출처 우선순위** | Tier1 (DART / IR / 공식 뉴스룸) > Tier2 (대형 미디어 — 한경/매경) > Tier3 (Naver/RSS/Bloter 등) | **필수 — Evidence / NewsAnalysis** |
-| **5** | **분석 기간** | window_days 명시 (기본 7일 / 30일 / 90일). 비교 시 동일 기간 적용 | **필수 — PeerComparison / DerivedMetrics / WeakSignal** |
+| **5** | **분석 기간** | window_days 명시 (기본 7일 / 30일 / 90일). 비교 시 동일 기간 적용 | **필수 — Mixer / DerivedMetrics / WeakSignal** |
 | **6** | **최신성 검증** | published_at 의 KST 변환 + 분기 / 반기 / 1년 boundary 명시. "최신 정보" 라는 표현 X — "2026-1Q 기준" 같이 절대 기준 | **필수 — 모든 시계열 agent** |
 | **7** | **단순 뉴스 요약 금지 (동향 분류 체계)** | "기사 N개 요약" 이 아닌 "이벤트 X 가 발생 → 시사점 Y" 패턴. event_type taxonomy 기반 분류 강제 | **필수 — NewsSummary / NewsAnalysis / Insight** |
-| **8** | **회사별 비교 기준** | peer 별 KPI 명시 — 매출 / 영업이익 / 영업이익률 / Captive 비중 / 인력 / R&D 비중. 시계열은 QoQ / YoY 표기 | **필수 — PeerComparison / DerivedMetrics** |
-| **9** | **변화 감지 기준** | 임계값 명시 — 매출 ±5% 가 normal / >10% 가 유의 / >30% 가 급변. 텍스트는 동일 키워드 빈도 ±50% 이상 | **필수 — WeakSignal / PeerComparison** |
-| **10** | **수익화 관점** | "이 변화가 SK AX 매출 또는 마진에 어떻게 영향?" 항상 명시 (긍정 / 중립 / 부정) | **권장 — Insight / Mixer / PeerComparison** |
+| **8** | **회사별 비교 기준** | peer 별 KPI 명시 — 매출 / 영업이익 / 영업이익률 / Captive 비중 / 인력 / R&D 비중. 시계열은 QoQ / YoY 표기 | **필수 — Mixer / DerivedMetrics** |
+| **9** | **변화 감지 기준** | 임계값 명시 — 매출 ±5% 가 normal / >10% 가 유의 / >30% 가 급변. 텍스트는 동일 키워드 빈도 ±50% 이상 | **필수 — WeakSignal / Mixer** |
+| **10** | **수익화 관점** | "이 변화가 SK AX 매출 또는 마진에 어떻게 영향?" 항상 명시 (긍정 / 중립 / 부정) | **권장 — Insight / Mixer** |
 | **11** | **정량 수치 우선** | "성장 추세" → "QoQ +12.3%" / "흑자전환" → "영업이익 -120억 → +340억". 정성 표현 후 (정량) 보강 강제 | **필수 — 재무 연계 agent** |
 | **12** | **공식 수치 vs 추정치 구분** | `[공식 DART 2026-1Q]` / `[자체 추정 v3 산식]` / `[기사 인용]` 같이 출처 prefix 강제 | **필수 — 모든 정량 출력** |
-| **13** | **전략적 시사점 (국내 IT서비스사 관점)** | "삼성SDS 가 X 했다" 가 아니라 "삼성SDS 의 X 는 SK AX 의 Y 사업에 ___ 영향" — 화자 = SK AX | **필수 — Insight / Mixer / PeerComparison / GlobalTrends** |
+| **13** | **전략적 시사점 (국내 IT서비스사 관점)** | "삼성SDS 가 X 했다" 가 아니라 "삼성SDS 의 X 는 SK AX 의 Y 사업에 ___ 영향" — 화자 = SK AX | **필수 — Insight / Mixer / ITTrend** |
 | **14** | **출력 형식** | JSON schema 명시 + 필수 / 옵션 필드 / enum 값 / 길이 제약. 항상 검증 가능 | **필수 — 모든 agent** |
 | **15** | **우선순위 판단 기준** | "다음 3 항목 중 가장 영향 큰 것 1개 선택: A/B/C". 모호한 "중요한 것" X | **권장 — Insight / Mixer** |
 | **16** | **리스크 분석** | "이 가정이 틀릴 가능성: ___ (낮음/중간/높음)" + "그 경우 대응: ___" | **권장 — Forecast / Insight** |
@@ -123,7 +123,7 @@ class LangfuseTraceRef(TypedDict):
 
 ### `AnyLLMOutput` 표준 schema
 
-multi-step LLM agent (Insight / Mixer / PeerComparison / GlobalTrends / Briefing) 의 output 은 다음 3 필드 모두 포함:
+multi-step LLM agent (Insight / Mixer / ITTrend / Briefing) 의 output 은 다음 3 필드 모두 포함:
 
 ```python
 class AnyLLMOutput(TypedDict):
@@ -160,8 +160,7 @@ raw reasoning_steps 가 더 길어도 압축할 것. 핵심 결정만 trail.
 |---|---|---|
 | **MixerAnalysis** | HIGH | PDF §5 직접 요구 (CoT 노출 + 한 줄 결론) |
 | **InsightCascade** | HIGH | 4 phase × 3~5 bullet = 15+ raw → 4~5 trail |
-| **PeerComparison** | HIGH | 4 phase (Current/Trend/Forecast/Strategic) 자연 매핑 |
-| **GlobalTrends** | HIGH | 5 phase 자연 매핑 + impact_matrix 의 channel 설명 |
+| **ITTrend** | HIGH | 글로벌 회사 뉴스룸과 산업 브리핑을 통합한 트렌드 흐름 설명 |
 | **BriefingGeneration** | MEDIUM | section 별 mini-trail (10 section × 3 step) 권장 |
 | **ChatOrchestrator** | LOW | 실시간 turn 이라 streaming 으로 충분, trail 보다 follow_up_suggestions 가 효과적 |
 | Ingestion agents | NONE | 사용자 노출 안 함 |
@@ -171,14 +170,13 @@ raw reasoning_steps 가 더 길어도 압축할 것. 핵심 결정만 trail.
 | Agent | 필수 (Mandatory) | 권장 (Recommended) | 3-tier observability |
 |---|---|---|---|
 | **ClassificationAgent** | 1, 2, 3, 4, 6, 7, 14 | 9 | trace_id only |
-| **PeerNewsSummaryAgent** | 1, 2, 4, 6, 7, 11, 12, 14 | 16 | trace_id only |
-| **PeerNewsAnalysisAgent** | 1, 2, 4, 6, 7, 10, 11, 13, 14 | 15, 17 | trace_id only |
-| **IssueCardAgent** | 1, 2, 3, 4, 6, 7, 11, 12, 13, 14 | 15, 17 | trace_id only |
+| **IssueIntegrationAgent** | 1, 2, 4, 6, 7, 11, 12, 14 | 16 | trace_id only |
+| **AnalysisAgent** | 1, 2, 4, 6, 7, 10, 11, 13, 14 | 15, 17 | trace_id only |
+| **CardNewsAgent** | 1, 2, 3, 4, 6, 7, 11, 12, 13, 14 | 15, 17 | trace_id only |
 | **EvidenceAgent** | 1, 4, 11, 12, 14 | — | trace_id only |
 | **InsightCascadeAgent** | 1, 2, 7, 10, 13, 14, 15, 16, 17 + CoT | 5, 8 | **trail + steps + trace_id** |
 | **MixerAnalysisAgent** | 1, 2, 7, 10, 13, 14, 15, 17 + CoT | 5, 8, 16 | **trail + steps + trace_id** |
-| **PeerComparisonAgent** | 1, 2, 5, 6, 8, 9, 11, 12, 13, 14, 16 + CoT | 10, 17 | **trail + steps + trace_id** |
-| **GlobalTrendsAgent** *(신규)* | **17 요소 모두** + CoT + final_one_liner | — | **trail + steps + trace_id** |
+| **ITTrendAgent** | 1, 2, 5, 6, 9, 11, 13, 14, 16 + CoT | 10, 17 | **trail + steps + trace_id** |
 | **AnswerAgent** | 1, 4, 7, 11, 12, 14 | 13, 17 | trace_id only |
 | **ChatOrchestratorAgent** | 1, 14, 17 (deep_dive) | — | trace_id only (streaming) |
 | **WeakSignalAgent** | 1, 2, 5, 6, 9, 11, 14 | 13, 16 | trace_id only |

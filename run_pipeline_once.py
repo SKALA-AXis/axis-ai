@@ -68,6 +68,7 @@ log.info("실행 프로파일: %s", _profile)
 from src.config.companies import COMPANY_IDS, company_name_ko  # noqa: E402
 from src.config.global_companies import GLOBAL_COMPANY_IDS, global_company_name_ko  # noqa: E402
 from src.config.sectors import sector_name_ko  # noqa: E402
+from src.pipeline.analysis_delivery import run_analysis_delivery  # noqa: E402
 from src.preprocessing.preprocessing import PreprocessingService  # noqa: E402
 
 _BAND_MARK = {"high": "■■■", "medium": "■■ ", "low": "■  "}
@@ -111,11 +112,18 @@ def main() -> None:
         crawl_run_id=_args.crawl_run_id,
         limit=_args.limit,
     )
-    _print_preprocess_result(result)
-    return
 
-    cards = []
-    validation_pass_count = 0
+    if _args.preprocess_only:
+        _print_preprocess_result(result)
+        return
+
+    delivery = run_analysis_delivery(result)
+    cards = delivery.get("card_news", [])
+    validation_pass_count = sum(
+        1
+        for card in cards
+        if bool(card.get("validation_pass", card.get("validation", {}).get("pass", True)))
+    )
 
     print("\n" + "=" * 78)
     print("📊 파이프라인 v3 실행 결과")
@@ -131,9 +139,11 @@ def main() -> None:
     print(f"  대표 기사:       {len(result.get('representative_ids', []))}건")
     print(f"  카드뉴스:        {len(cards)}건")
     print(f"  카드 검증 통과:  {validation_pass_count}/{len(cards)}건")
+    print(f"  Qdrant 인덱싱:   {len(delivery.get('indexed_vector_ids', []))}건")
     print(f"  Human 검토 필요: {len(result.get('human_review_flags', []))}건")
-    if result.get("errors"):
-        print(f"  오류:            {result['errors']}")
+    all_errors = [*result.get("errors", []), *delivery.get("errors", [])]
+    if all_errors:
+        print(f"  오류:            {all_errors}")
 
     # 섹터 분포
     if cards:

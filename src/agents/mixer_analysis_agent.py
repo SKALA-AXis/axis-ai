@@ -22,7 +22,10 @@ import uuid
 from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
-from src.agents._validation_helpers import (
+from src.db.postgres import SessionLocal
+from src.middleware.analysis_ledger import with_ledger_writeback
+from src.observability.langfuse_client import tracing_config
+from src.services.agent_output_validation import (
     cap_reasoning_steps,
     cap_reasoning_trail,
     clip_final_one_liner,
@@ -31,9 +34,6 @@ from src.agents._validation_helpers import (
     confidence_in_range,
     dedup_and_cap,
 )
-from src.db.postgres import SessionLocal
-from src.middleware.analysis_ledger import with_ledger_writeback
-from src.observability.langfuse_client import tracing_config
 
 log = logging.getLogger(__name__)
 
@@ -589,3 +589,7 @@ def _error_response(
             "error": short_reason,
         },
     }
+
+
+class MixerAgent(MixerAnalysisAgent):
+    """Architecture-facing name for the 2단계 mixer agent."""
