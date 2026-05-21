@@ -206,44 +206,47 @@
                   │  - human_review_flags: list[str]                │
                   └────────────────────────────────────────────────┘
 
-   [build_input_bundle]
+   [build_input_bundle]           # supervisor 외부 (analysis_pipeline / analysis_delivery)
           ↓
-   [profile_context]              # ProfileAgent.build_context_v2() — snapshot + enrichment, NO LLM
+   [issue_integrate]              # ① IssueIntegrationAgent (LLM) — main_company 확정
+          ↓                       #   (외부 리뷰 R-1 2026-05-21: 흐름 앞으로 이동)
+   [profile_context]              # ② build_profile_context_v2 — main_company 기준 snapshot+enrichment, NO LLM
           ↓
-   [build_analysis_context]       # ← W4 신설. AnalysisContextBuilder, NO LLM (DB query + Qdrant retrieve)
+   [build_analysis_context]       # ③ AnalysisContextBuilder — NO LLM (DB+Qdrant), main_company 기준 4-Layer
           ↓
-   [issue_integrate]              # IssueIntegrationAgent (LLM via SourceSummarizer)
+   [strategic_analyze]            # ④ AnalysisAgent (LLM, peer 관점 only)
           ↓
-   [strategic_analyze]            # AnalysisAgent (LLM)
+   [implication]                  # ⑤ ImplicationAgent v4.0/v5.0 (LLM, SK AX 관점) ← P0-1 / P3-1 fix
           ↓
-   [implication]                  # ImplicationAgent v2.0 (LLM, W4 이후 prompt v5.0) ← P0-1 / P3-1 fix
-          ↓
-   [validate]                     # 출처 수치 / 단정 표현 / evidence 무결성 ← P1-3 fix
+   [validate]                     # ⑥ 출처 수치 / 단정 표현 / evidence 무결성 + W5-1 metric ← P1-3 fix
        ↓             ↓
    pass=true      pass=false
        ↓             ↓
    [assemble]    [human_review]   # human_review_flags 추가 후 종료
        ↓             ↓
-   [card_writer]   (END)          # ← W2-1 작업 5 신설. CardNewsAgent.write_card 호출
-       ↓                          #   (As-Is `ingestion_graph.card_news_node` 에서 이관)
-     (END) → card_news WRITE (v2 schema)
+   [card_writer]   (END)          # ⑧ CardNewsAgent.write_card 호출 + save_card_news v2 INSERT (R-2)
+       ↓
+     (END) → card_news WRITE (v2 schema: peer_company_id / primary_keyword_category /
+                                source_raw_article_ids / evidence_payload /
+                                card_schema_version='v2' / evaluation_payload['rule_based'])
 ```
 
 → **카드뉴스는 분석/시사점/대응의 직렬화 결과** — 즉 Supervisor 의 최종 산출물이며, ingestion (Layer A) 단에서 만들지 않는다. As-Is 의 `ingestion_graph.card_news_node` 는 W2-1 작업 5 에서 제거되어 `card_writer` 노드로 통합된다.
 
-**Retry 정책** (LangGraph `with_retries`):
+**Retry 정책** — **목표 (별도 PR), 현재 미적용** (외부 리뷰 R-7 명시):
 
-| 노드 | max_attempts | backoff | 실패 시 |
-|---|---|---|---|
-| `profile_context` | 1 | — | static-only fallback |
-| `build_analysis_context` | 1 | — | empty AnalysisContext fallback (no LLM 이므로 retry 불필요) |
-| `issue_integrate` | 2 | exponential 1s, 2s | `is_valid_summary=false` → 카드 skip |
-| `strategic_analyze` | 2 | exponential 1s, 2s | `is_valid_analysis=false` → implication skip |
-| `implication` | 2 | exponential 1s, 2s | heuristic fallback (현 `ImplicationGenerator`) |
-| `validate` | 1 | — | hard fail (skip 카드) |
-| `card_writer` | 2 | exponential 1s, 2s | DB transient 실패 시 retry, 2회 실패 시 errors 기록 후 hard fail (카드 누락은 가시화) |
+| 노드 | 목표 max_attempts | 목표 backoff | 실패 시 | **현재 상태** |
+|---|---|---|---|---|
+| `issue_integrate` | 2 | exponential 1s, 2s | `is_valid_summary=false` → 카드 skip | 미적용. `_logged_step` 의 try/except 가 예외를 `state.errors[]` 에 누적 |
+| `profile_context` | 1 | — | static-only fallback | 미적용. v2→legacy `build_context` fallback 만 |
+| `build_analysis_context` | 1 | — | empty AnalysisContext fallback (no LLM 이므로 retry 불필요) | DB query try/except 로 layer 별 graceful 빈 결과 |
+| `strategic_analyze` | 2 | exponential 1s, 2s | `is_valid_analysis=false` → implication skip | 미적용. 빈 결과 반환 후 다음 노드의 valid 검사 |
+| `implication` | 2 | exponential 1s, 2s | heuristic fallback (현 `ImplicationGenerator`) | **이미 적용** — ImplicationAgent 내부 try/except 가 LLM 실패를 잡아 heuristic 으로 fallback |
+| `validate` | 1 | — | hard fail (skip 카드) | 적용 |
+| `card_writer` | 2 | exponential 1s, 2s | DB transient 실패 시 retry, 2회 실패 시 errors 기록 후 hard fail | 미적용. save_card_news 의 try/except 가 한 번 잡음 |
 
-→ **부분 실패 흡수**: implication LLM 만 실패해도 analysis 단계까지의 결과는 보존됨. `card_writer` 만 실패하면 `AnalysisPackage` 는 메모리에 남아 후속 재시도 가능.
+→ **목표**: LangGraph `node.with_retry(RetryPolicy(...))` 로 위 정책을 정식 적용. **별도 PR (W3-4 trace + retry 묶음)** 에서 도입 예정.
+→ **현재 부분 실패 흡수**: implication LLM 만 실패해도 analysis 단계까지의 결과는 보존됨 (heuristic fallback). 다른 노드는 retry 없이 한 번만 시도하고 실패 시 다음 노드의 valid 검사로 라우팅됨. `card_writer` 만 실패하면 `AnalysisPackage` 는 메모리에 남아 호출자가 후속 재시도 가능.
 
 ### 3.2 ProfileContext 2-tier 분리
 
@@ -544,39 +547,52 @@ FROM raw_article_financial_metrics rfm
 WHERE rfm.peer_id IS NOT NULL;
 ```
 
-**`peer_companies.peer_plus_payload` JSONB key namespace 표준** (코드 + 문서 수준 규약):
+**`peer_companies` snapshot 저장 위치 표준** (v3.2.1 정정 — 외부 리뷰 R-5):
 
-```jsonc
-{
-  "profile_snapshot": {                  // W2-2 (Tier A) — 주1회 갱신
+* **Tier A profile snapshot** → `peer_companies.profile_snapshot` JSONB **별도 컬럼**
+  (`profile_snapshot_version` + `profile_snapshot_generated_at` 메타와 함께). V33 에서
+  컬럼 신설. JSONB key 예시:
+  ```jsonc
+  {
     "version": "profile-v5",
     "generated_at": "2026-05-18T03:00:00+09:00",
     "narrative": "...",
     "core_capabilities": [...],
     "recent_keywords": [...]
-  },
-  "capability_evolution": {              // W4 (Layer 2-B) — 월1회 갱신
-    "version": "capability-v1",
-    "generated_at": "2026-05-01T03:00:00+09:00",
-    "windows": [
-      {
-        "period": "2025Q3-2026Q1",
-        "business_area": "Cloud",
-        "narrative": "MSP 매출 성장 가속, 인력 +15%",
-        "evidence_signal_ids": ["...", "..."],
-        "delta_intensity": 0.78,
-        "confidence": 0.72
-      }
-    ]
-  },
-  "snapshot_archive_ref": {              // V30 legacy_records 참조 메타
-    "last_archived_at": "2026-05-18T03:00:00+09:00",
-    "archive_count": 3
   }
-}
-```
+  ```
 
-→ **V33 = 인덱스 3 + VIEW 2 + MATERIALIZED VIEW 1**. 신규 테이블 0.
+* **W4 derived data** (capability_evolution / snapshot_archive_ref) → `peer_companies.peer_plus_payload`
+  JSONB key namespace 표준:
+  ```jsonc
+  {
+    "capability_evolution": {            // W4 (Layer 2-B) — 월1회 갱신
+      "version": "capability-v1",
+      "generated_at": "2026-05-01T03:00:00+09:00",
+      "windows": [
+        {
+          "period": "2025Q3-2026Q1",
+          "business_area": "Cloud",
+          "narrative": "MSP 매출 성장 가속, 인력 +15%",
+          "evidence_signal_ids": ["...", "..."],
+          "delta_intensity": 0.78,
+          "confidence": 0.72
+        }
+      ]
+    },
+    "snapshot_archive_ref": {            // V30 legacy_records 참조 메타
+      "last_archived_at": "2026-05-18T03:00:00+09:00",
+      "archive_count": 3
+    }
+  }
+  ```
+
+→ **profile_snapshot 은 별도 컬럼 (`peer_companies.profile_snapshot`) 만 인정.**
+이전 문서에서 `peer_plus_payload['profile_snapshot']` 표현이 혼재했지만 v3.2.1 부터는
+**별도 컬럼 (인덱싱 가능 + version/generated_at 메타 분리)** 로 통일.
+
+→ **V33 = 컬럼 5 (profile_snapshot/_version/_generated_at + card_schema_version + evaluation_payload)
+   + 인덱스 5 + VIEW 2 + MATERIALIZED VIEW 1**. 신규 테이블 0.
 → (옵션) **V34 = `event_chain_links` 1 테이블** — MVP 보류, P3-4 측정값으로 결정.
 
 #### 3.4.4 (옵션) V34 — `event_chain_links` (도입 보류)

@@ -111,10 +111,10 @@ def main(cluster_id: int) -> None:
     peer = impl.get("peer_implication") or {}
     skax = impl.get("skax_implication") or {}
     print(f"peer_implication.company = {peer.get('company_id')} ({peer.get('company_name_ko')})")
-    print(f"peer_meaning = {peer.get('peer_meaning', '')[:200]}")
-    print(f"capability_change = {peer.get('capability_change', '')[:200]}")
-    print(f"\nskax_implication.why_important = {skax.get('why_important', '')[:200]}")
-    print(f"skax_implication.potential_impact = {skax.get('potential_impact', '')[:200]}")
+    print(f"peer_meaning = {(peer.get('peer_meaning') or '')[:200]}")
+    print(f"capability_change = {(peer.get('capability_change') or '')[:200]}")
+    print(f"\nskax_implication.why_important = {(skax.get('why_important') or '')[:200]}")
+    print(f"skax_implication.potential_impact = {(skax.get('potential_impact') or '')[:200]}")
     print(f"opportunities = {skax.get('opportunities')}")
     print(f"threats = {skax.get('threats')}")
     print(f"recommended_actions = {skax.get('recommended_actions')}")

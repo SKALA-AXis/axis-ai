@@ -1,26 +1,58 @@
 # Supervisor Topology
 
 > 기준: 1단계 데이터 분석 Supervisor / 2단계 데이터 활용 Orchestrator
+> v3.2.1 갱신 (2026-05-21) — 실제 LangGraph 노드 순서 + W4 Context Engineering + W5 Evaluation 반영.
+
+## 명칭 주의 (2026-05-21)
+
+이 문서에서 "supervisor" 는 **단계 코디네이터 / 오케스트레이터** 의 의미다 — LLM 이
+다음 worker 를 동적으로 선택하는 *multi-agent supervisor pattern* 이 아닌, **노드
+순서가 정적으로 정의된 LangGraph StateGraph (DAG pipeline)**. 단 하나의 동적 분기는
+`validate` 의 `pass / fail` 라우팅이다. 1 cluster 처리는 정해진 절차 (요약 → 분석
+→ 시사점 → 검증 → 카드) 라서 dynamic routing 가치가 낮고, deterministic pipeline 이
+운영 예측·debugging·비용 안정성 측면에서 더 적합하다.
 
 ## 1단계: 데이터 수집·정제·통합·분석·시사점·카드뉴스
 
 ```text
-수집 데이터
-→ 원문 저장
-→ 전처리·적합성 판단
-→ 기업·섹터·이벤트 매칭
-→ raw_articles / 관련 테이블 저장
-→ DataAnalysisSupervisorAgent
-   → AnalysisInputBundle 구성
-   → IssueIntegrationAgent
-   → AnalysisAgent
-   → ProfileAgent
-   → ImplicationAgent
-→ AnalysisPackage
-→ CardNewsAgent
-→ 기존 save_card_news 경로
-→ card_news / card_news_articles / evidence_chain 저장
+[Layer A — Data Pipeline (axis-cron-ingestion-*)]
+  수집 → 원문 저장 → 전처리·적합성 판단 → 기업·섹터·이벤트 매칭
+  → raw_articles / raw_article_business_signals / raw_article_financial_metrics 저장
+
+                            ↓ (cluster / document / period trigger)
+
+[Layer B-0 — Context Memory CronJob (정적·시계열 맥락 갱신)]
+  axis-cron-profile-refresh        (주1회, gpt-4o)   → peer_companies.profile_snapshot
+  axis-cron-capability-evolution   (월1회, gpt-4o)   → peer_plus_payload['capability_evolution']
+  axis-cron-sector-pulse           (주1회, psql)     → sector_pulse MV REFRESH
+
+                            ↓
+
+[Layer B — Analysis Supervisor Graph (cluster-time, src/pipeline/supervisor_graph.py)]
+  ① issue_integrate         (LLM gpt-4o)  IntegratedIssue 생성
+  ② profile_context         (DB only)     main_company 확정 후 ProfileContext 합성
+  ③ build_analysis_context  (DB+Qdrant)   AnalysisContext (4-Layer, ≤4,000 token)
+  ④ strategic_analyze       (LLM gpt-4o)  AnalysisResult (peer 관점)
+  ⑤ implication             (LLM gpt-4o)  ImplicationResult v4.0/v5.0 (SK AX 관점)
+  ⑥ validate                (rule-based)  numeric/certainty/evidence + EvaluatorAgent
+       pass → ⑦ assemble → ⑧ card_writer → card_news INSERT (v2 schema)
+       fail → human_review (flag only, 카드 생성 X)
+
+                            ↓
+
+[Layer B+1 — Evaluation Sidecar (5분 주기, gpt-4o-mini)]
+  axis-cron-card-evaluator → card_news.evaluation_payload['llm_judge']
 ```
+
+### 순서 변경 근거 (외부 리뷰 2026-05-21 반영)
+
+이전 버전은 `profile_context → build_analysis_context → issue_integrate → ...` 였으나
+다음 이유로 `issue_integrate → profile_context → build_analysis_context → ...` 로 정정:
+
+1. **잘못 매칭된 cluster (`is_valid_summary=False`) 가 ① 에서 즉시 차단** → profile /
+   context build 의 DB query 비용 절약.
+2. **`IntegratedIssue.main_company` 가 확정된 후 context 조회** → ProfileContext /
+   AnalysisContext 가 cluster 의 실제 주체에 맞게 build 됨.
 
 ## 2단계: 저장 데이터 활용
 
@@ -55,20 +87,29 @@ ProfileContext
 - 하위 Agent를 조율한다.
 - 최종 결과를 `AnalysisPackage`로 묶어 `CardNewsAgent`에 전달한다.
 
-내부 흐름:
+내부 흐름 (v3.2.1, LangGraph StateGraph 9-node):
 
 ```text
 AnalysisInputBundle
-→ IssueIntegrationAgent
-→ IntegratedIssue
-→ AnalysisAgent
-→ AnalysisResult
-→ ProfileAgent
-→ ProfileContext
-→ ImplicationAgent
-→ ImplicationResult
-→ AnalysisPackage
+→ ① issue_integrate          IssueIntegrationAgent → IntegratedIssue
+→ ② profile_context          build_profile_context_v2 → ProfileContext (Tier A snapshot + Tier B enrichment)
+→ ③ build_analysis_context   AnalysisContextBuilder → AnalysisContext (6 layer, ≤4,000 token)
+→ ④ strategic_analyze        AnalysisAgent (StrategicAnalyzer) → AnalysisResult
+→ ⑤ implication              ImplicationAgent v4.0/v5.0 → ImplicationResult
+→ ⑥ validate                 _hard_validate + EvaluatorAgent → ValidationReport
+   ├ pass → ⑦ assemble → ⑧ card_writer → save_card_news (v2 schema) → END
+   └ fail → human_review (flag only) → END
 ```
+
+각 노드는 `_logged_step` 데코레이터로 `pipeline_logs.step='supervisor.<node_name>'` 에
+elapsed_ms 기록. 부분 실패는 다음과 같이 흡수:
+
+- ② profile_context_v2 fail → legacy `ProfileAgent.build_context` fallback
+- ③ DB unavailable → 빈 `AnalysisContext` (ImplicationAgent 자동 v4.0 사용)
+- ⑤ LLM fail → `ImplicationGenerator` heuristic fallback (`is_valid_implication=true` 단순 출력)
+
+LangGraph `RetryPolicy / with_retry` 정식 도입은 별도 PR (`design/01-supervisor-implementation-plan.md`
+의 §3.1 retry 표는 미구현 — 현재는 `_logged_step` try/except + ImplicationAgent fallback 만).
 
 ## IssueIntegrationAgent
 

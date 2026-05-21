@@ -900,7 +900,51 @@ def update_classification(
 # 카드 뉴스 저장 (구 issue_cards → V9 에서 card_news 로 rename)
 # ──────────────────────────────────────────────────────────────
 
-_INSERT_CARD_NEWS = text("""
+# V33 이후 — 모든 v2 컬럼 (`peer_company_id` / `primary_keyword_category` /
+# `source_raw_article_ids` / `evidence_payload` / `card_schema_version` /
+# `evaluation_payload`) 을 INSERT 시점에 한 번에 채운다.
+_INSERT_CARD_NEWS_V2 = text("""
+    INSERT INTO card_news (
+        id, company, cluster_id, title, summary_lines,
+        event_type, importance, importance_score,
+        implication, sources, validation_pass, validation_sc_score,
+        peer_company_id, primary_keyword_category, source_raw_article_ids,
+        keyword_categories, evidence_payload,
+        card_schema_version, evaluation_payload
+    ) VALUES (
+        :id, :company, :cluster_id, :title, :summary_lines,
+        :event_type, :importance, :importance_score,
+        CAST(:implication AS jsonb), CAST(:sources AS jsonb),
+        :validation_pass, :validation_sc_score,
+        :peer_company_id, :primary_keyword_category,
+        CAST(:source_raw_article_ids AS bigint[]),
+        CAST(:keyword_categories AS jsonb),
+        CAST(:evidence_payload AS jsonb),
+        :card_schema_version,
+        CAST(:evaluation_payload AS jsonb)
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        implication = CAST(:implication AS jsonb),
+        validation_pass = :validation_pass,
+        validation_sc_score = :validation_sc_score,
+        peer_company_id = COALESCE(EXCLUDED.peer_company_id, card_news.peer_company_id),
+        primary_keyword_category = COALESCE(
+            EXCLUDED.primary_keyword_category, card_news.primary_keyword_category
+        ),
+        source_raw_article_ids = COALESCE(
+            EXCLUDED.source_raw_article_ids, card_news.source_raw_article_ids
+        ),
+        keyword_categories = COALESCE(EXCLUDED.keyword_categories, card_news.keyword_categories),
+        evidence_payload = COALESCE(EXCLUDED.evidence_payload, card_news.evidence_payload),
+        card_schema_version = EXCLUDED.card_schema_version,
+        evaluation_payload =
+            COALESCE(card_news.evaluation_payload, '{}'::jsonb)
+            || COALESCE(EXCLUDED.evaluation_payload, '{}'::jsonb)
+    RETURNING id
+""")
+
+# pre-V33 환경 fallback (v2 컬럼 미존재 시). 신규 컬럼 6개 빼고 INSERT.
+_INSERT_CARD_NEWS_V1_FALLBACK = text("""
     INSERT INTO card_news (
         id, company, cluster_id, title, summary_lines,
         event_type, importance, importance_score,
@@ -918,58 +962,172 @@ _INSERT_CARD_NEWS = text("""
     RETURNING id
 """)
 
-# W1-4 / W5-1 (V33 이후) — card_schema_version / evaluation_payload 컬럼이 존재할 때만
-# 사용하는 보조 UPDATE. 컬럼 미존재 환경 (pre-V33) 에서는 silent skip.
-_UPDATE_CARD_NEWS_V2_FIELDS = text("""
-    UPDATE card_news
-       SET card_schema_version = :card_schema_version,
-           evaluation_payload =
-               COALESCE(evaluation_payload, '{}'::jsonb)
-               || CAST(:evaluation_payload AS jsonb)
-     WHERE id = :id
-""")
-
 
 def save_card_news(card: dict[str, Any]) -> Optional[str]:
     """카드 뉴스를 card_news 테이블에 저장한다.
 
-    W2-4 정정: ``implication`` JSONB 가 ImplicationAgent v4.0/v5.0 의 결과
-    (``peer_implication`` / ``skax_implication`` / ``recommended_actions`` 등) 를
-    유지하도록 변경. sector·exposure·evidence_chain 등의 메타데이터는 별도 키
-    네임스페이스로 함께 포함.
+    외부 리뷰 R-2 반영 (2026-05-21) — 모든 v2 컬럼을 단일 INSERT 로 채운다.
+    더 이상 두 번째 UPDATE 가 필요하지 않으며, FK / sector / provenance / schema /
+    evaluation 모두 카드 INSERT 시점에 일관 보장된다.
 
-    V33 이후 환경에서는 ``card_schema_version`` / ``evaluation_payload`` 컬럼을
-    별도 UPDATE 로 갱신한다 (컬럼 미존재 환경에서는 silent skip).
+    호환 fallback — V33 미적용 환경 (`card_schema_version` 컬럼 없음) 에서는
+    `UndefinedColumn` 발생 → 기존 v1 컬럼만 사용하는 fallback INSERT 로 자동 재시도.
     """
     try:
-        implication_payload = _merge_implication_payload(card)
-        with SessionLocal() as db:
-            result = db.execute(
-                _INSERT_CARD_NEWS,
-                {
-                    "id": card["id"],
-                    "company": card.get("company") or card.get("peer_id"),
-                    "cluster_id": card.get("cluster_id"),
-                    "title": card["title"][:500],
-                    "summary_lines": card.get("summary_lines", []),
-                    "event_type": card.get("event_type", "tech"),
-                    "importance": card.get("importance", "low"),
-                    "importance_score": card.get("importance_score", 0.0),
-                    "implication": json.dumps(implication_payload, ensure_ascii=False),
-                    "sources": json.dumps(card.get("sources", []), ensure_ascii=False),
-                    "validation_pass": card.get("validation", {}).get("pass", False),
-                    "validation_sc_score": card.get("validation", {}).get("sc_score", 0.0),
-                },
+        params = _card_news_insert_params(card)
+        try:
+            return _execute_v2_insert(card_id=card["id"], params=params)
+        except Exception as exc:  # noqa: BLE001
+            if not _is_undefined_column_error(exc):
+                raise
+            log.info(
+                "card_news v2 INSERT 실패 (v33 미적용) → v1 fallback 사용 | id=%s",
+                card.get("id"),
             )
-            row = result.fetchone()
-            db.commit()
-            if row:
-                log.info("카드 뉴스 저장 완료 | id=%s", card["id"])
-                _persist_v2_fields(card)
-                return card["id"]
+            return _execute_v1_fallback(card_id=card["id"], params=params)
     except Exception as e:
         log.error("카드 뉴스 저장 실패 | id=%s error=%s", card.get("id"), e)
     return None
+
+
+def _execute_v2_insert(*, card_id: str, params: dict[str, Any]) -> Optional[str]:
+    with SessionLocal() as db:
+        result = db.execute(_INSERT_CARD_NEWS_V2, params)
+        row = result.fetchone()
+        db.commit()
+        if row:
+            log.info("카드 뉴스 저장 완료 (v2) | id=%s", card_id)
+            return card_id
+    return None
+
+
+def _execute_v1_fallback(*, card_id: str, params: dict[str, Any]) -> Optional[str]:
+    legacy_params = {
+        key: params[key]
+        for key in (
+            "id",
+            "company",
+            "cluster_id",
+            "title",
+            "summary_lines",
+            "event_type",
+            "importance",
+            "importance_score",
+            "implication",
+            "sources",
+            "validation_pass",
+            "validation_sc_score",
+        )
+    }
+    with SessionLocal() as db:
+        result = db.execute(_INSERT_CARD_NEWS_V1_FALLBACK, legacy_params)
+        row = result.fetchone()
+        db.commit()
+        if row:
+            log.info("카드 뉴스 저장 완료 (v1 fallback) | id=%s", card_id)
+            return card_id
+    return None
+
+
+def _is_undefined_column_error(exc: Exception) -> bool:
+    """psycopg / SQLAlchemy 가 던지는 UndefinedColumn 인지 확인."""
+    text_repr = str(exc).lower()
+    return "undefinedcolumn" in text_repr or "does not exist" in text_repr
+
+
+def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
+    implication_payload = _merge_implication_payload(card)
+    source_ids = _normalize_int_list(card.get("source_raw_article_ids"))
+    evidence_payload = _build_evidence_payload(card)
+    evaluation_payload = card.get("evaluation_payload") or {}
+    if not isinstance(evaluation_payload, dict):
+        evaluation_payload = {}
+    keyword_categories = card.get("keyword_categories") or {}
+    if not isinstance(keyword_categories, dict):
+        keyword_categories = {}
+    return {
+        "id": card["id"],
+        "company": card.get("company") or card.get("peer_id"),
+        "cluster_id": card.get("cluster_id"),
+        "title": card["title"][:500],
+        "summary_lines": card.get("summary_lines", []),
+        "event_type": card.get("event_type", "tech"),
+        "importance": card.get("importance", "low"),
+        "importance_score": card.get("importance_score", 0.0),
+        "implication": json.dumps(implication_payload, ensure_ascii=False),
+        "sources": json.dumps(card.get("sources", []), ensure_ascii=False),
+        "validation_pass": card.get("validation", {}).get("pass", False),
+        "validation_sc_score": card.get("validation", {}).get("sc_score", 0.0),
+        "peer_company_id": _resolve_peer_company_id(card),
+        "primary_keyword_category": card.get("primary_keyword_category") or card.get("sector"),
+        "source_raw_article_ids": source_ids,
+        "keyword_categories": json.dumps(keyword_categories, ensure_ascii=False),
+        "evidence_payload": json.dumps(evidence_payload, ensure_ascii=False),
+        "card_schema_version": str(card.get("card_schema_version") or "v2"),
+        "evaluation_payload": json.dumps(evaluation_payload, ensure_ascii=False),
+    }
+
+
+def _resolve_peer_company_id(card: dict[str, Any]) -> Optional[str]:
+    """카드 INSERT 시 peer_company_id FK 를 직접 확정한다.
+
+    우선순위: card['peer_company_id'] (CardNewsAgent 가 set 했을 수 있음) →
+    card['company'] (peer_companies.id 와 동일 표기) → card['peer_id'].
+    SK AX 같은 self 회사는 FK NULL (peer_companies 가 self 도 포함하지만,
+    안전을 위해 None 으로 두고 보조 컬럼 company 만 사용).
+    """
+    direct = card.get("peer_company_id")
+    if direct:
+        return str(direct)
+    company = card.get("company") or card.get("peer_id")
+    if not company:
+        return None
+    return str(company)
+
+
+def _normalize_int_list(value: Any) -> list[int]:
+    if not value:
+        return []
+    if isinstance(value, list | tuple | set):
+        out: list[int] = []
+        seen: set[int] = set()
+        for item in value:
+            try:
+                ivalue = int(item)
+            except (TypeError, ValueError):
+                continue
+            if ivalue <= 0 or ivalue in seen:
+                continue
+            seen.add(ivalue)
+            out.append(ivalue)
+        return out
+    try:
+        ivalue = int(value)
+    except (TypeError, ValueError):
+        return []
+    return [ivalue] if ivalue > 0 else []
+
+
+def _build_evidence_payload(card: dict[str, Any]) -> dict[str, Any]:
+    """카드 저장 시 `evidence_payload` JSONB 의 단일 출처.
+
+    supervisor 의 메모리 `evidence_payload` 와 CardNewsAgent 의 `evidence_chain` /
+    `sources` 를 합쳐서 sidecar (W5-2) 가 단일 컬럼만 보고도 풍부한 근거에 접근 가능.
+    """
+    payload: dict[str, Any] = {}
+    raw_evidence = card.get("evidence_payload")
+    if isinstance(raw_evidence, dict):
+        payload.update(raw_evidence)
+    evidence_chain = card.get("evidence_chain") or {}
+    if isinstance(evidence_chain, dict):
+        payload.setdefault("source_links", evidence_chain.get("source_links") or [])
+        payload.setdefault("financial_refs", evidence_chain.get("financial_refs") or {})
+        payload.setdefault("mbb_refs", evidence_chain.get("mbb_refs") or [])
+        payload.setdefault("provenance", evidence_chain.get("provenance") or {})
+    sources = card.get("sources") or []
+    if isinstance(sources, list) and "source_links" not in payload:
+        payload["source_links"] = sources
+    return payload
 
 
 def _merge_implication_payload(card: dict[str, Any]) -> dict[str, Any]:
@@ -998,34 +1156,6 @@ def _merge_implication_payload(card: dict[str, Any]) -> dict[str, Any]:
         },
     )
     return payload
-
-
-def _persist_v2_fields(card: dict[str, Any]) -> None:
-    """W1-4 + W5-1 — V33 이후 컬럼 (card_schema_version / evaluation_payload) 갱신.
-
-    컬럼 미존재 환경 (pre-V33) 에서는 silent skip.
-    """
-    schema_version = card.get("card_schema_version")
-    evaluation_payload = card.get("evaluation_payload")
-    if not schema_version and not evaluation_payload:
-        return
-    try:
-        with SessionLocal() as db:
-            db.execute(
-                _UPDATE_CARD_NEWS_V2_FIELDS,
-                {
-                    "id": card["id"],
-                    "card_schema_version": str(schema_version or "v2"),
-                    "evaluation_payload": json.dumps(evaluation_payload or {}, ensure_ascii=False),
-                },
-            )
-            db.commit()
-    except Exception as exc:  # noqa: BLE001 — pre-V33 컬럼 부재 fallback
-        log.debug(
-            "v2 fields persist skipped (likely pre-V33) | id=%s error=%s",
-            card.get("id"),
-            exc,
-        )
 
 
 # ──────────────────────────────────────────────────────────────

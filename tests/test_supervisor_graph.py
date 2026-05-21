@@ -148,6 +148,11 @@ def test_supervisor_graph_happy_path_writes_card():
     assert validation is not None
     assert validation.passed is True
     assert validation.metrics is not None
+    # R-1: issue_integrate 가 가장 먼저 실행되어야 한다.
+    deps.issue_integrator.integrate_input_bundle.assert_called_once()
+    # ProfileContext 는 integrated_issue.main_company (= samsung_sds) 를 받았는지.
+    profile_call = deps.profile_agent.build_context.call_args
+    assert "samsung_sds" in (profile_call.kwargs.get("companies") or [])
 
 
 def test_supervisor_graph_routes_human_review_on_fake_numeric():

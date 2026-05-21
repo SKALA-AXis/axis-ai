@@ -1,6 +1,28 @@
 # 1단계 데이터 분석 Supervisor — 팀 공유본
 
 > 상세: [`01-supervisor-implementation-plan.md`](01-supervisor-implementation-plan.md) (v3.2.1)
+>
+> ## 배포 순서 (Hard dependency, 외부 리뷰 R-6 명시)
+>
+> 다음 순서를 반드시 지켜야 정상 동작:
+>
+> 1. **axis-backend V32_5 + V33 마이그레이션 적용** — `peer_companies.profile_snapshot` /
+>    `card_news.card_schema_version` / `evaluation_payload` 컬럼, `peer_event_timeline` /
+>    `peer_financial_trend` VIEW, `sector_pulse` MV 가 만들어진다.
+> 2. **axis-ai image 빌드/ECR push** — `scripts/refresh_peer_profile_snapshots.py` /
+>    `refresh_capability_evolution.py` / `evaluate_recent_cards.py` 가 image 안에 포함.
+> 3. **axis-infra CronJob image tag 갱신 + apply** — CronJob 4종 (profile-refresh /
+>    capability-evolution / sector-pulse / card-evaluator) 활성.
+> 4. **운영 첫 1주는 W5-1 threshold 비활성** — 카드 차단/플래그 0건, 측정만. 7일 후
+>    percentile-based calibration 으로 threshold 자동 산출 (Phase 2).
+>
+> ## Retry / Tracing 현재 상태 (외부 리뷰 R-7 명시)
+>
+> * LangGraph `RetryPolicy / with_retry` 정식 적용: **별도 PR** (W3-4 trace + retry 묶음).
+> * 현재는 `_logged_step` 데코레이터의 try/except 가 노드 예외를 잡아 `state.errors[]` 에
+>   누적하고, ImplicationAgent 가 내부에서 LLM 실패 시 heuristic generator 로 자동 fallback.
+> * Langfuse tracing 도 ImplicationAgent / CapabilityEvolutionAgent 만 부분 적용 — 다른
+>   supervisor 노드 (issue_integrate / strategic_analyze) 는 별도 PR 에서 trace metadata 부착.
 > 작성: 2026-05-20 / 갱신: 2026-05-21 · Critical path **~40h** / 총 **~85h** / **5-5.5주** (W5 Evaluation Layer 포함)
 
 ---
@@ -78,7 +100,7 @@
 
 | Agent | Input | Output |
 |---|---|---|
-| **ProfileAgent** (2-tier) | **READ**: `peer_companies.peer_plus_payload['profile_snapshot']` (Tier A) + `raw_article_business_signals` 최근 30일 top-3 + `raw_article_financial_metrics` 최근 분기 (Tier B) | `ProfileContext` (메모리) |
+| **ProfileAgent** (2-tier) | **READ**: `peer_companies.profile_snapshot` JSONB 컬럼 (Tier A) + `raw_article_business_signals` 최근 30일 top-3 + `raw_article_financial_metrics` 최근 분기 (Tier B) | `ProfileContext` (메모리) |
 | **AnalysisContextBuilder** ⭐신규 | **READ**: `peer_event_timeline` VIEW (90일) + `peer_companies.peer_plus_payload['capability_evolution']` + `sector_pulse` MV (4주) + `peer_financial_trend` VIEW (8분기) + `card_news.evidence_payload.financial_refs` + Qdrant `axis_main` (top-3) | `AnalysisContext` (메모리, ≤4k token) |
 | **IssueIntegrationAgent** | `AnalysisInputBundle` (cluster 의 raw_articles) | `IntegratedIssue` (메모리, consolidated_facts / key_numbers / fact_basis) |
 | **AnalysisAgent** | `IntegratedIssue` + `ProfileContext` | `AnalysisResult` (메모리, strategic_meaning / impact_level / risk_or_opportunity) |
@@ -90,7 +112,7 @@
 
 | Agent | 주기 | Input | Output |
 |---|---|---|---|
-| **ProfileSnapshotAgent** | 주1회 (월 03:00) | **READ**: `raw_articles` (sk_ax_site / official / DART) + `raw_article_business_signals` | **WRITE**: `peer_companies.peer_plus_payload['profile_snapshot']` JSONB |
+| **ProfileSnapshotAgent** | 주1회 (월 03:00) | **READ**: `raw_articles` (sk_ax_site / official / DART) + `raw_article_business_signals` | **WRITE**: `peer_companies.profile_snapshot` JSONB 컬럼 (+ version / generated_at) |
 | **CapabilityEvolutionAgent** ⭐신규 | 월1회 (1일 03:00) | **READ**: `raw_article_business_signals` 4분기 top-5/group | **WRITE**: `peer_companies.peer_plus_payload['capability_evolution']` JSONB |
 | **SectorPulseAggregator** ⭐신규 | 주1회 (월 02:00) | **READ**: `card_news` (180일) | **WRITE**: `sector_pulse` MATERIALIZED VIEW REFRESH |
 | **EventChainDiscoveryAgent** (옵션) | 매일 (02:00) | **READ**: `card_news` 14일 + Qdrant 임베딩 | **WRITE**: `card_news.evidence_payload['related_card_ids']` JSONB |
@@ -127,7 +149,7 @@ CREATE MATERIALIZED VIEW sector_pulse AS ...;    -- sector×week 단위 집계 (
 
 | 데이터 | 저장 위치 |
 |---|---|
-| Profile snapshot | `peer_companies.peer_plus_payload['profile_snapshot']` JSONB |
+| Profile snapshot | `peer_companies.profile_snapshot` JSONB **별도 컬럼** (v3.2.1 정정 — `peer_plus_payload` 안이 아님) |
 | Capability evolution narrative | `peer_companies.peer_plus_payload['capability_evolution']` JSONB |
 | Event chain (옵션) | `card_news.evidence_payload['related_card_ids']` JSONB |
 | Snapshot history | `legacy_records` (V30 archive 재사용) |

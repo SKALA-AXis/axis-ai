@@ -654,7 +654,23 @@ class EvaluationMetrics:
 
 @dataclass(slots=True)
 class ValidationReport:
-    """W2-3 quality gate + W5-1 evaluation metric 통합 보고."""
+    """W2-3 quality gate + W5-1 evaluation metric 통합 보고.
+
+    ``passed`` 는 **hard gate** 결과만 본다 — 외부 리뷰 R-4 (2026-05-21):
+
+    * **Hard (passed=False 사유)** — 카드 생성 차단, ``human_review`` 라우팅.
+        ``numeric_violations``: 출처에 없는 수치
+        ``evidence_chain_warnings``: 출처 0건 또는 provenance 누락
+        ``integrated_issue_valid=False`` / ``analysis_valid=False`` / ``implication_valid=False``
+
+    * **Soft (passed=True 유지, 품질 경고만)** — 카드 생성 진행, ``evaluation_payload``
+      또는 ``human_review_flags`` 에 점수만 기록.
+        ``certainty_warnings``: 단정 표현 (반드시/확실히/...)
+        ``implication_confidence_warning``: confidence < 0.4
+        ``metrics`` (W5-1 rule-based score): threshold calibration (Phase 2) 활성 시
+            ``actionability_score`` / ``evidence_claim_ratio`` 등이 bottom-10% 인 경우
+            ``low_<metric_name>`` flag 만 추가.
+    """
 
     passed: bool = False
     integrated_issue_valid: bool = False

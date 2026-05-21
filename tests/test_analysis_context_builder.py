@@ -127,7 +127,7 @@ def test_compression_truncates_capability_narrative():
     assert len(narrative) <= 151  # 150 + ellipsis
 
 
-def test_builder_returns_empty_context_when_db_unavailable(monkeypatch):
+def test_builder_returns_empty_context_when_db_unavailable():
     """SessionLocal 가 실패하더라도 fallback 으로 빈 context 반환."""
     builder = AnalysisContextBuilder()
     # 모든 query 가 fallback 으로 빈 결과를 내도록 SessionLocal patch.
@@ -135,7 +135,11 @@ def test_builder_returns_empty_context_when_db_unavailable(monkeypatch):
         "src.services.analysis_context_builder.SessionLocal",
         side_effect=RuntimeError("db unavailable"),
     ):
-        ctx = builder.build(input_bundle=_stub_bundle(), profile_context=None)
+        ctx = builder.build(
+            input_bundle=_stub_bundle(),
+            profile_context=None,
+            integrated_issue={"main_company": "samsung_sds"},
+        )
     assert isinstance(ctx, AnalysisContext)
     assert ctx.is_empty()
     assert ctx.available_layer_count() == 0

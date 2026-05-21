@@ -68,8 +68,11 @@ class AnalysisContextBuilder:
         *,
         input_bundle: AnalysisInputBundle,
         profile_context: ProfileContext | dict[str, Any] | None = None,
+        integrated_issue: dict[str, Any] | None = None,
     ) -> AnalysisContext:
-        peers = _resolve_peers(input_bundle, profile_context)
+        # IntegratedIssue 가 우선 — main_company / mentioned_peer_companies 가
+        # 확정되면 그것을 peer 입력으로 쓴다. 없으면 input_bundle.companies fallback.
+        peers = _resolve_peers(input_bundle, profile_context, integrated_issue)
         sectors = list(dict.fromkeys(input_bundle.sectors or []))
         ctx = AnalysisContext()
         provenance = ContextProvenance()
@@ -511,22 +514,38 @@ class AnalysisContextBuilder:
 def _resolve_peers(
     input_bundle: AnalysisInputBundle,
     profile_context: ProfileContext | dict[str, Any] | None,
+    integrated_issue: dict[str, Any] | None = None,
 ) -> list[str]:
+    """우선순위: integrated_issue.main_company > mentioned_peer_companies >
+    profile_context.peer_profiles > input_bundle.companies.
+
+    SELF_COMPANY_IDS (sk_ax 등) 은 peer 후보에서 제외.
+    """
     candidates: list[str] = []
-    for company in input_bundle.companies or []:
-        if company and company not in SELF_COMPANY_IDS:
-            candidates.append(company)
+    if integrated_issue:
+        main_company = str(integrated_issue.get("main_company") or "").strip()
+        if main_company and main_company not in SELF_COMPANY_IDS:
+            candidates.append(main_company)
+        mentioned = integrated_issue.get("mentioned_peer_companies") or []
+        if isinstance(mentioned, list):
+            for company in mentioned:
+                text = str(company or "").strip()
+                if text and text not in SELF_COMPANY_IDS and text not in candidates:
+                    candidates.append(text)
     if isinstance(profile_context, ProfileContext):
         for peer_id in profile_context.peer_profiles or {}:
-            if peer_id and peer_id not in SELF_COMPANY_IDS:
+            if peer_id and peer_id not in SELF_COMPANY_IDS and peer_id not in candidates:
                 candidates.append(peer_id)
     elif isinstance(profile_context, dict):
         peers = profile_context.get("peer_profiles") or {}
         if isinstance(peers, dict):
             for peer_id in peers:
-                if peer_id and peer_id not in SELF_COMPANY_IDS:
+                if peer_id and peer_id not in SELF_COMPANY_IDS and peer_id not in candidates:
                     candidates.append(peer_id)
-    return list(dict.fromkeys(candidates))
+    for company in input_bundle.companies or []:
+        if company and company not in SELF_COMPANY_IDS and company not in candidates:
+            candidates.append(company)
+    return candidates
 
 
 def _compress_to_budget(ctx: AnalysisContext, *, budget: int) -> AnalysisContext:

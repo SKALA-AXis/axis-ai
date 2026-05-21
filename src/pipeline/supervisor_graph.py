@@ -1,14 +1,20 @@
 """Supervisor LangGraph StateGraph — W2-1 + W2-3 + W4-2 + W4-5 + W5-1.
 
-design/01-supervisor-implementation-plan.md §3.1 의 7-노드 그래프를 구현한다:
+design/01-supervisor-implementation-plan.md §3.1 + 외부 리뷰 (2026-05-21) 반영:
 
-    profile_context  →  build_analysis_context  →  issue_integrate
-        →  strategic_analyze  →  implication  →  validate  →  assemble  →  card_writer (END)
-                                                                       ↘
-                                                            human_review (END)
+    issue_integrate  →  profile_context  →  build_analysis_context
+        →  strategic_analyze  →  implication  →  validate
+        → pass → assemble → card_writer → END
+        → fail → human_review → END
+
+순서 변경 근거 (외부 리뷰 R-1):
+* IntegratedIssue 가 만들어진 후 main_company / mentioned_peer_companies 가 확정되어야
+  ProfileContext / AnalysisContext 조회가 정확해진다.
+* 잘못 매칭된 cluster (is_valid_summary=False) 가 ① 단계에서 즉시 차단되어 profile /
+  context build 의 DB query 비용을 절약.
 
 각 노드는 `_logged_step` 데코레이터로 `pipeline_logs` 에 elapsed_ms 기록.
-LangGraph 의 retry 정책은 `add_node(...).with_retry(RetryPolicy(...))` 활용.
+LangGraph 의 RetryPolicy 정식 도입은 별도 PR (W3-4 trace + retry 묶음).
 """
 
 from __future__ import annotations
@@ -169,13 +175,22 @@ class SupervisorDeps:
 
 
 def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], SupervisorState]]:
+    @_logged_step("issue_integrate")
+    def issue_integrate_node(state: SupervisorState) -> SupervisorState:
+        bundle = state["input_bundle"]
+        integrated = deps.issue_integrator.integrate_input_bundle(bundle)
+        return cast(SupervisorState, {**state, "integrated_issue": integrated})
+
     @_logged_step("profile_context")
     def profile_context_node(state: SupervisorState) -> SupervisorState:
+        """IntegratedIssue 가 확정한 main_company / mentioned_peer_companies 우선 사용."""
         bundle = state["input_bundle"]
+        integrated = state.get("integrated_issue") or {}
         sectors = list(bundle.sectors or [])
+        companies = _companies_for_context(bundle=bundle, integrated_issue=integrated)
         try:
             ctx = build_profile_context_v2(
-                companies=list(bundle.companies),
+                companies=companies,
                 sectors=sectors,
                 event_type=bundle.event_type,
             )
@@ -183,7 +198,7 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         except Exception as exc:  # noqa: BLE001
             log.warning("profile_context v2 실패, legacy fallback | error=%s", exc)
             legacy = deps.profile_agent.build_context(
-                companies=list(bundle.companies),
+                companies=companies,
                 sectors=sectors,
                 event_type=bundle.event_type,
             )
@@ -198,17 +213,13 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
     def build_analysis_context_node(state: SupervisorState) -> SupervisorState:
         bundle = state["input_bundle"]
         profile_context = state.get("profile_context")
+        integrated = state.get("integrated_issue") or {}
         ctx = deps.context_builder.build(
             input_bundle=bundle,
             profile_context=profile_context,
+            integrated_issue=integrated,
         )
         return cast(SupervisorState, {**state, "analysis_context": ctx})
-
-    @_logged_step("issue_integrate")
-    def issue_integrate_node(state: SupervisorState) -> SupervisorState:
-        bundle = state["input_bundle"]
-        integrated = deps.issue_integrator.integrate_input_bundle(bundle)
-        return cast(SupervisorState, {**state, "integrated_issue": integrated})
 
     @_logged_step("strategic_analyze")
     def strategic_analyze_node(state: SupervisorState) -> SupervisorState:
@@ -306,9 +317,39 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         )
         if not card:
             return cast(SupervisorState, {**state, "card_news_id": None})
-        # v2 schema 표기 — V33 마이그레이션 후 컬럼이 존재하면 자동 인식.
+
+        # 외부 리뷰 R-2 (2026-05-21) 반영 — card_news INSERT 가 모든 v2 컬럼을 직접
+        # 채우도록 보강. 카드 생성 단계의 책임을 명확히 한다.
         card.setdefault("card_schema_version", "v2")
-        # rule-based metric 을 evaluation_payload['rule_based'] 로 함께 저장.
+        bundle = state["input_bundle"]
+        integrated = state.get("integrated_issue") or {}
+        # peer_company_id FK — main_company (integrated) > input_bundle.companies[0].
+        if not card.get("peer_company_id"):
+            main_company = str(integrated.get("main_company") or "").strip()
+            companies = list(bundle.companies or [])
+            card["peer_company_id"] = main_company or (companies[0] if companies else None)
+        # primary_keyword_category — classification.sector 또는 카드의 sector.
+        if not card.get("primary_keyword_category"):
+            classification = state.get("classification") or {}
+            card["primary_keyword_category"] = (
+                classification.get("sector") or card.get("sector") or None
+            )
+        # source_raw_article_ids — bundle.items 의 id 들.
+        if not card.get("source_raw_article_ids"):
+            ids: list[int] = []
+            for item in bundle.items or []:
+                raw_id = item.get("id") if isinstance(item, dict) else None
+                if raw_id is None:
+                    continue
+                try:
+                    ids.append(int(raw_id))
+                except (TypeError, ValueError):
+                    continue
+            card["source_raw_article_ids"] = ids
+        # evidence_payload — supervisor 가 만든 in-memory payload.
+        if not card.get("evidence_payload"):
+            card["evidence_payload"] = _evidence_payload_from_state(state)
+        # W5-1 rule-based metric.
         validation = state.get("validation")
         if validation is not None and validation.metrics is not None:
             existing_eval = card.get("evaluation_payload") or {}
@@ -316,6 +357,7 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
                 existing_eval = {}
             existing_eval["rule_based"] = validation.metrics.to_dict()
             card["evaluation_payload"] = existing_eval
+
         card_id = save_card_news(card)
         return cast(
             SupervisorState,
@@ -538,6 +580,35 @@ def _evidence_payload_from_state(state: SupervisorState) -> dict[str, Any]:
     return evidence_payload
 
 
+def _companies_for_context(
+    *,
+    bundle: AnalysisInputBundle,
+    integrated_issue: dict[str, Any],
+) -> list[str]:
+    """ProfileContext / AnalysisContext query 의 peer 입력.
+
+    우선순위:
+      1. IntegratedIssue.main_company (LLM 이 확정한 cluster 의 주체)
+      2. IntegratedIssue.mentioned_peer_companies (cluster 안에서 언급된 peer)
+      3. AnalysisInputBundle.companies (raw matched_companies fallback)
+    """
+    out: list[str] = []
+    main_company = str(integrated_issue.get("main_company") or "").strip()
+    if main_company:
+        out.append(main_company)
+    mentioned = integrated_issue.get("mentioned_peer_companies") or []
+    if isinstance(mentioned, list):
+        for company in mentioned:
+            text = str(company or "").strip()
+            if text and text not in out:
+                out.append(text)
+    for company in bundle.companies or []:
+        text = str(company or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
 def _cluster_metadata(
     bundle: AnalysisInputBundle,
     profile_context: ProfileContext | None,
@@ -583,10 +654,12 @@ def build_supervisor_graph(deps: SupervisorDeps | None = None) -> Any:
     g: StateGraph = StateGraph(SupervisorState)
     for name, fn in nodes.items():
         g.add_node(name, fn)  # type: ignore[call-overload]
-    g.set_entry_point("profile_context")
+    # 외부 리뷰 (2026-05-21) 반영 — IntegratedIssue 가 main_company 를 확정한 후에
+    # ProfileContext / AnalysisContext 를 build 하도록 순서 재배치.
+    g.set_entry_point("issue_integrate")
+    g.add_edge("issue_integrate", "profile_context")
     g.add_edge("profile_context", "build_analysis_context")
-    g.add_edge("build_analysis_context", "issue_integrate")
-    g.add_edge("issue_integrate", "strategic_analyze")
+    g.add_edge("build_analysis_context", "strategic_analyze")
     g.add_edge("strategic_analyze", "implication")
     g.add_edge("implication", "validate")
     g.add_conditional_edges(
