@@ -246,7 +246,12 @@ class CardNewsAgent:
         analysis_package: AnalysisPackage | dict[str, Any],
         classification: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """AnalysisPackage를 사용자용 카드뉴스/API 스키마로 재가공한다."""
+        """AnalysisPackage 를 사용자용 카드뉴스/API 스키마로 재가공.
+
+        W2-4: implication 이중 처리 제거. ImplicationAgent v4.0 (또는 v5.0) 의
+        is_valid_implication=true 결과가 있으면 그것을 단일 출처로 사용하고,
+        실패/누락 시에만 analysis 기반 frontend implication 으로 fallback.
+        """
         package = (
             analysis_package.to_dict()
             if isinstance(analysis_package, AnalysisPackage)
@@ -265,7 +270,15 @@ class CardNewsAgent:
         if not card:
             return {}
         implication_result = package.get("implication") or {}
-        if implication_result:
+        is_llm_valid = bool(
+            isinstance(implication_result, dict)
+            and implication_result.get("is_valid_implication")
+            and (
+                (implication_result.get("skax_implication") or {}).get("why_important")
+                or (implication_result.get("peer_implication") or {}).get("peer_meaning")
+            )
+        )
+        if is_llm_valid:
             card["implication_result"] = implication_result
             card["implication"] = _implication_from_result(
                 implication_result,
@@ -274,6 +287,11 @@ class CardNewsAgent:
             card["frontend_implication"] = _frontend_implication_from_result(
                 implication_result,
                 fallback=card.get("frontend_implication"),
+            )
+        else:
+            # ImplicationAgent 결과 없음/무효 → analysis 기반 frontend fallback 유지.
+            card.setdefault(
+                "frontend_implication", _frontend_implication(package.get("analysis") or {})
             )
         card["analysis_package"] = {
             "bundle_id": package.get("bundle_id"),
@@ -714,24 +732,63 @@ def _frontend_implication_from_result(
     *,
     fallback: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """v4.0 schema 인식 — peer_implication / skax_implication dict 의 핵심 필드 추출.
+
+    W2-4: 기존에 peer_implication 전체를 str() 으로 변환하던 버그 정정. CardNewsAgent
+    가 frontend 에 보내는 표면 schema 와 일치.
+    """
     fallback = fallback or {}
-    return {
-        "why_important": str(
-            implication.get("peer_implication") or fallback.get("why_important") or ""
-        ).strip(),
-        "potential_impact": str(
-            implication.get("skax_implication") or fallback.get("potential_impact") or ""
-        ).strip(),
-        "follow_up_questions": _list_string(
-            implication.get("follow_up_questions") or implication.get("watch_points")
-        )
-        or _list_string(fallback.get("follow_up_questions")),
-        "suggested_actions": _list_string(implication.get("recommended_actions"))
-        or _list_string(fallback.get("suggested_actions")),
-        "confidence": _optional_float(implication.get("confidence"))
+    skax = implication.get("skax_implication") or {}
+    peer = implication.get("peer_implication") or {}
+
+    why_important = _first_text(
+        skax.get("why_important") if isinstance(skax, dict) else None,
+        peer.get("peer_meaning") if isinstance(peer, dict) else None,
+        fallback.get("why_important"),
+    )
+    potential_impact = _first_text(
+        skax.get("potential_impact") if isinstance(skax, dict) else None,
+        fallback.get("potential_impact"),
+    )
+    follow_up = _list_string(
+        implication.get("follow_up_questions") or implication.get("watch_points")
+    ) or _list_string(fallback.get("follow_up_questions"))
+    suggested_actions = (
+        _list_string(skax.get("recommended_actions") if isinstance(skax, dict) else None)
+        or _list_string(implication.get("recommended_actions"))
+        or _list_string(fallback.get("suggested_actions"))
+    )
+    confidence = (
+        _optional_float(implication.get("confidence"))
         if implication.get("confidence") is not None
-        else fallback.get("confidence"),
+        else fallback.get("confidence")
+    )
+    payload: dict[str, Any] = {
+        "why_important": why_important,
+        "potential_impact": potential_impact,
+        "follow_up_questions": follow_up,
+        "suggested_actions": suggested_actions,
+        "confidence": confidence,
     }
+    if isinstance(skax, dict):
+        if skax.get("opportunities"):
+            payload["opportunities"] = _list_string(skax.get("opportunities"))
+        if skax.get("threats"):
+            payload["threats"] = _list_string(skax.get("threats"))
+        if skax.get("business_line_mapping"):
+            payload["business_line_mapping"] = _list_string(skax.get("business_line_mapping"))
+    if isinstance(peer, dict):
+        if peer.get("company_id"):
+            payload["peer_company_id"] = peer.get("company_id")
+        if peer.get("company_name_ko"):
+            payload["peer_company_name_ko"] = peer.get("company_name_ko")
+        if peer.get("capability_change"):
+            payload["peer_capability_change"] = peer.get("capability_change")
+        if peer.get("precedent_link"):
+            payload["precedent_link"] = peer.get("precedent_link")
+    if implication.get("evidence_label"):
+        payload["evidence_label"] = implication.get("evidence_label")
+    return payload
 
 
 def _implication_from_result(
@@ -739,9 +796,31 @@ def _implication_from_result(
     *,
     fallback: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    payload = _frontend_implication_from_result(implication, fallback=fallback)
-    payload["raw"] = implication
+    """W2-4: CardNewsAgent 가 DB 에 저장할 implication JSONB 의 단일 출처.
+
+    v2 schema 의 `peer_implication` / `skax_implication` / `follow_up_questions` /
+    `watch_points` / `confidence` / `evidence_label` / `provenance` 를 모두 포함하고,
+    frontend 호환 핵심 필드도 함께 평면화.
+    """
+    fallback = fallback or {}
+    payload = dict(implication)
+    # v2 schema 가 사용하는 필드를 모두 안전 default 로 채운다.
+    payload.setdefault("implication_scope", "peer_and_skax")
+    payload.setdefault("watch_points", payload.get("watch_points", []))
+    # frontend 호환 - flatten.
+    frontend = _frontend_implication_from_result(implication, fallback=fallback)
+    payload["frontend"] = frontend
     return payload
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
 
 
 def _rich_sources(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:

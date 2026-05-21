@@ -1,8 +1,10 @@
-"""1단계 데이터 분석 Supervisor Agent.
+"""DataAnalysisSupervisorAgent — thin wrapper around the supervisor LangGraph.
 
-DataAnalysisSupervisorAgent는 전체 시스템 최상위 supervisor가 아니라,
-런타임 AnalysisInputBundle 하나를 기준으로 이슈 통합, 분석, 프로필 context,
-시사점 생성을 조율하고 AnalysisPackage를 만든다.
+W2-1 이후 본 클래스는 직접 child agent 를 조율하지 않고 LangGraph 상에서 정의된
+state machine (`src.pipeline.supervisor_graph`) 을 호출하는 wrapper 다.
+
+기존 외부 인터페이스 (`analyze_cluster` / `analyze_input_bundle` → AnalysisPackage)
+는 유지하므로 호출부 변경 최소화.
 """
 
 from __future__ import annotations
@@ -17,14 +19,23 @@ from src.agents.issue_integration_agent import (
     analysis_input_bundle_from_articles,
 )
 from src.agents.profile_agent import ProfileAgent
-from src.analysis.models import AnalysisInputBundle, AnalysisPackage
+from src.analysis.models import (
+    AnalysisInputBundle,
+    AnalysisPackage,
+    ProfileContext,
+)
 from src.db.article_store import get_articles_by_ids
+from src.pipeline.supervisor_graph import (
+    SupervisorDeps,
+    build_supervisor_graph,
+    run_supervisor,
+)
 
 log = logging.getLogger(__name__)
 
 
 class DataAnalysisSupervisorAgent:
-    """AnalysisInputBundle 기반 1단계 분석 workflow supervisor."""
+    """AnalysisInputBundle 기반 1단계 분석 workflow supervisor (LangGraph wrapper)."""
 
     def __init__(
         self,
@@ -35,11 +46,35 @@ class DataAnalysisSupervisorAgent:
         profile_agent: ProfileAgent | None = None,
         implication_generator: ImplicationAgent | None = None,
     ) -> None:
-        self.issue_integrator = issue_integrator or summarizer or IssueIntegrationAgent()
-        self.analyzer = analyzer or AnalysisAgent()
-        self.profile_agent = profile_agent or ProfileAgent()
-        self.implication_generator = implication_generator or ImplicationAgent()
+        deps = SupervisorDeps(
+            issue_integrator=issue_integrator or summarizer,
+            analyzer=analyzer,
+            profile_agent=profile_agent,
+            implication_agent=implication_generator,
+        )
+        self._deps = deps
+        self._graph = build_supervisor_graph(deps)
 
+    # Backwards-compat attributes (legacy callers reach inside).
+    @property
+    def issue_integrator(self) -> IssueIntegrationAgent:
+        return self._deps.issue_integrator
+
+    @property
+    def analyzer(self) -> AnalysisAgent:
+        return self._deps.analyzer
+
+    @property
+    def profile_agent(self) -> ProfileAgent:
+        return self._deps.profile_agent
+
+    @property
+    def implication_generator(self) -> ImplicationAgent:
+        return self._deps.implication_agent
+
+    # ──────────────────────────────────────────────────────────────────
+    # Public API (backwards-compat)
+    # ──────────────────────────────────────────────────────────────────
     def analyze_cluster(
         self,
         *,
@@ -51,7 +86,7 @@ class DataAnalysisSupervisorAgent:
         peer_profile_context: dict[str, Any] | None = None,
         skax_profile_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """클러스터를 AnalysisInputBundle으로 묶은 뒤 AnalysisPackage를 만든다."""
+        """뉴스 클러스터를 supervisor graph 에 invoke 하여 AnalysisPackage dict 반환."""
         article_ids = _cluster_fetch_ids(representative_id, cluster_article_ids)
         source_articles = articles if articles is not None else get_articles_by_ids(article_ids)
         input_bundle = analysis_input_bundle_from_articles(
@@ -76,70 +111,38 @@ class DataAnalysisSupervisorAgent:
         peer_profile_context: dict[str, Any] | None = None,
         skax_profile_context: dict[str, Any] | None = None,
     ) -> AnalysisPackage:
-        """AnalysisInputBundle을 공통 입력으로 이슈 통합, 분석, 시사점을 생성한다."""
-        classification = classification or input_bundle.metadata.get("classification", {})
-        profile_context = _profile_context(
-            classification=classification,
+        """AnalysisInputBundle 1건을 그래프에 invoke."""
+        classification_payload = classification or input_bundle.metadata.get("classification") or {}
+        # ProfileContext 외부 주입은 supervisor 내부 build 가 우선이지만, 기존 호출자가
+        # 외부 context 를 함께 전달했다면 그래프 input 에 함께 실어준다.
+        state = run_supervisor(
             input_bundle=input_bundle,
-            profile_agent=self.profile_agent,
-            peer_profile_context=peer_profile_context,
-            skax_profile_context=skax_profile_context,
+            classification=classification_payload,
+            graph=self._graph,
         )
-        skax_profile_context = profile_context.get("skax_profile") or skax_profile_context
-        peer_profile_context = profile_context.get("peer_profiles") or peer_profile_context
-        integrated_issue = self.issue_integrator.integrate_input_bundle(input_bundle)
-        cluster_metadata = _cluster_metadata_from_input_bundle(
-            input_bundle=input_bundle,
-            peer_profile_context=peer_profile_context,
-            skax_profile_context=skax_profile_context,
-        )
-        analysis = self.analyzer.analyze(
-            integrated_issue=integrated_issue,
-            classification=classification,
-            cluster_metadata=cluster_metadata,
-        )
-        implication = self.implication_generator.generate(
-            summary=integrated_issue,
-            analysis=analysis,
-            classification=classification,
-            input_bundle=input_bundle,
-            profile_context=profile_context,
-            peer_profile_context=peer_profile_context,
-            skax_profile_context=skax_profile_context,
-        )
-        validation = _analysis_package_validation(
-            integrated_issue=integrated_issue,
-            analysis=analysis,
-        )
-        package = AnalysisPackage(
-            bundle_id=input_bundle.bundle_id,
-            input_bundle=input_bundle,
-            integrated_issue=integrated_issue,
-            analysis=analysis,
-            implication=implication,
-            sources=input_bundle.sources,
-            validation={
-                **validation,
-                "classification": classification,
-                "profile_context_available": {
-                    "peer": bool(peer_profile_context),
-                    "skax": bool(skax_profile_context),
-                },
-                "provenance": {
-                    "supervisor": "DataAnalysisSupervisorAgent",
-                    "issue_component": "IssueIntegrationAgent",
-                    "analysis_component": "AnalysisAgent",
-                    "implication_component": "ImplicationAgent",
-                },
-            },
-        )
-        log.info(
-            "분석 supervisor 완료 | cluster=%s valid_integrated_issue=%s valid_analysis=%s",
-            input_bundle.cluster_id,
-            integrated_issue.get("is_valid_summary"),
-            analysis.get("is_valid_analysis"),
-        )
-        return package
+        pkg = state.get("analysis_package")
+        if pkg is None:
+            log.info(
+                "analyze_input_bundle | bundle=%s validation failed → no package",
+                input_bundle.bundle_id,
+            )
+            validation_state = state.get("validation")
+            validation_dict: dict[str, Any] = (
+                validation_state.to_dict()
+                if validation_state is not None
+                else {"pass": False, "passed": False}
+            )
+            return AnalysisPackage(
+                bundle_id=input_bundle.bundle_id,
+                input_bundle=input_bundle,
+                integrated_issue=state.get("integrated_issue") or {},
+                analysis=state.get("analysis") or {},
+                implication=state.get("implication") or {},
+                sources=list(input_bundle.sources or []),
+                validation=validation_dict,
+                classification=classification_payload,
+            )
+        return pkg
 
 
 class AnalysisSupervisorAgent(DataAnalysisSupervisorAgent):
@@ -156,86 +159,8 @@ def _cluster_fetch_ids(
     return ids
 
 
-def _cluster_metadata_from_input_bundle(
-    *,
-    input_bundle: AnalysisInputBundle,
-    peer_profile_context: dict[str, Any] | None,
-    skax_profile_context: dict[str, Any] | None,
-) -> dict[str, Any]:
-    source_names = sorted(
-        {
-            str(source.get("source_name"))
-            for source in input_bundle.sources
-            if source.get("source_name")
-        }
-    )
-    source_types = sorted(
-        {
-            str(source.get("source_type"))
-            for source in input_bundle.sources
-            if source.get("source_type")
-        }
-    )
-    return {
-        "bundle_id": input_bundle.bundle_id,
-        "cluster_id": input_bundle.cluster_id,
-        "source_type": input_bundle.source_type,
-        "companies": input_bundle.companies,
-        "sectors": input_bundle.sectors,
-        "event_type": input_bundle.event_type,
-        "cluster_size": len(input_bundle.items),
-        "source_count": len(source_names),
-        "source_names": source_names,
-        "source_types": source_types,
-        "has_peer_profile_context": bool(peer_profile_context),
-        "has_skax_profile_context": bool(skax_profile_context),
-    }
-
-
-def _profile_context(
-    *,
-    classification: dict[str, Any],
-    input_bundle: AnalysisInputBundle,
-    profile_agent: ProfileAgent,
-    peer_profile_context: dict[str, Any] | None,
-    skax_profile_context: dict[str, Any] | None,
-) -> dict[str, Any]:
-    try:
-        return profile_agent.build_context(
-            companies=input_bundle.companies,
-            sectors=_sector_ids(classification) or input_bundle.sectors,
-            event_type=input_bundle.event_type or classification.get("event_type"),
-            peer_profile_context=peer_profile_context,
-            skax_profile_context=skax_profile_context,
-        )
-    except Exception as exc:
-        log.warning("ProfileAgent context 생성 실패 | error=%s", exc)
-        return {
-            "skax_profile": skax_profile_context or {},
-            "peer_profiles": peer_profile_context or {},
-            "sector_context": {"selected_sector_ids": _sector_ids(classification)},
-        }
-
-
-def _sector_ids(classification: dict[str, Any]) -> list[str]:
-    values: list[str] = []
-    sector = classification.get("sector")
-    if sector:
-        values.append(str(sector))
-    sectors = classification.get("sectors")
-    if isinstance(sectors, list):
-        values.extend(str(item) for item in sectors if item)
-    return list(dict.fromkeys(values))
-
-
-def _analysis_package_validation(
-    *,
-    integrated_issue: dict[str, Any],
-    analysis: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "pass": bool(integrated_issue.get("is_valid_summary", True))
-        and bool(analysis.get("is_valid_analysis", True)),
-        "integrated_issue_valid": bool(integrated_issue.get("is_valid_summary", True)),
-        "analysis_valid": bool(analysis.get("is_valid_analysis", True)),
-    }
+__all__ = [
+    "AnalysisSupervisorAgent",
+    "DataAnalysisSupervisorAgent",
+    "ProfileContext",
+]

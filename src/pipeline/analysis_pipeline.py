@@ -1,18 +1,8 @@
 """1단계 분석·카드뉴스 생성 파이프라인 베이스 러너.
 
-이 모듈은 Agent가 아니라 실행 흐름을 연결하는 pipeline 코드다.
-DB schema나 저장 구조를 만들지 않고, 기존 raw_articles / 기존 save_card_news
-경로를 사용해 아래 아키텍처를 실행한다.
-
-raw_articles 또는 클러스터 기사 묶음
-→ AnalysisInputBundle
-→ DataAnalysisSupervisorAgent
-→ IssueIntegrationAgent
-→ AnalysisAgent
-→ ProfileAgent
-→ ImplicationAgent
-→ AnalysisPackage
-→ CardNewsAgent
+W2-1 이후 본 runner 는 LangGraph supervisor 그래프를 invoke 하고 결과 (state) 를
+호환 dict 로 반환한다. 카드 저장 (`save_card_news`) 은 supervisor 의 `card_writer`
+노드 안에서 일어나므로 runner 의 외부 `save_card` 옵션은 호환을 위해 유지한다.
 """
 
 from __future__ import annotations
@@ -28,6 +18,7 @@ from src.agents.card_news_agent import CardNewsAgent
 from src.analysis.models import AnalysisInputBundle
 from src.db.article_store import get_articles_by_ids, save_card_news
 from src.db.postgres import SessionLocal
+from src.pipeline.supervisor_graph import run_supervisor
 
 log = logging.getLogger(__name__)
 
@@ -112,7 +103,12 @@ class AnalysisPipelineRunner:
         classification: dict[str, Any] | None = None,
         save_card: bool = False,
     ) -> dict[str, Any]:
-        """이미 로드된 기사/문서 묶음을 기준으로 전체 1단계 흐름을 실행한다."""
+        """W2-1: supervisor graph 를 invoke 하여 카드까지 한 번에 처리.
+
+        - supervisor 의 `card_writer` 노드가 이미 `card_news` INSERT 를 수행한다.
+        - 따라서 본 runner 의 `save_card=True` 는 backward-compat 만을 위한 옵션이며,
+          그래프가 카드를 저장하지 않은 경우 (validation fail 등) 에만 의미가 있다.
+        """
         if not articles:
             return _empty_pipeline_result(
                 reason="articles empty",
@@ -125,18 +121,27 @@ class AnalysisPipelineRunner:
             articles=articles,
             overrides=classification,
         )
-        analysis_package = self.analysis_supervisor.analyze_cluster(
+        from src.agents.issue_integration_agent import analysis_input_bundle_from_articles
+
+        input_bundle = analysis_input_bundle_from_articles(
             cluster_id=cluster_id,
             representative_id=representative_id,
-            classification=effective_classification,
-            cluster_article_ids=cluster_article_ids or _article_ids(articles),
             articles=articles,
-        )
-        card_news = self.build_card_news(
-            analysis_package=analysis_package,
+            cluster_article_ids=cluster_article_ids or _article_ids(articles),
             classification=effective_classification,
         )
-        saved_card_id = save_card_news(card_news) if save_card and card_news else None
+        state = run_supervisor(
+            input_bundle=input_bundle,
+            classification=effective_classification,
+        )
+        analysis_package_obj = state.get("analysis_package")
+        analysis_package = (
+            analysis_package_obj.to_dict() if analysis_package_obj is not None else {}
+        )
+        card_news = state.get("card_news_payload") or {}
+        saved_card_id = state.get("card_news_id")
+        if save_card and card_news and not saved_card_id:
+            saved_card_id = save_card_news(card_news)
         return {
             "ok": bool(card_news),
             "cluster_id": cluster_id,
@@ -145,6 +150,8 @@ class AnalysisPipelineRunner:
             "analysis_package": analysis_package,
             "card_news": card_news,
             "saved_card_id": saved_card_id,
+            "human_review_flags": list(state.get("human_review_flags") or []),
+            "validation": (analysis_package.get("validation") if analysis_package else {}),
         }
 
     def run_input_bundle(
@@ -154,27 +161,31 @@ class AnalysisPipelineRunner:
         classification: dict[str, Any] | None = None,
         save_card: bool = False,
     ) -> dict[str, Any]:
-        """AnalysisInputBundle을 직접 받아 Supervisor 이후 흐름을 실행한다."""
+        """AnalysisInputBundle 을 직접 받아 supervisor 그래프를 호출."""
         effective_classification = classification or input_bundle.metadata.get(
             "classification",
             {},
         )
-        package = self.analysis_supervisor.analyze_input_bundle(
+        state = run_supervisor(
             input_bundle=input_bundle,
             classification=effective_classification,
-        ).to_dict()
-        card_news = self.build_card_news(
-            analysis_package=package,
-            classification=effective_classification,
         )
-        saved_card_id = save_card_news(card_news) if save_card and card_news else None
+        analysis_package_obj = state.get("analysis_package")
+        analysis_package = (
+            analysis_package_obj.to_dict() if analysis_package_obj is not None else {}
+        )
+        card_news = state.get("card_news_payload") or {}
+        saved_card_id = state.get("card_news_id")
+        if save_card and card_news and not saved_card_id:
+            saved_card_id = save_card_news(card_news)
         return {
             "ok": bool(card_news),
             "cluster_id": input_bundle.cluster_id,
             "classification": effective_classification,
-            "analysis_package": package,
+            "analysis_package": analysis_package,
             "card_news": card_news,
             "saved_card_id": saved_card_id,
+            "human_review_flags": list(state.get("human_review_flags") or []),
         }
 
     def build_card_news(
