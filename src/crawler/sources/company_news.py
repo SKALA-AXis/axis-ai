@@ -542,6 +542,17 @@ def extract_samsung_sds_links(
     candidates = []
     seen_urls = set()
 
+    for candidate in _samsung_sds_json_candidates(list_url):
+        add_candidate(
+            candidates=candidates,
+            seen_urls=seen_urls,
+            list_url=list_url,
+            href=candidate["href"],
+            title=candidate["title"],
+            published_at=candidate["published_at"],
+            score=30,
+        )
+
     exclude_section_keywords = [
         "언론이 본 삼성SDS",
         "SDS seen by the media",
@@ -582,6 +593,41 @@ def extract_samsung_sds_links(
         )
 
     return sort_candidates(candidates)
+
+
+def _samsung_sds_json_candidates(list_url: str) -> list[dict]:
+    """삼성SDS 뉴스룸의 전체 기사 JSON(news.txt)에서 보도자료 후보를 읽는다."""
+
+    news_json_url = urljoin(list_url, "/kr/news/news.txt")
+    try:
+        text = fetch_html_by_requests(news_json_url).lstrip("\ufeff")
+        rows = json.loads(text)
+    except Exception as e:
+        log.warning("[삼성SDS] news.txt 수집 실패: %s", e)
+        return []
+
+    candidates: list[dict] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        if clean_text(str(row.get("category") or "")) != "보도자료":
+            continue
+
+        href = str(row.get("detailLink") or "").strip()
+        title = clean_text(str(row.get("title") or ""))
+        published_at = parse_date_to_datetime(str(row.get("releaseDate") or ""))
+        if not href or not title:
+            continue
+
+        candidates.append(
+            {
+                "href": href,
+                "title": title,
+                "published_at": published_at,
+            }
+        )
+
+    return candidates
 
 
 def extract_skax_newsroom_links(
@@ -1483,7 +1529,8 @@ class CompanyNewsCrawler(BaseCrawler):
                 should_try_render = self.use_render or (
                     self.render_fallback
                     and len(page_candidates) < self.latest_limit
-                    and company in {"SK AX", "현대오토에버", "포스코DX", "LG CNS"}
+                    and company in {"삼성SDS", "SK AX", "현대오토에버", "포스코DX", "LG CNS"}
+                    and (not self.crawl_window or not page_candidates)
                 )
 
                 if should_try_render:
@@ -1528,11 +1575,16 @@ class CompanyNewsCrawler(BaseCrawler):
                     break
 
             candidates = sort_candidates(candidates)
+            in_window_candidates = self._filter_candidates_for_window(candidates)
 
-            log.info("[%s] 후보 기사 수: %s", company, len(candidates))
+            self._log_candidate_coverage(
+                company=company,
+                candidates=candidates,
+                in_window_candidates=in_window_candidates,
+            )
 
             if self.debug_candidates:
-                for idx, candidate in enumerate(candidates, start=1):
+                for idx, candidate in enumerate(in_window_candidates, start=1):
                     log.info(
                         "[%s] 후보 %s | date=%s | title=%s | url=%s",
                         company,
@@ -1544,7 +1596,7 @@ class CompanyNewsCrawler(BaseCrawler):
 
             articles: list[RawArticle] = []
 
-            for candidate in candidates[: self.latest_limit]:
+            for candidate in in_window_candidates[: self.latest_limit]:
                 detail_url = candidate["url"]
                 fallback_title = candidate["title"]
                 fallback_date = candidate["published_at"]
@@ -1630,6 +1682,47 @@ class CompanyNewsCrawler(BaseCrawler):
             return max(1, BACKFILL_MAX_LIST_PAGES)
         return 1
 
+    def _filter_candidates_for_window(self, candidates: list[dict]) -> list[dict]:
+        if not self.crawl_window:
+            return candidates
+        return [
+            candidate
+            for candidate in candidates
+            if (
+                candidate.get("published_at") is None
+                or self.crawl_window.contains(candidate.get("published_at"))
+            )
+        ]
+
+    def _log_candidate_coverage(
+        self,
+        *,
+        company: str,
+        candidates: list[dict],
+        in_window_candidates: list[dict],
+    ) -> None:
+        dates = [item.get("published_at") for item in candidates if item.get("published_at")]
+        if dates:
+            oldest = min(dates)
+            latest = max(dates)
+        else:
+            oldest = None
+            latest = None
+
+        window_text = None
+        if self.crawl_window:
+            window_text = f"{self.crawl_window.start}~{self.crawl_window.end}"
+
+        log.info(
+            "[%s] 후보 기사 수: total=%s in_window=%s oldest=%s latest=%s window=%s",
+            company,
+            len(candidates),
+            len(in_window_candidates),
+            oldest,
+            latest,
+            window_text,
+        )
+
     def _list_url_seeds(self, config: dict) -> list[str]:
         list_url = config["list_url"]
         company = company_name_ko(config["company"])
@@ -1697,7 +1790,7 @@ def _company_news_page_url(list_url: str, company: str, page_no: int) -> str:
         return urlunparse(parsed._replace(path=path))
 
     param = "page"
-    if company in {"현대오토에버", "포스코DX"}:
+    if company == "현대오토에버":
         param = "pageIndex"
 
     return _with_query_param(list_url, param, str(page_no))

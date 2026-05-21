@@ -324,7 +324,7 @@ def test_dart_business_signals_do_not_apply_multi_area_chunk_to_every_sentence()
     assert all("일반 솔루션" not in signal["evidence_text"] for signal in signals)
 
 
-def test_dart_sk_ax_financial_metrics_are_not_stored_as_company_total() -> None:
+def test_dart_sk_ax_financial_metrics_keep_only_sk_ax_business_segment() -> None:
     article = {
         "id": 15,
         "title": "SK주식회사 사업보고서",
@@ -351,9 +351,32 @@ def test_dart_sk_ax_financial_metrics_are_not_stored_as_company_total() -> None:
                 ],
             }
         ],
+        "candidates": [
+            {
+                "type": "revenue_total",
+                "metric_scope": "segment",
+                "business_area": "SK주식회사 사업부문",
+                "standard_business_area": "sk_ax",
+                "value_krwbn": 1234,
+                "raw": "SK주식회사 사업부문 IT서비스 123,400 (백만원)",
+                "source": "business_segment_table",
+            },
+            {
+                "type": "revenue_total",
+                "metric_scope": "segment",
+                "business_area": "SK텔레콤",
+                "value_krwbn": 9999,
+                "raw": "SK텔레콤 999,900 (백만원)",
+                "source": "business_segment_table",
+            },
+        ],
     }
 
-    assert financial_metrics_from_dart(article, parser_result) == []
+    metrics = financial_metrics_from_dart(article, parser_result)
+
+    assert len(metrics) == 1
+    assert metrics[0]["business_area"] == "sk_ax"
+    assert metrics[0]["value_krwbn"] == 1234
 
 
 def test_dart_sk_ax_signals_keep_only_sk_ax_related_sentences() -> None:

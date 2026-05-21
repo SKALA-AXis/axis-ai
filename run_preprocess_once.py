@@ -40,6 +40,11 @@ STRUCTURED_SIGNAL_SOURCE_TYPES = {"job", "market_data", "search_trend", "social"
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="DB 없이 저장된 crawler JSON 전처리 결과 확인")
     parser.add_argument(
+        "--db",
+        action="store_true",
+        help="crawler JSON 대신 DB raw_articles의 RAW row를 전처리하고 DB에 반영",
+    )
+    parser.add_argument(
         "--input",
         default=None,
         help="전처리할 crawler JSON 파일. 생략하면 src/crawler/crawler_results/*.json 전체를 읽음",
@@ -54,6 +59,7 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    parser.add_argument("--limit", type=int, default=500, help="DB 모드에서 처리할 최대 RAW row 수")
     return parser.parse_args()
 
 
@@ -172,7 +178,7 @@ def _preprocess(articles: list[dict[str, Any]]) -> dict[str, Any]:
             continue
 
         if is_relevant:
-            item["processing_status"] = "PREPROCESSED"
+            item["processing_status"] = "PROCESSED"
             enriched.append(item)
         else:
             skipped_items.append(item)
@@ -233,7 +239,8 @@ def _preprocess_route(article: dict[str, Any]) -> str:
 
 def _mark_official_document(article: dict[str, Any]) -> dict[str, Any]:
     item = dict(article)
-    item["processing_status"] = "PREPROCESSED_OFFICIAL_DOCUMENT"
+    item["processing_status"] = "PROCESSED"
+    item["status_detail"] = "official_document"
     item["document_scope"] = "company_official"
     item["matched_companies"] = _normalize_company(item.get("company"))
     item["matched_sectors"] = _matched_sectors_from_article(item)
@@ -248,7 +255,8 @@ def _mark_parsed_document(article: dict[str, Any]) -> dict[str, Any]:
     item = dict(article)
     source_type = _source_type(item)
 
-    item["processing_status"] = "PREPROCESSED_PARSED_DOCUMENT"
+    item["processing_status"] = "PROCESSED"
+    item["status_detail"] = "parsed_document"
     item["document_scope"] = "company_document"
     item["preprocess_note"] = (
         f"{source_type} 문서는 parser quality check 후 보존. "
@@ -262,7 +270,8 @@ def _mark_parsed_document(article: dict[str, Any]) -> dict[str, Any]:
 def _mark_industry_document(article: dict[str, Any]) -> dict[str, Any]:
     item = dict(article)
     parser_result = DocumentParserRouter().parse_article(item)
-    item["processing_status"] = "PREPROCESSED_INDUSTRY_DOCUMENT"
+    item["processing_status"] = "PROCESSED"
+    item["status_detail"] = "industry_document"
     item["document_scope"] = "industry_trend"
     item["parser_result"] = parser_result
     item["matched_sectors"] = _matched_sectors_from_article(item)
@@ -275,7 +284,8 @@ def _mark_industry_document(article: dict[str, Any]) -> dict[str, Any]:
 def _mark_structured_signal(article: dict[str, Any]) -> dict[str, Any]:
     item = dict(article)
     source_type = _source_type(item)
-    item["processing_status"] = "PREPROCESSED_STRUCTURED_SIGNAL"
+    item["processing_status"] = "PROCESSED"
+    item["status_detail"] = "structured_signal"
     item["signal_scope"] = source_type
     item["matched_companies"] = _normalize_company(item.get("company"))
     item["preprocess_note"] = (
@@ -288,7 +298,8 @@ def _mark_structured_signal(article: dict[str, Any]) -> dict[str, Any]:
 def _mark_unsupported_source(article: dict[str, Any]) -> dict[str, Any]:
     item = dict(article)
     source_type = _source_type(item) or "unknown"
-    item["processing_status"] = "SKIPPED_PREPROCESS_UNSUPPORTED_SOURCE"
+    item["processing_status"] = "SKIPPED"
+    item["status_detail"] = "unsupported_source"
     item["skip_reason"] = (
         f"{source_type} source_type은 현재 전처리 대상이 아님. "
         "급변/급증 탐지 단계에서 별도 처리 예정"
@@ -413,6 +424,40 @@ def _source_label(args: argparse.Namespace) -> str:
 
 def _run() -> None:
     args = _parse_args()
+
+    if args.db:
+        from src.preprocessing.preprocessing import PreprocessingService
+
+        result = PreprocessingService().run(
+            company=[],
+            source_types=args.source_type,
+            trigger_type="manual:run_preprocess_once",
+            limit=args.limit,
+        )
+        counts = {
+            "raw": len(result.get("raw_article_ids", [])),
+            "relevant": len(result.get("relevant_ids", [])),
+            "official_documents": len(result.get("official_document_ids", [])),
+            "parsed_documents": len(result.get("parsed_document_ids", [])),
+            "industry_documents": len(result.get("industry_document_ids", [])),
+            "structured_signals": len(result.get("structured_signal_ids", [])),
+            "skipped": len(result.get("skipped_preprocess_ids", [])),
+            "clusters": len(result.get("cluster_map", {})),
+            "representatives": len(result.get("representative_ids", [])),
+        }
+        print("\n" + "=" * 78)
+        print("DB 전처리 결과")
+        print("=" * 78)
+        print(f"  raw:             {counts['raw']}건")
+        print(f"  relevant:        {counts['relevant']}건")
+        print(f"  official_docs:   {counts['official_documents']}건")
+        print(f"  parsed_docs:     {counts['parsed_documents']}건")
+        print(f"  skipped:         {counts['skipped']}건")
+        print(f"  industry_docs:   {counts['industry_documents']}건")
+        print(f"  structured:      {counts['structured_signals']}건")
+        print(f"  clusters:        {counts['clusters']}개")
+        print(f"  representatives: {counts['representatives']}건")
+        return
 
     articles = _load_articles(args)
     if args.input:

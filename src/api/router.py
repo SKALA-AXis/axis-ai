@@ -2,7 +2,8 @@ import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +24,7 @@ from src.schemas import (
 )
 
 log = logging.getLogger(__name__)
+KST = ZoneInfo("Asia/Seoul")
 
 
 @asynccontextmanager
@@ -69,13 +71,23 @@ async def run_pipeline(request: PipelineRunRequest, background_tasks: Background
         raise HTTPException(status_code=400, detail=f"unsupported track: {request.track}")
 
     log.info(
-        "수집 파이프라인 큐 등록 | track=%s company=%s trigger=%s task_id=%s",
+        ("수집 파이프라인 큐 등록 | track=%s company=%s trigger=%s window=%s~%s task_id=%s"),
         track,
         request.company,
         request.trigger_type,
+        request.window_start,
+        request.window_end,
         task_id,
     )
-    background_tasks.add_task(_run_collection_track, task_id, track, request.company)
+    background_tasks.add_task(
+        _run_collection_track,
+        task_id,
+        track,
+        request.company,
+        request.trigger_type,
+        request.window_start,
+        request.window_end,
+    )
     return PipelineRunResponse(
         task_id=task_id,
         status="accepted",
@@ -150,18 +162,18 @@ def _api_response(data: dict) -> dict:
     }
 
 
-async def _run_collection_track(task_id: str, track: str, companies: list[str]) -> None:
+async def _run_collection_track(
+    task_id: str,
+    track: str,
+    companies: list[str],
+    trigger_type: str = "scheduled",
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
+) -> None:
     from src.config.companies import COMPANY_ALIASES
     from src.config.global_companies import GLOBAL_COMPANY_ALIASES, GLOBAL_COMPANY_IDS
     from src.crawler.batch_processor import BatchProcessor
-    from src.pipeline.ingestion_graph import (
-        card_news_node,
-        classify_node,
-        crawl_node,
-        dedup_node,
-        preprocess_route_node,
-        vector_index_node,
-    )
+    from src.preprocessing.preprocessing import PreprocessingService
 
     all_aliases = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
     selected = companies or [*COMPANY_ALIASES, *GLOBAL_COMPANY_IDS]
@@ -172,54 +184,77 @@ async def _run_collection_track(task_id: str, track: str, companies: list[str]) 
 
     processor = BatchProcessor()
     started_at = datetime.now(UTC).isoformat()
+    crawl_window = _collection_window(track, window_start, window_end)
 
     try:
         if track in {"a", "all"}:
-            await processor.run_track_a({company: all_aliases[company] for company in selected})
+            await processor.run_track_a(
+                {company: all_aliases[company] for company in selected},
+                crawl_window=crawl_window,
+            )
         if track in {"b", "all"}:
-            await processor.run_track_b({company: all_aliases[company] for company in selected})
+            await processor.run_track_b(
+                {company: all_aliases[company] for company in selected},
+                crawl_window=crawl_window,
+            )
         if track in {"c", "all"}:
-            await processor.run_track_c({company: all_aliases[company] for company in selected})
+            await processor.run_track_c(
+                {company: all_aliases[company] for company in selected},
+                crawl_window=crawl_window,
+            )
         if track in {"d", "all"}:
-            await processor.run_track_d({company: all_aliases[company] for company in selected})
+            await processor.run_track_d(
+                {company: all_aliases[company] for company in selected},
+                crawl_window=crawl_window,
+            )
 
-        state: dict = {
-            "company": selected,
-            "trigger_type": "scheduled",
-            "collected_since": started_at,
-            "crawl_run_id": None,
-            "raw_article_ids": [],
-            "relevant_ids": [],
-            "official_document_ids": [],
-            "parsed_document_ids": [],
-            "industry_document_ids": [],
-            "structured_signal_ids": [],
-            "skipped_preprocess_ids": [],
-            "cluster_map": {},
-            "representative_ids": [],
-            "classified_clusters": [],
-            "card_news": [],
-            "indexed_vector_ids": [],
-            "errors": [],
-            "human_review_flags": [],
-        }
-        result = crawl_node(state)
-        result = preprocess_route_node(result)
-        result = dedup_node(result)
-        result = classify_node(result)
-        result = card_news_node(result)
-        result = vector_index_node(result)
+        result = PreprocessingService().run(
+            company=selected,
+            trigger_type=trigger_type,
+            collected_since=started_at,
+            crawl_run_id=None,
+        )
         log.info(
-            "수집 파이프라인 완료 | task_id=%s track=%s raw=%d classified=%d cards=%d indexed=%d",
+            (
+                "수집 파이프라인 완료 | task_id=%s track=%s raw=%d "
+                "analysis_metrics=%d analysis_signals=%d classified=%d"
+            ),
             task_id,
             track,
             len(result.get("raw_article_ids", [])),
+            result.get("analysis_metric_count", 0),
+            result.get("analysis_signal_count", 0),
             len(result.get("classified_clusters", [])),
-            len(result.get("card_news", [])),
-            len(result.get("indexed_vector_ids", [])),
         )
     except Exception:
         log.exception("수집 파이프라인 실패 | task_id=%s track=%s", task_id, track)
+
+
+def _collection_window(
+    track: str,
+    window_start: datetime | None,
+    window_end: datetime | None,
+):
+    from src.crawler.base import CrawlWindow
+
+    if window_start and window_end:
+        return CrawlWindow(
+            start=_ensure_kst(window_start),
+            end=_ensure_kst(window_end),
+        )
+
+    end = datetime.now(KST)
+    if track == "a":
+        start = end - timedelta(hours=1)
+    else:
+        start = end - timedelta(days=1)
+    return CrawlWindow(start=start, end=end)
+
+
+def _ensure_kst(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=KST)
+    return value.astimezone(KST)
 
 
 @app.post("/search", response_model=SearchResponse)

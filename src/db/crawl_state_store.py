@@ -192,7 +192,12 @@ def get_or_create_cursor(config: BackfillSourceConfig, initial_cursor_date: date
     )
 
 
-def create_crawl_run(source_name: str, window_start: date, window_end: date) -> UUID:
+def create_crawl_run(
+    source_name: str,
+    window_start: date,
+    window_end: date,
+    run_type: str = "backfill",
+) -> UUID:
     run_id = uuid4()
     with SessionLocal() as db:
         db.execute(
@@ -201,12 +206,13 @@ def create_crawl_run(source_name: str, window_start: date, window_end: date) -> 
                     id, run_type, source_name, window_start, window_end,
                     status, started_at
                 ) VALUES (
-                    :id, 'backfill', :source_name, :window_start, :window_end,
+                    :id, :run_type, :source_name, :window_start, :window_end,
                     'running', NOW()
                 )
             """),
             {
                 "id": str(run_id),
+                "run_type": run_type,
                 "source_name": source_name,
                 "window_start": window_start,
                 "window_end": window_end,

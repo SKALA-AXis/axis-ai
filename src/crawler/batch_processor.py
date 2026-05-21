@@ -3,6 +3,7 @@
 import json
 import logging
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from typing import Any, Protocol
 
@@ -13,6 +14,11 @@ from src.crawler.parsers.dedup import DedupStore
 from src.crawler.parsers.link_check import LinkChecker
 from src.crawler.result_writer import DEFAULT_RESULTS_DIR
 from src.db.article_store import save_articles
+from src.db.crawl_state_store import (
+    create_crawl_run,
+    mark_crawl_run_failed,
+    mark_crawl_run_success,
+)
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +43,21 @@ TRACK_D_SOURCES = (
     "bcg",
 )
 
+REALTIME_SOURCE_OVERLAP_DAYS = {
+    "naver_news": 0,
+    "global_newsroom": 1,
+    "stock": 0,
+    "naver_research": 3,
+    "jobs": 1,
+    "company_news": 7,
+    "dart": 30,
+    "ir": 365,
+    "sk_ax_site": 7,
+    "naver_datalab": 7,
+    "spri": 30,
+    "bcg": 30,
+}
+
 
 class _Crawlable(Protocol):
     async def crawl(self) -> list[Any]: ...
@@ -54,15 +75,17 @@ class BatchProcessor:
         keywords: dict[str, list[str]],
         persist: bool = True,
         recent_hours: int = 1,
+        crawl_window: CrawlWindow | None = None,
         run_context: CrawlRunContext | None = None,
     ) -> list[RawArticle]:
         """Track A — 뉴스성 고빈도 수집."""
-        return await self.run_sources(
+        return await self._run_track_sources(
             TRACK_A_SOURCES,
             keywords=keywords,
             persist=persist,
+            crawl_window=crawl_window,
             recent_hours=recent_hours,
-            run_context=run_context or CrawlRunContext(collection_mode="scheduled", track="A"),
+            run_context=run_context or CrawlRunContext(collection_mode="realtime", track="A"),
         )
 
     async def run_track_b(
@@ -73,12 +96,12 @@ class BatchProcessor:
         run_context: CrawlRunContext | None = None,
     ) -> list[RawArticle]:
         """Track B — 마켓/증권 리포트 수집."""
-        return await self.run_sources(
+        return await self._run_track_sources(
             TRACK_B_SOURCES,
             keywords=keywords,
             persist=persist,
             crawl_window=crawl_window,
-            run_context=run_context or CrawlRunContext(collection_mode="scheduled", track="B"),
+            run_context=run_context or CrawlRunContext(collection_mode="realtime", track="B"),
         )
 
     async def run_track_c(
@@ -89,12 +112,12 @@ class BatchProcessor:
         run_context: CrawlRunContext | None = None,
     ) -> list[RawArticle]:
         """Track C — 업무시간성 채용/기업 뉴스 수집."""
-        return await self.run_sources(
+        return await self._run_track_sources(
             TRACK_C_SOURCES,
             keywords=keywords,
             persist=persist,
             crawl_window=crawl_window,
-            run_context=run_context or CrawlRunContext(collection_mode="scheduled", track="C"),
+            run_context=run_context or CrawlRunContext(collection_mode="realtime", track="C"),
         )
 
     async def run_track_d(
@@ -105,13 +128,42 @@ class BatchProcessor:
         run_context: CrawlRunContext | None = None,
     ) -> list[RawArticle]:
         """Track D — 문서/리포트/자사 사이트 저빈도 수집."""
-        return await self.run_sources(
+        return await self._run_track_sources(
             TRACK_D_SOURCES,
             keywords=keywords,
             persist=persist,
             crawl_window=crawl_window,
-            run_context=run_context or CrawlRunContext(collection_mode="scheduled", track="D"),
+            run_context=run_context or CrawlRunContext(collection_mode="realtime", track="D"),
         )
+
+    async def _run_track_sources(
+        self,
+        source_names: tuple[str, ...],
+        *,
+        keywords: dict[str, list[str]],
+        persist: bool,
+        crawl_window: CrawlWindow | None,
+        run_context: CrawlRunContext,
+        recent_hours: int = 1,
+    ) -> list[RawArticle]:
+        articles: list[RawArticle] = []
+        total_inserted = 0
+
+        for source_name in source_names:
+            source_context = replace(run_context, source_name=source_name)
+            source_articles = await self.run_sources(
+                (source_name,),
+                keywords=keywords,
+                persist=persist,
+                crawl_window=crawl_window,
+                run_context=source_context,
+                recent_hours=recent_hours,
+            )
+            total_inserted += self.last_inserted_count
+            articles.extend(source_articles)
+
+        self.last_inserted_count = total_inserted
+        return articles
 
     async def run_sources(
         self,
@@ -134,6 +186,7 @@ class BatchProcessor:
         from src.crawler.sources.naver_research import NaverResearchCrawler
 
         requested = set(source_names)
+        effective_window = _effective_source_window(source_names, crawl_window, run_context)
         keywords = keywords or {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
         articles: list[RawArticle] = []
         domestic_keywords = {
@@ -143,13 +196,13 @@ class BatchProcessor:
 
         if "naver_news" in requested:
             naver_errors: list[str] = []
-            cutoff = crawl_window.start if crawl_window else _hours_cutoff(recent_hours)
+            cutoff = effective_window.start if effective_window else _hours_cutoff(recent_hours)
             for peer_id, kws in domestic_keywords.items():
                 naver_crawler = NaverNewsCrawler(
                     peer_id=peer_id,
                     aliases=kws,
                     cutoff_datetime=cutoff,
-                    end_datetime=crawl_window.end if crawl_window else None,
+                    end_datetime=effective_window.end if effective_window else None,
                 )
                 try:
                     articles.extend(await naver_crawler.crawl())
@@ -160,7 +213,12 @@ class BatchProcessor:
                         peer_id,
                         e,
                     )
-            if crawl_window and naver_errors:
+            if (
+                run_context
+                and run_context.collection_mode == "backfill"
+                and effective_window
+                and naver_errors
+            ):
                 raise RuntimeError(
                     "naver_news backfill failed; cursor not advanced. "
                     + "; ".join(naver_errors[:5])
@@ -176,8 +234,8 @@ class BatchProcessor:
                             peer_id=peer_id,
                             corp_code=CORP_CODES.get(peer_id, ""),
                             corp_names=kws,
-                            start_date=_window_date(crawl_window, "start"),
-                            end_date=_window_date(crawl_window, "end"),
+                            start_date=_window_date(effective_window, "start"),
+                            end_date=_window_date(effective_window, "end"),
                         ),
                     )
                 )
@@ -187,9 +245,9 @@ class BatchProcessor:
                         "ir",
                         IRCrawler(
                             peer_id=peer_id,
-                            lookback_days=_window_lookback_days(crawl_window),
-                            start_date=_window_date(crawl_window, "start"),
-                            end_date=_window_date(crawl_window, "end"),
+                            lookback_days=_window_lookback_days(effective_window),
+                            start_date=_window_date(effective_window, "start"),
+                            end_date=_window_date(effective_window, "end"),
                         ),
                     )
                 )
@@ -199,9 +257,9 @@ class BatchProcessor:
                         "naver_research",
                         NaverResearchCrawler(
                             peer_id=peer_id,
-                            lookback_days=_window_lookback_days(crawl_window),
-                            start_date=_window_date(crawl_window, "start"),
-                            end_date=_window_date(crawl_window, "end"),
+                            lookback_days=_window_lookback_days(effective_window),
+                            start_date=_window_date(effective_window, "start"),
+                            end_date=_window_date(effective_window, "end"),
                         ),
                     )
                 )
@@ -211,8 +269,8 @@ class BatchProcessor:
                         "jobs",
                         JobCrawler(
                             peer_id=peer_id,
-                            start_date=_window_date(crawl_window, "start"),
-                            end_date=_window_date(crawl_window, "end"),
+                            start_date=_window_date(effective_window, "start"),
+                            end_date=_window_date(effective_window, "end"),
                         ),
                     )
                 )
@@ -224,9 +282,12 @@ class BatchProcessor:
                         "stock",
                         StockCrawler(
                             peer_id=peer_id,
-                            start_date=_window_date(crawl_window, "start"),
-                            end_date=_window_date(crawl_window, "end"),
-                            include_realtime=not crawl_window,
+                            start_date=_window_date(effective_window, "start"),
+                            end_date=_window_date(effective_window, "end"),
+                            include_realtime=(
+                                run_context is not None
+                                and run_context.collection_mode == "realtime"
+                            ),
                         ),
                     )
                 )
@@ -250,8 +311,8 @@ class BatchProcessor:
                 (
                     "company_news",
                     CompanyNewsCrawler(
-                        crawl_window=crawl_window,
-                        latest_limit=100 if crawl_window else 5,
+                        crawl_window=effective_window,
+                        latest_limit=100 if effective_window else 5,
                     ),
                 )
             )
@@ -260,8 +321,8 @@ class BatchProcessor:
                 (
                     "naver_datalab",
                     KeywordCrawler(
-                        start_date=_window_iso(crawl_window, "start"),
-                        end_date=_window_iso(crawl_window, "end"),
+                        start_date=_window_iso(effective_window, "start"),
+                        end_date=_window_iso(effective_window, "end"),
                     ),
                 )
             )
@@ -271,8 +332,8 @@ class BatchProcessor:
                     f"global_newsroom[{company_id}]",
                     GlobalNewsroomCrawler(
                         company=company_id,
-                        start_date=_window_date(crawl_window, "start"),
-                        end_date=_window_date(crawl_window, "end"),
+                        start_date=_window_date(effective_window, "start"),
+                        end_date=_window_date(effective_window, "end"),
                     ),
                 )
                 for company_id in global_company_ids
@@ -282,8 +343,8 @@ class BatchProcessor:
                 (
                     "global_newsroom",
                     GlobalNewsroomCrawler(
-                        start_date=_window_date(crawl_window, "start"),
-                        end_date=_window_date(crawl_window, "end"),
+                        start_date=_window_date(effective_window, "start"),
+                        end_date=_window_date(effective_window, "end"),
                     ),
                 )
             )
@@ -298,7 +359,7 @@ class BatchProcessor:
                         output_path=DEFAULT_RESULTS_DIR / f"spri_backfill_{month}.json",
                     ),
                 )
-                for month in _window_months(crawl_window)
+                for month in _window_months(effective_window)
             )
         if "bcg" in requested:
             from src.crawler.sources.bcg import BcgCrawler
@@ -307,11 +368,11 @@ class BatchProcessor:
                 (
                     "bcg",
                     BcgCrawler(
-                        days=_window_lookback_days(crawl_window) or 7,
+                        days=_window_lookback_days(effective_window) or 7,
                         max_articles=100,
                         output_path=DEFAULT_RESULTS_DIR / "bcg_backfill.json",
-                        start_date=_window_date(crawl_window, "start"),
-                        end_date=_window_date(crawl_window, "end"),
+                        start_date=_window_date(effective_window, "start"),
+                        end_date=_window_date(effective_window, "end"),
                     ),
                 )
             )
@@ -334,11 +395,44 @@ class BatchProcessor:
             except Exception as e:
                 log.error("source 크롤 오류 | source=%s error=%s", name, e)
 
-        articles = _filter_window(articles, crawl_window)
-        accessible, rejected = await self.link_checker.filter_accessible(articles)
-        new_articles = self.dedup.filter_new(accessible)
-        inserted = save_articles(new_articles, run_context=run_context) if persist else 0
-        self.last_inserted_count = inserted
+        run_id = None
+        effective_run_context = run_context
+        if persist and run_context and not run_context.crawl_run_id:
+            run_source_name = run_context.source_name or ",".join(source_names)
+            window_start = _window_date(effective_window, "start") or datetime.now().date()
+            window_end = _window_date(effective_window, "end") or window_start
+            run_id = create_crawl_run(
+                run_source_name,
+                window_start,
+                window_end,
+                run_type=run_context.collection_mode,
+            )
+            effective_run_context = replace(
+                run_context,
+                crawl_run_id=str(run_id),
+                source_name=run_source_name,
+                window_start=effective_window.start if effective_window else None,
+                window_end=effective_window.end if effective_window else None,
+            )
+
+        try:
+            articles = _filter_window(articles, effective_window)
+            accessible, rejected = await self.link_checker.filter_accessible(articles)
+            new_articles = self.dedup.filter_new(accessible)
+            inserted = (
+                save_articles(new_articles, run_context=effective_run_context) if persist else 0
+            )
+            self.last_inserted_count = inserted
+            if run_id:
+                mark_crawl_run_success(
+                    run_id,
+                    inserted_count=inserted,
+                    skipped_count=len(new_articles) - inserted,
+                )
+        except Exception as e:
+            if run_id:
+                mark_crawl_run_failed(run_id, f"{type(e).__name__}: {e}")
+            raise
         log.info(
             "source 크롤 완료 | sources=%s raw=%d accessible=%d "
             "rejected_links=%d new=%d db_inserted=%d",
@@ -376,6 +470,29 @@ def _filter_window(
     ]
 
 
+def _effective_source_window(
+    source_names: list[str] | tuple[str, ...],
+    crawl_window: CrawlWindow | None,
+    run_context: CrawlRunContext | None,
+) -> CrawlWindow | None:
+    if not crawl_window:
+        return None
+    if not run_context or run_context.collection_mode != "realtime":
+        return crawl_window
+
+    overlap_days = max(
+        (REALTIME_SOURCE_OVERLAP_DAYS.get(source_name, 0) for source_name in source_names),
+        default=0,
+    )
+    if overlap_days <= 0:
+        return crawl_window
+
+    end = crawl_window.end or datetime.now().astimezone()
+    overlap_start = end - timedelta(days=overlap_days)
+    start = overlap_start if overlap_start < crawl_window.start else crawl_window.start
+    return CrawlWindow(start=start, end=end)
+
+
 def _window_date(crawl_window: CrawlWindow | None, bound: str) -> date | None:
     if not crawl_window:
         return None
@@ -392,8 +509,8 @@ def _window_lookback_days(crawl_window: CrawlWindow | None) -> int | None:
     if not crawl_window:
         return None
     start = crawl_window.start.date()
-    today = datetime.now().astimezone().date()
-    return max((today - start).days, 1)
+    end = (crawl_window.end or datetime.now().astimezone()).date()
+    return max((end - start).days, 1)
 
 
 def _window_month(crawl_window: CrawlWindow | None) -> str:

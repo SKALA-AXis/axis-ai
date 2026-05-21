@@ -1,19 +1,16 @@
 """크롤러 단위 테스트"""
 
 import json
+import os
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
+import pytest
 from bs4 import BeautifulSoup
 
-from src.preprocessing.relevance import (
-    _core_company_role_reject_result,
-    _metadata_patch_for_relevance,
-    _result,
-)
 from src.crawler.backfill_runner import BackfillRunner
-from src.crawler.base import CrawlWindow, RawArticle
-from src.crawler.batch_processor import _window_months
+from src.crawler.base import CrawlRunContext, CrawlWindow, RawArticle
+from src.crawler.batch_processor import _effective_source_window, _window_months
 from src.crawler.sources.bcg import match_bcg_core_sectors
 from src.crawler.sources.keyword import (
     load_naver_credential_pairs as load_datalab_credentials,
@@ -49,6 +46,18 @@ from src.db.article_store import (
     _metadata_json,
 )
 from src.preprocessing.preprocessing import _company_for_context
+from src.preprocessing.relevance import (
+    _core_company_role_reject_result,
+    _metadata_patch_for_relevance,
+    _result,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_naver_credentials(monkeypatch):
+    for key in list(os.environ):
+        if key.startswith(("NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET")):
+            monkeypatch.delenv(key, raising=False)
 
 
 def test_raw_article_fields():
@@ -62,6 +71,38 @@ def test_raw_article_fields():
     )
     assert article.url
     assert article.company == ["samsung_sds"]
+
+
+def test_realtime_source_window_expands_by_source_policy():
+    base_window = CrawlWindow(
+        start=datetime(2026, 5, 19, tzinfo=timezone.utc),
+        end=datetime(2026, 5, 20, tzinfo=timezone.utc),
+    )
+
+    window = _effective_source_window(
+        ("naver_datalab",),
+        base_window,
+        CrawlRunContext(collection_mode="realtime", track="D"),
+    )
+
+    assert window is not None
+    assert window.start.date() == date(2026, 5, 13)
+    assert window.end == base_window.end
+
+
+def test_backfill_source_window_keeps_requested_window():
+    base_window = CrawlWindow(
+        start=datetime(2026, 5, 19, tzinfo=timezone.utc),
+        end=datetime(2026, 5, 20, tzinfo=timezone.utc),
+    )
+
+    window = _effective_source_window(
+        ("ir",),
+        base_window,
+        CrawlRunContext(collection_mode="backfill", track="D"),
+    )
+
+    assert window == base_window
 
 
 def test_naver_credentials_support_multiple_keys(monkeypatch):
@@ -415,6 +456,8 @@ def test_multi_peer_sector_article_keeps_company_and_gets_industry_topic_scope()
         "topic_scope": "industry_trend",
         "matched_companies": ["samsung_sds", "lg_cns"],
         "matched_sectors": ["ai"],
+        "matched_sector_details": [],
+        "status_detail": "relevance_passed",
         "primary_company": None,
     }
 

@@ -123,6 +123,9 @@ _SK_AX_STRONG_TERMS = (
     "씨앤씨",
     "c&c부문",
     "c&c 부문",
+    "sk주식회사 사업부문",
+    "sk 주식회사 사업부문",
+    "sk주식회사는 국내 top-tier it 서비스",
     "it서비스",
     "it 서비스",
     "디지털전환",
@@ -137,6 +140,12 @@ _SK_AX_BUSINESS_TERMS = (
     "cloud",
     "데이터센터",
     "data center",
+    "it 컨설팅",
+    "시스템 구축",
+    "아웃소싱",
+    "outsourcing",
+    "agentic",
+    "delivery 역량",
     "erp",
     "scm",
     "자동화",
@@ -146,6 +155,8 @@ _SK_GROUP_UNRELATED_TERMS = (
     "sk innovation",
     "sk텔레콤",
     "sk telecom",
+    "skt",
+    "에이닷",
     "sk하이닉스",
     "sk hynix",
     "sk스퀘어",
@@ -153,6 +164,10 @@ _SK_GROUP_UNRELATED_TERMS = (
     "sk바이오팜",
     "sk biopharmaceuticals",
     "sk e&s",
+    "sk온",
+    "sk on",
+    "sk에코플랜트",
+    "sk ecoplant",
     "투자부문",
     "계열회사",
     "관계회사",
@@ -168,12 +183,23 @@ def financial_metrics_from_dart(
     """DART 재무제표 구조화 결과를 raw_article_financial_metrics row로 변환한다."""
     article_id = int(article["id"])
     peer_id = _peer_id(article, parser_result)
-    if peer_id == "sk_ax":
-        return []
     period = _period(article, parser_result)
     period_year = parser_result.get("period_year") or article["extra"].get("period_year")
     period_quarter = parser_result.get("period_quarter") or article["extra"].get("period_quarter")
     period_type = parser_result.get("period_type") or article["extra"].get("period_type")
+
+    if peer_id == "sk_ax":
+        return _metrics_from_candidates(
+            article=article,
+            parser_result=parser_result,
+            article_id=article_id,
+            peer_id=peer_id,
+            period=period,
+            period_year=period_year,
+            period_quarter=period_quarter,
+            period_type=period_type,
+            candidate_filter=_is_sk_ax_financial_metric_candidate,
+        )
 
     metrics: list[dict[str, Any]] = []
     statements = parser_result.get("financial_statements")
@@ -244,6 +270,19 @@ def business_signals_from_dart(
 
     signals: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
+    signals.extend(
+        _llm_business_signals_from_dart(
+            article=article,
+            parser_result=parser_result,
+            article_id=article_id,
+            peer_id=peer_id,
+            period=period,
+            period_year=period_year,
+            period_quarter=period_quarter,
+            period_type=period_type,
+            seen=seen,
+        )
+    )
     for chunk in chunks:
         if not isinstance(chunk, dict):
             continue
@@ -311,6 +350,68 @@ def business_signals_from_dart(
             )
 
     return signals
+
+
+def _llm_business_signals_from_dart(
+    *,
+    article: dict[str, Any],
+    parser_result: dict[str, Any],
+    article_id: int,
+    peer_id: str | None,
+    period: Any,
+    period_year: Any,
+    period_quarter: Any,
+    period_type: Any,
+    seen: set[tuple[str, str, str]],
+) -> list[dict[str, Any]]:
+    llm_signals = parser_result.get("llm_business_signals")
+    if not isinstance(llm_signals, list):
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for index, signal in enumerate(llm_signals, start=1):
+        if not isinstance(signal, dict):
+            continue
+        business_area = str(signal.get("business_area") or "company_total")
+        signal_type = str(signal.get("signal_type") or "")
+        evidence_text = str(signal.get("evidence_text") or "").strip()
+        if not signal_type or not evidence_text:
+            continue
+        if peer_id == "sk_ax" and not _is_sk_ax_relevant_sentence(evidence_text):
+            continue
+        dedupe_key = (business_area, signal_type, evidence_text[:180])
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        rows.append(
+            {
+                "raw_article_id": article_id,
+                "signal_uid": f"dart-llm:{business_area}:{signal_type}:{index}",
+                "source_type": "dart",
+                "source_name": article.get("source_name"),
+                "peer_id": peer_id,
+                "period": period,
+                "period_year": period_year,
+                "period_quarter": period_quarter,
+                "period_type": period_type,
+                "business_area": business_area,
+                "signal_type": signal_type,
+                "sentiment": signal.get("sentiment") or _sentiment(evidence_text),
+                "summary": signal.get("summary") or _summary(evidence_text),
+                "evidence_text": evidence_text,
+                "source_page": None,
+                "source_chunk_uid": None,
+                "confidence": signal.get("confidence") or 0.78,
+                "extraction_method": "dart_llm.analysis",
+                "payload": {
+                    "title": article.get("title"),
+                    "url": article.get("url"),
+                    "rcept_no": parser_result.get("rcept_no") or article["extra"].get("rcept_no"),
+                    "llm_signal": signal,
+                },
+            }
+        )
+    return rows
 
 
 def _metrics_from_statement(
@@ -423,6 +524,7 @@ def _metrics_from_candidates(
     period_year: Any,
     period_quarter: Any,
     period_type: Any,
+    candidate_filter: Any | None = None,
 ) -> list[dict[str, Any]]:
     candidates = parser_result.get("candidates")
     if not isinstance(candidates, list):
@@ -431,6 +533,8 @@ def _metrics_from_candidates(
     metrics: list[dict[str, Any]] = []
     for index, candidate in enumerate(candidates, start=1):
         if not isinstance(candidate, dict):
+            continue
+        if candidate_filter is not None and not candidate_filter(candidate):
             continue
         metric_name = str(candidate.get("type") or "")
         value = candidate.get("value_krwbn")
@@ -449,7 +553,7 @@ def _metrics_from_candidates(
                 metric_name=metric_name,
                 metric_label=_DART_METRIC_LABELS[metric_name],
                 metric_scope=str(candidate.get("metric_scope") or "company_total"),
-                business_area=str(candidate.get("business_area") or "company_total"),
+                business_area=_candidate_business_area(candidate, peer_id=peer_id),
                 value_numeric=float(value),
                 source_table_uid=(
                     f"dart-table-{candidate.get('table_index')}"
@@ -463,6 +567,25 @@ def _metrics_from_candidates(
         )
 
     return metrics
+
+
+def _is_sk_ax_financial_metric_candidate(candidate: dict[str, Any]) -> bool:
+    if candidate.get("metric_scope") != "segment":
+        return False
+    if candidate.get("standard_business_area") == "sk_ax":
+        return True
+
+    evidence = " ".join(
+        str(candidate.get(key) or "")
+        for key in ("business_area", "segment_label", "raw", "table_title")
+    )
+    return _is_sk_ax_relevant_sentence(evidence)
+
+
+def _candidate_business_area(candidate: dict[str, Any], *, peer_id: str | None) -> str:
+    if peer_id == "sk_ax" and candidate.get("standard_business_area") == "sk_ax":
+        return "sk_ax"
+    return str(candidate.get("business_area") or "company_total")
 
 
 def _metric_row(
@@ -571,7 +694,7 @@ def _signals_from_chunk(
 
 
 def _is_sk_ax_relevant_sentence(sentence: str) -> bool:
-    lowered = sentence.lower()
+    lowered = " ".join(sentence.lower().split())
     has_strong = any(_contains_term(lowered, term) for term in _SK_AX_STRONG_TERMS)
     if has_strong:
         return True
@@ -580,7 +703,9 @@ def _is_sk_ax_relevant_sentence(sentence: str) -> bool:
     if has_unrelated_group:
         return False
 
-    return any(_contains_term(lowered, term) for term in _SK_AX_BUSINESS_TERMS)
+    business_hits = sum(1 for term in _SK_AX_BUSINESS_TERMS if _contains_term(lowered, term))
+    has_sk_business_context = "sk주식회사" in lowered or "sk 주식회사" in lowered
+    return business_hits >= 2 or (has_sk_business_context and business_hits >= 1)
 
 
 def _detect_business_area(text_value: str) -> str | None:

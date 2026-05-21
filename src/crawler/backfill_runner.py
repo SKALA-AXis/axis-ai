@@ -19,7 +19,7 @@ from src.db.crawl_state_store import (
     mark_crawl_run_success,
     update_cursor,
 )
-from src.pipeline.ingestion_graph import IngestionState
+from src.preprocessing.preprocessing import PreprocessingService
 
 log = logging.getLogger(__name__)
 
@@ -196,51 +196,20 @@ class BackfillRunner:
             )
 
     def _run_pipeline_for_run(self, crawl_run_id: str) -> None:
-        from src.pipeline.ingestion_graph import (
-            classify_node,
-            crawl_node,
-            dedup_node,
-            ingestion_graph,
-            preprocess_route_node,
+        result = PreprocessingService().run(
+            company=list(self.keywords),
+            trigger_type=f"backfill:{self.process_after_window}",
+            collected_since=None,
+            crawl_run_id=crawl_run_id,
         )
-
-        state: IngestionState = {
-            "company": list(self.keywords),
-            "trigger_type": "backfill",
-            "collected_since": None,
-            "crawl_run_id": crawl_run_id,
-            "raw_article_ids": [],
-            "relevant_ids": [],
-            "official_document_ids": [],
-            "parsed_document_ids": [],
-            "industry_document_ids": [],
-            "structured_signal_ids": [],
-            "skipped_preprocess_ids": [],
-            "cluster_map": {},
-            "representative_ids": [],
-            "classified_clusters": [],
-            "card_news": [],
-            "indexed_vector_ids": [],
-            "errors": [],
-            "human_review_flags": [],
-        }
-
-        if self.process_after_window == "full":
-            # LangGraph의 런타임 객체에는 invoke가 있지만 현재 타입 스텁이 좁게 잡혀 있다.
-            result = ingestion_graph.invoke(state)  # type: ignore[attr-defined]
-        else:
-            result = crawl_node(state)
-            result = preprocess_route_node(result)
-            result = dedup_node(result)
-            result = classify_node(result)
 
         log.info(
             "backfill 후처리 완료 | mode=%s crawl_run_id=%s raw=%d classified=%d "
-            "cards=%d vectors=%d",
+            "analysis_metrics=%d analysis_signals=%d",
             self.process_after_window,
             crawl_run_id,
             len(result.get("raw_article_ids", [])),
             len(result.get("classified_clusters", [])),
-            len(result.get("card_news", [])),
-            len(result.get("indexed_vector_ids", [])),
+            result.get("analysis_metric_count", 0),
+            result.get("analysis_signal_count", 0),
         )

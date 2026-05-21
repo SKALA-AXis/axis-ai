@@ -46,6 +46,18 @@ _parser.add_argument(
     default=None,
     help="지정 시 raw_articles.metadata.crawl_run_id가 일치하는 RAW만 처리한다.",
 )
+_parser.add_argument(
+    "--source-type",
+    action="append",
+    default=None,
+    help="처리할 source_type. 여러 번 지정 가능. 예: --source-type official",
+)
+_parser.add_argument(
+    "--limit",
+    type=int,
+    default=500,
+    help="한 번에 처리할 RAW row 최대 개수",
+)
 _args = _parser.parse_args()
 
 from src.config.env_loader import load_profile  # noqa: E402
@@ -56,13 +68,8 @@ log.info("실행 프로파일: %s", _profile)
 from src.config.companies import COMPANY_IDS, company_name_ko  # noqa: E402
 from src.config.global_companies import GLOBAL_COMPANY_IDS, global_company_name_ko  # noqa: E402
 from src.config.sectors import sector_name_ko  # noqa: E402
-from src.pipeline.ingestion_graph import (  # noqa: E402
-    classify_node,
-    crawl_node,
-    dedup_node,
-    ingestion_graph,
-    preprocess_route_node,
-)
+from src.pipeline.analysis_delivery import run_analysis_delivery  # noqa: E402
+from src.preprocessing.preprocessing import PreprocessingService  # noqa: E402
 
 _BAND_MARK = {"high": "■■■", "medium": "■■ ", "low": "■  "}
 
@@ -97,38 +104,21 @@ def main() -> None:
     mode = "전처리 전용" if _args.preprocess_only else "파이프라인"
     log.info("%s 시작 | company=%s labels=%s", mode, company, company_labels)
 
-    initial_state = {
-        "company": company,
-        "trigger_type": "manual",
-        "collected_since": _args.collected_since,
-        "crawl_run_id": _args.crawl_run_id,
-        "raw_article_ids": [],
-        "relevant_ids": [],
-        "official_document_ids": [],
-        "parsed_document_ids": [],
-        "industry_document_ids": [],
-        "structured_signal_ids": [],
-        "skipped_preprocess_ids": [],
-        "cluster_map": {},
-        "representative_ids": [],
-        "classified_clusters": [],
-        "card_news": [],
-        "indexed_vector_ids": [],
-        "errors": [],
-        "human_review_flags": [],
-    }
+    result = PreprocessingService().run(
+        company=company,
+        source_types=_args.source_type,
+        trigger_type="manual",
+        collected_since=_args.collected_since,
+        crawl_run_id=_args.crawl_run_id,
+        limit=_args.limit,
+    )
 
     if _args.preprocess_only:
-        result = crawl_node(initial_state)
-        result = preprocess_route_node(result)
-        result = dedup_node(result)
-        result = classify_node(result)
         _print_preprocess_result(result)
         return
 
-    result = ingestion_graph.invoke(initial_state)
-
-    cards = result.get("card_news", [])
+    delivery = run_analysis_delivery(result)
+    cards = delivery.get("card_news", [])
     validation_pass_count = sum(
         1
         for card in cards
@@ -149,9 +139,11 @@ def main() -> None:
     print(f"  대표 기사:       {len(result.get('representative_ids', []))}건")
     print(f"  카드뉴스:        {len(cards)}건")
     print(f"  카드 검증 통과:  {validation_pass_count}/{len(cards)}건")
+    print(f"  Qdrant 인덱싱:   {len(delivery.get('indexed_vector_ids', []))}건")
     print(f"  Human 검토 필요: {len(result.get('human_review_flags', []))}건")
-    if result.get("errors"):
-        print(f"  오류:            {result['errors']}")
+    all_errors = [*result.get("errors", []), *delivery.get("errors", [])]
+    if all_errors:
+        print(f"  오류:            {all_errors}")
 
     # 섹터 분포
     if cards:

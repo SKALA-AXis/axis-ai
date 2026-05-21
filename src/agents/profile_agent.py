@@ -61,11 +61,9 @@ _MIN_RECENCY_FOCUS_DAYS = 90
 _MAX_RECENCY_FOCUS_DAYS = 730
 _PROCESSING_STATUS_BUCKETS: Final[tuple[str, ...]] = (
     "RAW",
-    "CREDIBILITY_SCORED",
-    "RELEVANCE_PASSED",
-    "CLUSTERED_REP",
-    "CLUSTERED_DUPE",
-    "SKIPPED_RELEVANCE",
+    "PROCESSED",
+    "SKIPPED",
+    "FAILED",
     "OTHER",
 )
 _PROFILE_COMPANY_IDS: Final[set[str]] = set(COMPANIES)
@@ -783,11 +781,9 @@ selected_sector_config:
       },
       "by_processing_status": {
         "RAW": 0,
-        "CREDIBILITY_SCORED": 0,
-        "RELEVANCE_PASSED": 0,
-        "CLUSTERED_REP": 0,
-        "CLUSTERED_DUPE": 0,
-        "SKIPPED_RELEVANCE": 0,
+        "PROCESSED": 0,
+        "SKIPPED": 0,
+        "FAILED": 0,
         "OTHER": 0
       }
     },
@@ -1714,16 +1710,8 @@ def collect_processing_status_counts(
         text("""
             SELECT
                 CASE
-                    WHEN cluster_id IS NOT NULL AND is_representative = true
-                        THEN 'CLUSTERED_REP'
-                    WHEN cluster_id IS NOT NULL AND COALESCE(is_representative, false) = false
-                        THEN 'CLUSTERED_DUPE'
-                    WHEN processing_status IN (
-                        'RAW',
-                        'CREDIBILITY_SCORED',
-                        'RELEVANCE_PASSED',
-                        'SKIPPED_RELEVANCE'
-                    ) THEN processing_status
+                    WHEN processing_status IN ('RAW', 'PROCESSED', 'SKIPPED', 'FAILED')
+                        THEN processing_status
                     ELSE 'OTHER'
                 END AS status_bucket,
                 COUNT(*) AS count
@@ -3605,7 +3593,7 @@ def _limitations_from_counts(source_counts: dict[str, Any], *, company_id: str) 
         notes.append("뉴스 대표 클러스터 수가 적어 최근 활동 신호가 제한적임")
     if raw_news > 0 and representative == 0:
         notes.append(
-            "raw 뉴스는 있으나 대표 클러스터가 없어 ArticleDeduplicator/ingestion_graph 미실행 가능성"
+            "raw 뉴스는 있으나 대표 클러스터가 없어 ArticleDeduplicator/전처리 파이프라인 미실행 가능성"
         )
     if unclustered > 0:
         notes.append("cluster_id가 없는 뉴스가 많아 프로필 입력에서 제외됨")

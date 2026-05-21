@@ -1,11 +1,11 @@
 """파이프라인 단위 테스트"""
 
 from src.preprocessing.dedup import _company_presence_score, _same_issue
-from src.pipeline.ingestion_graph import IngestionState
+from src.preprocessing.preprocessing import PreprocessingResult
 
 
 def test_ingestion_state_structure():
-    state: IngestionState = {
+    state: PreprocessingResult = {
         "company": ["samsung_sds"],
         "trigger_type": "scheduled",
         "collected_since": None,
@@ -20,16 +20,13 @@ def test_ingestion_state_structure():
         "cluster_map": {},
         "representative_ids": [],
         "classified_clusters": [],
-        "card_news": [],
-        "evidence_results": [],
-        "indexed_vector_ids": [],
         "errors": [],
         "human_review_flags": [],
     }
     assert state["company"] == ["samsung_sds"]
 
 
-def test_same_issue_groups_company_customer_business_overlap():
+def test_same_issue_does_not_merge_on_customer_name_only():
     left = {
         "company": ["lg_cns"],
         "title": "요금 심사부터 설비 운영까지…LG CNS, AI로 한전 시스템 전환",
@@ -39,6 +36,23 @@ def test_same_issue_groups_company_customer_business_overlap():
         "company": ["lg_cns"],
         "title": "LG CNS, 한국전력 차세대 영업배전시스템 구축 위한 ISP 컨설팅 사업",
         "content": "한국전력 차세대 영업배전시스템 ISP 컨설팅 사업을 수주했다.",
+    }
+
+    assert _same_issue(left, right) is False
+
+
+def test_same_issue_groups_shared_specific_terms_and_numbers():
+    left = {
+        "company": ["lg_cns"],
+        "matched_sectors": ["infra"],
+        "title": "LG CNS, 차세대 영업배전시스템 2500만 고객 서비스 전환",
+        "content": "차세대 영업배전시스템을 AI 기반으로 고도화한다.",
+    }
+    right = {
+        "company": ["lg_cns"],
+        "matched_sectors": ["infra"],
+        "title": "LG CNS, 차세대 영업배전시스템 전환 프로젝트 착수",
+        "content": "2500만 고객 대상 차세대 영업배전시스템 구축 사업이다.",
     }
 
     assert _same_issue(left, right) is True

@@ -65,6 +65,7 @@ _SOURCE_METADATA_EXCLUDED_KEYS = {
     "window_end",
     "matched_companies",
     "matched_sectors",
+    "matched_sector_details",
 }
 
 _UPSERT_FINANCIAL_METRIC_SQL = text("""
@@ -322,6 +323,7 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
                        raw_articles.relevance_score, raw_articles.relevance_label,
                        raw_articles.relevance_reason,
                        raw_articles.matched_companies, raw_articles.matched_sectors,
+                       raw_articles.matched_sector_details,
                        raw_articles.source_name, raw_articles.published_at,
                        raw_articles.collected_at,
                        raw_articles.metadata,
@@ -545,7 +547,7 @@ def list_card_news_cluster_candidates(
         WHERE r.source_type = 'news'
           AND r.is_representative = true
           AND r.cluster_id IS NOT NULL
-          AND r.processing_status = 'CLASSIFIED'
+          AND r.processing_status IN ('PROCESSED', 'CLASSIFIED')
           {where_today}
         GROUP BY
             r.cluster_id, r.id, r.company, r.title, r.url,
@@ -847,7 +849,7 @@ def update_cluster(
     is_representative: bool,
 ) -> None:
     """cluster_id, is_representative, processing_status를 업데이트한다."""
-    status = "CLUSTERED_REP" if is_representative else "CLUSTERED_DUPE"
+    status = "PROCESSED"
     with SessionLocal() as db:
         db.execute(
             text("""
@@ -880,7 +882,7 @@ def update_classification(
                 UPDATE raw_articles
                 SET importance_level = :importance,
                     importance_score = :score,
-                    processing_status = 'CLASSIFIED',
+                    processing_status = 'PROCESSED',
                     qdrant_vector_id = CAST(:qdrant_id AS uuid)
                 WHERE id = :id
             """),
@@ -1053,9 +1055,17 @@ def save_pipeline_log(
     llm_tokens_used: int = 0,
     error_msg: Optional[str] = None,
 ) -> None:
-    """파이프라인 단계별 실행 통계를 pipeline_logs에 기록."""
+    """파이프라인 단계별 실행 통계를 기록한다.
+
+    backend V30 이후 운영 DB에서는 legacy pipeline_logs 테이블이 제거되었다.
+    테이블이 남아 있는 로컬/구버전 DB에서는 기록하고, 없는 DB에서는 조용히 건너뛴다.
+    """
     try:
         with SessionLocal() as db:
+            exists = db.execute(text("SELECT to_regclass('public.pipeline_logs')")).scalar()
+            if exists is None:
+                log.debug("pipeline_logs 테이블 없음. 단계 로그 저장 생략 | step=%s", step)
+                return
             db.execute(
                 _INSERT_PIPELINE_LOG,
                 {
