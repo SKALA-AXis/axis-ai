@@ -682,9 +682,9 @@ def build_supervisor_graph(deps: SupervisorDeps | None = None) -> Any:
     for name, fn in nodes.items():
         retry_policy = _NODE_RETRY_POLICIES.get(name)
         if retry_policy is not None:
-            g.add_node(name, fn, retry_policy=retry_policy)  # type: ignore[call-overload]
+            g.add_node(name, fn, retry_policy=retry_policy)  # type: ignore[arg-type,call-overload]
         else:
-            g.add_node(name, fn)  # type: ignore[call-overload]
+            g.add_node(name, fn)  # type: ignore[arg-type,call-overload]
     # 외부 리뷰 R-1 (2026-05-21) — IntegratedIssue 가 main_company 를 확정한 후에
     # ProfileContext / AnalysisContext 를 build 하도록 순서 재배치.
     g.set_entry_point("issue_integrate")
