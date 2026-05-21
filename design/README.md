@@ -43,10 +43,10 @@ AXIS AI는 뉴스, DART/IR/공시, 시장·증권 리포트, Peer사 동향, 산
 Raw / 정제 데이터 저장소
         │
         ▼
-DataAnalysisSupervisorAgent
+AnalysisGraphRunner (= 1단계 분석 Pipeline 의 thin wrapper)
         ├─ IssueIntegrationAgent
-        ├─ AnalysisAgent
         ├─ ProfileAgent
+        ├─ AnalysisAgent
         └─ ImplicationAgent
         │
         ▼
@@ -133,9 +133,11 @@ CardNewsAgent
 
 ## 1단계 Agent
 
-### DataAnalysisSupervisorAgent
+### AnalysisGraphRunner
 
-1단계 분석 흐름을 조율하는 Supervisor Agent이다.
+> 명칭 (외부 리뷰 2026-05-21 R-rename) — multi-agent supervisor pattern 이 아닌
+> **LangGraph 기반 고정 순서 DAG pipeline** 의 thin wrapper. 기존 이름
+> `DataAnalysisSupervisorAgent` 는 backward-compat 으로 유지.
 
 주요 책임:
 - Raw / 정제 데이터 저장소에서 분석 대상 데이터를 조회한다.
@@ -144,23 +146,23 @@ CardNewsAgent
   `raw_article_parse_results`, `raw_article_financial_metrics`,
   `raw_article_business_signals` 등을 함께 조회한다.
 - 조회한 데이터를 `AnalysisInputBundle`로 구성한다.
-- `IssueIntegrationAgent`, `AnalysisAgent`, `ProfileAgent`, `ImplicationAgent`를 조율한다.
-- 최종 결과를 `AnalysisPackage`로 묶어 `CardNewsAgent`에 전달한다.
+- 다음 노드 순서로 child agent 를 호출한다 — `IssueIntegrationAgent` → `ProfileAgent` →
+  (`AnalysisContextBuilder`) → `AnalysisAgent` → `ImplicationAgent`.
+- 최종 결과를 `AnalysisPackage`로 묶어 `CardNewsAgent`에 전달한다 (in-graph `card_writer`
+  노드).
 
-흐름:
+흐름 (외부 리뷰 R-1 반영 — issue_integrate 가 먼저):
 
 ```text
 AnalysisInputBundle
-→ IssueIntegrationAgent
-→ IntegratedIssue
-→ AnalysisAgent
-→ AnalysisResult
-→ ProfileAgent
-→ ProfileContext
-→ ImplicationAgent
-→ ImplicationResult
-→ AnalysisPackage
-→ CardNewsAgent
+→ ① IssueIntegrationAgent      → IntegratedIssue (main_company 확정)
+→ ② ProfileContext Loader      → ProfileContext (Tier A snapshot + Tier B recent)
+→ ③ AnalysisContextBuilder     → AnalysisContext (timeline / sector pulse / financial 등)
+→ ④ AnalysisAgent              → AnalysisResult (peer 관점)
+→ ⑤ ImplicationAgent           → ImplicationResult (SK AX 관점)
+→ ⑥ validate                   → ValidationReport (hard / soft + W5-1 metric)
+   ├ pass → ⑦ assemble → ⑧ card_writer → card_news INSERT (v2 schema)
+   └ fail → human_review (flag only)
 ```
 
 ### IssueIntegrationAgent
@@ -234,20 +236,33 @@ AnalysisInputBundle
 
 ### ProfileAgent
 
-시사점 도출에 필요한 SK AX와 Peer사의 context를 제공한다.
+**핵심 책임 (외부 리뷰 2026-05-21 명시): RDB 백필 데이터 기반 회사 전략 프로필 생성.**
 
-주요 책임:
-- SK AX의 사업군, 역량, 전략 방향 context 제공
-- Peer사의 사업군, 주요 역량, 최근 집중 섹터 context 제공
-- 해당 이슈가 SK AX의 어떤 사업 방향과 연결되는지 판단할 수 있는 context 제공
+ProfileAgent 는 단순 context provider 가 아니라 **DART / IR / 공식 newsroom / 누적
+뉴스 / business_signals / financial_metrics 를 LLM 으로 합성하여 회사별 전략 프로필을
+만드는 합성 책임자** 다.
+
+두 단계로 운영 (W2-2 2-tier):
+* **Tier A (snapshot 생성)** — 주1회 CronJob `axis-cron-profile-refresh` 가 회사별
+  방향성 / 주요 사업 / 전략 변화 / 역량 평가 narrative 를 합성하여 `peer_companies.
+  profile_snapshot` JSONB (별도 컬럼) 에 저장.
+* **Tier B (runtime loader)** — Analysis Pipeline ② 노드 (`profile_context`) 가
+  Tier A snapshot 을 load + 최근 30일 business_signals top-3 + 최근 분기
+  financial_metrics 보강 (DB query only, LLM X).
+
+출력은 **두 관점으로 분리**:
+* `ProfileContext.peer_profiles[peer_id]` — AnalysisAgent 입력 (peer 의 전략·역량 해석).
+* `ProfileContext.skax_profile` — ImplicationAgent 입력 (SK AX 의 기회/위협/대응 도출).
 
 주의:
-- 전처리의 기업·섹터·이벤트 매칭과 다르다.
-- ProfileAgent는 시사점 도출용 context provider이다.
+- 전처리의 기업·섹터·이벤트 **매칭** (raw data 라벨링) 과 다르다.
+- ProfileAgent 는 그 위에 **회사 전략 합성 narrative** 를 만든다.
 
 현재 코드 기준:
-- `src/agents/profile_agent.py`
+- `src/agents/profile_agent.py` (Tier A 합성)
+- `src/services/profile_context_v2.py` (Tier B runtime loader)
 - `src/services/skax_profile_context_loader.py`
+- `scripts/refresh_peer_profile_snapshots.py` (Tier A CronJob entry)
 
 ### ImplicationAgent
 
@@ -315,7 +330,7 @@ DataUsageOrchestrator
 
 ### DataUsageOrchestrator
 
-2단계 활용 흐름을 조율하는 Supervisor이다.
+2단계 활용 흐름을 조율하는 dispatcher (DAG 가 아닌 dynamic request-based 라우터).
 
 주요 책임:
 - 사용자 요청 또는 스케줄에 따라 필요한 활용 Agent를 호출한다.

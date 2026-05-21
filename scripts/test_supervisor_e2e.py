@@ -36,7 +36,7 @@ def main(cluster_id: int) -> None:
         build_classification_from_articles,
         list_cluster_article_ids,
     )
-    from src.pipeline.supervisor_graph import run_supervisor
+    from src.pipeline.analysis_flow_graph import run_supervisor
 
     article_ids = list_cluster_article_ids(cluster_id)
     print(f"\n=== cluster {cluster_id} | article_ids={article_ids}")

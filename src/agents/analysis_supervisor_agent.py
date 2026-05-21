@@ -34,7 +34,7 @@ from src.analysis.models import (
     ProfileContext,
 )
 from src.db.article_store import get_articles_by_ids
-from src.pipeline.supervisor_graph import (
+from src.pipeline.analysis_flow_graph import (
     SupervisorDeps,
     build_supervisor_graph,
     run_supervisor,

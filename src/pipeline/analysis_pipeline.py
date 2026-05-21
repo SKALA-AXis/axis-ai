@@ -18,7 +18,7 @@ from src.agents.card_news_agent import CardNewsAgent
 from src.analysis.models import AnalysisInputBundle
 from src.db.article_store import get_articles_by_ids, save_card_news
 from src.db.postgres import SessionLocal
-from src.pipeline.supervisor_graph import run_supervisor
+from src.pipeline.analysis_flow_graph import run_supervisor
 
 log = logging.getLogger(__name__)
 

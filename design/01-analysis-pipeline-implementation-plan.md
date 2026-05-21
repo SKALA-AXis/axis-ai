@@ -15,7 +15,7 @@
 
 ## 0. 한 줄 요약
 
-수집·전처리·매칭이 끝난 데이터를 받아 `DataAnalysisSupervisorAgent` 가 4 child agent 를 조율해 `AnalysisPackage` 를 만들고 `CardNewsAgent` 가 카드로 재가공하는 **wire 는 동작 중**. 그러나 (a) 시사점이 LLM 미사용 heuristic 이라 카드 가치의 핵심이 약하고, (b) Profile context 가 cluster-time 에 빈약하며, (c) Supervisor 가 plain Python 순차 호출이라 retry·관측·검증이 모두 부재. **추가로 (d) 시사점·대응 추론에 필요한 과거 누적 맥락 (뉴스 14k, business_signals 27k, financial_metrics 3.4k, IR/DART) 이 cluster-time 에 활용되지 않고 있으며**, (e) 카드뉴스 형식이 `요약` 중심이라 `요약+시사점+대응` 세 섹션을 명확히 분리하는 schema 정합화가 필요. 본 계획서는 (a)(b)(c) 를 **LangGraph 기반 검증 가능한 Supervisor 로 재설계**, (d) 를 **4-Layer Context Model + AnalysisContextBuilder + 운영 CronJob 2~3종** 으로 해결, (e) 를 **카드뉴스 v2 schema (`summary_lines` + `implication.skax_implication.recommended_actions` 명시화)** 로 마무리. **핵심: 신규 DB 테이블은 거의 불필요 (기존 `card_news` / `raw_article_business_signals` / `raw_article_financial_metrics` / `peer_companies.peer_plus_payload` JSONB / `legacy_records` 로 모두 흡수 가능). 추가는 VIEW 2 + MATERIALIZED VIEW 1 + 인덱스 3개 + V34 (옵션) `event_chain_links` 1 테이블.**
+수집·전처리·매칭이 끝난 데이터를 받아 **Analysis Pipeline runner** (코드 상 `AnalysisGraphRunner` / `DataAnalysisSupervisorAgent` alias) 가 4 child agent 를 조율해 `AnalysisPackage` 를 만들고 `CardNewsAgent` 가 카드로 재가공하는 **wire 는 동작 중**. 그러나 (a) 시사점이 LLM 미사용 heuristic 이라 카드 가치의 핵심이 약하고, (b) Profile context 가 cluster-time 에 빈약하며, (c) **Analysis Pipeline 이 plain Python 순차 호출** 이라 retry·관측·검증이 모두 부재. **추가로 (d) 시사점·대응 추론에 필요한 과거 누적 맥락 (뉴스 14k, business_signals 27k, financial_metrics 3.4k, IR/DART) 이 cluster-time 에 활용되지 않고 있으며**, (e) 카드뉴스 형식이 `요약` 중심이라 `요약+시사점+대응` 세 섹션을 명확히 분리하는 schema 정합화가 필요. 본 계획서는 (a)(b)(c) 를 **LangGraph 기반 고정 순서 DAG (`AnalysisFlowGraph`) 로 재설계**, (d) 를 **4-Layer Context Model + AnalysisContextBuilder + 운영 CronJob 2~3종** 으로 해결, (e) 를 **카드뉴스 v2 schema (`summary_lines` + `implication.skax_implication.recommended_actions` 명시화)** 로 마무리. **핵심: 신규 DB 테이블은 거의 불필요 (기존 `card_news` / `raw_article_business_signals` / `raw_article_financial_metrics` / `peer_companies.peer_plus_payload` JSONB / `legacy_records` 로 모두 흡수 가능). 추가는 VIEW 2 + MATERIALIZED VIEW 1 + 인덱스 3개 + V34 (옵션) `event_chain_links` 1 테이블.**
 
 **v3.1 핵심 변경 (실측 기반)**: §2.4 에 8 critical issue 추가 (cluster_id 의미 불일치 / source_raw_article_ids 누락 15% / metric_name 정규화 누락 / matched_companies 표기 혼재 등). §3.4 의 ContextBuilder query 를 **`source_raw_article_ids[]` 기반 join + peer_id alias 정규화 + metric_name canonicalization + chunked LLM input** 으로 재설계. W4 단계 앞에 **W4-0 (data hygiene precondition)** 신설.
 
@@ -71,7 +71,7 @@
 
 | # | 컴포넌트 | 파일 | LoC | LLM | DB | 상태 |
 |---|---|---|---|---|---|---|
-| 1 | `DataAnalysisSupervisorAgent` | `agents/analysis_supervisor_agent.py` | 241 | ❌ 조율 | via children | 🟢 wire / 🔴 retry 없음 |
+| 1 | `AnalysisGraphRunner` (= `DataAnalysisSupervisorAgent` alias) | `agents/analysis_supervisor_agent.py` | 241 | ❌ 조율 | via children | 🟢 wire / 🔴 retry 없음 |
 | 2 | `IssueIntegrationAgent` | `agents/issue_integration_agent.py` | 610 | via summarizer | `raw_articles` read | 🟢 |
 | 2a | `SourceSummarizer` (engine) | `analysis/summarizer.py` | 2,630 | ✅ 2 invoke | `raw_articles` | 🟢 `summary-v4.0` |
 | 3 | `AnalysisAgent` (= `StrategicAnalyzer`) | `agents/analysis_agent.py` + `analysis/analyzer.py` | 343 | ✅ 1 invoke | in-memory | 🟢 `analysis-v3.0` |
@@ -114,13 +114,13 @@
 |---|---|---|
 | **P0-1** | `ImplicationAgent` 가 heuristic only (LLM 미사용) | 카드 183건의 SK AX 시사점이 generic 템플릿. 서비스 핵심 가치 손실 |
 | **P0-2** | `ProfileAgent` 가 cluster-time 에 lightweight context (static dict) 만 반환 | peer 별 차별화 input 부재 → 시사점 깊이 한계 |
-| **P0-3** | Supervisor 가 LLM 한 단계 실패 시 cluster 전체 카드 손실 | 시간당 카드 손실, rate limit / OpenAI 5xx 빈도에 직접 노출 |
+| **P0-3** | Analysis Pipeline 의 한 LLM 노드 실패 시 cluster 전체 카드 손실 | 시간당 카드 손실, rate limit / OpenAI 5xx 빈도에 직접 노출 |
 
 ### 🟠 P1 — 구조적 약점
 
 | ID | 약점 | 영향 |
 |---|---|---|
-| **P1-1** | Supervisor 가 LangGraph state machine 이 아니라 plain Python 순차 호출 | 노드별 elapsed_ms · token 추적 불가, retry/fallback 라우팅 어려움 |
+| **P1-1** | Analysis Pipeline 이 LangGraph state machine 이 아니라 plain Python 순차 호출 | 노드별 elapsed_ms · token 추적 불가, retry/fallback 라우팅 어려움 |
 | **P1-2** | `AnalysisResult` / `ImplicationResult` dataclass ↔ 실 LLM 출력 키 mismatch (schema drift) | 타입 안전 무력, 신규 팀원 혼란 |
 | **P1-3** | Supervisor 레벨 quality gate 부재 (출처 수치 검증, 단정 표현 검출, evidence_chain 무결성) | hallucination 카드가 production 으로 빠져나감 |
 | **P1-4** | CardNewsAgent 가 implication 을 2번 처리 (analysis 기반 + ImplicationAgent 결과) | 같은 의미 중복 LLM 가능, 출력 일관성 약함 |
@@ -188,14 +188,14 @@
 
 기존 design (`design/00-analysis-pipeline-topology.md`) 의 컴포넌트는 유지하되 **6가지 구조적 수정**:
 
-1. **Supervisor 를 LangGraph StateGraph 로 재구성** — `ingestion_graph` 와 동일한 패턴 (state-based, 노드별 logging, retry decorator).
+1. **Analysis Pipeline 을 LangGraph 기반 고정 순서 DAG (`AnalysisFlowGraph`) 로 재구성** — `ingestion_graph` 와 동일한 패턴 (state-based, 노드별 logging, retry decorator).
 2. **ProfileContext 를 2-tier 분리** — Static snapshot (CronJob 주1회 LLM 합성) + Recent enrichment (cluster-time DB query). cluster-time LLM 호출 추가 없음.
 3. **Validate 노드 신설** — output guardrail 분리. Evidence Chain 무결성 / 출처 수치 / 단정 표현 자동 검사.
 4. **Context layer 신설 (W4)** — 4-Layer Context Model (Raw / Derived Timeseries / Retrieval Index / Active Context) + `AnalysisContextBuilder` (cluster-time, LLM X) + 운영 CronJob 2~3종. **신규 DB 테이블은 사실상 0개** — 기존 JSONB + VIEW + MATERIALIZED VIEW + `legacy_records` 로 모두 흡수.
 5. **카드뉴스 v2 schema (요약+시사점+대응 3섹션)** — `card_news` 컬럼 추가 없이 `implication` JSONB key namespace 만 V34 에서 정합화. frontend 는 A(`summary_lines`) / B(`implication.skax_implication.why_important+potential_impact`) / C(`implication.skax_implication.recommended_actions`) 로 3섹션 분리 표시.
 6. **Evaluation & Observability Layer 신설 (W5)** — **Hybrid 배치**: rule-based 5 metric 은 `validate` 노드 확장 (in-graph, LLM X, latency 0), LLM-as-Judge 4 score 는 별도 sidecar CronJob (`axis-cron-card-evaluator`, 5분 주기, gpt-4o-mini). 두 결과 모두 `card_news.evaluation_payload` JSONB 에 누적 → regression detection 자동화 가능.
 
-### 3.1 LangGraph Supervisor StateGraph
+### 3.1 LangGraph Analysis Flow Graph (DAG)
 
 ```text
                   ┌────────────────────────────────────────────────┐
@@ -236,22 +236,25 @@
                                 card_schema_version='v2' / evaluation_payload['rule_based'])
 ```
 
-→ **카드뉴스는 분석/시사점/대응의 직렬화 결과** — 즉 Supervisor 의 최종 산출물이며, ingestion (Layer A) 단에서 만들지 않는다. As-Is 의 `ingestion_graph.card_news_node` 는 W2-1 작업 5 에서 제거되어 `card_writer` 노드로 통합된다.
+→ **카드뉴스는 분석/시사점/대응의 직렬화 결과** — 즉 Analysis Pipeline 의 최종 산출물이며, ingestion (Layer A) 단에서 만들지 않는다. As-Is 의 `ingestion_graph.card_news_node` 는 W2-1 작업 5 에서 제거되어 `card_writer` 노드로 통합된다.
 
-**Retry 정책** — **목표 (별도 PR), 현재 미적용** (외부 리뷰 R-7 명시):
+**Retry 정책** — LangGraph `RetryPolicy` **정식 적용 완료** (외부 리뷰 R-7 반영 2026-05-21):
 
-| 노드 | 목표 max_attempts | 목표 backoff | 실패 시 | **현재 상태** |
-|---|---|---|---|---|
-| `issue_integrate` | 2 | exponential 1s, 2s | `is_valid_summary=false` → 카드 skip | 미적용. `_logged_step` 의 try/except 가 예외를 `state.errors[]` 에 누적 |
-| `profile_context` | 1 | — | static-only fallback | 미적용. v2→legacy `build_context` fallback 만 |
-| `build_analysis_context` | 1 | — | empty AnalysisContext fallback (no LLM 이므로 retry 불필요) | DB query try/except 로 layer 별 graceful 빈 결과 |
-| `strategic_analyze` | 2 | exponential 1s, 2s | `is_valid_analysis=false` → implication skip | 미적용. 빈 결과 반환 후 다음 노드의 valid 검사 |
-| `implication` | 2 | exponential 1s, 2s | heuristic fallback (현 `ImplicationGenerator`) | **이미 적용** — ImplicationAgent 내부 try/except 가 LLM 실패를 잡아 heuristic 으로 fallback |
-| `validate` | 1 | — | hard fail (skip 카드) | 적용 |
-| `card_writer` | 2 | exponential 1s, 2s | DB transient 실패 시 retry, 2회 실패 시 errors 기록 후 hard fail | 미적용. save_card_news 의 try/except 가 한 번 잡음 |
+| 노드 | RetryPolicy | 실패 시 fallback |
+|---|---|---|
+| `issue_integrate` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | 2회 실패 → 빈 IntegratedIssue → `validate` 가 `integrated_issue_valid=false` → human_review |
+| `profile_context` | None (DB only) | `build_profile_context_v2` 실패 → legacy `ProfileAgent.build_context` fallback |
+| `build_analysis_context` | None (DB+Qdrant only) | layer 별 query try/except → 빈 AnalysisContext, ImplicationAgent v4.0 사용 |
+| `strategic_analyze` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | 2회 실패 → `is_valid_analysis=false` → human_review |
+| `implication` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | LangGraph 2회 실패 후 ImplicationAgent 내부 try/except → heuristic generator |
+| `validate` | None (rule-based) | hard fail → human_review |
+| `assemble` | None | — |
+| `card_writer` | `RetryPolicy(initial_interval=0.5, backoff_factor=2.0, max_attempts=2)` | DB transient 실패 시 자동 retry, 2회 실패 시 `card_news_id=None` 반환 |
+| `human_review` | None | — |
 
-→ **목표**: LangGraph `node.with_retry(RetryPolicy(...))` 로 위 정책을 정식 적용. **별도 PR (W3-4 trace + retry 묶음)** 에서 도입 예정.
-→ **현재 부분 실패 흡수**: implication LLM 만 실패해도 analysis 단계까지의 결과는 보존됨 (heuristic fallback). 다른 노드는 retry 없이 한 번만 시도하고 실패 시 다음 노드의 valid 검사로 라우팅됨. `card_writer` 만 실패하면 `AnalysisPackage` 는 메모리에 남아 호출자가 후속 재시도 가능.
+구현: `src/pipeline/analysis_flow_graph.py` 의 `_NODE_RETRY_POLICIES` dict + `build_supervisor_graph` 의 `g.add_node(name, fn, retry_policy=...)`.
+
+→ **부분 실패 흡수**: LLM 호출 노드는 LangGraph 가 exponential backoff 로 자동 재시도 후 노드 내부 fallback (heuristic / 빈 결과) 으로 graceful degradation. cluster 전체 손실 방지.
 
 ### 3.2 ProfileContext 2-tier 분리
 
@@ -1273,7 +1276,7 @@ src/db/article_store.py                      (INSERT statement 갱신)
 
 ### 단계 W2 — 2주차 (graph + profile + validation, 약 20h)
 
-#### W2-1. Supervisor 를 LangGraph StateGraph 로 ★ P1-1
+#### W2-1. Analysis Pipeline 을 LangGraph DAG 로 ★ P1-1
 
 ```python
 # src/pipeline/supervisor_graph.py (신규)
@@ -1342,7 +1345,7 @@ class DataAnalysisSupervisorAgent:
 
 **작업 5 (v3.1.3 신설) — CardNewsAgent 를 Supervisor 의 last 노드로 이관**
 
-> §0.1 의 Layer 분리 약속을 이행. 카드뉴스는 분석/시사점/대응의 직렬화 결과 (= Supervisor 의 산출물) 이므로 `ingestion_graph` 가 아닌 `supervisor_graph` 의 마지막 노드에서 작성.
+> §0.1 의 Layer 분리 약속을 이행. 카드뉴스는 분석/시사점/대응의 직렬화 결과 (= Analysis Pipeline 의 산출물) 이므로 `ingestion_graph` 가 아닌 `analysis_flow_graph` (호환 alias `supervisor_graph`) 의 마지막 노드에서 작성.
 
 - `ingestion_graph.card_news_node` 제거 (이관) — `pipeline/ingestion_graph.py` 에서 `card_news_node` 호출 제거. ingestion_graph 의 종료 시점은 `raw_articles` + cluster classification 까지로 한정 (Layer A 책임).
 - `pipeline/analysis_pipeline.py` 의 `AnalysisPipelineRunner` 가 cluster 마다 supervisor.invoke 후 `card_news_id` 까지 반환받음 (호출자는 `state['card_news_id']` 로 카드 ID 접근).

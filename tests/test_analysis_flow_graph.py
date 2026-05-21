@@ -9,7 +9,7 @@ from src.analysis.models import (
     AnalysisContext,
     AnalysisInputBundle,
 )
-from src.pipeline.supervisor_graph import (
+from src.pipeline.analysis_flow_graph import (
     SupervisorDeps,
     _hard_validate,
     build_supervisor_graph,
@@ -127,10 +127,10 @@ def test_supervisor_graph_happy_path_writes_card():
     deps = _stub_deps()
     graph = build_supervisor_graph(deps)
     with (
-        patch("src.pipeline.supervisor_graph.save_card_news", return_value="CN-OK"),
-        patch("src.pipeline.supervisor_graph.save_pipeline_log"),
+        patch("src.pipeline.analysis_flow_graph.save_card_news", return_value="CN-OK"),
+        patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
         patch(
-            "src.pipeline.supervisor_graph.build_profile_context_v2",
+            "src.pipeline.analysis_flow_graph.build_profile_context_v2",
             side_effect=RuntimeError("force legacy"),
         ),
     ):
@@ -166,10 +166,10 @@ def test_supervisor_graph_routes_human_review_on_fake_numeric():
     deps.issue_integrator.integrate_input_bundle.return_value["key_numbers"] = []
     graph = build_supervisor_graph(deps)
     with (
-        patch("src.pipeline.supervisor_graph.save_card_news"),
-        patch("src.pipeline.supervisor_graph.save_pipeline_log"),
+        patch("src.pipeline.analysis_flow_graph.save_card_news"),
+        patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
         patch(
-            "src.pipeline.supervisor_graph.build_profile_context_v2",
+            "src.pipeline.analysis_flow_graph.build_profile_context_v2",
             side_effect=RuntimeError("force legacy"),
         ),
     ):

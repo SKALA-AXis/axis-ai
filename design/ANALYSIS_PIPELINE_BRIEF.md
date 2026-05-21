@@ -27,7 +27,7 @@
 > * 현재는 `_logged_step` 데코레이터의 try/except 가 노드 예외를 잡아 `state.errors[]` 에
 >   누적하고, ImplicationAgent 가 내부에서 LLM 실패 시 heuristic generator 로 자동 fallback.
 > * Langfuse tracing 도 ImplicationAgent / CapabilityEvolutionAgent 만 부분 적용 — 다른
->   supervisor 노드 (issue_integrate / strategic_analyze) 는 별도 PR 에서 trace metadata 부착.
+>   Analysis Pipeline 노드 (issue_integrate / strategic_analyze) 는 별도 PR 에서 trace metadata 부착.
 > 작성: 2026-05-20 / 갱신: 2026-05-21 · Critical path **~40h** / 총 **~85h** / **5-5.5주** (W5 Evaluation Layer 포함)
 
 ---
@@ -36,18 +36,18 @@
 
 | # | Agent | 위치 | 호출 시점 | LLM |
 |---|---|---|---|---|
-| 1 | **DataAnalysisSupervisorAgent** (재설계) | `pipeline/supervisor_graph.py` | cluster 마다 | ❌ (조율) |
-| 2 | IssueIntegrationAgent (유지) | `agents/issue_integration_agent.py` | Supervisor 노드 | ✅ |
-| 3 | AnalysisAgent (유지) | `agents/analysis_agent.py` | Supervisor 노드 | ✅ |
-| 4 | ProfileAgent (2-tier 분리) | `agents/profile_agent.py` | Supervisor 노드 | ❌ (CronJob 분리) |
-| 5 | **ImplicationAgent v4.0** (신규) | `agents/implication_agent.py` | Supervisor 노드 | ✅ |
-| 6 | CardNewsAgent (수정 + 이관) | `agents/card_news_agent.py` (호출은 supervisor `card_writer` 노드) | Supervisor 노드 (W2-1 작업 5) | ✅ |
-| 7 | **AnalysisContextBuilder** (신규) | `services/analysis_context_builder.py` | Supervisor 노드 | ❌ |
+| 1 | **AnalysisGraphRunner** (재설계 — alias of `DataAnalysisSupervisorAgent`) | `pipeline/supervisor_graph.py` (= 곧 `analysis_flow_graph.py`) | cluster 마다 | ❌ (조율) |
+| 2 | IssueIntegrationAgent (유지) | `agents/issue_integration_agent.py` | Analysis Pipeline 노드 | ✅ |
+| 3 | AnalysisAgent (유지) | `agents/analysis_agent.py` | Analysis Pipeline 노드 | ✅ |
+| 4 | ProfileAgent (2-tier 분리) | `agents/profile_agent.py` | Analysis Pipeline 노드 | ❌ (CronJob 분리) |
+| 5 | **ImplicationAgent v4.0** (신규) | `agents/implication_agent.py` | Analysis Pipeline 노드 | ✅ |
+| 6 | CardNewsAgent (수정 + 이관) | `agents/card_news_agent.py` (호출은 Analysis Pipeline 의 `card_writer` 노드) | Analysis Pipeline 노드 (W2-1 작업 5) | ✅ |
+| 7 | **AnalysisContextBuilder** (신규) | `services/analysis_context_builder.py` | Analysis Pipeline 노드 | ❌ |
 | 8 | **CapabilityEvolutionAgent** (신규) | `agents/context/capability_evolution_agent.py` | 월1회 CronJob | ✅ |
 | 9 | **SectorPulseAggregator** (신규) | `agents/context/sector_pulse_aggregator.py` | 주1회 CronJob | ❌ |
 | 10 | **EventChainDiscoveryAgent** (옵션) | `agents/context/event_chain_discovery_agent.py` | 매일 CronJob | ✅ |
 | 11 | **ProfileSnapshotAgent** (신규) | `scripts/refresh_peer_profile_snapshots.py` | 주1회 CronJob | ✅ |
-| 12 | **EvaluatorAgent** (W5-1 신규, rule-based 5 metric) | `agents/evaluator_agent.py` + `validate` 노드 확장 | Supervisor 노드 (in-graph) | ❌ |
+| 12 | **EvaluatorAgent** (W5-1 신규, rule-based 5 metric) | `agents/evaluator_agent.py` + `validate` 노드 확장 | Analysis Pipeline 노드 (in-graph) | ❌ |
 | 13 | **CardEvaluatorSidecar** (W5-2 신규, LLM-as-Judge 4 score) | `scripts/evaluate_recent_cards.py` | 5분 주기 CronJob (sidecar) | ✅ gpt-4o-mini |
 
 ---
@@ -63,7 +63,7 @@
 └─────────────────────────────────────────────────────────────────────┘
                           ↓ (cluster 단위 trigger)
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Layer B — Analysis Supervisor Graph (이 계획서의 작업 범위)         │
+│ Layer B — Analysis Pipeline Graph (DAG, 이 계획서의 작업 범위)      │
 │                                                                     │
 │   ① context assemble                                                │
 │      profile_context  →  build_analysis_context (DB+Qdrant, no LLM) │
@@ -95,13 +95,13 @@
                                           evaluation_payload.llm_judge
 ```
 
-> **As-Is design debt (v3.1.3 해소)**: 현재 코드에서는 카드 생성 (`CardNewsAgent.write_card`) 이 `ingestion_graph.card_news_node` 에서 호출됨 — Layer 위반. **W2-1 작업 5 에서 `card_writer` 노드로 supervisor 의 마지막 노드에 통합** (W2-1 시간 +2~3h, 본 계획서 범위 내). 카드뉴스는 분석/시사점/대응의 직렬화 결과 = Layer B 의 산출물.
+> **As-Is design debt (v3.1.3 해소)**: 현재 코드에서는 카드 생성 (`CardNewsAgent.write_card`) 이 `ingestion_graph.card_news_node` 에서 호출됨 — Layer 위반. **W2-1 작업 5 에서 `card_writer` 노드로 Analysis Pipeline 의 마지막 노드에 통합** (W2-1 시간 +2~3h, 본 계획서 범위 내). 카드뉴스는 분석/시사점/대응의 직렬화 결과 = Layer B 의 산출물.
 
 ---
 
 ## 3. Agent I/O (DB 테이블·컬럼 기준)
 
-### 3.1 Supervisor 흐름 내 (cluster-time)
+### 3.1 Analysis Pipeline 흐름 내 (cluster-time)
 
 | Agent | Input | Output |
 |---|---|---|
@@ -110,7 +110,7 @@
 | **IssueIntegrationAgent** | `AnalysisInputBundle` (cluster 의 raw_articles) | `IntegratedIssue` (메모리, consolidated_facts / key_numbers / fact_basis) |
 | **AnalysisAgent** | `IntegratedIssue` + `ProfileContext` | `AnalysisResult` (메모리, strategic_meaning / impact_level / risk_or_opportunity) |
 | **ImplicationAgent v4.0** ⭐신규 | `Bundle` + `IntegratedIssue` + `AnalysisResult` + `ProfileContext` + `AnalysisContext` | `ImplicationResult` (메모리, peer_implication / skax_implication / follow_up / confidence) |
-| **Validate 노드 + EvaluatorAgent** ⭐신규 (W2-3 + W5-1) | 전체 SupervisorState (+ rolling 7d confidence) | `ValidationReport` (pass/fail + violations + **rule-based 5 metric**) |
+| **Validate 노드 + EvaluatorAgent** ⭐신규 (W2-3 + W5-1) | 전체 AnalysisFlowState (= SupervisorState alias) + rolling 7d confidence | `ValidationReport` (pass/fail + violations + **rule-based 5 metric**) |
 | **CardNewsAgent** (via `card_writer` 노드) | `AnalysisPackage` (모든 결과) + ValidationReport | **WRITE**: `card_news` 행 (v2 schema + `evaluation_payload.rule_based`) |
 
 ### 3.2 Context Layer CronJobs (배치) + Evaluation Sidecar (W5)
@@ -185,7 +185,7 @@ CREATE MATERIALIZED VIEW sector_pulse AS ...;    -- sector×week 단위 집계 (
 | 단계 | 작업 | 시간 |
 |---|---|---|
 | **W1** (1주차) | ImplicationAgent v4.0 / schema 정합화 / metadata typed / card v2 lint | 12h |
-| **W2** (2주차) | Supervisor → LangGraph (+ CardNews 이관) / Profile 2-tier / Validate 노드 / CardNews 정리 | 22-25h |
+| **W2** (2주차) | Analysis Pipeline → LangGraph DAG (+ CardNews 이관) / Profile 2-tier / Validate 노드 / CardNews 정리 | 22-25h |
 | **W3** (3주차) | design docs / tests / Langfuse / cleanup | 12h |
 | **W4** (4주차) | **data hygiene → V33 → ContextBuilder → CapabilityEvol → SectorPulse → prompt v5.0** | 22h |
 | **W5** (5주차) | **Evaluation Layer — rule-based eval (W5-1) + LLM-as-Judge sidecar (W5-2)** | **10-14h** |
@@ -213,7 +213,7 @@ CREATE MATERIALIZED VIEW sector_pulse AS ...;    -- sector×week 단위 집계 (
 
 1. **신규 DB 테이블 0개** — 기존 JSONB + VIEW + MV 로 모두 흡수
 2. **Cluster-time LLM 호출 0건 증가** — context 합성은 DB query 만
-3. **Supervisor → LangGraph 전환** — retry / 노드별 logging / human_review 라우팅
+3. **Analysis Pipeline → LangGraph DAG 전환** — retry / 노드별 logging / human_review 라우팅
 4. **카드 = 요약 + 시사점 + 대응 3섹션** — `implication` JSONB key 표준화로 해결
 5. **W4-6 (EventChain) 보류** — 4주 운영 측정 후 결정
 6. **`card_news.cluster_id` 사용 금지** — ephemeral seq. `source_raw_article_ids` 또는 `(peer, event_type, date)` 사용
@@ -225,7 +225,7 @@ CREATE MATERIALIZED VIEW sector_pulse AS ...;    -- sector×week 단위 집계 (
 
 ## 9. Layer B 카드 생성 단 (`card_writer` 노드) 의 정합화 — W2-1 작업 5 흡수
 
-> ingestion (Layer A) 회귀가 아닌 **Supervisor 의 `card_writer` 노드** (As-Is `ingestion_graph.card_news_node`, To-Be `card_writer` in `supervisor_graph.py`) 의 정합화 작업. **W2-1 작업 5 (CardNews 이관) 에 흡수** — 노드 이관 시 아래 항목들을 함께 처리.
+> ingestion (Layer A) 회귀가 아닌 **Analysis Pipeline 의 `card_writer` 노드** (As-Is `ingestion_graph.card_news_node`, To-Be `card_writer` in `analysis_flow_graph` / 호환 별칭 `supervisor_graph`) 의 정합화 작업. **W2-1 작업 5 (CardNews 이관) 에 흡수** — 노드 이관 시 아래 항목들을 함께 처리.
 
 - 카드 dedup 강화 (같은 `(peer, event_type, DATE(created_at))` 키에 카드 4-6건 발생) — `card_writer` 진입 시 dedup 키 검사
 - `card_news.source_raw_article_ids` 빈 15% 카드 — `card_writer` 가 source 비어있으면 hard fail
