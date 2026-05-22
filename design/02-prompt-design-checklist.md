@@ -160,7 +160,7 @@ raw reasoning_steps 가 더 길어도 압축할 것. 핵심 결정만 trail.
 |---|---|---|
 | **MixerAnalysis** | HIGH | PDF §5 직접 요구 (CoT 노출 + 한 줄 결론) |
 | **InsightCascade** | HIGH | 4 phase × 3~5 bullet = 15+ raw → 4~5 trail |
-| **ITTrend** | HIGH | 글로벌 회사 뉴스룸과 산업 브리핑을 통합한 트렌드 흐름 설명 |
+| **ITTrend** | HIGH | SPRi/BCG 자료 + 글로벌 뉴스룸 통합/분석 결과로 TrendContext 생성·갱신 |
 | **BriefingGeneration** | MEDIUM | section 별 mini-trail (10 section × 3 step) 권장 |
 | **ChatOrchestrator** | LOW | 실시간 turn 이라 streaming 으로 충분, trail 보다 follow_up_suggestions 가 효과적 |
 | Ingestion agents | NONE | 사용자 노출 안 함 |

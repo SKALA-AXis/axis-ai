@@ -12,47 +12,72 @@
 
 ## 2. 책임
 
-`ITTrendAgent`는 글로벌 IT 트렌드, 산업 동향, 기술 키워드를 Peer사 동향과 연결해 해석한다.
+`ITTrendAgent`는 SPRi / BCG 자료와 글로벌 회사 뉴스룸의 분석 결과를 기반으로
+글로벌 IT 트렌드와 산업 흐름을 `TrendContext`로 정리·갱신한다. 이 Agent는
+카드뉴스 생성용 Agent가 아니다.
 
 대상 데이터 예:
 - SPRI 보고서
-- BCG / McKinsey / Gartner 등 컨설팅·리서치 자료
-- 글로벌 회사 뉴스룸
-- 산업 동향 브리핑
-- 시장·기술 트렌드 문서
+- BCG 자료
+- 글로벌 회사 뉴스룸에서 생성된 `IntegratedIssue`
+- 글로벌 회사 뉴스룸에서 생성된 `AnalysisResult`
 
 한 줄 책임:
 
-> 외부 트렌드 출처와 저장된 Peer사 동향을 연결해 현재 IT 흐름이 구조적 변화인지 판단한다.
+> SPRi / BCG 트렌드 자료, 글로벌 회사 뉴스룸 분석 결과, 과거 TrendContext를 함께
+> 보고 AnalysisAgent가 참고할 글로벌·산업 흐름 context를 만든다.
 
 ## 3. 책임 NOT
 
 - 원문 크롤링
 - PDF/HTML 파싱
 - 기업·섹터·이벤트 매칭
-- 단일 Peer사 카드뉴스 생성
+- 카드뉴스 생성
+- 글로벌 회사별 뉴스룸 카드뉴스 생성
 - SK AX 대응 전략 확정
 - DB schema 생성
 
-## 4. 글로벌 기업 동향 포함 기준
+## 4. IT 트렌드 영역 입력 구분
 
-글로벌 기업 뉴스룸, 공식 발표, 빅테크 동향은 별도 글로벌 트렌드 전용 에이전트로 분리하지 않고
-`ITTrendAgent`의 입력 소스 중 하나로 본다.
+IT 트렌드 영역 입력은 두 종류로 나눈다.
 
-`ITTrendAgent`는 SPRI/BCG/뉴스룸/산업 브리핑에서 보이는 현재 IT 흐름과
-Peer사 동향의 연결성을 정리한다.
+1. 글로벌 회사별 뉴스룸
+2. SPRi / BCG 트렌드 자료
+
+글로벌 회사별 뉴스룸은 카드뉴스 생성 대상이다. Microsoft, AWS, Google, NVIDIA,
+OpenAI 같은 회사별 뉴스룸은 일반 이슈처럼 다음 흐름을 탄다.
+
+```text
+수집
+→ 전처리 / 매칭
+→ IntegratedIssue
+→ AnalysisAgent
+→ ImplicationAgent
+→ CardNewsAgent
+```
+
+SPRi / BCG 자료는 카드뉴스 생성 대상이 아니다. 이 자료는 `ITTrendAgent`가 읽어
+`TrendContext`를 생성하거나 갱신하는 데 사용한다.
+
+글로벌 회사별 뉴스룸 결과도 `TrendContext` 갱신 입력으로 사용한다. 단, 이때
+`ITTrendAgent`는 원문 뉴스룸이나 카드뉴스 화면 결과가 아니라 `IntegratedIssue`와
+`AnalysisResult`를 실행 신호로 참고한다.
 
 ## 5. 입력 구조
 
 ```python
 class ITTrendInput:
-    items: list[dict]
+    trend_items: list[dict]
     period: str | None
     source_groups: list[str]
+    previous_trend_context: dict | None
+    reference_issue_results: list[dict]
     metadata: dict
 ```
 
-`items`는 이미 Parser / Extractor를 거친 정규화 데이터다.
+`trend_items`는 이미 Parser / Extractor를 거친 SPRi / BCG 정규화 데이터다.
+`reference_issue_results`는 글로벌 회사별 뉴스룸의 `IntegratedIssue` /
+`AnalysisResult` 입력이다.
 
 예:
 
@@ -87,8 +112,7 @@ class ITTrendOutput:
   "trend_summary": "최근 IT 트렌드는 생성형 AI의 업무 적용, AI 인프라 투자, 산업별 자동화 사례 확대로 요약된다.",
   "trend_lines": [
     "리서치 자료에서는 생성형 AI가 파일럿 단계를 넘어 업무 프로세스 적용으로 이동하는 흐름이 반복된다.",
-    "글로벌 회사 뉴스룸에서는 AI 인프라와 데이터센터 투자 확대가 주요 신호로 확인된다.",
-    "산업 브리핑에서는 제조·금융·공공 영역의 자동화 적용 사례가 증가하고 있다."
+    "BCG 자료에서는 AI 투자와 운영 모델 변화가 함께 다뤄진다."
   ],
   "signals": [
     {
@@ -109,8 +133,9 @@ class ITTrendOutput:
 
 ```text
 Raw / 정제 데이터 저장소
-  + 외부 트렌드 문서
-  + 글로벌 뉴스룸 데이터
+  + SPRi / BCG 트렌드 문서
+  + 과거 TrendContext
+  + 글로벌 뉴스룸의 IntegratedIssue / AnalysisResult
         │
         ▼
 DataUsageOrchestrator
@@ -118,11 +143,11 @@ DataUsageOrchestrator
         ▼
 ITTrendAgent
         │
-        ├─ 트렌드 source 묶음 구성
-        ├─ 반복 출현 키워드/주제 정리
-        ├─ Peer사 동향과 트렌드 연결
+        ├─ SPRi / BCG 트렌드 source 묶음 구성
+        ├─ 글로벌 뉴스룸 분석 결과에서 실행 신호 정리
+        ├─ 과거 TrendContext와 최신 자료 비교
         ├─ 일시적 이슈/구조적 변화 구분
-        ├─ 출처 기반 trend_lines 생성
+        ├─ 출처 기반 TrendContext 생성 / 갱신
         └─ validation
 ```
 
@@ -132,4 +157,4 @@ ITTrendAgent
 2. 출처 유형, 기간, 반복 신호, 키워드 변화, 적용 영역 같은 정보 유형 기준으로 판단한다.
 3. 원문에 없는 트렌드를 만들지 않는다.
 4. 리포트/인사이트/챗봇에서 재사용 가능한 구조로 출력한다.
-5. SK AX 전략 시사점이 필요하면 `InsightAgent` 또는 `ImplicationAgent`와 결합한다.
+5. `AnalysisAgent`는 이슈 분석 시 필요하면 `TrendContext`를 참고한다.

@@ -514,6 +514,35 @@ class AnalysisContext:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TrendContext — ITTrendAgent 산출물 (런타임/저장 payload용 내부 DTO)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(slots=True)
+class TrendContext:
+    """SPRi/BCG + 글로벌 뉴스룸 분석 결과 기반 글로벌·산업 흐름 context.
+
+    DB schema가 아니며, ITTrendAgent가 생성/갱신해 AnalysisAgent가 참고할 수 있는
+    내부 DTO이다. 글로벌 회사별 뉴스룸 원문은 카드뉴스 생성 파이프라인을 먼저 타고,
+    그 산출물인 IntegratedIssue / AnalysisResult가 실행 신호 입력으로 들어온다.
+    """
+
+    period: str | None = None
+    trend_summary: str = ""
+    trend_lines: list[str] = field(default_factory=list)
+    signals: list[dict[str, Any]] = field(default_factory=list)
+    source_groups: list[str] = field(default_factory=list)
+    sources: list[dict[str, Any]] = field(default_factory=list)
+    reference_issue_ids: list[str] = field(default_factory=list)
+    updated_at: str = ""
+    validation: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ImplicationResult — W1-1 신설 (v4.0 schema), W4-5 에서 PrecedentLink 활용
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -813,5 +842,6 @@ __all__ = [
     "SkaxImplication",
     "SummaryResult",
     "TimelineEntry",
+    "TrendContext",
     "ValidationReport",
 ]
