@@ -68,6 +68,7 @@ class BatchProcessor:
         self.dedup = DedupStore()
         self.link_checker = LinkChecker()
         self.last_inserted_count = 0
+        self.last_crawl_run_ids: list[str] = []
 
     async def run_track_a(
         self,
@@ -406,6 +407,7 @@ class BatchProcessor:
                 window_end,
                 run_type=run_context.collection_mode,
             )
+            self.last_crawl_run_ids.append(str(run_id))
             effective_run_context = replace(
                 run_context,
                 crawl_run_id=str(run_id),
