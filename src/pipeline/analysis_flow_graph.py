@@ -571,6 +571,8 @@ def _evidence_payload_from_state(state: SupervisorState) -> dict[str, Any]:
     metadata = bundle.metadata or {}
     classification = state.get("classification") or metadata.get("classification") or {}
     integrated = state.get("integrated_issue") or {}
+    analysis = state.get("analysis") or {}
+    implication = state.get("implication") or {}
     evidence_payload: dict[str, Any] = {
         "source_links": [
             {
@@ -583,7 +585,17 @@ def _evidence_payload_from_state(state: SupervisorState) -> dict[str, Any]:
         ],
         "financial_refs": integrated.get("key_numbers", []),
         "mbb_refs": classification.get("mbb_refs", []),
+        "analysis_package": {
+            "bundle_id": bundle.bundle_id,
+            "integrated_issue": integrated,
+            "analysis": analysis,
+            "implication": implication,
+            "classification": classification,
+        },
     }
+    validation = state.get("validation")
+    if validation is not None:
+        evidence_payload["analysis_package"]["validation"] = validation.to_dict()
     return evidence_payload
 
 
@@ -620,6 +632,7 @@ def _cluster_metadata(
     bundle: AnalysisInputBundle,
     profile_context: ProfileContext | None,
 ) -> dict[str, Any]:
+    trend_context = bundle.metadata.get("trend_context") or {}
     return {
         "bundle_id": bundle.bundle_id,
         "cluster_id": bundle.cluster_id,
@@ -635,6 +648,8 @@ def _cluster_metadata(
         "has_skax_profile_context": bool(
             profile_context is not None and profile_context.skax_profile
         ),
+        "has_trend_context": bool(trend_context),
+        "trend_context": trend_context if isinstance(trend_context, dict) else {},
     }
 
 

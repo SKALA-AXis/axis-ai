@@ -60,6 +60,8 @@ class DataUsageOrchestrator:
                 items=request.get("items") or [],
                 period=request.get("period"),
                 source_groups=request.get("source_groups"),
+                previous_trend_context=request.get("previous_trend_context"),
+                reference_issue_results=request.get("reference_issue_results"),
                 metadata=request.get("metadata"),
             )
             return self.it_trend_agent.generate(trend_input)

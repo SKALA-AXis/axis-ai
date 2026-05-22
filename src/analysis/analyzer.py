@@ -38,6 +38,8 @@ _PEER_NEWS_ANALYSIS_PROMPT = """\
 
 목적:
 - 피어사 통합 이슈를 바탕으로 피어사의 전략적 움직임과 산업적 의미를 분석합니다.
+- 입력에 trend_context가 있으면 글로벌/산업 배경으로 참고하되, IntegratedIssue의
+  사실보다 앞세우지 않습니다.
 - SK AX 관점의 대응 전략, 권고, 실행 과제는 작성하지 않습니다.
 - 기사 요약에 없는 구체 수치, 제품명, 회사명, 고객명은 추가하지 않습니다.
 
@@ -55,7 +57,7 @@ cluster_metadata:
 1. integrated_issue에 포함된 사실, 수치, business_signals, fact_basis에 기반한 해석만 작성하세요.
 2. "무슨 일이 있었나"를 반복하지 말고 "왜 의미가 있는가"를 설명하세요.
 3. 피어사의 사업 방향, 제품/서비스 전략, 시장 접근 방식을 중심으로 분석하세요.
-4. 산업 동향은 입력 사실에서 자연스럽게 도출되는 범위 안에서만 작성하세요.
+4. trend_context가 제공되면 산업 동향 배경으로만 사용하고, 이슈에 없는 사실을 새로 만들지 마세요.
 5. SK AX의 대응 필요성, 해야 할 일, 권고 문장은 작성하지 마세요.
 6. 과장 표현을 피하고, 근거가 약하면 confidence를 낮추세요.
 
@@ -233,6 +235,19 @@ def _cluster_metadata_for_prompt(cluster_metadata: dict[str, Any]) -> dict[str, 
         "companies": cluster_metadata.get("companies", []),
         "sectors": cluster_metadata.get("sectors", []),
         "event_type": cluster_metadata.get("event_type"),
+        "trend_context": _trend_context_for_prompt(cluster_metadata.get("trend_context")),
+    }
+
+
+def _trend_context_for_prompt(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "trend_summary": value.get("trend_summary", ""),
+        "trend_lines": value.get("trend_lines", []),
+        "signals": value.get("signals", []),
+        "source_groups": value.get("source_groups", []),
+        "period": value.get("period"),
     }
 
 

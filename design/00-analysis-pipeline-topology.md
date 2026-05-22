@@ -84,6 +84,19 @@ ProfileContext
    → KeywordGraphAgent
 ```
 
+### ITTrendAgent 입력 구분
+
+- 글로벌 회사별 뉴스룸은 카드뉴스 생성 대상이다. Microsoft, AWS, Google, NVIDIA,
+  OpenAI 같은 회사별 뉴스룸은 일반 이슈처럼
+  `IntegratedIssue → AnalysisAgent → ImplicationAgent → CardNewsAgent` 흐름을 탄다.
+- SPRi / BCG 자료는 카드뉴스 생성 대상이 아니다. `ITTrendAgent`가 이 자료와 과거
+  `TrendContext`를 함께 보고 글로벌·산업 흐름을 갱신한다.
+- 글로벌 회사별 뉴스룸의 `IntegratedIssue`와 `AnalysisResult`도 `ITTrendAgent`가
+  실행 신호로 참고해 `TrendContext`를 갱신한다.
+- `ITTrendAgent` 출력은 카드뉴스가 아니라 `TrendContext`다.
+- `AnalysisAgent`는 이슈 분석 시 필요하면 `TrendContext`를 참고할 수 있다.
+- 카드뉴스 화면 결과나 글로벌 뉴스룸 원문을 `TrendContext` 입력으로 직접 쓰지는 않는다.
+
 ## DataAnalysisSupervisorAgent
 
 `DataAnalysisSupervisorAgent`는 1단계 분석 흐름을 조율하는 Supervisor Agent이다.
@@ -160,6 +173,7 @@ LangGraph `RetryPolicy / with_retry` 정식 도입은 별도 PR (`design/01-anal
 입력:
 - `IntegratedIssue`
 - company / sector / event_type metadata
+- 필요 시 `TrendContext`
 
 출력:
 
@@ -177,6 +191,8 @@ LangGraph `RetryPolicy / with_retry` 정식 도입은 별도 PR (`design/01-anal
 - 원문 기반 fact 통합은 IssueIntegrationAgent 책임이다.
 - AnalysisAgent는 IntegratedIssue 안의 `integrated_text`, `consolidated_facts`,
   `key_numbers`, `business_signals`, `fact_basis`를 근거로 해석한다.
+- `TrendContext`가 있으면 글로벌/산업 배경으로만 참고하며, IntegratedIssue에 없는
+  사실을 새로 만들지 않는다.
 
 ## ProfileAgent
 

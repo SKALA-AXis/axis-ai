@@ -75,6 +75,32 @@ class CrossCardFinding(BaseModel):
     ] = "convergent_strategy"
 
 
+class MixerEvidenceRef(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    card_id: str = ""
+    text: str = ""
+
+
+class MixerInsightBlock(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    finding: str = ""
+    rationale: str = ""
+    evidence: list[MixerEvidenceRef] = Field(default_factory=list)
+    evidence_card_ids: list[str] = Field(default_factory=list)
+
+
+class MixerActionDetail(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    action: str = ""
+    why: str = ""
+    use_case: str = ""
+    evidence: list[MixerEvidenceRef] = Field(default_factory=list)
+    evidence_card_ids: list[str] = Field(default_factory=list)
+
+
 class ReasoningTrailItem(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -104,6 +130,14 @@ class MixerAnalysisResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     mix_id: str
+    mix_insight: str = ""
+    common_pattern: MixerInsightBlock = Field(default_factory=MixerInsightBlock)
+    comparison_point: MixerInsightBlock = Field(default_factory=MixerInsightBlock)
+    hidden_conclusion: MixerInsightBlock = Field(default_factory=MixerInsightBlock)
+    action_details: list[MixerActionDetail] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+
+    # Legacy UI-compatible fields.
     insight: str = ""
     final_one_liner: str = ""
     sk_ax_implication: str = ""
