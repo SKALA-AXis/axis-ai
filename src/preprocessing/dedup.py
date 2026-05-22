@@ -17,6 +17,7 @@ import numpy as np
 
 from src.config.companies import COMPANY_ALIASES
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES
+from src.config.openai_policy import openai_calls_enabled
 from src.db.article_store import (
     get_articles_by_ids,
     list_existing_news_cluster_candidates,
@@ -197,7 +198,7 @@ def _embed(
     try:
         return _embed_bge(texts)
     except Exception as e:
-        if not allow_openai_fallback:
+        if not allow_openai_fallback or not openai_calls_enabled():
             raise
         log.warning("BGE-M3 임베딩 실패, OpenAI fallback | error=%s", e)
         return _embed_openai(texts)

@@ -10,6 +10,8 @@ from typing import Any
 
 from langchain_openai import ChatOpenAI
 
+from src.config.openai_policy import openai_calls_enabled, openai_disabled_reason
+
 log = logging.getLogger(__name__)
 
 _LLM_MODEL = os.getenv("DART_ANALYSIS_LLM_MODEL", "gpt-4o-mini")
@@ -94,6 +96,10 @@ def analyze_dart_with_llm(
     max_chunks: int | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Run optional LLM extraction on selected DART sections."""
+    if not openai_calls_enabled():
+        log.warning("DART LLM 분석 스킵 | reason=%s", openai_disabled_reason())
+        return {"llm_business_signals": []}
+
     if not os.getenv("OPENAI_API_KEY"):
         log.warning("OPENAI_API_KEY 미설정: DART LLM 분석 스킵")
         return {"llm_business_signals": []}

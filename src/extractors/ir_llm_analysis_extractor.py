@@ -15,6 +15,8 @@ from typing import Any
 
 from langchain_openai import ChatOpenAI
 
+from src.config.openai_policy import openai_calls_enabled, openai_disabled_reason
+
 log = logging.getLogger(__name__)
 
 _LLM_MODEL = os.getenv("IR_ANALYSIS_LLM_MODEL", "gpt-4o-mini")
@@ -128,6 +130,10 @@ def analyze_ir_with_llm(
     max_pages: int | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Run optional LLM extraction and return normalized metrics/signals."""
+    if not openai_calls_enabled():
+        log.warning("IR LLM 분석 스킵 | reason=%s", openai_disabled_reason())
+        return {"llm_financial_metrics": [], "llm_business_signals": []}
+
     if not os.getenv("OPENAI_API_KEY"):
         log.warning("OPENAI_API_KEY 미설정: IR LLM 분석 스킵")
         return {"llm_financial_metrics": [], "llm_business_signals": []}

@@ -855,6 +855,12 @@ async def translate_article_to_korean(
     - title/content는 번역본을 main 필드로 저장
     - 원문은 extra.original_title/original_content로 보존
     """
+    from src.config.openai_policy import openai_calls_enabled, openai_disabled_reason
+
+    if not openai_calls_enabled():
+        log.warning("BCG 번역 스킵 | reason=%s", openai_disabled_reason())
+        return None, None, {"translation_status": "openai_disabled"}
+
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
         log.warning("OPENAI_API_KEY 미설정: 번역 스킵")

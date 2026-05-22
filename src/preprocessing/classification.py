@@ -17,6 +17,7 @@ from src.config.event_types import (
     event_type_values,
 )
 from src.config.global_companies import global_company_aliases
+from src.config.openai_policy import openai_calls_enabled
 from src.config.sectors import SECTOR_IDS, match_sectors, primary_sector
 from src.db.article_store import get_articles_by_ids, update_classification
 
@@ -287,13 +288,13 @@ class ClusterClassifier:
         rep_article: dict[str, Any],
         exposure: dict[str, Any],
     ) -> tuple[str, str]:
-        if not self.enable_llm:
+        if not self.enable_llm or not openai_calls_enabled():
             rule_event_type, rule_reasoning = _classify_event_type_rule_based(
                 title=str(rep_article.get("title") or ""),
                 content=str(rep_article.get("content") or ""),
             )
             return rule_event_type or "company", (
-                rule_reasoning or "scheduled no-llm mode: 규칙 매칭 없음, company 기본값"
+                rule_reasoning or "no-llm mode: 규칙 매칭 없음, company 기본값"
             )
 
         articles_text = _format_articles([rep_article])
