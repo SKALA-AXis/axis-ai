@@ -1,6 +1,6 @@
 """KnowledgeCuration K1 — AnalysisLedger middleware.
 
-분석 agent (InsightCascade / MixerAnalysis / PeerComparison / GlobalTrends /
+분석 agent (InsightCascade / MixerAnalysis / ITTrend /
 BriefingGeneration) 의 결론을 ``analysis_ledger`` 테이블에 INSERT 하여 다음
 분석 호출 시 ``ContextPackBuilder`` 가 carry-over 하도록 한다.
 
@@ -379,8 +379,7 @@ class AnalysisLedger:
 _AGENT_TYPE_MAP = {
     "InsightCascadeAgent": "insight",
     "MixerAnalysisAgent": "mixer",
-    "PeerComparisonAgent": "peer",
-    "GlobalTrendsAgent": "global",
+    "ITTrendAgent": "it_trend",
     "BriefingGenerationAgent": "briefing",
 }
 

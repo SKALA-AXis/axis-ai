@@ -8,7 +8,7 @@
 | **Supervisor** | Ingestion |
 | **LangGraph node** | `evidence` (#7) |
 | **상태** | ✅ 구현 — `src/agents/evidence_agent.py` |
-| **Trigger** | CardComposerAgent 후 — card_news row 마다 1회 |
+| **Trigger** | CardNewsAgent 후 — card_news row 마다 1회 |
 
 ## 2. 책임
 
@@ -25,7 +25,7 @@
 
 ## 3. 책임 NOT
 
-- card 본문 생성 — CardComposerAgent (이전 노드)
+- card 본문 생성 — CardNewsAgent (이전 노드)
 - LLM 자유형 사실 추출 — 산식 + sub-agent 의 deterministic 책임
 - Qdrant 인덱싱 — EmbedIndexAgent (다음 노드)
 

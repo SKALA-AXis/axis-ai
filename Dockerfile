@@ -34,6 +34,11 @@ RUN python -m playwright install --with-deps chromium-headless-shell \
 
 # 애플리케이션 코드
 COPY src ./src
+# CronJob entrypoint (W2-2 / W4-3 / W5-2):
+#   - scripts/refresh_peer_profile_snapshots.py  (axis-cron-profile-refresh)
+#   - scripts/refresh_capability_evolution.py    (axis-cron-capability-evolution)
+#   - scripts/evaluate_recent_cards.py           (axis-cron-card-evaluator, `python -m scripts.evaluate_recent_cards`)
+COPY scripts ./scripts
 # v3 §5.1·§5.2: FinancialLinkerAgent가 런타임에 읽는 stub 재무 데이터
 # peer_financials 테이블 마이그레이션 후 DB 조회로 전환되면 이 라인 제거
 COPY data ./data

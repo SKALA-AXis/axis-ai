@@ -5,7 +5,7 @@
 | 항목 | 값 |
 |---|---|
 | **이름** | `LinkVerificationAgent` |
-| **Supervisor** | Analysis |
+| **Supervisor** | DataUsageOrchestrator |
 | **상태** | 🟡 backend fixture (`POST /api/cards/{id}/verify-link`), axis-ai 신규 |
 | **Trigger** | User 카드 상세에서 "출처 검증" 클릭 |
 

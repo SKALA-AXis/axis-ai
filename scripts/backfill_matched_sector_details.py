@@ -110,11 +110,7 @@ def _details_for_row(
         return []
 
     text_value = f"{title or ''} {content or ''}"
-    return [
-        detail
-        for detail in match_sector_details(text_value)
-        if detail["sector_id"] in allowed
-    ]
+    return [detail for detail in match_sector_details(text_value) if detail["sector_id"] in allowed]
 
 
 def _json_list(value: Any) -> list[str]:

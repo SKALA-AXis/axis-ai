@@ -1,4 +1,5 @@
 """검색 단위 테스트"""
+
 from unittest.mock import patch
 
 

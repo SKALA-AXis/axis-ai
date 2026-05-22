@@ -236,9 +236,7 @@ def test_ir_parser_does_not_apply_amount_unit_to_margin_rows() -> None:
         parsed,
         {"period": "2026Q1", "peer_id": "test_peer"},
     )
-    margin_metrics = [
-        metric for metric in metrics if metric["metric_name"] == "operating_margin"
-    ]
+    margin_metrics = [metric for metric in metrics if metric["metric_name"] == "operating_margin"]
     assert all(metric["value_krwbn"] is None for metric in margin_metrics)
     assert all(metric["unit"] == "%" for metric in margin_metrics)
 
@@ -324,8 +322,7 @@ def test_ir_parser_stops_table_matrix_before_narrative_text() -> None:
     assert len(table_candidates) == 8
     assert {candidate["business_area"] for candidate in table_candidates} == {"물류 사업"}
     assert all(
-        "AI Transformation" not in candidate["business_area"]
-        for candidate in table_candidates
+        "AI Transformation" not in candidate["business_area"] for candidate in table_candidates
     )
 
 
@@ -412,9 +409,7 @@ def test_ir_parser_ignores_cost_and_gross_profit_rows_as_revenue() -> None:
     assert {
         candidate["metric_name"] if "metric_name" in candidate else candidate["type"]
         for candidate in table_candidates
-    } == {
-        "revenue_total"
-    }
+    } == {"revenue_total"}
     assert all(candidate["business_area"] == "company_total" for candidate in table_candidates)
 
 

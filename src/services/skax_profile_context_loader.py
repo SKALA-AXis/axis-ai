@@ -1,6 +1,14 @@
-"""SK AX 관점 분석 에이전트.
+"""SK AX profile context loading service.
 
-피어사 뉴스 분석 결과를 SK AX 공식 사업 관점에 연결한다.
+SK AX 공식 프로필, 섹터별 관점, 공식 문서/newsroom 문서를 로드해
+시사점 도출 단계의 ProfileContext로 넘기는 service 모듈이다.
+
+주의:
+- 이 파일은 Agent 폴더에서 분리된 service 진입점이다.
+- ``SKAXPerspectiveAgent``는 기존 호환을 위해 함께 이동되어 있지만,
+  현재 1단계 supervisor의 표준 시사점 생성 경로는 ``ImplicationAgent``다.
+- DB schema나 저장 구조를 만들지 않는다.
+
 섹터 기준은 src.config.sectors를 단일 출처로 사용한다.
 """
 
@@ -1568,3 +1576,12 @@ def _clamp_float(value: Any, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return min(max(number, 0.0), 1.0)
+
+
+__all__ = [
+    "SKAXPerspectiveAgent",
+    "SKAXProfileLoader",
+    "build_skax_context",
+    "load_skax_newsroom_documents",
+    "load_skax_official_documents",
+]

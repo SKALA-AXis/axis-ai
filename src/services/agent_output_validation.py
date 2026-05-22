@@ -41,8 +41,7 @@ STRATEGY_LABEL_ENUM: tuple[str, ...] = (
 INTENT_ENUM: tuple[str, ...] = (
     "insight",
     "mixer",
-    "peer_compare",
-    "global_trends",
+    "it_trend",
     "link_verify",
     "search",
     "summary",
@@ -186,3 +185,16 @@ def confidence_in_range(value: Any) -> float:
     if v > 1.0:
         return 1.0
     return round(v, 3)
+
+
+__all__ = [
+    "cap_reasoning_steps",
+    "cap_reasoning_trail",
+    "clip_final_one_liner",
+    "clip_implication",
+    "clip_string",
+    "confidence_in_range",
+    "dedup_and_cap",
+    "normalize_intent",
+    "normalize_strategy_label",
+]

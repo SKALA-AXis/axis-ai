@@ -5,9 +5,9 @@
 | 항목 | 값 |
 |---|---|
 | **이름** | `InsightCascadeAgent` |
-| **Supervisor** | Analysis |
+| **Supervisor** | DataUsageOrchestrator |
 | **상태** | 🟡 backend fixture (`POST /api/insights/generate`, `GET /api/insights/latest`), axis-ai 신규 |
-| **Trigger** | User POST request, on-demand |
+| **Trigger** | 2단계 데이터 활용 요청: User POST request, on-demand |
 
 ## 2. 책임
 
@@ -308,7 +308,7 @@ AnalysisSupervisor 의 state (간소 — on-demand 단일 호출):
 
 ```python
 class AnalysisState(TypedDict):
-    request_type: Literal["insight","mixer","peer_compare","link_verify"]
+    request_type: Literal["insight","mixer","it_trend","link_verify"]
     card_ids: list[str]
     result: dict
     confidence: float
