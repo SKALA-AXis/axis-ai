@@ -68,7 +68,10 @@ HEADERS = {
 
 REQUEST_TIMEOUT = 30
 OFFICIAL_MAX_AGE_DAYS = 30
-BACKFILL_MAX_LIST_PAGES = int(os.getenv("COMPANY_NEWS_BACKFILL_MAX_LIST_PAGES", "20"))
+BACKFILL_MAX_LIST_PAGES = int(os.getenv("COMPANY_NEWS_BACKFILL_MAX_LIST_PAGES", "120"))
+BACKFILL_ARTICLE_LIMIT_PER_COMPANY = int(
+    os.getenv("COMPANY_NEWS_BACKFILL_ARTICLE_LIMIT_PER_COMPANY", "1000")
+)
 
 
 COMPANY_CONFIGS = [
@@ -1415,6 +1418,7 @@ class CompanyNewsCrawler(BaseCrawler):
         self.render_fallback = render_fallback
         self.debug_candidates = debug_candidates
         self.crawl_window = crawl_window
+        self.backfill_article_limit = max(latest_limit, BACKFILL_ARTICLE_LIMIT_PER_COMPANY)
 
     async def crawl(self) -> list[RawArticle]:
         all_articles: list[RawArticle] = []
@@ -1596,7 +1600,7 @@ class CompanyNewsCrawler(BaseCrawler):
 
             articles: list[RawArticle] = []
 
-            for candidate in in_window_candidates[: self.latest_limit]:
+            for candidate in in_window_candidates[: self._article_limit()]:
                 detail_url = candidate["url"]
                 fallback_title = candidate["title"]
                 fallback_date = candidate["published_at"]
@@ -1682,6 +1686,11 @@ class CompanyNewsCrawler(BaseCrawler):
             return max(1, BACKFILL_MAX_LIST_PAGES)
         return 1
 
+    def _article_limit(self) -> int:
+        if self.crawl_window:
+            return self.backfill_article_limit
+        return self.latest_limit
+
     def _filter_candidates_for_window(self, candidates: list[dict]) -> list[dict]:
         if not self.crawl_window:
             return candidates
@@ -1732,7 +1741,7 @@ class CompanyNewsCrawler(BaseCrawler):
             return urls
 
         for page_no in range(2, self._max_list_pages() + 1):
-            urls.append(_company_news_page_url(list_url, company, page_no))
+            urls.extend(_company_news_page_urls(list_url, company, page_no))
 
         return _unique_urls(urls)
 
@@ -1782,37 +1791,102 @@ def _is_recent_official_article(published_at: datetime | None) -> bool:
     return age_days <= OFFICIAL_MAX_AGE_DAYS
 
 
-def _company_news_page_url(list_url: str, company: str, page_no: int) -> str:
+def _company_news_page_urls(list_url: str, company: str, page_no: int) -> list[str]:
     parsed = urlparse(list_url)
 
     if company == "LG CNS" and "press.page_" in parsed.path:
         path = re.sub(r"press\.page_\d+", f"press.page_{page_no}", parsed.path)
-        return urlunparse(parsed._replace(path=path))
+        return [urlunparse(parsed._replace(path=path))]
 
-    param = "page"
-    if company == "현대오토에버":
-        param = "pageIndex"
+    query_keys_by_company = {
+        "삼성SDS": ("page", "pageIndex", "pageNo"),
+        "SK AX": ("page", "pageIndex", "curPage", "pageNo"),
+        "현대오토에버": ("pageIndex", "page", "curPage", "pageNo"),
+        "포스코DX": ("page", "pageIndex", "curPage", "pageNo"),
+    }
+    query_keys = query_keys_by_company.get(company, ("page", "pageIndex", "curPage", "pageNo"))
+    urls = [_with_query_param(list_url, key, str(page_no)) for key in query_keys]
 
-    return _with_query_param(list_url, param, str(page_no))
+    # 일부 뉴스룸은 정적/SEO pagination 경로를 노출한다. 404는 다음 단계에서 자연스럽게 무시된다.
+    base_path = parsed.path.rstrip("/")
+    urls.extend(
+        [
+            urlunparse(parsed._replace(path=f"{base_path}/page/{page_no}", query="")),
+            urlunparse(parsed._replace(path=f"{base_path}/page_{page_no}", query="")),
+        ]
+    )
+
+    return _unique_urls(urls)
+
+
+def _company_news_page_url(list_url: str, company: str, page_no: int) -> str:
+    return _company_news_page_urls(list_url, company, page_no)[0]
+
+
+def _infer_company_from_list_url(url: str) -> str:
+    return get_company_from_url(url)
+
+
+def _page_no_from_pagination_link(link) -> int | None:
+    text = clean_text(link.get_text(" ", strip=True))
+    if text.isdigit():
+        return int(text)
+
+    raw_parts = [
+        str(link.get("href") or ""),
+        str(link.get("onclick") or ""),
+        str(link.get("data-page") or ""),
+        str(link.get("data-page-index") or ""),
+        str(link.get("data-pageno") or ""),
+    ]
+    raw = " ".join(raw_parts)
+
+    for pattern in (
+        r"(?:page|pageIndex|curPage|pageNo)\s*[=:]\s*['\"]?(\d+)",
+        r"(?:goPage|fnPage|movePage|paging|pageMove|linkPage)\s*\(\s*['\"]?(\d+)",
+        r"(?:page|pageIndex|curPage|pageNo)=([0-9]+)",
+    ):
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+
+    return None
 
 
 def _extract_pagination_urls(soup: BeautifulSoup, base_url: str) -> list[str]:
     urls: list[str] = []
-    for link in soup.find_all("a", href=True):
+    company = _infer_company_from_list_url(base_url)
+    for link in soup.find_all("a"):
         text = clean_text(link.get_text(" ", strip=True)).lower()
         href = str(link.get("href") or "").strip()
-        if not href or href.startswith("#") or href.startswith("javascript:"):
+
+        page_no = _page_no_from_pagination_link(link)
+        if (not href or href.startswith("#")) and page_no is None:
             continue
-        if not (
+
+        is_pagination_link = (
             text.isdigit()
             or text in {"next", "more", "다음", "더보기", ">", "›", "»"}
             or re.search(r"(page|pageIndex|curPage|pageNo)=\d+", href, re.IGNORECASE)
             or re.search(r"page[_/-]?\d+", href, re.IGNORECASE)
-        ):
+            or page_no is not None
+        )
+        if not is_pagination_link:
             continue
+
+        if not href or href.startswith("#") or href.startswith("javascript:"):
+            if page_no is None:
+                continue
+            urls.extend(_company_news_page_urls(base_url, company, page_no))
+            continue
+
         url = normalize_url(urljoin(base_url, href))
         if same_domain(base_url, url):
             urls.append(url)
+
+        if page_no is not None:
+            urls.extend(_company_news_page_urls(base_url, company, page_no))
+
     return _unique_urls(urls)
 
 
