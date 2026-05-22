@@ -79,6 +79,10 @@ def _get_llm() -> ChatOpenAI:
     return _llm
 
 
+def _dict_or_empty(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Prompt — design/30-analysis/mixer-analysis.md §6.2.
 # ──────────────────────────────────────────────────────────────────────────
@@ -624,8 +628,8 @@ def _score_for_sector(cards: list[dict], sectors: set[str]) -> float:
 
 
 def _card_score(card: dict) -> float:
-    impl = card.get("implication") or {}
-    sector_meta = impl.get("sector_meta") if isinstance(impl.get("sector_meta"), dict) else {}
+    impl = _dict_or_empty(card.get("implication"))
+    sector_meta = _dict_or_empty(impl.get("sector_meta"))
     exposure = impl.get("exposure_score") or sector_meta.get("exposure_score")
     if exposure is None:
         exposure = card.get("importance_score")
@@ -636,8 +640,8 @@ def _card_score(card: dict) -> float:
 
 
 def _card_sector(card: dict) -> str:
-    impl = card.get("implication") or {}
-    sector_meta = impl.get("sector_meta") if isinstance(impl.get("sector_meta"), dict) else {}
+    impl = _dict_or_empty(card.get("implication"))
+    sector_meta = _dict_or_empty(impl.get("sector_meta"))
     return (
         impl.get("sector")
         or sector_meta.get("sector")
@@ -954,9 +958,11 @@ def _int_list(value: object) -> list[int]:
     values = value if isinstance(value, list | tuple | set) else [value]
     result: list[int] = []
     for item in values:
+        if not isinstance(item, int | float | str | bytes | bytearray):
+            continue
         try:
             number = int(item)
-        except (TypeError, ValueError):
+        except ValueError:
             continue
         if number > 0 and number not in result:
             result.append(number)
@@ -1111,13 +1117,9 @@ def _needs_action_detail_fallback(details: list[dict]) -> bool:
 
 
 def _fallback_action_details_from_result(result: dict) -> list[dict]:
-    common = result.get("common_pattern") if isinstance(result.get("common_pattern"), dict) else {}
-    comparison = (
-        result.get("comparison_point") if isinstance(result.get("comparison_point"), dict) else {}
-    )
-    hidden = (
-        result.get("hidden_conclusion") if isinstance(result.get("hidden_conclusion"), dict) else {}
-    )
+    common = _dict_or_empty(result.get("common_pattern"))
+    comparison = _dict_or_empty(result.get("comparison_point"))
+    hidden = _dict_or_empty(result.get("hidden_conclusion"))
     common_evidence = _json_list(common.get("evidence"))
     comparison_evidence = _json_list(comparison.get("evidence"))
     hidden_evidence = _json_list(hidden.get("evidence"))
@@ -1416,13 +1418,9 @@ def _generate_mix_level_implication(result: dict, cards: list[dict]) -> dict:
 
 
 def _mix_integrated_issue(result: dict, cards: list[dict]) -> dict:
-    common = result.get("common_pattern") if isinstance(result.get("common_pattern"), dict) else {}
-    comparison = (
-        result.get("comparison_point") if isinstance(result.get("comparison_point"), dict) else {}
-    )
-    hidden = (
-        result.get("hidden_conclusion") if isinstance(result.get("hidden_conclusion"), dict) else {}
-    )
+    common = _dict_or_empty(result.get("common_pattern"))
+    comparison = _dict_or_empty(result.get("comparison_point"))
+    hidden = _dict_or_empty(result.get("hidden_conclusion"))
     action_basis = _json_list(result.get("recommended_action_basis"))
     return {
         "is_valid_summary": True,
@@ -1467,13 +1465,9 @@ def _mix_integrated_issue(result: dict, cards: list[dict]) -> dict:
 
 def _mix_analysis_result(result: dict, cards: list[dict]) -> dict:
     del cards
-    common = result.get("common_pattern") if isinstance(result.get("common_pattern"), dict) else {}
-    comparison = (
-        result.get("comparison_point") if isinstance(result.get("comparison_point"), dict) else {}
-    )
-    hidden = (
-        result.get("hidden_conclusion") if isinstance(result.get("hidden_conclusion"), dict) else {}
-    )
+    common = _dict_or_empty(result.get("common_pattern"))
+    comparison = _dict_or_empty(result.get("comparison_point"))
+    hidden = _dict_or_empty(result.get("hidden_conclusion"))
     action_basis = _json_list(result.get("recommended_action_basis"))
     return {
         "is_valid_analysis": True,
@@ -1704,7 +1698,7 @@ def _warning_for(data: dict) -> str | None:
     if confidence < 0.6:
         warnings.append("근거 불충분 — 다른 카드 조합 권장 (confidence < 0.6)")
     for key in ("common_pattern", "comparison_point", "hidden_conclusion"):
-        block = data.get(key) if isinstance(data.get(key), dict) else {}
+        block = _dict_or_empty(data.get(key))
         if not block.get("finding") or len(_json_list(block.get("evidence_card_ids"))) < 2:
             warnings.append(f"{key} 근거 부족")
     if not data.get("recommended_actions"):
