@@ -206,6 +206,9 @@ def _zero_exposure() -> dict[str, Any]:
 class ClusterClassifier:
     """클러스터를 섹터, 노출도, 이벤트 타입 기준으로 분류한다."""
 
+    def __init__(self, *, enable_llm: bool = True) -> None:
+        self.enable_llm = enable_llm
+
     def classify(
         self,
         cluster_id: int,
@@ -284,6 +287,15 @@ class ClusterClassifier:
         rep_article: dict[str, Any],
         exposure: dict[str, Any],
     ) -> tuple[str, str]:
+        if not self.enable_llm:
+            rule_event_type, rule_reasoning = _classify_event_type_rule_based(
+                title=str(rep_article.get("title") or ""),
+                content=str(rep_article.get("content") or ""),
+            )
+            return rule_event_type or "company", (
+                rule_reasoning or "scheduled no-llm mode: 규칙 매칭 없음, company 기본값"
+            )
+
         articles_text = _format_articles([rep_article])
         company_mention_text = (
             f"{exposure['company_mention_count']}건 (cluster_size={exposure['cluster_size']})"

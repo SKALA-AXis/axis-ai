@@ -181,6 +181,9 @@ peer_context: {peer_context}
 class RelevanceEvaluator:
     """company/sector 관점의 내용 기반 관련성을 판단한다."""
 
+    def __init__(self, *, enable_llm: bool = True) -> None:
+        self.enable_llm = enable_llm
+
     def filter(self, raw_article_ids: list[int]) -> tuple[list[int], list[int]]:
         """관련성 판단 후 relevant ID와 skipped ID를 반환한다.
 
@@ -425,6 +428,15 @@ class RelevanceEvaluator:
                 fast_pass_result["reason"],
             )
             return fast_pass_result
+
+        if not self.enable_llm:
+            return _result(
+                label="irrelevant",
+                score=0.35,
+                companies=matched_company_candidates,
+                sectors=matched_sector_candidates,
+                reason="scheduled no-llm mode: 규칙으로 확정되지 않은 후보는 비용 보호를 위해 제외",
+            )
 
         return self._analyze_with_llm(
             title=title,
