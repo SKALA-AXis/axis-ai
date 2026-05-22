@@ -353,12 +353,7 @@ def _merge_with_existing_clusters(
     id_to_article = {int(article["id"]): article for article in articles}
     id_to_index = {int(article["id"]): idx for idx, article in enumerate(articles)}
     company_keys = sorted(
-        {
-            company
-            for article in articles
-            for company in _company_key(article)
-            if company
-        }
+        {company for article in articles for company in _company_key(article) if company}
     )
 
     candidates = list_existing_news_cluster_candidates(
@@ -420,8 +415,7 @@ def _merge_with_existing_clusters(
         )
 
     deduped_matches = {
-        cluster_id: sorted(set(article_ids))
-        for cluster_id, article_ids in existing_matches.items()
+        cluster_id: sorted(set(article_ids)) for cluster_id, article_ids in existing_matches.items()
     }
     return final_cluster_map, final_representatives, deduped_matches
 

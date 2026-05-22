@@ -15,4 +15,3 @@ def openai_calls_enabled() -> bool:
 
 def openai_disabled_reason() -> str:
     return "ENABLE_OPENAI_CALLS is not enabled"
-

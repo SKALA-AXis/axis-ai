@@ -1703,19 +1703,10 @@ def _build_page_index(
         text = str(page.get("text") or "")
         page_chunks = chunks_by_page.get(page_no, [])
         section_keys = sorted(
-            {
-                str(chunk.get("section_key"))
-                for chunk in page_chunks
-                if chunk.get("section_key")
-            }
+            {str(chunk.get("section_key")) for chunk in page_chunks if chunk.get("section_key")}
         )
         topics = sorted(
-            {
-                str(topic)
-                for chunk in page_chunks
-                for topic in (chunk.get("topics") or [])
-                if topic
-            }
+            {str(topic) for chunk in page_chunks for topic in (chunk.get("topics") or []) if topic}
         )
         page_index.append(
             {
