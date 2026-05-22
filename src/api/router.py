@@ -211,17 +211,32 @@ async def _run_collection_track(
             )
 
         scheduled_no_llm = trigger_type == "scheduled"
-        result = PreprocessingService(
+        preprocessing_service = PreprocessingService(
             relevance_evaluator=RelevanceEvaluator(enable_llm=not scheduled_no_llm),
             # Classification is rule-first; LLM is only a last-resort fallback
             # when OpenAI calls are explicitly enabled by policy.
             classifier=ClusterClassifier(enable_llm=True),
-        ).run(
-            company=selected,
-            trigger_type=trigger_type,
-            collected_since=started_at,
-            crawl_run_id=None,
         )
+        crawl_run_ids = processor.last_crawl_run_ids
+        if crawl_run_ids:
+            results = [
+                preprocessing_service.run(
+                    company=selected,
+                    trigger_type=trigger_type,
+                    collected_since=None,
+                    crawl_run_id=crawl_run_id,
+                )
+                for crawl_run_id in crawl_run_ids
+            ]
+        else:
+            results = [
+                preprocessing_service.run(
+                    company=selected,
+                    trigger_type=trigger_type,
+                    collected_since=started_at,
+                    crawl_run_id=None,
+                )
+            ]
         log.info(
             (
                 "수집 파이프라인 완료 | task_id=%s track=%s raw=%d "
@@ -229,10 +244,10 @@ async def _run_collection_track(
             ),
             task_id,
             track,
-            len(result.get("raw_article_ids", [])),
-            result.get("analysis_metric_count", 0),
-            result.get("analysis_signal_count", 0),
-            len(result.get("classified_clusters", [])),
+            sum(len(result.get("raw_article_ids", [])) for result in results),
+            sum(result.get("analysis_metric_count", 0) for result in results),
+            sum(result.get("analysis_signal_count", 0) for result in results),
+            sum(len(result.get("classified_clusters", [])) for result in results),
         )
     except Exception:
         log.exception("수집 파이프라인 실패 | task_id=%s track=%s", task_id, track)
