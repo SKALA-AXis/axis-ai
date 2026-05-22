@@ -173,7 +173,9 @@ async def _run_collection_track(
     from src.config.companies import COMPANY_ALIASES
     from src.config.global_companies import GLOBAL_COMPANY_ALIASES, GLOBAL_COMPANY_IDS
     from src.crawler.batch_processor import BatchProcessor
+    from src.preprocessing.classification import ClusterClassifier
     from src.preprocessing.preprocessing import PreprocessingService
+    from src.preprocessing.relevance import RelevanceEvaluator
 
     all_aliases = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
     selected = companies or [*COMPANY_ALIASES, *GLOBAL_COMPANY_IDS]
@@ -208,7 +210,13 @@ async def _run_collection_track(
                 crawl_window=crawl_window,
             )
 
-        result = PreprocessingService().run(
+        scheduled_no_llm = trigger_type == "scheduled"
+        result = PreprocessingService(
+            relevance_evaluator=RelevanceEvaluator(enable_llm=not scheduled_no_llm),
+            # Classification is rule-first; LLM is only a last-resort fallback
+            # when OpenAI calls are explicitly enabled by policy.
+            classifier=ClusterClassifier(enable_llm=True),
+        ).run(
             company=selected,
             trigger_type=trigger_type,
             collected_since=started_at,

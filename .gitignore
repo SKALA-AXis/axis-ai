@@ -6,6 +6,9 @@ __pycache__/
 .env.local
 .env.cloud
 !.env.example
+# macOS Finder duplicates ('.env 2', '.env.cloud 3' …) — 실값 누출 방지.
+.env\ [0-9]*
+.env.*\ [0-9]*
 .zshrc
 *.log
 .DS_Store

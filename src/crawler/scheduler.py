@@ -375,9 +375,12 @@ async def _persist_articles(source_label: str, articles: list[RawArticle]) -> No
 
 def _run_realtime_pipeline_for_run(crawl_run_id: str, *, trigger_type: str) -> None:
     """Run preprocessing for a realtime crawl run."""
+    from src.preprocessing.classification import ClusterClassifier
     from src.preprocessing.preprocessing import PreprocessingService
 
-    result = PreprocessingService().run(
+    result = PreprocessingService(
+        classifier=ClusterClassifier(enable_llm=True),
+    ).run(
         company=[],
         trigger_type=trigger_type,
         collected_since=None,

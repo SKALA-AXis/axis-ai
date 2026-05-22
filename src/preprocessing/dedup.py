@@ -17,13 +17,25 @@ import numpy as np
 
 from src.config.companies import COMPANY_ALIASES
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES
-from src.db.article_store import get_articles_by_ids, update_cluster
+from src.config.openai_policy import openai_calls_enabled
+from src.db.article_store import (
+    get_articles_by_ids,
+    list_existing_news_cluster_candidates,
+    merge_card_news_sources_for_cluster,
+    update_cluster,
+)
 
 log = logging.getLogger(__name__)
 
 DEDUP_THRESHOLD = 0.80
 EMBED_BATCH_SIZE = 32
 _HIGH_CONFIDENCE_SIMILARITY = 0.88
+_EXISTING_CLUSTER_THRESHOLD = float(os.getenv("DEDUP_EXISTING_CLUSTER_THRESHOLD", "0.84"))
+_EXISTING_CLUSTER_LOOKBACK_HOURS = int(
+    os.getenv("DEDUP_EXISTING_CLUSTER_LOOKBACK_HOURS", str(24 * 7))
+)
+_EXISTING_CLUSTER_CANDIDATE_LIMIT = int(os.getenv("DEDUP_EXISTING_CLUSTER_CANDIDATE_LIMIT", "200"))
+_MAX_CLUSTER_PUBLISHED_GAP_DAYS = int(os.getenv("DEDUP_MAX_CLUSTER_PUBLISHED_GAP_DAYS", "5"))
 _MAX_BRIDGE_TOPIC_TERMS = 1
 _MIN_RELATED_TERM_LENGTH = 6
 _TERM_NGRAM_SIMILARITY = 0.45
@@ -73,17 +85,24 @@ class ArticleDeduplicator:
             articles=articles,
             embeddings=embeddings,
         )
-        cluster_map = _with_representative_cluster_ids(cluster_map, representative_ids)
+        cluster_map, representative_ids, existing_matches = _merge_with_existing_clusters(
+            cluster_map=cluster_map,
+            representative_ids=representative_ids,
+            articles=articles,
+            embeddings=embeddings,
+        )
 
         _persist(cluster_map, representative_ids)
+        _persist_existing_card_updates(existing_matches)
 
         duplicate_count = len(article_ids) - len(representative_ids)
         log.info(
-            "Gate 3 클러스터링 완료 | total=%d clusters=%d reps=%d dupes=%d",
+            "Gate 3 클러스터링 완료 | total=%d clusters=%d reps=%d dupes=%d existing_matches=%d",
             len(article_ids),
             len(cluster_map),
             len(representative_ids),
             duplicate_count,
+            len(existing_matches),
         )
 
         return cluster_map, representative_ids
@@ -179,7 +198,7 @@ def _embed(
     try:
         return _embed_bge(texts)
     except Exception as e:
-        if not allow_openai_fallback:
+        if not allow_openai_fallback or not openai_calls_enabled():
             raise
         log.warning("BGE-M3 임베딩 실패, OpenAI fallback | error=%s", e)
         return _embed_openai(texts)
@@ -316,6 +335,122 @@ def _with_representative_cluster_ids(
     }
 
 
+def _merge_with_existing_clusters(
+    *,
+    cluster_map: dict[int, list[int]],
+    representative_ids: list[int],
+    articles: list[dict[str, Any]],
+    embeddings: np.ndarray,
+) -> tuple[dict[int, list[int]], list[int], dict[int, list[int]]]:
+    """이번 실행 클러스터를 최근 기존 클러스터에 붙인다.
+
+    반환값의 cluster_map은 최종 cluster_id 기준이다. 기존 클러스터에 매칭된 경우
+    기존 cluster_id/대표기사를 유지하고, 신규 기사만 기존 카드 sources에 병합한다.
+    """
+    if not cluster_map:
+        return {}, [], {}
+
+    id_to_article = {int(article["id"]): article for article in articles}
+    id_to_index = {int(article["id"]): idx for idx, article in enumerate(articles)}
+    company_keys = sorted(
+        {company for article in articles for company in _company_key(article) if company}
+    )
+
+    candidates = list_existing_news_cluster_candidates(
+        company_keys=company_keys,
+        exclude_article_ids=list(id_to_article),
+        lookback_hours=_EXISTING_CLUSTER_LOOKBACK_HOURS,
+        limit=_EXISTING_CLUSTER_CANDIDATE_LIMIT,
+    )
+    if not candidates:
+        return (
+            _with_representative_cluster_ids(cluster_map, representative_ids),
+            representative_ids,
+            {},
+        )
+
+    candidate_embeddings = _embed(candidates)
+    rep_by_local_cluster = dict(zip(cluster_map, representative_ids))
+    final_cluster_map: dict[int, list[int]] = {}
+    final_representatives: list[int] = []
+    existing_matches: dict[int, list[int]] = {}
+
+    for local_cluster_id, article_ids in cluster_map.items():
+        rep_id = rep_by_local_cluster[local_cluster_id]
+        rep_article = id_to_article[rep_id]
+        rep_embedding = embeddings[id_to_index[rep_id]]
+        match = _best_existing_cluster_match(
+            rep_article=rep_article,
+            rep_embedding=rep_embedding,
+            candidates=candidates,
+            candidate_embeddings=candidate_embeddings,
+        )
+
+        if match is None:
+            final_cluster_map.setdefault(rep_id, []).extend(article_ids)
+            final_representatives.append(rep_id)
+            continue
+
+        existing_cluster_id = int(match["cluster_id"])
+        existing_rep_id = int(match["representative_id"])
+        existing_article_ids = [
+            int(article_id)
+            for article_id in (match.get("article_ids") or [])
+            if int(article_id) not in id_to_article
+        ]
+        merged_ids = final_cluster_map.setdefault(existing_cluster_id, [])
+        for article_id in [existing_rep_id, *existing_article_ids, *article_ids]:
+            if article_id not in merged_ids:
+                merged_ids.append(article_id)
+        if existing_rep_id not in final_representatives:
+            final_representatives.append(existing_rep_id)
+        existing_matches.setdefault(existing_cluster_id, []).extend(article_ids)
+
+        log.info(
+            "기존 클러스터 매칭 | new_rep=%s existing_cluster=%s existing_rep=%s similarity=%.3f",
+            rep_id,
+            existing_cluster_id,
+            existing_rep_id,
+            float(match["similarity"]),
+        )
+
+    deduped_matches = {
+        cluster_id: sorted(set(article_ids)) for cluster_id, article_ids in existing_matches.items()
+    }
+    return final_cluster_map, final_representatives, deduped_matches
+
+
+def _best_existing_cluster_match(
+    *,
+    rep_article: dict[str, Any],
+    rep_embedding: np.ndarray,
+    candidates: list[dict[str, Any]],
+    candidate_embeddings: np.ndarray,
+) -> dict[str, Any] | None:
+    similarities = candidate_embeddings @ rep_embedding
+    best: dict[str, Any] | None = None
+    best_similarity = -1.0
+
+    for idx, candidate in enumerate(candidates):
+        similarity = float(similarities[idx])
+        if similarity < best_similarity:
+            continue
+        if not _should_merge_articles(
+            rep_article,
+            candidate,
+            similarity,
+            _EXISTING_CLUSTER_THRESHOLD,
+        ):
+            continue
+        best = candidate
+        best_similarity = similarity
+
+    if best is None:
+        return None
+
+    return {**best, "similarity": best_similarity}
+
+
 def _should_merge_articles(
     left: dict[str, Any],
     right: dict[str, Any],
@@ -323,6 +458,9 @@ def _should_merge_articles(
     threshold: float,
 ) -> bool:
     if not _same_company_context(left, right):
+        return False
+
+    if not _within_cluster_time_window(left, right):
         return False
 
     if _same_issue(left, right):
@@ -338,6 +476,22 @@ def _should_merge_articles(
         return False
 
     return True
+
+
+def _within_cluster_time_window(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """오래 떨어진 반복 주제가 같은 클러스터로 묶이지 않도록 시간 간격을 제한한다."""
+    left_dt = _parse_datetime(left.get("published_at") or left.get("collected_at"))
+    right_dt = _parse_datetime(right.get("published_at") or right.get("collected_at"))
+    if left_dt is None or right_dt is None:
+        return True
+
+    if left_dt.tzinfo is None:
+        left_dt = left_dt.replace(tzinfo=timezone.utc)
+    if right_dt.tzinfo is None:
+        right_dt = right_dt.replace(tzinfo=timezone.utc)
+
+    gap_days = abs((left_dt - right_dt).days)
+    return gap_days <= _MAX_CLUSTER_PUBLISHED_GAP_DAYS
 
 
 def _same_issue(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -846,3 +1000,9 @@ def _persist(cluster_map: dict[int, list[int]], representative_ids: list[int]) -
                 cluster_id,
                 is_representative=article_id in representative_set,
             )
+
+
+def _persist_existing_card_updates(existing_matches: dict[int, list[int]]) -> None:
+    """기존 클러스터에 붙은 신규 기사를 card_news sources에 반영한다."""
+    for cluster_id, article_ids in existing_matches.items():
+        merge_card_news_sources_for_cluster(cluster_id, article_ids)

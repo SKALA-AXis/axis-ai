@@ -1688,6 +1688,38 @@ def _extract_sections_and_chunks(
     return sections, document_chunks, sorted(all_topic_signals), all_topic_signals
 
 
+def _build_page_index(
+    pages: list[dict[str, Any]],
+    document_chunks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compact page-level index so agents can target pages before reading chunks."""
+    chunks_by_page: dict[Any, list[dict[str, Any]]] = {}
+    for chunk in document_chunks:
+        chunks_by_page.setdefault(chunk.get("page"), []).append(chunk)
+
+    page_index: list[dict[str, Any]] = []
+    for index, page in enumerate(pages, start=1):
+        page_no = page.get("page") or index
+        text = str(page.get("text") or "")
+        page_chunks = chunks_by_page.get(page_no, [])
+        section_keys = sorted(
+            {str(chunk.get("section_key")) for chunk in page_chunks if chunk.get("section_key")}
+        )
+        topics = sorted(
+            {str(topic) for chunk in page_chunks for topic in (chunk.get("topics") or []) if topic}
+        )
+        page_index.append(
+            {
+                "page": page_no,
+                "text_chars": len(text),
+                "chunk_count": len(page_chunks),
+                "section_keys": section_keys,
+                "topics": topics,
+            }
+        )
+    return page_index
+
+
 def _build_financial_record(
     *,
     source: str,
@@ -1924,6 +1956,7 @@ class IRParser:
             "candidates": candidates,
             "financial_tables": financial_tables,
             "sections": sections,
+            "page_index": _build_page_index(pages, document_chunks),
             "document_chunks": document_chunks,
             "topics": topics,
             "topic_signals": topic_signals,

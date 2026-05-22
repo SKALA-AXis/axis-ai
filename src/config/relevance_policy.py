@@ -6,7 +6,6 @@ import os
 from typing import Final
 
 RELEVANCE_THRESHOLD: Final[float] = 0.60
-UNCERTAIN_CANDIDATE_THRESHOLD: Final[float] = 0.45
 PEER_CONTEXT_LIMIT: Final[int] = 1800
 MIN_PEER_MENTIONS: Final[int] = int(os.getenv("RELEVANCE_MIN_PEER_MENTIONS", "1"))
 

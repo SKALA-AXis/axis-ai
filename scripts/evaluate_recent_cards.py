@@ -89,12 +89,10 @@ def _select_unjudged_cards(*, limit: int, hours: int) -> list[dict[str, Any]]:
                        cn.peer_company_id,
                        cn.primary_keyword_category,
                        cn.created_at,
-                       COALESCE(ec.financial_refs, '{}'::jsonb) AS evidence_financial_refs,
-                       COALESCE(ec.source_links,  '[]'::jsonb) AS evidence_source_links,
-                       COALESCE(ec.mbb_refs,      '[]'::jsonb) AS evidence_mbb_refs
+                       COALESCE(cn.evidence_payload->'financial_refs', '{}'::jsonb) AS evidence_financial_refs,
+                       COALESCE(cn.evidence_payload->'source_links',   '[]'::jsonb) AS evidence_source_links,
+                       COALESCE(cn.evidence_payload->'mbb_refs',       '[]'::jsonb) AS evidence_mbb_refs
                   FROM card_news cn
-                  LEFT JOIN evidence_chain ec
-                         ON ec.issue_card_id = cn.id
                  WHERE cn.card_schema_version = 'v2'
                    AND NOT (COALESCE(cn.evaluation_payload, '{}'::jsonb) ? 'llm_judge')
                    AND cn.created_at >= NOW() - (:hours || ' hours')::interval

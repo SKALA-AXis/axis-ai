@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from typing import Any
 
@@ -19,6 +20,7 @@ from sqlalchemy import text
 
 from src.config.companies import COMPANY_ALIASES
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES
+from src.config.openai_policy import openai_calls_enabled, openai_disabled_reason
 from src.config.preprocessing import (
     COMPANY_SITE_SOURCE_TYPES,
     INDUSTRY_DOCUMENT_SOURCE_TYPES,
@@ -42,7 +44,6 @@ from src.config.relevance_policy import (
     STRATEGIC_ACTION_KEYWORDS,
     STRONG_STRATEGIC_ACTION_KEYWORDS,
     SUBJECT_MARKERS,
-    UNCERTAIN_CANDIDATE_THRESHOLD,
 )
 from src.config.sectors import SECTOR_IDS, SectorMatch, match_sector_details, match_sectors
 from src.db.article_store import INDUSTRY_TREND_COMPANY
@@ -54,6 +55,13 @@ ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
 
 _llm: ChatOpenAI | None = None
 _PROMPT_VERSION = "relevance-v1.0"
+_LLM_BATCH_SIZE = int(os.getenv("RELEVANCE_LLM_BATCH_SIZE", "20"))
+_LLM_MAX_BATCHES_PER_RUN = int(os.getenv("RELEVANCE_LLM_MAX_BATCHES_PER_RUN", "1"))
+_LLM_ALLOWED_SOURCE_NAMES = {
+    name.strip().lower()
+    for name in os.getenv("RELEVANCE_LLM_SOURCE_NAMES", "naver_news").split(",")
+    if name.strip()
+}
 
 
 def _get_llm() -> ChatOpenAI:
@@ -131,8 +139,6 @@ irrelevant:
 - 동향 신호가 없습니다.
 - 대상 company가 아니라 다른 회사나 그룹사가 핵심 주체입니다.
 - 광고성, 행사성, 인물성, 단순 홍보성 기사입니다.
-
-uncertain:
 - 본문이 부족해 핵심 주체나 동향 신호를 확정하기 어렵습니다.
 - company와 sector 후보는 있으나 실제 사업 맥락인지 불명확합니다.
 - 관련 가능성은 있으나 근거가 약합니다.
@@ -147,7 +153,7 @@ uncertain:
 ## 출력 규칙
 - 반드시 JSON만 출력하세요.
 - 마크다운 코드블록을 사용하지 마세요.
-- relevance_label은 relevant, irrelevant, uncertain 중 하나만 사용하세요.
+- relevance_label은 relevant, irrelevant 중 하나만 사용하세요.
 - relevance_score는 0.0부터 1.0 사이의 숫자로 작성하세요.
 - matched_companies는 실제 기사 맥락상 의미 있게 등장한 company만 포함하세요.
 - matched_sectors는 실제 기사 맥락상 의미 있게 연결된 sector만 포함하세요.
@@ -169,7 +175,7 @@ peer_context: {peer_context}
 
 ## JSON 출력 형식
 {{
-  "relevance_label": "relevant|irrelevant|uncertain",
+  "relevance_label": "relevant|irrelevant",
   "relevance_score": 0.0,
   "matched_companies": ["string"],
   "matched_sectors": ["string"],
@@ -180,6 +186,10 @@ peer_context: {peer_context}
 
 class RelevanceEvaluator:
     """company/sector 관점의 내용 기반 관련성을 판단한다."""
+
+    def __init__(self, *, enable_llm: bool = True, llm_batch_size: int = _LLM_BATCH_SIZE) -> None:
+        self.enable_llm = enable_llm
+        self.llm_batch_size = max(1, llm_batch_size)
 
     def filter(self, raw_article_ids: list[int]) -> tuple[list[int], list[int]]:
         """관련성 판단 후 relevant ID와 skipped ID를 반환한다.
@@ -198,6 +208,9 @@ class RelevanceEvaluator:
 
         log.info("Gate 2.5 관련성 전처리 시작 | total=%d", len(raw_article_ids))
 
+        llm_batches_used = 0
+        llm_batch_cap = max(0, _LLM_MAX_BATCHES_PER_RUN)
+
         with SessionLocal() as db:
             rows = db.execute(
                 text("""
@@ -207,6 +220,7 @@ class RelevanceEvaluator:
                         ra.content,
                         ra.company,
                         ra.source_type,
+                        ra.source_name,
                         ra.crawl_status,
                         COALESCE(mu.metadata, '{}'::jsonb) AS metadata
                     FROM raw_articles ra
@@ -219,15 +233,9 @@ class RelevanceEvaluator:
             rows = sorted(rows, key=lambda row: int(row.id))
             db.commit()
 
-            for row in rows:
-                log.info(
-                    "Gate 2.5 기사 전처리 중 | id=%s source_type=%s title=%s",
-                    row.id,
-                    row.source_type,
-                    _shorten(row.title or "", 80),
-                )
-                result = self._analyze(row)
+            pending_llm: list[tuple[Any, dict[str, Any]]] = []
 
+            def apply_result(row: Any, result: dict[str, Any]) -> None:
                 is_relevant = _is_relevant(result)
                 result["matched_sector_details"] = _matched_sector_details_for_result(
                     row,
@@ -300,6 +308,44 @@ class RelevanceEvaluator:
                         result["relevance_score"],
                         result["reason"],
                     )
+
+            def flush_pending() -> None:
+                nonlocal llm_batches_used
+                if not pending_llm:
+                    return
+                batch = pending_llm[:]
+                pending_llm.clear()
+                if llm_batch_cap and llm_batches_used >= llm_batch_cap:
+                    log.warning(
+                        "Gate 2.5 LLM batch cap 도달 | cap=%d pending=%d",
+                        llm_batch_cap,
+                        len(batch),
+                    )
+                    for row, result in self._llm_cap_fallback(batch):
+                        apply_result(row, result)
+                    return
+
+                llm_batches_used += 1
+                for row, result in self._analyze_batch_with_llm(batch):
+                    apply_result(row, result)
+
+            for row in rows:
+                log.info(
+                    "Gate 2.5 기사 전처리 중 | id=%s source_type=%s title=%s",
+                    row.id,
+                    row.source_type,
+                    _shorten(row.title or "", 80),
+                )
+                result = self._analyze(row)
+                if result.pop("_llm_pending", False):
+                    pending_llm.append((row, result))
+                    if len(pending_llm) >= self.llm_batch_size:
+                        flush_pending()
+                    continue
+
+                apply_result(row, result)
+
+            flush_pending()
 
         log.info(
             "관련성 판단 완료 | total=%d relevant=%d skipped=%d",
@@ -426,46 +472,80 @@ class RelevanceEvaluator:
             )
             return fast_pass_result
 
-        return self._analyze_with_llm(
-            title=title,
-            content=analysis_content,
-            source_type=row.source_type,
-            company=company,
-            matched_company_candidates=matched_company_candidates,
-            matched_sector_candidates=matched_sector_candidates,
-            peer_context=_peer_context_snippets(
-                title=title,
-                content=analysis_content,
-                matched_companies=matched_company_candidates,
-            ),
-        )
+        if not self.enable_llm:
+            return _result(
+                label="irrelevant",
+                score=0.35,
+                companies=matched_company_candidates,
+                sectors=matched_sector_candidates,
+                reason="scheduled no-llm mode: 규칙으로 확정되지 않은 후보는 비용 보호를 위해 제외",
+            )
 
-    def _analyze_with_llm(
+        source_name = str(_row_value(row, "source_name", "") or "").strip().lower()
+        if source_name not in _LLM_ALLOWED_SOURCE_NAMES:
+            return _result(
+                label="irrelevant",
+                score=0.35,
+                companies=matched_company_candidates,
+                sectors=matched_sector_candidates,
+                reason=f"LLM relevance 제한 소스가 아님: {source_name or 'unknown'}",
+            )
+
+        return {
+            "_llm_pending": True,
+            "relevance_label": "irrelevant",
+            "relevance_score": 0.35,
+            "matched_companies": matched_company_candidates,
+            "matched_sectors": matched_sector_candidates,
+            "reason": "LLM batch 판단 대기",
+            "_llm_payload": {
+                "id": int(row.id),
+                "title": title,
+                "content": analysis_content[:2200],
+                "source_type": row.source_type,
+                "source_name": _row_value(row, "source_name", ""),
+                "company": company,
+                "matched_company_candidates": matched_company_candidates,
+                "matched_sector_candidates": matched_sector_candidates,
+                "peer_context": _peer_context_snippets(
+                    title=title,
+                    content=analysis_content,
+                    matched_companies=matched_company_candidates,
+                )[:PEER_CONTEXT_LIMIT],
+            },
+        }
+
+    def _analyze_batch_with_llm(
         self,
-        title: str,
-        content: str,
-        source_type: str | None,
-        company: list[str],
-        matched_company_candidates: list[str],
-        matched_sector_candidates: list[str],
-        peer_context: str,
-    ) -> dict[str, Any]:
-        prompt = _RELEVANCE_PROMPT.format(
-            title=title,
-            content=content,
-            source_type=source_type or "",
-            company=company,
-            matched_company_candidates=matched_company_candidates,
-            matched_sector_candidates=matched_sector_candidates,
-            peer_context=peer_context[:PEER_CONTEXT_LIMIT],
-        )
+        pending: list[tuple[Any, dict[str, Any]]],
+    ) -> list[tuple[Any, dict[str, Any]]]:
+        fallback_results = [
+            (
+                row,
+                _result(
+                    label="irrelevant",
+                    score=0.35,
+                    companies=result["matched_companies"],
+                    sectors=result["matched_sectors"],
+                    reason="LLM batch 판단 실패 또는 비활성화: 비용 보호를 위해 제외",
+                ),
+            )
+            for row, result in pending
+        ]
+        if not pending:
+            return []
+        if not openai_calls_enabled():
+            log.warning("Gate 2.5 LLM batch 스킵 | reason=%s", openai_disabled_reason())
+            return fallback_results
+
+        payloads = [result["_llm_payload"] for _, result in pending]
+        prompt = _build_batch_relevance_prompt(payloads)
 
         try:
             log.info(
-                "Gate 2.5 LLM 내용 분석 중 | source_type=%s companies=%s sectors=%s",
-                source_type,
-                matched_company_candidates,
-                matched_sector_candidates,
+                "Gate 2.5 LLM batch 내용 분석 중 | articles=%d ids=%s",
+                len(payloads),
+                [item["id"] for item in payloads],
             )
             from src.observability import tracing_config
 
@@ -473,47 +553,74 @@ class RelevanceEvaluator:
                 prompt,
                 config=tracing_config(
                     agent="RelevanceEvaluator",
-                    prompt_version=_PROMPT_VERSION,
-                    source_type=source_type,
+                    prompt_version=f"{_PROMPT_VERSION}-batch",
+                    batch_size=len(payloads),
                 ),
             )
             response_text = (
                 response.content if isinstance(response.content, str) else str(response.content)
             )
-            result = _parse_relevance_json(response_text)
+            results_by_id = _parse_batch_relevance_json(response_text)
+            resolved: list[tuple[Any, dict[str, Any]]] = []
+            for row, pending_result in pending:
+                parsed = results_by_id.get(int(row.id))
+                if parsed is None:
+                    resolved.append(
+                        (
+                            row,
+                            _result(
+                                label="irrelevant",
+                                score=0.35,
+                                companies=pending_result["matched_companies"],
+                                sectors=pending_result["matched_sectors"],
+                                reason="LLM batch 응답에 해당 id 없음: 비용 보호를 위해 제외",
+                            ),
+                        )
+                    )
+                else:
+                    resolved.append((row, parsed))
             log.info(
-                "Gate 2.5 LLM 판단 완료 | label=%s score=%.2f reason=%s",
-                result["relevance_label"],
-                result["relevance_score"],
-                result["reason"],
+                "Gate 2.5 LLM batch 판단 완료 | articles=%d relevant=%d",
+                len(resolved),
+                sum(1 for _, result in resolved if _is_relevant(result)),
             )
-            return result
+            return resolved
         except Exception as e:
-            log.warning("관련성 LLM 판단 실패 | error=%s", e)
+            log.warning("관련성 LLM batch 판단 실패 | error=%s", e)
+            return fallback_results
 
-            if matched_company_candidates and matched_sector_candidates:
-                return _result(
-                    label="uncertain",
-                    score=0.50,
-                    companies=matched_company_candidates,
-                    sectors=matched_sector_candidates,
-                    reason="LLM 판단 실패로 핵심 주체와 동향 신호를 확정하지 못함",
-                )
-
-            return _result(
-                label="irrelevant",
-                score=0.30,
-                companies=matched_company_candidates,
-                sectors=matched_sector_candidates,
-                reason="LLM 판단 실패, 관련성 근거 부족",
+    def _llm_cap_fallback(
+        self,
+        pending: list[tuple[Any, dict[str, Any]]],
+    ) -> list[tuple[Any, dict[str, Any]]]:
+        return [
+            (
+                row,
+                _result(
+                    label="irrelevant",
+                    score=0.35,
+                    companies=result["matched_companies"],
+                    sectors=result["matched_sectors"],
+                    reason="LLM relevance batch cap 초과: 비용 보호를 위해 제외",
+                ),
             )
+            for row, result in pending
+        ]
 
 
 def analyze_relevance_article(article: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """JSON article에 Gate 2.5 관련성 결과를 붙인다."""
 
     row = _DictRow(article)
-    result = RelevanceEvaluator()._analyze(row)
+    result = RelevanceEvaluator(enable_llm=False)._analyze(row)
+    if result.pop("_llm_pending", False):
+        result = _result(
+            label="irrelevant",
+            score=0.35,
+            companies=result["matched_companies"],
+            sectors=result["matched_sectors"],
+            reason="LLM 판단 대기 후보는 로컬 relevance helper에서 제외",
+        )
     is_relevant = _is_relevant(result)
 
     item = dict(article)
@@ -540,6 +647,7 @@ class _DictRow:
         self.content = article.get("content")
         self.company = article.get("company")
         self.source_type = article.get("source_type")
+        self.source_name = article.get("source_name")
         self.crawl_status = article.get("crawl_status", "success")
         self.metadata = article.get("metadata") or article.get("extra") or {}
 
@@ -789,21 +897,31 @@ def _fast_pass_result(
         return None
 
     has_strong_action = any(
-        _compact(keyword) in text_compact for keyword in FAST_PASS_ACTION_KEYWORDS
+        _compact(keyword) in title_compact for keyword in FAST_PASS_ACTION_KEYWORDS
     )
     if not has_strong_action:
         return None
 
     has_sector = bool(matched_sectors and matched_sectors != ["other"])
-    score = 0.82 if has_sector else 0.72
+    if not has_sector:
+        return None
+
+    has_direct_role = any(
+        _has_direct_role_keyword_near_alias(text_compact, _compact(alias))
+        for company_id in matched_companies
+        for alias in ALL_COMPANY_ALIASES.get(company_id, [company_id])
+        if _compact(alias)
+    )
+    if not has_direct_role:
+        return None
 
     return _result(
         label="relevant",
-        score=score,
+        score=0.82,
         companies=matched_companies,
         sectors=matched_sectors,
         reason=(
-            "fast-pass: 제목에 피어사가 있고 명확한 핵심 이벤트 키워드가 있어 "
+            "fast-pass: 제목에 피어사/핵심 이벤트가 있고, sector와 직접 역할 근거가 있어 "
             "LLM 없이 관련 기사로 판단"
         ),
     )
@@ -1081,19 +1199,8 @@ def _is_event_listing_noise(
 def _is_relevant(result: dict[str, Any]) -> bool:
     label = result.get("relevance_label", "irrelevant")
     score = float(result.get("relevance_score", 0.0))
-    matched_companies = result.get("matched_companies") or []
-    matched_sectors = result.get("matched_sectors") or []
-    has_sector = bool(matched_sectors and matched_sectors != ["other"])
 
     if label == "relevant" and score >= RELEVANCE_THRESHOLD:
-        return True
-
-    if (
-        label == "uncertain"
-        and score >= UNCERTAIN_CANDIDATE_THRESHOLD
-        and matched_companies
-        and has_sector
-    ):
         return True
 
     return False
@@ -1263,9 +1370,7 @@ def _parse_relevance_json(text_value: str) -> dict[str, Any]:
 
     data = json.loads(text_value.strip())
 
-    label = data.get("relevance_label", "uncertain")
-    if label not in {"relevant", "irrelevant", "uncertain"}:
-        label = "uncertain"
+    label = _normalize_relevance_label(data.get("relevance_label", "irrelevant"))
 
     return _result(
         label=label,
@@ -1274,6 +1379,89 @@ def _parse_relevance_json(text_value: str) -> dict[str, Any]:
         sectors=data.get("matched_sectors", []),
         reason=data.get("reason", ""),
     )
+
+
+def _build_batch_relevance_prompt(items: list[dict[str, Any]]) -> str:
+    compact_items = [
+        {
+            "id": item["id"],
+            "title": item["title"],
+            "content": item["content"],
+            "source_type": item.get("source_type") or "",
+            "source_name": item.get("source_name") or "",
+            "target_companies": item.get("company") or [],
+            "matched_company_candidates": item.get("matched_company_candidates") or [],
+            "matched_sector_candidates": item.get("matched_sector_candidates") or [],
+            "peer_context": item.get("peer_context") or "",
+        }
+        for item in items
+    ]
+    return f"""\
+당신은 기사 관련성 판단 Agent입니다.
+아래 JSON 배열의 각 기사에 대해 독립적으로 relevant/irrelevant를 판단하세요.
+
+판단 기준:
+- 대상 company가 핵심 주체로 등장해야 합니다.
+- sector는 실제 사업/기술/시장 맥락과 연결되어야 합니다.
+- 수주, 계약, 제휴, 투자, 출시, 실적, 공시, IR, 채용, 조직개편,
+  정책 변화 등 동향 신호가 있어야 합니다.
+- 단순 키워드 나열, 광고, 관련 기사 목록, 행사 참가사 목록은 irrelevant입니다.
+
+반드시 JSON 배열만 응답하세요. 입력 id를 그대로 유지하세요.
+응답 형식:
+[
+  {{
+    "id": 123,
+    "relevance_label": "relevant|irrelevant",
+    "relevance_score": 0.0,
+    "matched_companies": ["company_id"],
+    "matched_sectors": ["sector_id"],
+    "reason": "짧은 판단 근거"
+  }}
+]
+
+입력:
+{json.dumps(compact_items, ensure_ascii=False)}
+"""
+
+
+def _parse_batch_relevance_json(text_value: str) -> dict[int, dict[str, Any]]:
+    text_value = text_value.strip()
+    if text_value.startswith("```"):
+        text_value = text_value.split("```")[1]
+        if text_value.startswith("json"):
+            text_value = text_value[4:]
+
+    data = json.loads(text_value.strip())
+    if isinstance(data, dict):
+        data = data.get("results") or data.get("items") or []
+    if not isinstance(data, list):
+        return {}
+
+    results: dict[int, dict[str, Any]] = {}
+    for item in data:
+        if not isinstance(item, dict) or item.get("id") is None:
+            continue
+        try:
+            article_id = int(item["id"])
+        except (TypeError, ValueError):
+            continue
+        label = _normalize_relevance_label(item.get("relevance_label", "irrelevant"))
+        results[article_id] = _result(
+            label=label,
+            score=float(item.get("relevance_score", 0.60)),
+            companies=item.get("matched_companies", []),
+            sectors=item.get("matched_sectors", []),
+            reason=item.get("reason", ""),
+        )
+    return results
+
+
+def _normalize_relevance_label(value: Any) -> str:
+    label = str(value or "").strip().lower()
+    if label == "relevant":
+        return "relevant"
+    return "irrelevant"
 
 
 def _result(
