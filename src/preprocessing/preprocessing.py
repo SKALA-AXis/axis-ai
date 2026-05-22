@@ -13,6 +13,8 @@ from typing import Any, TypedDict
 from sqlalchemy import text
 
 from src.analysis.document_analysis_materializer import materialize_document_analysis
+from src.config.companies import company_aliases, company_name_ko
+from src.config.global_companies import global_company_aliases, global_company_name_ko
 from src.config.preprocessing import (
     COMPANY_SITE_SOURCE_TYPES,
     DEFAULT_GPT_WORKERS,
@@ -39,13 +41,18 @@ RELEVANCE_SOURCE_TYPES = NEWS_SOURCE_TYPES
 OFFICIAL_RELEVANCE_SOURCE_TYPES: set[str] = set()
 OFFICIAL_DOCUMENT_SOURCE_TYPES = OFFICIAL_SOURCE_TYPES
 COMPANY_SITE_DOCUMENT_SOURCE_TYPES = COMPANY_SITE_SOURCE_TYPES
+COMPANY_FILTER_EXEMPT_SOURCE_TYPES = INDUSTRY_DOCUMENT_SOURCE_TYPES | {"search_trend"}
 
 _LOAD_SQL = text("""
     SELECT ra.id
     FROM raw_articles ra
     WHERE ra.processing_status = 'RAW'
       AND ra.crawl_status = 'success'
-      AND (:no_filter OR ra.company ?| :company)
+      AND (
+          :no_filter
+          OR ra.source_type = ANY(:company_filter_exempt_source_types)
+          OR ra.company ?| :company
+      )
       AND (:collected_since IS NULL OR ra.collected_at >= CAST(:collected_since AS timestamptz))
       AND (
           :crawl_run_id IS NULL
@@ -84,6 +91,21 @@ class PreprocessingResult(TypedDict):
     classified_clusters: list[dict[str, Any]]
     errors: list[str]
     human_review_flags: list[int]
+
+
+def _company_filter_values(company_ids: list[str]) -> list[str]:
+    """Expand peer ids to aliases used by source-specific crawlers."""
+    values: list[str] = []
+    for company_id in company_ids:
+        normalized = company_id.strip()
+        if not normalized:
+            continue
+        values.append(normalized)
+        values.extend(company_aliases(normalized))
+        values.append(company_name_ko(normalized))
+        values.extend(global_company_aliases(normalized))
+        values.append(global_company_name_ko(normalized))
+    return list(dict.fromkeys(value for value in values if value))
 
 
 class PreprocessingService:
@@ -231,7 +253,7 @@ class PreprocessingService:
         crawl_run_id: str | None = None,
     ) -> list[int]:
         """처리 대기 중인 RAW article id를 DB에서 조회한다."""
-        company_filter = company or []
+        company_filter = _company_filter_values(company or [])
         source_type_filter = [
             source_type.strip().lower()
             for source_type in (source_types or [])
@@ -244,6 +266,7 @@ class PreprocessingService:
                 {
                     "company": company_filter if company_filter else [""],
                     "no_filter": len(company_filter) == 0,
+                    "company_filter_exempt_source_types": list(COMPANY_FILTER_EXEMPT_SOURCE_TYPES),
                     "source_types": source_type_filter if source_type_filter else [""],
                     "no_source_filter": len(source_type_filter) == 0,
                     "collected_since": collected_since,
