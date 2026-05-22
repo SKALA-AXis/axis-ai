@@ -908,82 +908,6 @@ def _chunk_text(text: str, max_chars: int = 2200) -> list[str]:
     return chunks
 
 
-async def translate_article_to_korean(
-    *,
-    title: str,
-    content: str,
-    model: str,
-) -> tuple[str | None, str | None, dict]:
-    """
-    BCG 글(영문)을 한글로 번역해서 저장할 수 있게 한다.
-
-    - title/content는 번역본을 main 필드로 저장
-    - 원문은 extra.original_title/original_content로 보존
-    """
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        log.warning("OPENAI_API_KEY 미설정: 번역 스킵")
-        return None, None, {"translation_status": "no_api_key"}
-
-    try:
-        from openai import AsyncOpenAI
-    except Exception as e:
-        log.warning("openai 패키지 import 실패: 번역 스킵 | error=%s", e)
-        return None, None, {"translation_status": "no_openai_pkg", "translation_error": str(e)}
-
-    client = AsyncOpenAI(api_key=api_key)
-
-    async def translate_text(text: str) -> str:
-        if not (text or "").strip():
-            return ""
-        resp = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a professional translator. "
-                        "Translate the user's text into natural Korean. "
-                        "Preserve names, numbers, and technical terms. "
-                        "Do not add commentary."
-                    ),
-                },
-                {"role": "user", "content": text},
-            ],
-            temperature=0.2,
-        )
-        return (resp.choices[0].message.content or "").strip()
-
-    try:
-        title_ko = await translate_text(title)
-
-        chunks = _chunk_text(content, max_chars=2200)
-        if not chunks:
-            content_ko = ""
-        else:
-            translated_chunks: list[str] = []
-            for chunk in chunks:
-                translated_chunks.append(await translate_text(chunk))
-            content_ko = "\n\n".join([c for c in translated_chunks if c])
-
-        meta = {
-            "translation_status": "success",
-            "translation_model": model,
-        }
-        return title_ko or None, content_ko or None, meta
-    except Exception as e:
-        log.warning("번역 실패: 원문 유지 | error=%r", e)
-        return (
-            None,
-            None,
-            {
-                "translation_status": "error",
-                "translation_model": model,
-                "translation_error": str(e),
-            },
-        )
-
-
 class BcgCrawler(BaseCrawler):
     """BCG 글로벌 IT/AI 산업동향 크롤러."""
 
@@ -992,8 +916,6 @@ class BcgCrawler(BaseCrawler):
         days: int,
         max_articles: int,
         output_path: Path,
-        translate_ko: bool = False,
-        translate_model: str | None = None,
         start_date: date | None = None,
         end_date: date | None = None,
     ):
@@ -1001,8 +923,6 @@ class BcgCrawler(BaseCrawler):
         self.days = days
         self.max_articles = max_articles
         self.output_path = output_path
-        self.translate_ko = translate_ko
-        self.translate_model = translate_model or os.getenv("OPENAI_TRANSLATE_MODEL", "gpt-4o-mini")
         self.start_date = start_date
         self.end_date = end_date
 
@@ -1134,25 +1054,6 @@ class BcgCrawler(BaseCrawler):
                     image_urls = extract_body_image_urls(soup, detail_url)
                     pdf_urls = find_pdf_urls(soup, detail_url)
 
-                    if self.translate_ko:
-                        title_ko, content_ko, translation_meta = await translate_article_to_korean(
-                            title=title,
-                            content=content,
-                            model=self.translate_model,
-                        )
-                        if title_ko:
-                            # 원문은 extra에 보존하고, main 필드는 한글로 저장
-                            translation_meta.update(
-                                {
-                                    "original_title": title,
-                                    "original_content": content,
-                                }
-                            )
-                            title = title_ko
-                            content = content_ko or content
-                        else:
-                            translation_meta = {"translation_status": "skipped"}
-
                     article_id = make_id(
                         source_type="trend_report",
                         source_name="BCG",
@@ -1184,7 +1085,6 @@ class BcgCrawler(BaseCrawler):
                             "image_count": len(image_urls),
                             "pdf_urls": pdf_urls,
                             "article_index": success_count + 1,
-                            **(translation_meta if self.translate_ko else {}),
                         },
                     )
 
@@ -1221,20 +1121,6 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="결과 JSON 저장 경로. 미지정 시 src/crawler/crawler_results/bcg_crawler.json",
     )
-    parser.add_argument(
-        "--translate-ko",
-        action="store_true",
-        help=(
-            "title/content를 한글로 번역해서 저장하고, 원문은 extra에 보관한다. "
-            "(OPENAI_API_KEY 필요)"
-        ),
-    )
-    parser.add_argument(
-        "--translate-model",
-        default=None,
-        help="번역에 사용할 OpenAI 모델명. 미지정 시 OPENAI_TRANSLATE_MODEL 또는 gpt-4o-mini",
-    )
-
     return parser.parse_args()
 
 

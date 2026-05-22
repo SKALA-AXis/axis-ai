@@ -29,7 +29,9 @@ BACKFILL_SOURCES: dict[str, BackfillSourceConfig] = {
     "naver_datalab": BackfillSourceConfig("naver_datalab", 180, 1, DEFAULT_UNTIL_DATE),
     "spri": BackfillSourceConfig("spri", 365, 1, DEFAULT_UNTIL_DATE),
     "bcg": BackfillSourceConfig("bcg", 180, 1, DEFAULT_UNTIL_DATE),
-    "sk_ax_site": BackfillSourceConfig("sk_ax_site", 365, 1, DEFAULT_UNTIL_DATE),
+    # SK AX site is a mostly static company profile source. Keep it opt-in only
+    # so scheduled/backfill-all crawls do not repeatedly revisit the whole site.
+    "sk_ax_site": BackfillSourceConfig("sk_ax_site", 365, 1, DEFAULT_UNTIL_DATE, enabled=False),
 }
 
 

@@ -301,6 +301,16 @@ def save_articles(
     return inserted
 
 
+def article_exists_by_url(url: str) -> bool:
+    """Return whether a raw article URL has already been stored."""
+    if not url:
+        return False
+
+    with SessionLocal() as db:
+        row = db.execute(_SELECT_ARTICLE_ID_BY_URL, {"url": url}).fetchone()
+    return row is not None
+
+
 # ──────────────────────────────────────────────────────────────
 # 조회
 # ──────────────────────────────────────────────────────────────
@@ -502,6 +512,53 @@ def _json_or_value(value: Any, default: Any) -> Any:
     return value if value is not None else default
 
 
+def _merge_source_dicts(
+    existing: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for item in [*existing, *incoming]:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("raw_article_id") or item.get("id") or item.get("url") or "")
+        if not key:
+            key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        clean_item = dict(item)
+        clean_item["index"] = len(merged) + 1
+        merged.append(clean_item)
+
+    return merged
+
+
+def _source_dict_from_article(article: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "index": 0,
+        "raw_article_id": int(article["id"]),
+        "title": article.get("title") or "",
+        "source_name": article.get("source_name") or article.get("publisher") or "",
+        "url": article.get("url") or "",
+        "published_at": _iso_or_none(article.get("published_at")),
+        "collected_at": _iso_or_none(article.get("collected_at")),
+    }
+
+
+def _source_article_dict_from_article(article: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": int(article["id"]),
+        "title": article.get("title") or "",
+        "url": article.get("url") or "",
+        "source_name": article.get("source_name") or "",
+        "publisher": article.get("publisher") or "",
+        "published_at": _iso_or_none(article.get("published_at")),
+        "collected_at": _iso_or_none(article.get("collected_at")),
+    }
+
+
 def _iso_or_none(value: Any) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -514,7 +571,19 @@ def list_card_news_cluster_candidates(
 ) -> list[dict[str, Any]]:
     """프론트 카드뉴스 생성을 위한 뉴스 대표 클러스터 후보를 조회한다."""
     limit = max(1, min(limit, 30))
-    where_today = "AND r.published_at >= NOW() - INTERVAL '24 hours'" if today_only else ""
+    where_today = (
+        """
+          AND EXISTS (
+              SELECT 1
+              FROM raw_articles recent
+              WHERE recent.cluster_id = r.cluster_id
+                AND recent.source_type = 'news'
+                AND recent.published_at >= NOW() - INTERVAL '24 hours'
+          )
+        """
+        if today_only
+        else ""
+    )
     query = text(f"""
         SELECT
             r.cluster_id,
@@ -537,12 +606,13 @@ def list_card_news_cluster_candidates(
                     FILTER (WHERE a.id IS NOT NULL),
                 ARRAY[]::bigint[]
             ) AS article_ids,
-            COUNT(a.id) AS cluster_size
+            COUNT(a.id) AS cluster_size,
+            MAX(a.published_at) AS latest_published_at,
+            MAX(a.collected_at) AS latest_collected_at
         FROM raw_articles r
         LEFT JOIN raw_articles a
             ON a.cluster_id = r.cluster_id
            AND a.source_type = 'news'
-           AND a.collected_at::date = r.collected_at::date
            AND a.company = r.company
         WHERE r.source_type = 'news'
           AND r.is_representative = true
@@ -555,12 +625,102 @@ def list_card_news_cluster_candidates(
             r.published_at, r.collected_at
         ORDER BY
             COALESCE(r.importance_score, 0) DESC,
-            r.published_at DESC NULLS LAST,
-            r.collected_at DESC
+            MAX(a.published_at) DESC NULLS LAST,
+            MAX(a.collected_at) DESC,
+            r.published_at DESC NULLS LAST
         LIMIT :limit
     """)
     with SessionLocal() as db:
         rows = db.execute(query, {"limit": limit}).fetchall()
+    return [dict(row._mapping) for row in rows]
+
+
+def list_existing_news_cluster_candidates(
+    *,
+    company_keys: list[str] | None = None,
+    exclude_article_ids: list[int] | None = None,
+    lookback_hours: int = 168,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """최근 뉴스 대표 클러스터 후보를 조회한다.
+
+    실시간/백필 전처리에서 새 기사 클러스터를 기존 클러스터에 붙일 때 사용한다.
+    cluster_id는 현재 대표 기사 ID 기반으로 저장되므로, 대표 row를 anchor로 삼는다.
+    """
+    lookback_hours = max(1, min(lookback_hours, 24 * 30))
+    limit = max(1, min(limit, 1000))
+    company_filter = bool(company_keys)
+    exclude_ids = exclude_article_ids or []
+
+    query = text("""
+        SELECT
+            r.cluster_id,
+            r.id AS representative_id,
+            r.company,
+            r.title,
+            r.content,
+            r.url,
+            r.source_type,
+            r.content_type,
+            r.publisher,
+            r.language,
+            r.relevance_score,
+            r.relevance_label,
+            r.relevance_reason,
+            r.matched_companies,
+            r.matched_sectors,
+            r.matched_sector_details,
+            r.source_name,
+            r.published_at,
+            r.collected_at,
+            r.metadata,
+            COALESCE(
+                array_agg(
+                    a.id
+                    ORDER BY
+                        a.published_at DESC NULLS LAST,
+                        a.collected_at DESC NULLS LAST,
+                        a.id DESC
+                ) FILTER (WHERE a.id IS NOT NULL),
+                ARRAY[]::bigint[]
+            ) AS article_ids
+        FROM raw_articles r
+        LEFT JOIN raw_articles a
+            ON a.cluster_id = r.cluster_id
+           AND a.source_type = 'news'
+        WHERE r.source_type = 'news'
+          AND r.is_representative = true
+          AND r.cluster_id IS NOT NULL
+          AND r.processing_status IN ('PROCESSED', 'CLASSIFIED')
+          AND r.collected_at >= NOW() - (:lookback_hours * INTERVAL '1 hour')
+          AND (NOT :company_filter OR r.company ?| :company_keys)
+          AND (
+              cardinality(CAST(:exclude_article_ids AS bigint[])) = 0
+              OR r.id <> ALL(CAST(:exclude_article_ids AS bigint[]))
+          )
+        GROUP BY
+            r.cluster_id, r.id, r.company, r.title, r.content, r.url,
+            r.source_type, r.content_type, r.publisher, r.language,
+            r.relevance_score, r.relevance_label, r.relevance_reason,
+            r.matched_companies, r.matched_sectors, r.matched_sector_details,
+            r.source_name, r.published_at, r.collected_at, r.metadata
+        ORDER BY
+            r.published_at DESC NULLS LAST,
+            r.collected_at DESC,
+            r.id DESC
+        LIMIT :limit
+    """)
+    with SessionLocal() as db:
+        rows = db.execute(
+            query,
+            {
+                "company_filter": company_filter,
+                "company_keys": company_keys or [""],
+                "exclude_article_ids": exclude_ids,
+                "lookback_hours": lookback_hours,
+                "limit": limit,
+            },
+        ).fetchall()
     return [dict(row._mapping) for row in rows]
 
 
@@ -1156,6 +1316,100 @@ def _merge_implication_payload(card: dict[str, Any]) -> dict[str, Any]:
         },
     )
     return payload
+
+
+def merge_card_news_sources_for_cluster(
+    cluster_id: int,
+    raw_article_ids: list[int],
+    *,
+    importance_score: float | None = None,
+) -> Optional[str]:
+    """기존 클러스터 카드에 새 원문 기사 출처를 병합한다.
+
+    같은 주제의 새 기사가 기존 cluster_id에 편입될 때 새 card_news를 만들지 않고,
+    기존 카드의 sources/source_raw_article_ids/source_articles를 보강한다.
+    """
+    if not raw_article_ids:
+        return None
+
+    articles = get_articles_by_ids(raw_article_ids)
+    if not articles:
+        return None
+
+    try:
+        with SessionLocal() as db:
+            row = db.execute(
+                text("""
+                    SELECT id, sources, source_raw_article_ids, source_articles, importance_score
+                    FROM card_news
+                    WHERE cluster_id = :cluster_id
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """),
+                {"cluster_id": cluster_id},
+            ).fetchone()
+            if row is None:
+                return None
+
+            current = dict(row._mapping)
+            existing_sources = _json_or_value(current.get("sources"), [])
+            existing_source_articles = _json_or_value(current.get("source_articles"), [])
+            existing_ids = [
+                int(value)
+                for value in (current.get("source_raw_article_ids") or [])
+                if value is not None
+            ]
+
+            merged_sources = _merge_source_dicts(
+                existing_sources if isinstance(existing_sources, list) else [],
+                [_source_dict_from_article(article) for article in articles],
+            )
+            merged_source_articles = _merge_source_dicts(
+                existing_source_articles if isinstance(existing_source_articles, list) else [],
+                [_source_article_dict_from_article(article) for article in articles],
+            )
+            merged_ids = sorted({*existing_ids, *(int(article["id"]) for article in articles)})
+            merged_importance = max(
+                float(current.get("importance_score") or 0.0),
+                float(importance_score or 0.0),
+            )
+
+            db.execute(
+                text("""
+                    UPDATE card_news
+                    SET sources = CAST(:sources AS jsonb),
+                        source_raw_article_ids = CAST(:source_raw_article_ids AS bigint[]),
+                        source_articles = CAST(:source_articles AS jsonb),
+                        importance_score = GREATEST(
+                            COALESCE(importance_score, 0),
+                            :importance_score
+                        )
+                    WHERE id = :id
+                """),
+                {
+                    "id": current["id"],
+                    "sources": json.dumps(merged_sources, ensure_ascii=False),
+                    "source_raw_article_ids": merged_ids,
+                    "source_articles": json.dumps(merged_source_articles, ensure_ascii=False),
+                    "importance_score": merged_importance,
+                },
+            )
+            db.commit()
+            log.info(
+                "기존 카드 출처 병합 완료 | card_id=%s cluster_id=%s added=%d",
+                current["id"],
+                cluster_id,
+                len(articles),
+            )
+            return str(current["id"])
+    except Exception as e:
+        log.warning(
+            "기존 카드 출처 병합 실패 | cluster_id=%s article_ids=%s error=%s",
+            cluster_id,
+            raw_article_ids,
+            e,
+        )
+        return None
 
 
 # ──────────────────────────────────────────────────────────────

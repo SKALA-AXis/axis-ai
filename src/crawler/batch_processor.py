@@ -37,7 +37,6 @@ TRACK_C_SOURCES = (
 TRACK_D_SOURCES = (
     "dart",
     "ir",
-    "sk_ax_site",
     "naver_datalab",
     "spri",
     "bcg",
