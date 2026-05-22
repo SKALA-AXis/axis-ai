@@ -301,6 +301,16 @@ def save_articles(
     return inserted
 
 
+def article_exists_by_url(url: str) -> bool:
+    """Return whether a raw article URL has already been stored."""
+    if not url:
+        return False
+
+    with SessionLocal() as db:
+        row = db.execute(_SELECT_ARTICLE_ID_BY_URL, {"url": url}).fetchone()
+    return row is not None
+
+
 # ──────────────────────────────────────────────────────────────
 # 조회
 # ──────────────────────────────────────────────────────────────

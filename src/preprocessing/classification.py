@@ -288,14 +288,15 @@ class ClusterClassifier:
         rep_article: dict[str, Any],
         exposure: dict[str, Any],
     ) -> tuple[str, str]:
+        rule_event_type, rule_reasoning = _classify_event_type_rule_based(
+            title=str(rep_article.get("title") or ""),
+            content=str(rep_article.get("content") or ""),
+        )
+        if rule_event_type:
+            return rule_event_type, rule_reasoning
+
         if not self.enable_llm or not openai_calls_enabled():
-            rule_event_type, rule_reasoning = _classify_event_type_rule_based(
-                title=str(rep_article.get("title") or ""),
-                content=str(rep_article.get("content") or ""),
-            )
-            return rule_event_type or "company", (
-                rule_reasoning or "no-llm mode: 규칙 매칭 없음, company 기본값"
-            )
+            return "company", "규칙 매칭 없음, company 기본값"
 
         articles_text = _format_articles([rep_article])
         company_mention_text = (

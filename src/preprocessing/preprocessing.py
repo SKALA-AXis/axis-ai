@@ -101,9 +101,9 @@ class PreprocessingService:
         classifier: ClusterClassifier | None = None,
         max_workers: int = DEFAULT_GPT_WORKERS,
     ) -> None:
-        self.relevance_evaluator = relevance_evaluator or RelevanceEvaluator()
+        self.relevance_evaluator = relevance_evaluator or RelevanceEvaluator(enable_llm=False)
         self.deduplicator = deduplicator or ArticleDeduplicator()
-        self.classifier = classifier or ClusterClassifier()
+        self.classifier = classifier or ClusterClassifier(enable_llm=False)
         self.max_workers = max_workers
 
     def run(
@@ -554,6 +554,7 @@ def _parsed_document_metadata_patch(
                 "topics": parser_result.get("topics"),
                 "topic_signals": parser_result.get("topic_signals"),
                 "dart_sections": parser_result.get("sections"),
+                "dart_section_index": parser_result.get("section_index"),
                 "dart_section_tree": parser_result.get("section_tree"),
                 "dart_document_chunks": compact_parser_result.get("document_chunks"),
                 "dart_classified_tables": parser_result.get("classified_tables"),
@@ -571,6 +572,7 @@ def _parsed_document_metadata_patch(
                 "topics": parser_result.get("topics"),
                 "topic_signals": parser_result.get("topic_signals"),
                 "ir_sections": parser_result.get("sections"),
+                "ir_page_index": parser_result.get("page_index"),
                 "ir_document_chunks": compact_parser_result.get("document_chunks"),
             }
         )

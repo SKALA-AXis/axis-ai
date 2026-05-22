@@ -21,6 +21,7 @@ from src.crawler.article_filter import strip_html
 from src.crawler.base import RawArticle
 from src.crawler.base_crawler import BaseCrawler
 from src.crawler.playwright_client import PlaywrightClient
+from src.db.article_store import article_exists_by_url
 
 log = logging.getLogger(__name__)
 
@@ -218,6 +219,15 @@ class IRCrawler(BaseCrawler):
             if _is_non_ir_pdf(pdf_url):
                 log.info(
                     "IR 발표자료 외 PDF 스킵 | peer_id=%s title=%s url=%s",
+                    self.peer_id,
+                    strip_html(normalized_label),
+                    pdf_url,
+                )
+                continue
+
+            if article_exists_by_url(pdf_url):
+                log.info(
+                    "IR 기존 URL 스킵 | peer_id=%s title=%s url=%s",
                     self.peer_id,
                     strip_html(normalized_label),
                     pdf_url,

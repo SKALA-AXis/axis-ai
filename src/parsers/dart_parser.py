@@ -892,6 +892,25 @@ def _extract_sections_and_chunks(
     return sections, chunks
 
 
+def _section_index(sections: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Compact major-section index for downstream agents."""
+    if not sections:
+        return []
+    return [
+        {
+            "section_key": key,
+            "section_title": section.get("title"),
+            "section_order": section.get("order"),
+            "text_chars": section.get("text_chars"),
+            "chunk_count": section.get("chunk_count"),
+        }
+        for key, section in sorted(
+            sections.items(),
+            key=lambda item: int(item[1].get("order") or 999),
+        )
+    ]
+
+
 def _major_section_anchors(text: str) -> list[dict[str, Any]]:
     anchors: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
@@ -1520,6 +1539,7 @@ class DartParser:
                 "image_count": extra.get("image_count"),
             },
             "sections": sections,
+            "section_index": _section_index(sections),
             "section_tree": section_tree,
             "document_chunks": document_chunks,
             "classified_tables": classified_tables,

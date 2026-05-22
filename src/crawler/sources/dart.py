@@ -15,6 +15,7 @@ from bs4.element import Tag
 from src.crawler.article_filter import strip_html
 from src.crawler.base import RawArticle
 from src.crawler.base_crawler import BaseCrawler
+from src.db.article_store import article_exists_by_url
 
 log = logging.getLogger(__name__)
 
@@ -327,6 +328,16 @@ class DartCrawler(BaseCrawler):
                 "parse_strategy": "not_fetched",
             }
 
+            article_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={receipt_no}"
+            if article_exists_by_url(article_url):
+                log.info(
+                    "DART 기존 URL 스킵 | peer_id=%s receipt_no=%s url=%s",
+                    self.peer_id,
+                    receipt_no,
+                    article_url,
+                )
+                continue
+
             if self.fetch_document and receipt_no:
                 try:
                     document_payload = await self._fetch_document_payload(receipt_no)
@@ -353,7 +364,7 @@ class DartCrawler(BaseCrawler):
 
             articles.append(
                 RawArticle(
-                    url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={receipt_no}",
+                    url=article_url,
                     title=report_name,
                     content=content,
                     published_at=published_at,

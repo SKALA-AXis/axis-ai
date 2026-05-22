@@ -213,7 +213,9 @@ async def _run_collection_track(
         scheduled_no_llm = trigger_type == "scheduled"
         result = PreprocessingService(
             relevance_evaluator=RelevanceEvaluator(enable_llm=not scheduled_no_llm),
-            classifier=ClusterClassifier(enable_llm=not scheduled_no_llm),
+            # Classification is rule-first; LLM is only a last-resort fallback
+            # when OpenAI calls are explicitly enabled by policy.
+            classifier=ClusterClassifier(enable_llm=True),
         ).run(
             company=selected,
             trigger_type=trigger_type,
