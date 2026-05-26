@@ -263,7 +263,10 @@ class ITTrendAgent:
             }
         )
         if snapshot_card_total == 0:
-            warning = "Phase 1 snapshot empty (global newsroom rows = 0) — global_industry_trends 저장 skip."
+            warning = (
+                "Phase 1 snapshot empty (global newsroom rows = 0) — "
+                "global_industry_trends 저장 skip."
+            )
             log.warning("ITTrendAgent | %s", warning)
             return _empty_result(
                 batch_id=batch_id,
@@ -840,7 +843,8 @@ def _phase5_forecast_synthesis(
     prompt = (
         "당신은 SK AX 의 글로벌 IT 트렌드 시나리오 분석가입니다.\n"
         "다음 입력으로 다음 세 가지를 산출하세요:\n"
-        "1. forecasts — 각 horizon (1Q, 6M, 1Y) 별 baseline narrative + sk_ax_impact + drivers + risk_level + recommended_response\n"
+        "1. forecasts — 각 horizon (1Q, 6M, 1Y) 별 baseline narrative + "
+        "sk_ax_impact + drivers + risk_level + recommended_response\n"
         "2. final_one_liner — SK AX 임원 한 명이 5초 안에 이해할 한 줄\n"
         "3. sk_ax_implication — SK AX 가 가져야 할 자세 / 행동 권고 (3 문장 이하)\n"
         "4. per_keyword — 각 trend 별 title (한 줄) + summary (1~2 문장) + implication (한 줄)\n"
