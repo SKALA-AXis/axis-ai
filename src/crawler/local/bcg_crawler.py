@@ -867,7 +867,10 @@ async def translate_article_to_korean(
         return None, None, {"translation_status": "no_api_key"}
 
     try:
-        from openai import AsyncOpenAI
+        try:
+            from langfuse.openai import AsyncOpenAI
+        except Exception:
+            from openai import AsyncOpenAI
     except Exception as e:
         log.warning("openai 패키지 import 실패: 번역 스킵 | error=%s", e)
         return None, None, {"translation_status": "no_openai_pkg", "translation_error": str(e)}
