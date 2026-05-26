@@ -417,10 +417,19 @@ def _ensure_business_signals_schema() -> None:
 
 
 def _reparse_dart_article(article: dict[str, Any]) -> dict[str, Any]:
+    preserved_llm_signals = _preserved_llm_business_signals(article)
     parser = DartParser()
     parsed = parser.parse_article(article)
     item, ok, reason = analyze_parser_quality_article(article)
     parser_result = item.get("parser_result") or parsed
+    if preserved_llm_signals:
+        parser_result = {
+            **parser_result,
+            "llm_business_signals": _merge_llm_business_signals(
+                parser_result.get("llm_business_signals"),
+                preserved_llm_signals,
+            ),
+        }
     storage_parser_result = _compact_parser_result_for_storage(parser_result)
 
     metadata_patch = {
@@ -454,6 +463,86 @@ def _reparse_dart_article(article: dict[str, Any]) -> dict[str, Any]:
     )
     article["extra"] = {**article["extra"], **metadata_patch}
     return parser_result
+
+
+def _preserved_llm_business_signals(article: dict[str, Any]) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    metadata = article.get("extra") or {}
+    parser_result = metadata.get("parser_result")
+    if isinstance(parser_result, dict):
+        signals.extend(_llm_signal_dicts(parser_result.get("llm_business_signals")))
+    signals.extend(_llm_signal_dicts(metadata.get("dart_llm_business_signals")))
+    signals.extend(_stored_llm_business_signal_rows(int(article["id"])))
+    return _merge_llm_business_signals([], signals)
+
+
+def _stored_llm_business_signal_rows(raw_article_id: int) -> list[dict[str, Any]]:
+    if not _business_signals_table_exists():
+        return []
+    with SessionLocal() as db:
+        rows = db.execute(
+            text("""
+                SELECT business_area, signal_type, sentiment, summary,
+                       evidence_text, confidence, payload
+                FROM raw_article_business_signals
+                WHERE raw_article_id = :raw_article_id
+                  AND source_type = 'dart'
+                  AND extraction_method = 'dart_llm.analysis'
+                ORDER BY id
+            """),
+            {"raw_article_id": raw_article_id},
+        ).fetchall()
+
+    signals: list[dict[str, Any]] = []
+    for row in rows:
+        data = dict(row._mapping)
+        payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+        llm_signal = payload.get("llm_signal") if isinstance(payload, dict) else None
+        if isinstance(llm_signal, dict):
+            signals.append(llm_signal)
+            continue
+        signals.append(
+            {
+                "business_area": data.get("business_area"),
+                "signal_type": data.get("signal_type"),
+                "sentiment": data.get("sentiment"),
+                "summary": data.get("summary"),
+                "evidence_text": data.get("evidence_text"),
+                "confidence": data.get("confidence"),
+            }
+        )
+    return signals
+
+
+def _business_signals_table_exists() -> bool:
+    with SessionLocal() as db:
+        return _table_exists(db, "raw_article_business_signals")
+
+
+def _llm_signal_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _merge_llm_business_signals(
+    current: Any,
+    preserved: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for signal in [*_llm_signal_dicts(current), *preserved]:
+        business_area = str(signal.get("business_area") or "company_total")
+        signal_type = str(signal.get("signal_type") or "")
+        evidence_text = str(signal.get("evidence_text") or "").strip()
+        if not signal_type or not evidence_text:
+            continue
+        key = (business_area, signal_type, evidence_text[:180])
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(signal)
+    return merged
 
 
 def _compact_parser_result_for_storage(parser_result: dict[str, Any]) -> dict[str, Any]:

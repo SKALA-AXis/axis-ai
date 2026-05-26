@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 _REPORT_PERIOD_PATTERN = re.compile(r"\((20\d{2})\.(0[369]|12)\)")
 _DART_STATEMENT_ANCHOR_PATTERN = re.compile(r"(?:연\s*결\s*)?(?:포\s*괄\s*)?손\s*익\s*계\s*산\s*서")
 _DART_AMOUNT_PATTERN = re.compile(r"\(?-?\d[\d,]*(?:\.\d+)?\)?")
+_DART_UNIT_PATTERN = re.compile(r"(?:단위\s*[:：]?\s*|\()(원|천원|백만원|억원|억|조원|조)\)?")
 _DART_ROW_STOP_PATTERN = re.compile(
     r"매출원가|매출총이익|판매비와관리비|영업이익|기타수익|기타비용|금융수익|금융비용|"
     r"법인세|당기순이익|기타포괄손익|주당이익"
@@ -305,7 +306,7 @@ def _normalize_dart_amount_krwbn(value: str, unit: str) -> float | None:
 
 
 def _dart_statement_unit(section: str) -> str | None:
-    match = re.search(r"단위\s*:\s*(원|천원|백만원|억원|억|조원|조)", section)
+    match = _DART_UNIT_PATTERN.search(section or "")
     return match.group(1) if match else None
 
 
@@ -459,10 +460,17 @@ def _extract_metric_from_table_rows(
 
 
 def _infer_table_unit(table: dict[str, Any]) -> str | None:
+    row_texts: list[str] = []
+    rows = table.get("rows")
+    if isinstance(rows, list):
+        for row in rows[:5]:
+            if isinstance(row, list):
+                row_texts.append(" ".join(str(cell or "") for cell in row))
     text = " ".join(
         [
             str(table.get("title") or ""),
-            str(table.get("text") or "")[:1000],
+            str(table.get("text") or "")[:3000],
+            *row_texts,
         ]
     )
     return _dart_statement_unit(text)
@@ -704,7 +712,9 @@ def _extract_business_segment_candidates(
         if not any(token in combined for token in ("주요 제품", "주요제품", "제품 및 서비스")):
             continue
 
-        unit = _dart_statement_unit(combined) or _infer_table_unit(table) or "백만원"
+        unit = _dart_statement_unit(combined) or _infer_table_unit(table)
+        if not unit:
+            continue
         header = _segment_header_row(rows)
         if not header:
             continue
