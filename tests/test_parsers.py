@@ -110,6 +110,43 @@ def test_ir_parser_extracts_financial_table_matrix_by_period() -> None:
     assert parsed["financial_tables"][0]["page"] == 4
 
 
+def test_ir_parser_normalizes_krw_bn_table_unit_to_eokwon() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="테스트사 2026년 1분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="test_peer",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 4,
+                    "blocks": [
+                        {"text": "Financial Results (Unit: KRW bn)"},
+                        {"text": "구분 2026년 1분기 2025년 1분기"},
+                        {"text": "Revenue 335.2 348.9"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    revenue_candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("type") == "revenue_total"
+    ]
+
+    assert revenue_candidates[0]["unit"] == "십억원"
+    assert revenue_candidates[0]["value_krwbn"] == 3352
+
+
 def test_ir_parser_preserves_unknown_table_business_area_label() -> None:
     article = RawArticle(
         url="https://example.com/ir.pdf",
@@ -221,7 +258,10 @@ def test_ir_parser_does_not_apply_amount_unit_to_margin_rows() -> None:
     assert [candidate["period"] for candidate in margin_candidates] == ["2025Q3", "2026Q1"]
     assert [candidate["value_pct"] for candidate in margin_candidates] == [11.2, 11.1]
     assert all(candidate["unit"] == "%" for candidate in margin_candidates)
-    assert all("십억원" not in candidate["evidence_text"] for candidate in margin_candidates)
+    assert all(
+        "단위 근거: (단위: 십억원)" in candidate["evidence_text"]
+        for candidate in margin_candidates
+    )
     assert margin_candidates[0]["business_area"] == "솔루션"
 
     metrics = _metrics_from_parser_result(
@@ -239,6 +279,75 @@ def test_ir_parser_does_not_apply_amount_unit_to_margin_rows() -> None:
     margin_metrics = [metric for metric in metrics if metric["metric_name"] == "operating_margin"]
     assert all(metric["value_krwbn"] is None for metric in margin_metrics)
     assert all(metric["unit"] == "%" for metric in margin_metrics)
+
+
+def test_ir_parser_does_not_store_percentage_cells_as_amount_metrics() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="테스트사 2026년 1분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="test_peer",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 10,
+                    "blocks": [
+                        {"text": "매출액 (단위: 억원)"},
+                        {"text": "구분 1Q26 4Q25 QoQ 1Q25 YoY"},
+                        {"text": "매출액"},
+                        {"text": "IT서비스 16,105 16,690 -3.5% 16,004 +0.6%"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    revenue_candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("type") == "revenue_total"
+    ]
+
+    assert [candidate["period"] for candidate in revenue_candidates] == [
+        "2026Q1",
+        "2025Q4",
+        "2025Q1",
+    ]
+    assert [candidate["value_krwbn"] for candidate in revenue_candidates] == [
+        16105,
+        16690,
+        16004,
+    ]
+    assert all(candidate["unit"] == "억원" for candidate in revenue_candidates)
+    assert all(
+        "단위 근거: 매출액 (단위: 억원)" in candidate["evidence_text"]
+        for candidate in revenue_candidates
+    )
+    revenue_qoq = next(
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("type") == "revenue_total_qoq"
+    )
+    revenue_yoy = next(
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("type") == "revenue_total_yoy"
+    )
+    assert revenue_qoq["period"] == "2026Q1"
+    assert revenue_qoq["value_pct"] == -3.5
+    assert revenue_qoq["unit"] == "%"
+    assert revenue_yoy["period"] == "2026Q1"
+    assert revenue_yoy["value_pct"] == 0.6
+    assert revenue_yoy["unit"] == "%"
 
 
 def test_ir_parser_uses_table_page_context_for_generic_metric_rows() -> None:
@@ -900,6 +1009,226 @@ def test_ir_parser_marks_sk_portfolio_metrics_separately() -> None:
     assert candidates_by_type["revenue_total"]["metric_scope"] == "portfolio_company"
     assert candidates_by_type["revenue_total"]["entity_name"] == "sk_biopharmaceuticals"
     assert candidates_by_type["operating_profit"]["metric_scope"] == "portfolio_company"
+
+
+def test_ir_parser_skips_sk_unlisted_subsidiary_appendix_table() -> None:
+    article = RawArticle(
+        url="https://example.com/sk-inc-ir.pdf",
+        title="SK AX 2026년 1분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="sk_ax",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 29,
+                    "blocks": [
+                        {"text": "[Appendix] 주요비상장자회사분기별실적"},
+                        {"text": "(단위: 십억원)"},
+                        {"text": "구분 1Q23 2Q23 3Q23 4Q23 1Q24 2Q24"},
+                        {"text": "영업이익 114 70 39 58 281 42"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    table_candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+    ]
+
+    assert table_candidates == []
+
+
+def test_ir_rule_based_business_signals_require_directional_evidence() -> None:
+    article = {
+        "id": 201,
+        "company": ["test_peer"],
+        "title": "테스트사 IR",
+        "url": "https://example.com/ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c1",
+                "chunk_index": 1,
+                "page": 3,
+                "section_key": "business",
+                "text": (
+                    "클라우드 매출은 1분기 주요 실적 지표입니다. "
+                    "클라우드 MSP 수요 확대와 GPU 인프라 구축으로 성장세가 강화되었습니다."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "test_peer"},
+    )
+
+    assert len(signals) == 2
+    assert {signal["signal_type"] for signal in signals} == {"growth", "investment"}
+    assert all(
+        "클라우드 매출은 1분기 주요 실적 지표" not in signal["evidence_text"]
+        for signal in signals
+    )
+    assert all(
+        signal["extraction_method"] == "ir_parser.document_chunks.rule_based.v2"
+        for signal in signals
+    )
+
+
+def test_ir_rule_based_business_signals_skip_appendix_portfolio_sentences() -> None:
+    article = {
+        "id": 202,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c1",
+                "chunk_index": 1,
+                "page": 29,
+                "section_key": "business",
+                "text": (
+                    "[Appendix] 주요비상장자회사분기별실적에서 자회사 매출이 증가했습니다. "
+                    "SK AX AI Transformation 사업은 고객 수요 확대로 성장했습니다."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert len(signals) == 1
+    assert signals[0]["business_area"] == "ai_ax"
+    assert signals[0]["signal_type"] == "growth"
+    assert "주요비상장자회사" not in signals[0]["evidence_text"]
+
+
+def test_ir_rule_based_business_signals_include_sk_ax_highlight_sentences() -> None:
+    article = {
+        "id": 203,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c1",
+                "chunk_index": 1,
+                "page": 9,
+                "section_key": "business",
+                "text": (
+                    "신규 AI DX 프로젝트 수주 견조한 가운데, 기저 효과로 매출 감소했습니다. "
+                    "포트폴리오 Mix 변화 및 생산성 향상에 따른 마진 개선 효과로 "
+                    "영업이익은 증가했습니다. "
+                    "AI Transformation 및 DT 기반의 고부가 비즈니스 모델로 개편 진행 중입니다."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    evidence = " ".join(signal["evidence_text"] for signal in signals)
+    signal_types = {signal["signal_type"] for signal in signals}
+    assert "수주 견조" in evidence
+    assert "마진 개선" in evidence
+    assert "AI Transformation" in evidence
+    assert {"orders_pipeline", "growth", "strategy"} <= signal_types
+
+
+def test_ir_metrics_keep_one_representative_candidate_for_report_period() -> None:
+    article = {
+        "id": 204,
+        "company": ["test_peer"],
+        "title": "테스트사 IR",
+        "url": "https://example.com/ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "candidates": [
+            {
+                "type": "revenue_total",
+                "value_krwbn": 1000,
+                "metric_scope": "company_total",
+                "business_area": "company_total",
+                "period": "2025Q4",
+                "source": "ir_table_matrix",
+                "confidence": 0.9,
+            },
+            {
+                "type": "revenue_total",
+                "value_krwbn": 1200,
+                "metric_scope": "company_total",
+                "business_area": "company_total",
+                "period": "2026Q1",
+                "source": "ir_parser_text",
+                "confidence": 0.85,
+            },
+            {
+                "type": "revenue_total",
+                "value_krwbn": 1234,
+                "metric_scope": "company_total",
+                "business_area": "company_total",
+                "period": "2026Q1",
+                "source": "ir_table_matrix",
+                "confidence": 0.88,
+            },
+        ],
+    }
+
+    metrics = _metrics_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "test_peer"},
+    )
+
+    assert len(metrics) == 1
+    assert metrics[0]["period"] == "2026Q1"
+    assert metrics[0]["metric_name"] == "revenue_total"
+    assert metrics[0]["value_krwbn"] == 1234
+    assert metrics[0]["extraction_method"] == "ir_parser.table_matrix"
 
 
 def test_dart_parser_parses_dart_crawler_article() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -28,6 +29,7 @@ log = logging.getLogger(__name__)
 _NAMESPACE = uuid.UUID("00000000-0000-0000-0000-00000000da47")
 _DART_VECTOR_SECTION_KEYS = {"company_overview", "business"}
 _TOP_K_PREFETCH = 50
+_UPSERT_BATCH_SIZE = max(1, int(os.getenv("DART_VECTOR_UPSERT_BATCH_SIZE", "8")))
 
 
 def index_dart_chunks(
@@ -92,7 +94,11 @@ def index_dart_chunks(
         )
         point_ids.append(point_id)
 
-    client.upsert(collection_name=COLLECTION_DOCUMENTS, points=points)
+    for start in range(0, len(points), _UPSERT_BATCH_SIZE):
+        client.upsert(
+            collection_name=COLLECTION_DOCUMENTS,
+            points=points[start : start + _UPSERT_BATCH_SIZE],
+        )
     log.info("DART chunk vector index 완료 | article=%s chunks=%d", article.get("id"), len(points))
     return point_ids
 

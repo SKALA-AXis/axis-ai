@@ -1,4 +1,4 @@
-"""ProfileAgent 2-tier (W2-2) — Tier B: cluster-time recent enrichment.
+"""ProfileContextLoader — cluster-time profile context enrichment.
 
 Tier A (`peer_companies.profile_snapshot` JSONB, 주1회 CronJob) 가 build 한 정적
 snapshot 위에, cluster-time 에 LLM 호출 없이 DB query 만으로 recent signals 와
@@ -23,48 +23,54 @@ from src.services.peer_id_aliases import expand_peer_aliases
 log = logging.getLogger(__name__)
 
 
-def build_profile_context_v2(
-    *,
-    companies: list[str],
-    sectors: list[str] | None = None,
-    event_type: str | None = None,
-    lookback_days: int = 30,
-    peer_profile_context: dict[str, Any] | None = None,
-    skax_profile_context: dict[str, Any] | None = None,
-) -> ProfileContext:
-    """Tier A snapshot + Tier B recent enrichment 를 합쳐 ProfileContext 반환.
+class ProfileContextLoader:
+    """Load Tier A snapshot and Tier B enrichment into ``ProfileContext``."""
 
-    Tier A: `peer_companies.profile_snapshot` JSONB (없으면 빈 dict fallback).
-    Tier B: 최근 N일 business_signals top-3 + 최근 분기 financial_metrics.
-    """
-    peers_canonical = [company_id for company_id in companies if company_id not in SELF_COMPANY_IDS]
-    skax_profile = dict(skax_profile_context or {}) or _load_snapshot("sk_ax")
+    def load(
+        self,
+        *,
+        companies: list[str],
+        sectors: list[str] | None = None,
+        event_type: str | None = None,
+        lookback_days: int = 30,
+        peer_profile_context: dict[str, Any] | None = None,
+        skax_profile_context: dict[str, Any] | None = None,
+    ) -> ProfileContext:
+        """Tier A snapshot + Tier B recent enrichment 를 합쳐 ProfileContext 반환.
 
-    peer_profiles: dict[str, Any] = dict(peer_profile_context or {})
-    for peer_id in peers_canonical:
-        snapshot = _load_snapshot(peer_id)
-        if not snapshot:
-            snapshot = {"peer_id": peer_id, "company_id": peer_id}
-        profile = dict(snapshot)
-        profile.setdefault("peer_id", peer_id)
-        profile.setdefault("company_id", peer_id)
-        profile["recent_signals"] = _load_recent_business_signals(
-            peer_id=peer_id, days=lookback_days, limit=3
+        Tier A: `peer_companies.profile_snapshot` JSONB (없으면 빈 dict fallback).
+        Tier B: 최근 N일 business_signals top-3 + 최근 분기 financial_metrics.
+        """
+        peers_canonical = [
+            company_id for company_id in companies if company_id not in SELF_COMPANY_IDS
+        ]
+        skax_profile = dict(skax_profile_context or {}) or _load_snapshot("sk_ax")
+
+        peer_profiles: dict[str, Any] = dict(peer_profile_context or {})
+        for peer_id in peers_canonical:
+            snapshot = _load_snapshot(peer_id)
+            if not snapshot:
+                snapshot = {"peer_id": peer_id, "company_id": peer_id}
+            profile = dict(snapshot)
+            profile.setdefault("peer_id", peer_id)
+            profile.setdefault("company_id", peer_id)
+            profile["recent_signals"] = _load_recent_business_signals(
+                peer_id=peer_id, days=lookback_days, limit=3
+            )
+            profile["recent_financial"] = _load_latest_financial_metrics(peer_id=peer_id)
+            profile["recent_capability_change"] = _summarize_capability_change(profile)
+            if event_type:
+                profile["event_type_focus"] = event_type
+            peer_profiles[peer_id] = profile
+
+        sector_context: dict[str, Any] = {
+            "selected_sector_ids": list(dict.fromkeys(sectors or [])),
+        }
+        return ProfileContext(
+            skax_profile=skax_profile,
+            peer_profiles=peer_profiles,
+            sector_context=sector_context,
         )
-        profile["recent_financial"] = _load_latest_financial_metrics(peer_id=peer_id)
-        profile["recent_capability_change"] = _summarize_capability_change(profile)
-        if event_type:
-            profile["event_type_focus"] = event_type
-        peer_profiles[peer_id] = profile
-
-    sector_context: dict[str, Any] = {
-        "selected_sector_ids": list(dict.fromkeys(sectors or [])),
-    }
-    return ProfileContext(
-        skax_profile=skax_profile,
-        peer_profiles=peer_profiles,
-        sector_context=sector_context,
-    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -266,4 +272,4 @@ def _iso(value: Any) -> str | None:
     return str(value)
 
 
-__all__ = ["build_profile_context_v2"]
+__all__ = ["ProfileContextLoader"]

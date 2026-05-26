@@ -106,6 +106,16 @@ _METRIC_SPECS = {
         "metric_scope": "company_total",
     },
 }
+_COMPARISON_LABELS = {"qoq": "QoQ", "yoy": "YoY"}
+for _base_metric_name, _base_spec in list(_METRIC_SPECS.items()):
+    for _comparison_key, _comparison_label in _COMPARISON_LABELS.items():
+        _METRIC_SPECS[f"{_base_metric_name}_{_comparison_key}"] = {
+            "record_key": f"{_base_metric_name}_{_comparison_key}_pct",
+            "label": f"{_base_spec['label']} {_comparison_label}",
+            "unit": "%",
+            "metric_scope": _base_spec["metric_scope"],
+        }
+
 _BUSINESS_AREA_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "cloud",
@@ -157,10 +167,27 @@ _SECTION_AREA_MAP = {
 _SIGNAL_TYPE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("orders_pipeline", ("수주", "backlog", "계약", "pipeline", "잔고")),
     ("investment", ("투자", "capex", "설비", "데이터센터", "gpu", "구축")),
-    ("growth", ("성장", "확대", "증가", "개선", "매출", "영업이익", "profitability")),
-    ("strategy", ("전략", "추진", "강화", "고도화", "출시", "제휴", "협력", "mou")),
+    ("growth", ("성장", "확대", "증가", "개선", "상승", "호조", "profitability")),
+    ("strategy", ("전략", "추진", "고도화", "출시", "제휴", "협력", "mou", "개편")),
     ("efficiency", ("효율", "최적화", "자동화", "비용 절감", "생산성")),
     ("risk", ("리스크", "위험", "하락", "감소", "둔화", "부진", "비용 증가")),
+)
+_SIGNAL_REQUIRED_CONTEXT = {
+    "orders_pipeline": ("수주", "backlog", "계약", "pipeline", "잔고"),
+    "investment": ("투자", "capex", "설비", "데이터센터", "gpu", "구축"),
+    "growth": ("성장", "확대", "증가", "개선", "상승", "호조"),
+    "strategy": ("전략", "추진", "고도화", "출시", "제휴", "협력", "mou", "개편"),
+    "efficiency": ("효율", "최적화", "자동화", "비용 절감", "생산성"),
+    "risk": ("리스크", "위험", "하락", "감소", "둔화", "부진", "비용 증가"),
+}
+_IR_SIGNAL_EXCLUDE_TERMS = (
+    "appendix",
+    "주요비상장자회사",
+    "비상장자회사",
+    "자회사분기별실적",
+    "forward-looking",
+    "본 자료는",
+    "무단 복제",
 )
 _NEGATIVE_TERMS = ("하락", "감소", "둔화", "부진", "리스크", "위험", "비용 증가")
 _POSITIVE_TERMS = ("성장", "확대", "증가", "개선", "강화", "고도화", "수주", "계약")
@@ -487,6 +514,11 @@ def _metrics_from_financial_record(
         business_area = detail.get("business_area")
         if not business_area and metric_scope == "company_total":
             business_area = "company_total"
+        metric_scope, business_area = _normalize_self_business_area(
+            peer_id=peer_id,
+            metric_scope=metric_scope,
+            business_area=business_area,
+        )
         scope_key = business_area if metric_scope == "segment" and business_area else "total"
         is_percentage = spec["unit"] == "%"
         confidence = detail.get("confidence")
@@ -557,8 +589,14 @@ def _metrics_from_parser_result(
     period_quarter = parser_result.get("period_quarter") or article["extra"].get("period_quarter")
     period_type = parser_result.get("period_type") or article["extra"].get("period_type")
 
+    selected_candidates = _select_ir_metric_candidates(
+        candidates,
+        report_period=period,
+        peer_id=peer_id,
+    )
+
     metrics: list[dict[str, Any]] = []
-    for idx, candidate in enumerate(candidates, start=1):
+    for idx, candidate in enumerate(selected_candidates, start=1):
         if not isinstance(candidate, dict):
             continue
 
@@ -591,6 +629,11 @@ def _metrics_from_parser_result(
         business_area = candidate.get("business_area")
         if not business_area and metric_scope == "company_total":
             business_area = "company_total"
+        metric_scope, business_area = _normalize_self_business_area(
+            peer_id=peer_id,
+            metric_scope=metric_scope,
+            business_area=business_area,
+        )
         entity_name = candidate.get("entity_name")
         scope_key = _metric_scope_key(metric_scope, business_area, entity_name)
         confidence = candidate.get("confidence")
@@ -647,6 +690,84 @@ def _metrics_from_parser_result(
         )
 
     return metrics
+
+
+def _select_ir_metric_candidates(
+    candidates: list[Any],
+    *,
+    report_period: Any,
+    peer_id: str | None = None,
+) -> list[dict[str, Any]]:
+    selected: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for order, candidate in enumerate(candidates):
+        if not isinstance(candidate, dict):
+            continue
+        metric_name = str(candidate.get("type") or "")
+        if metric_name not in _METRIC_SPECS:
+            continue
+        candidate_period, period_patch = _candidate_period_for_report(candidate, report_period)
+        metric_scope = str(candidate.get("metric_scope") or "unknown")
+        if metric_scope == "portfolio_company" or metric_scope == "unknown":
+            continue
+        business_area = candidate.get("business_area")
+        if not business_area and metric_scope == "company_total":
+            business_area = "company_total"
+        metric_scope, business_area = _normalize_self_business_area(
+            peer_id=peer_id,
+            metric_scope=metric_scope,
+            business_area=business_area,
+        )
+        scope_key = _metric_scope_key(metric_scope, business_area, candidate.get("entity_name"))
+        key = (metric_name, metric_scope, scope_key)
+        enriched = {
+            **candidate,
+            **period_patch,
+            "_candidate_order": order,
+            "period_matches_report": bool(
+                report_period and candidate_period and str(candidate_period) == str(report_period)
+            ),
+        }
+        current = selected.get(key)
+        if current is None or _metric_candidate_rank(enriched) > _metric_candidate_rank(current):
+            selected[key] = enriched
+    return list(selected.values())
+
+
+def _metric_candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, int, int, float, int, int]:
+    source_priority = 3 if candidate.get("source") == "ir_table_matrix" else 2
+    if candidate.get("source") == "ir_llm_analysis":
+        source_priority = 4
+    report_period_score = 1 if candidate.get("period_matches_report") else 0
+    period_score = 0 if candidate.get("period_inferred_from_report") else 1
+    has_evidence = 1 if candidate.get("evidence_text") or candidate.get("raw") else 0
+    confidence = candidate.get("confidence")
+    confidence_score = float(confidence) if isinstance(confidence, int | float) else 0.0
+    page = candidate.get("page")
+    page_score = -int(page) if isinstance(page, int) else -9999
+    order_score = -int(candidate.get("_candidate_order") or 0)
+    return (
+        report_period_score,
+        source_priority,
+        period_score,
+        has_evidence,
+        confidence_score,
+        page_score,
+        order_score,
+    )
+
+
+def _candidate_period_for_report(
+    candidate: dict[str, Any],
+    report_period: Any,
+) -> tuple[Any, dict[str, Any]]:
+    return candidate.get("period") or report_period, {}
+
+
+def _quarter_period_parts(period: Any) -> tuple[int | None, int | None]:
+    match = re.fullmatch(r"(20\d{2})Q([1-4])", str(period or ""))
+    if not match:
+        return None, None
+    return int(match.group(1)), int(match.group(2))
 
 
 def _metric_evidence_text(metric_source: dict[str, Any], *, fallback: Any = None) -> str | None:
@@ -719,61 +840,71 @@ def _business_signals_from_parser_result(
             continue
 
         text_value = str(chunk.get("text") or "").strip()
-        if len(text_value) < 80:
-            continue
-
-        business_area = _business_area_from_chunk(chunk, text_value)
-        signal_type = _signal_type_from_text(text_value)
-        if not business_area or not signal_type:
-            continue
-
-        evidence_text = _evidence_text(text_value, business_area, signal_type)
-        if not evidence_text:
+        if len(text_value) < 30:
             continue
 
         source_chunk_uid = str(chunk.get("chunk_id") or chunk.get("chunk_index") or "")
-        dedupe_key = (business_area, signal_type, evidence_text[:160])
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
+        for sentence_index, evidence_text, business_area, signal_type in _signals_from_chunk(
+            chunk,
+            text_value,
+        ):
+            _metric_scope, business_area = _normalize_self_business_area(
+                peer_id=peer_id,
+                metric_scope="segment",
+                business_area=business_area,
+            )
+            dedupe_key = (business_area, signal_type, evidence_text[:160])
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
 
-        signal_uid = (
-            f"ir:{business_area}:{signal_type}:"
-            f"p{chunk.get('page') or 'x'}:{chunk.get('chunk_index') or len(signals) + 1}"
-        )
-        signals.append(
-            {
-                "raw_article_id": article_id,
-                "signal_uid": signal_uid,
-                "source_type": "ir",
-                "source_name": article.get("source_name"),
-                "peer_id": peer_id,
-                "period": period,
-                "period_year": period_year,
-                "period_quarter": period_quarter,
-                "period_type": period_type,
-                "business_area": business_area,
-                "signal_type": signal_type,
-                "sentiment": _sentiment_from_text(evidence_text),
-                "summary": _summary_from_evidence(evidence_text),
-                "evidence_text": evidence_text,
-                "source_page": chunk.get("page"),
-                "source_chunk_uid": source_chunk_uid or None,
-                "confidence": _signal_confidence(business_area, signal_type, text_value),
-                "extraction_method": "ir_parser.document_chunks.rule_based",
-                "payload": {
-                    "title": article.get("title"),
-                    "url": article.get("url"),
-                    "chunk": {
-                        "chunk_id": chunk.get("chunk_id"),
-                        "chunk_index": chunk.get("chunk_index"),
-                        "section_key": chunk.get("section_key"),
-                        "section_title": chunk.get("section_title"),
-                        "topics": chunk.get("topics"),
+            signal_uid = (
+                f"ir:{business_area}:{signal_type}:"
+                f"p{chunk.get('page') or 'x'}:{chunk.get('chunk_index') or len(signals) + 1}:"
+                f"s{sentence_index}"
+            )
+            signals.append(
+                {
+                    "raw_article_id": article_id,
+                    "signal_uid": signal_uid,
+                    "source_type": "ir",
+                    "source_name": article.get("source_name"),
+                    "peer_id": peer_id,
+                    "period": period,
+                    "period_year": period_year,
+                    "period_quarter": period_quarter,
+                    "period_type": period_type,
+                    "business_area": business_area,
+                    "signal_type": signal_type,
+                    "sentiment": _sentiment_from_text(evidence_text),
+                    "summary": _summary_from_evidence(evidence_text),
+                    "evidence_text": evidence_text,
+                    "source_page": chunk.get("page"),
+                    "source_chunk_uid": source_chunk_uid or None,
+                    "confidence": _signal_confidence(business_area, signal_type, evidence_text),
+                    "extraction_method": "ir_parser.document_chunks.rule_based.v2",
+                    "payload": {
+                        "title": article.get("title"),
+                        "url": article.get("url"),
+                        "sentence_index": sentence_index,
+                        "matched_business_terms": _matched_terms_for_business_area(
+                            business_area,
+                            evidence_text,
+                        ),
+                        "matched_signal_terms": _matched_terms_for_signal_type(
+                            signal_type,
+                            evidence_text,
+                        ),
+                        "chunk": {
+                            "chunk_id": chunk.get("chunk_id"),
+                            "chunk_index": chunk.get("chunk_index"),
+                            "section_key": chunk.get("section_key"),
+                            "section_title": chunk.get("section_title"),
+                            "topics": chunk.get("topics"),
+                        },
                     },
-                },
-            }
-        )
+                }
+            )
 
     return signals
 
@@ -799,6 +930,11 @@ def _llm_business_signals_from_parser_result(
         if not isinstance(signal, dict):
             continue
         business_area = str(signal.get("business_area") or "company_total")
+        _metric_scope, business_area = _normalize_self_business_area(
+            peer_id=peer_id,
+            metric_scope="segment",
+            business_area=business_area,
+        )
         signal_type = str(signal.get("signal_type") or "")
         evidence_text = str(signal.get("evidence_text") or "")
         if not signal_type or not evidence_text:
@@ -853,18 +989,42 @@ def _document_chunks(
     return chunks if isinstance(chunks, list) else []
 
 
+def _signals_from_chunk(
+    chunk: dict[str, Any],
+    text_value: str,
+) -> list[tuple[int, str, str, str]]:
+    section_area = _business_area_from_section(chunk)
+    signals: list[tuple[int, str, str, str]] = []
+    for sentence_index, sentence in enumerate(_sentences(text_value), start=1):
+        if len(sentence) < 30 or _is_low_value_signal_sentence(sentence):
+            continue
+
+        signal_types = _detect_signal_types(sentence)
+        if not signal_types:
+            continue
+        business_area = _detect_business_area(sentence) or section_area or "company_total"
+
+        for signal_type in signal_types:
+            if not _has_required_signal_context(sentence, signal_type):
+                continue
+            signals.append((sentence_index, sentence[:800], business_area, signal_type))
+    return signals
+
+
 def _business_area_from_chunk(chunk: dict[str, Any], text_value: str) -> str | None:
     detected = _detect_business_area(text_value)
     if detected:
         return detected
 
+    return _business_area_from_section(chunk)
+
+
+def _business_area_from_section(chunk: dict[str, Any]) -> str | None:
     section_key = str(chunk.get("section_key") or "")
     mapped = _SECTION_AREA_MAP.get(section_key)
     if mapped:
         return mapped
 
-    if _signal_type_from_text(text_value):
-        return "company_total"
     return None
 
 
@@ -877,11 +1037,28 @@ def _detect_business_area(text_value: str) -> str | None:
 
 
 def _signal_type_from_text(text_value: str) -> str | None:
+    signal_types = _detect_signal_types(text_value)
+    return signal_types[0] if signal_types else None
+
+
+def _detect_signal_types(text_value: str) -> list[str]:
     lowered = text_value.lower()
-    for signal_type, terms in _SIGNAL_TYPE_RULES:
-        if any(term.lower() in lowered for term in terms):
-            return signal_type
-    return None
+    return [
+        signal_type
+        for signal_type, terms in _SIGNAL_TYPE_RULES
+        if any(term.lower() in lowered for term in terms)
+    ]
+
+
+def _is_low_value_signal_sentence(text_value: str) -> bool:
+    lowered = text_value.lower()
+    return any(term.lower() in lowered for term in _IR_SIGNAL_EXCLUDE_TERMS)
+
+
+def _has_required_signal_context(text_value: str, signal_type: str) -> bool:
+    lowered = text_value.lower()
+    required_terms = _SIGNAL_REQUIRED_CONTEXT.get(signal_type, ())
+    return any(term.lower() in lowered for term in required_terms)
 
 
 def _evidence_text(
@@ -911,12 +1088,30 @@ def _terms_for_evidence(business_area: str, signal_type: str) -> tuple[str, ...]
     return (*business_terms, *signal_terms)
 
 
+def _matched_terms_for_business_area(business_area: str, text_value: str) -> list[str]:
+    terms = next((terms for area, terms in _BUSINESS_AREA_RULES if area == business_area), ())
+    return _matched_terms(terms, text_value)
+
+
+def _matched_terms_for_signal_type(signal_type: str, text_value: str) -> list[str]:
+    terms = _SIGNAL_REQUIRED_CONTEXT.get(signal_type) or next(
+        (terms for kind, terms in _SIGNAL_TYPE_RULES if kind == signal_type),
+        (),
+    )
+    return _matched_terms(terms, text_value)
+
+
+def _matched_terms(terms: tuple[str, ...], text_value: str) -> list[str]:
+    lowered = text_value.lower()
+    return [term for term in terms if term.lower() in lowered]
+
+
 def _sentences(text_value: str) -> list[str]:
     value = re.sub(r"\s+", " ", text_value).strip()
     if not value:
         return []
 
-    pieces = re.split(r"(?<=[.!?。])\s+|(?<=[다요음함임됨됨\.])\s+", value)
+    pieces = re.split(r"(?<=[.!?。])\s+", value)
     sentences = [piece.strip(" -•\t") for piece in pieces if len(piece.strip()) >= 30]
     if sentences:
         return sentences
@@ -959,6 +1154,62 @@ def _company_peer_id(company: Any) -> str | None:
     if isinstance(company, str):
         return company
     return None
+
+
+def _normalize_self_business_area(
+    *,
+    peer_id: str | None,
+    metric_scope: str,
+    business_area: Any,
+) -> tuple[str, Any]:
+    if not business_area:
+        return metric_scope, business_area
+    business_area = _canonical_business_area(str(business_area))
+    if not peer_id:
+        return metric_scope, business_area
+
+    if str(business_area) == "company_total":
+        return "company_total", "company_total"
+
+    area_key = _business_area_alias_key(str(business_area))
+    self_keys = {_business_area_alias_key(peer_id)}
+    if peer_id == "sk_ax":
+        self_keys.update(
+            {
+                "skax",
+                "sk에이엑스",
+                "sk주식회사사업부문",
+                "sk사업부문",
+                "it서비스부문skax",
+            }
+        )
+
+    if area_key in self_keys:
+        return "company_total", "company_total"
+
+    return metric_scope, business_area
+
+
+def _canonical_business_area(value: str) -> str:
+    key = _business_area_alias_key(value)
+    aliases = {
+        "si": "SI",
+        "systemintegration": "SI",
+        "ito": "ITO",
+        "itoutsourcing": "ITO",
+        "차량sw": "vehicle_sw",
+        "차량용sw": "vehicle_sw",
+        "vehiclesw": "vehicle_sw",
+        "automotivesw": "vehicle_sw",
+        "enterpriseit": "Enterprise IT",
+        "엔터프라이즈it": "Enterprise IT",
+        "엔터프라이즈아이티": "Enterprise IT",
+    }
+    return aliases.get(key, value)
+
+
+def _business_area_alias_key(value: str) -> str:
+    return re.sub(r"[^0-9a-z가-힣]+", "", value.lower())
 
 
 if __name__ == "__main__":

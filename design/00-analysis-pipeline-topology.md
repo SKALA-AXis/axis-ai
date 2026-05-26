@@ -81,7 +81,7 @@ ProfileContext
    → ReportAgent
    → InsightAgent
    → ChatbotAgent
-   → KeywordGraphAgent
+   → KeywordGraphBuilder
 ```
 
 ### ITTrendAgent 입력 구분
@@ -118,7 +118,7 @@ ProfileContext
 ```text
 AnalysisInputBundle
 → ① issue_integrate          IssueIntegrationAgent → IntegratedIssue
-→ ② profile_context          build_profile_context_v2 → ProfileContext (Tier A snapshot + Tier B enrichment)
+→ ② profile_context          ProfileContextLoader.load → ProfileContext (Tier A snapshot + Tier B enrichment)
 → ③ build_analysis_context   AnalysisContextBuilder → AnalysisContext (6 layer, ≤4,000 token)
 → ④ strategic_analyze        AnalysisAgent (StrategicAnalyzer) → AnalysisResult
 → ⑤ implication              ImplicationAgent v4.0/v5.0 → ImplicationResult
@@ -130,7 +130,7 @@ AnalysisInputBundle
 각 노드는 `_logged_step` 데코레이터로 `pipeline_logs.step='supervisor.<node_name>'` 에
 elapsed_ms 기록. 부분 실패는 다음과 같이 흡수:
 
-- ② profile_context_v2 fail → legacy `ProfileAgent.build_context` fallback
+- ② ProfileContextLoader fail → legacy `ProfileAgent.build_context` fallback
 - ③ DB unavailable → 빈 `AnalysisContext` (ImplicationAgent 자동 v4.0 사용)
 - ⑤ LLM fail → `ImplicationGenerator` heuristic fallback (`is_valid_implication=true` 단순 출력)
 
@@ -207,7 +207,7 @@ ProfileAgent 는 단순 context provider 가 아니라 **원천 데이터 (DART 
 | 단계 | 시점 | 책임 | 출력 |
 |---|---|---|---|
 | **Tier A (snapshot 생성)** | 주1회 CronJob (`axis-cron-profile-refresh`) | RDB 의 6개월치 뉴스 + DART + IR + 공식 newsroom 을 회사별로 종합 → LLM (gpt-4o, `profile-v5` prompt) 으로 **회사 방향성 / 주요 사업 / 전략 변화 / 역량 평가** narrative 합성 | `peer_companies.profile_snapshot` JSONB (별도 컬럼) |
-| **Tier B (runtime loader, build_profile_context_v2)** | cluster-time (Analysis Flow ② 노드) | Tier A snapshot 을 그대로 load + 최근 30일 business_signals top-3 + 최근 분기 financial_metrics 보강 (DB query only, LLM X) | `ProfileContext` 메모리 dataclass |
+| **Tier B (runtime loader, ProfileContextLoader)** | cluster-time (Analysis Flow ② 노드) | Tier A snapshot 을 그대로 load + 최근 30일 business_signals top-3 + 최근 분기 financial_metrics 보강 (DB query only, LLM X) | `ProfileContext` 메모리 dataclass |
 
 ### 출력의 두 관점 (Peer 와 SK AX 분리)
 
@@ -276,7 +276,7 @@ DataAnalysisSupervisorAgent와의 차이:
 - `ReportAgent`
 - `InsightAgent`
 - `ChatbotAgent`
-- `KeywordGraphAgent`
+- `KeywordGraphBuilder`
 
 ## 내부 DTO 원칙
 

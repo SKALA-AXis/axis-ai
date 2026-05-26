@@ -1,13 +1,13 @@
-# FinancialLinkerAgent — Design Plan
+# FinancialLinkerService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `FinancialLinkerAgent` |
+| **이름** | `FinancialLinkerService` |
 | **Supervisor** | Ingestion (Evidence sub) + Enrichment (Home DART radar / Peer+ IR pack 재사용) |
-| **상태** | ✅ 구현 — `src/agents/financial_linker_agent.py` |
-| **호출 위치** | EvidenceAgent (Ingestion `evidence` 노드), Home dashboard, Peer+ IR pack |
+| **상태** | 🔴 미구현 — 별도 `FinancialLinkerService` 없음. `raw_article_financial_metrics` 추출/저장과 `peer_financial_trend` 조회 기반만 존재 |
+| **호출 위치** | EvidenceBuilder (Ingestion `evidence` 노드), Home dashboard, Peer+ IR pack |
 
 ## 2. 책임
 
@@ -18,14 +18,14 @@
 1. card 의 (sector, event_type, title 키워드) → segment 후보 검색 (예: ITS/Cloud/Security)
 2. peer_financials 의 동일 segment 분기별 데이터 fetch (당기 + 직전 + 전년 동기)
 3. QoQ delta = (current - prev) / prev, YoY delta = (current - year_ago) / year_ago
-4. DART 공시 번호 (rcept_no) + IR PDF page 매칭 (IRParserAgent 가 사전에 채움)
+4. DART 공시 번호 (rcept_no) + IR PDF page 매칭 (IRParserService 가 사전에 채움)
 5. narrative 1줄 자동 생성 ("ITS 매출 증가와 기사 동향 연결" 등)
 
 ## 3. 책임 NOT
 
-- IR PDF 파싱 자체 — IRParserAgent
+- IR PDF 파싱 자체 — IRParserService
 - segment 분류 (어떤 사업부인지) — peer_financials seed (manual or W6 prompt)
-- LLM 자유형 분석 — 본 agent 는 산식
+- LLM 자유형 분석 — 본 service 는 산식
 
 ## 4. 입력 스펙
 
@@ -111,12 +111,12 @@ def compute_deltas(segment_rows):
 
 ## 9. 외부 의존성
 
-- **DB**: `peer_financials` (READ — IRParserAgent + manual seed 가 채움)
+- **DB**: `peer_financials` (READ — IRParserService + manual seed 가 채움)
 - **lib**: 없음 (산식)
 
 ## 10. State 흐름
 
-본 agent 는 EvidenceAgent 내부 sub-call. LangGraph state 변경 X. EvidenceResult.financial_refs / financial_link 에 출력.
+본 service 는 EvidenceBuilder 내부 sub-call. LangGraph state 변경 X. EvidenceResult.financial_refs / financial_link 에 출력.
 
 ## 11. Provenance + Confidence
 
@@ -144,11 +144,11 @@ def compute_deltas(segment_rows):
 
 ### 핵심 파일
 
-- `src/agents/financial_linker_agent.py`
+- `src/services/financial_linker_service.py`
 - 데이터 source: `peer_financials` 테이블 (Track B 의 IR Parser 가 채움) + manual JSON stub (`data/peer_financials/*.json`)
 
 ### Changelog
 
 - **v1 (2026-04-W3)** — segment 키워드 매칭 + QoQ/YoY
-- **v2 (2026-05-W1, W5)** — IRParserAgent 연동 (DART rcept_no + IR page 자동 채움)
+- **v2 (2026-05-W1, W5)** — IRParserService 연동 (DART rcept_no + IR page 자동 채움)
 - **v3 (제안)** — segment 분류 LLM 보조 (현재 매칭 miss 시 fallback)

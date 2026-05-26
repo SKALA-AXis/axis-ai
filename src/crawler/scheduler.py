@@ -377,9 +377,14 @@ def _run_realtime_pipeline_for_run(crawl_run_id: str, *, trigger_type: str) -> N
     """Run preprocessing for a realtime crawl run."""
     from src.preprocessing.classification import ClusterClassifier
     from src.preprocessing.preprocessing import PreprocessingService
+    from src.preprocessing.relevance import RelevanceEvaluator
+
+    source_label = trigger_type.removeprefix("scheduler:")
+    track_a_sources = {"news_naver", "global_newsroom"}
 
     result = PreprocessingService(
-        classifier=ClusterClassifier(enable_llm=True),
+        relevance_evaluator=RelevanceEvaluator(enable_llm=source_label in track_a_sources),
+        classifier=ClusterClassifier(enable_llm=False),
     ).run(
         company=[],
         trigger_type=trigger_type,

@@ -1,13 +1,13 @@
-# IRParserAgent — Design Plan
+# IRParserService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `IRParserAgent` |
+| **이름** | `IRParserService` |
 | **Supervisor** | Ingestion (Evidence sub) |
-| **상태** | ✅ 구현 — `src/agents/ir_parser_agent.py` (W5 활성) |
-| **Trigger** | Track B (매일 02:00) — IR PDF 수집 후 / EvidenceAgent 가 호출 |
+| **상태** | ✅ 구현 — `src/parsers/ir_parser.py` (W5 활성) |
+| **Trigger** | Track B (매일 02:00) — IR PDF 수집 후 / EvidenceBuilder 가 호출 |
 
 ## 2. 책임
 
@@ -131,7 +131,7 @@ def extract_metrics(page_text, page_no):
 
 ## 10. State 흐름
 
-본 agent 는 LangGraph node 아니라 EvidenceAgent + Track B 크롤러가 호출. State 변경 X.
+본 parser 는 LangGraph node 아니라 EvidenceBuilder + Track B 크롤러가 호출. State 변경 X.
 
 ## 11. Provenance + Confidence
 
@@ -165,8 +165,8 @@ pymupdf = ">=1.24"
 
 ### 핵심 파일
 
-- `src/agents/ir_parser_agent.py`
-- 호출자: EvidenceAgent + `src/crawler/sources/ir.py` (Track B)
+- `src/parsers/ir_parser.py`
+- 호출자: EvidenceBuilder + `src/crawler/sources/ir.py` (Track B)
 
 ### Changelog
 

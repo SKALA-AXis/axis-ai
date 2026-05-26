@@ -1,10 +1,10 @@
-# KeywordGraphBuilderAgent — Design Plan
+# KeywordGraphBuilder — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `KeywordGraphBuilderAgent` |
+| **이름** | `KeywordGraphBuilder` |
 | **Supervisor** | Enrichment |
 | **상태** | 🟡 부분 (frontend mock data 있음, P6 우선) |
 | **Trigger** | nightly 02:30 (KeywordExtraction 이후) |
@@ -24,7 +24,7 @@
 
 ## 3. 책임 NOT
 
-- frontend 의 실 force simulation 렌더링 — Three.js 가 담당 (본 agent 는 데이터만)
+- frontend 의 실 force simulation 렌더링 — Three.js 가 담당 (본 builder 는 데이터만)
 - 사용자 클릭 → 관련 카드 조회 — backend `/api/keyword-graph/{nodeId}/cards` 가 별도 처리
 
 ## 4. 입력 스펙
@@ -156,7 +156,7 @@ EnrichmentState 의 `keyword_graph: dict` 필드 채움.
 
 ## 14. 구현 메모 + Changelog
 
-- 핵심 파일: `src/agents/keyword_graph_builder_agent.py` (신규 P6)
+- 핵심 파일: `src/services/keyword_graph_builder.py` (신규 P6)
 - frontend 의 mock `graphNodes` / `graphEdges` 대체 대상
 
 ### Changelog

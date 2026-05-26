@@ -1,10 +1,10 @@
-# KeywordExtractionAgent — Design Plan
+# KeywordExtractionService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `KeywordExtractionAgent` |
+| **이름** | `KeywordExtractionService` |
 | **Supervisor** | Enrichment |
 | **상태** | 🟡 부분 (산식 구현 가능, P6 우선) |
 | **Trigger** | Ingestion 후 매시 + nightly 02:00 batch |
@@ -24,9 +24,9 @@
 
 ## 3. 책임 NOT
 
-- 키워드 카테고리 라벨링 (기술/사업/MOU) — PeerWordCloudAgent (LLM)
-- 그래프 노드/엣지 구성 — KeywordGraphBuilderAgent
-- 사용자 입력 prefix 매칭 — SearchSuggestAgent
+- 키워드 카테고리 라벨링 (기술/사업/MOU) — PeerWordCloudBuilder (LLM)
+- 그래프 노드/엣지 구성 — KeywordGraphBuilder
+- 사용자 입력 prefix 매칭 — SearchSuggestService
 
 ## 4. 입력 스펙
 
@@ -57,7 +57,7 @@ import numpy as np
 
 STOPWORDS = {"기업", "회사", "발표", "관련", "예정", "있다", "통해", ...}
 
-class KeywordExtractionAgent:
+class KeywordExtractionService:
     def __init__(self):
         self.kiwi = Kiwi()
 
@@ -140,7 +140,7 @@ class EnrichmentState(TypedDict):
 
 ## 14. 구현 메모 + Changelog
 
-- 핵심 파일: `src/agents/keyword_extraction_agent.py` (신규 P6)
+- 핵심 파일: `src/services/keyword_extraction_service.py` (신규 P6)
 - 의존 lib: `kiwipiepy>=0.18`
 
 ### Changelog

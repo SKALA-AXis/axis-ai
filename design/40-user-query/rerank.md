@@ -1,10 +1,10 @@
-# RerankAgent — Design Plan
+# RerankService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `RerankAgent` |
+| **이름** | `RerankService` |
 | **Supervisor** | UserQuery |
 | **상태** | ✅ stub 구현 (`src/rag/reranker.py`) — P6 활성 |
 | **Trigger** | HybridSearch 후 |
@@ -17,12 +17,12 @@
 
 1. (query, doc) 쌍 모두에 cross-encoder forward pass (BGE-reranker-v2-m3)
 2. relevance score 산출 → 재정렬
-3. top 10 만 반환 (downstream AnswerAgent 또는 frontend hits 표시)
+3. top 10 만 반환 (downstream AnswerService 또는 frontend hits 표시)
 
 ## 3. 책임 NOT
 
-- 검색 자체 — HybridSearchAgent (이전)
-- 답변 — AnswerAgent
+- 검색 자체 — HybridSearchService (이전)
+- 답변 — AnswerService
 - LLM 호출 — Cross-encoder 모델 (transformers) 만, LLM 아님
 
 ## 4. 입력 스펙
@@ -50,7 +50,7 @@ class RerankOutput(TypedDict):
 ```python
 from FlagEmbedding import FlagReranker
 
-class RerankAgent:
+class RerankService:
     def __init__(self):
         self.reranker = FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=True)
 

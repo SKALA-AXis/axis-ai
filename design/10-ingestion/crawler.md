@@ -1,13 +1,13 @@
-# CrawlerAgent — Design Plan
+# CrawlerJob — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `CrawlerAgent` |
+| **이름** | `CrawlerJob` |
 | **Supervisor** | Ingestion |
 | **LangGraph node** | `crawl` (첫 노드) |
-| **상태** | ✅ 구현 — `axis-ai/src/agents/crawler_agent.py` 외 분산 (`src/crawler/sources/*.py`) |
+| **상태** | ✅ 구현 — 단일 Agent 클래스 없음. `src/crawler/scheduler.py`, `src/crawler/batch_processor.py`, `src/crawler/sources/*.py` 의 Crawler/Job 구조로 분산 |
 | **Owner** | 심유정 |
 | **Version** | v3 (2026-04-W3 — Track A/B/C 분리) |
 | **Trigger** | Spring `@Scheduled.triggerIngestionPipeline` 매시 정각 → `POST /pipeline/run?track=A|B|C|ALL` |
@@ -25,10 +25,10 @@
 
 ## 3. 책임 NOT (out of scope)
 
-- HTML/PDF 내용 파싱 — ParserAgent (별도)
+- HTML/PDF 내용 파싱 — ParserService (별도)
 - 신뢰도 분류 — CredibilityAgent (다음 노드)
-- 관련성 분류 — RelevanceAgent (다음 노드)
-- 중복 클러스터링 — DedupAgent (다음 노드, BGE-M3 임베딩 기반)
+- 관련성 분류 — RelevanceService (다음 노드)
+- 중복 클러스터링 — DedupService (다음 노드, BGE-M3 임베딩 기반)
 - 광고/품질 필터 — ParserQualityAgent (sub)
 
 ## 4. 입력 스펙

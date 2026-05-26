@@ -1,14 +1,14 @@
-# EmbedIndexAgent — Design Plan
+# EmbedIndexService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `EmbedIndexAgent` (rag/embedder + rag/vector_index 통합 view) |
+| **이름** | `EmbedIndexService` (rag/embedder + rag/vector_index 통합 view) |
 | **Supervisor** | Ingestion + Search 양쪽 사용 |
 | **LangGraph node** | `vector_index` (#8) |
 | **상태** | ✅ 구현 — `src/rag/embedder.py` (BGE-M3 wrapper) + `src/rag/vector_index.py` (Qdrant upsert) |
-| **Trigger** | EvidenceAgent 통과 카드 (pass=true) 마다 |
+| **Trigger** | EvidenceBuilder 통과 카드 (pass=true) 마다 |
 
 ## 2. 책임
 
@@ -25,7 +25,7 @@
 ## 3. 책임 NOT
 
 - 임베딩 모델 학습 — BGE-M3 사용 only (BAAI 사전 학습)
-- 검색 자체 — HybridSearchAgent (Search supervisor)
+- 검색 자체 — HybridSearchService (Search supervisor)
 - payload 의 원문 저장 — 메타데이터만 (원문은 PostgreSQL)
 
 ## 4. 입력 스펙

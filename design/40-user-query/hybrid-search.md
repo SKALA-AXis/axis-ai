@@ -1,10 +1,10 @@
-# HybridSearchAgent — Design Plan
+# HybridSearchService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `HybridSearchAgent` |
+| **이름** | `HybridSearchService` |
 | **Supervisor** | UserQuery (Search + Dialogue 공통) |
 | **상태** | ✅ stub 구현 (`src/rag/hybrid_search.py`) — 실제 Qdrant query 호출은 P6 |
 | **Trigger** | User 검색박스 입력 + FloatingAiChat |
@@ -19,14 +19,14 @@
 2. Qdrant Dense prefetch (top 50, cosine)
 3. Qdrant Sparse prefetch (top 50, dot product)
 4. RRF fusion — score(d) = 1/(60+rank_dense) + 1/(60+rank_sparse)
-5. 중복 제거 후 top 20 메타데이터 + payload 리턴 (RerankAgent 입력)
+5. 중복 제거 후 top 20 메타데이터 + payload 리턴 (RerankService 입력)
 6. 메타데이터 필터 (peer_id / event_type / sector / 날짜) 지원
 
 ## 3. 책임 NOT
 
-- 결과 재정렬 — RerankAgent (다음 단계)
-- 답변 생성 — AnswerAgent
-- 키워드 자동완성 — SearchSuggestAgent
+- 결과 재정렬 — RerankService (다음 단계)
+- 답변 생성 — AnswerService
+- 키워드 자동완성 — SearchSuggestService
 
 ## 4. 입력 스펙
 

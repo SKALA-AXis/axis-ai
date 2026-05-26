@@ -16,14 +16,14 @@
 **구체적 (3-phase orchestration)**:
 
 1. **Intent 추출** (LLM mini, zero-shot) — search / summary / insight / mixer / it_trend / smalltalk + entity (peer/sector/date)
-2. **Sub-agent 호출** — intent 별 위임:
-   - search → HybridSearchAgent + AnswerAgent
+2. **Sub-component 호출** — intent 별 위임:
+   - search → HybridSearchService + AnswerService
    - insight → InsightCascadeAgent
    - mixer → MixerAnalysisAgent
    - 기업/섹터 비교 → MixerAnalysisAgent 또는 InsightCascadeAgent
    - it_trend → ITTrendAgent
    - smalltalk → 직접 LLM 응답
-3. **응답 생성** (LLM mini) — sub-agent 결과 + 대화 톤 + follow-up 제안
+3. **응답 생성** (LLM mini) — sub-component 결과 + 대화 톤 + follow-up 제안
 
 ## 3. 책임 NOT
 
@@ -154,12 +154,12 @@ async def orchestrate(message, session_id, history, deep_dive_context=None, user
     entities = intent_result["entities"]
     intent = intent_result["intent"]
 
-    # Sub-agent 위임
+    # Sub-component 위임
     sub_result = None
     if intent == "search":
-        hits = await HybridSearchAgent().search(message, filters=build_filter(entities))
-        reranked = await RerankAgent().rerank(message, hits.hits)
-        sub_result = await AnswerAgent().answer(message, reranked.hits)
+        hits = await HybridSearchService().search(message, filters=build_filter(entities))
+        reranked = await RerankService().rerank(message, hits.hits)
+        sub_result = await AnswerService().answer(message, reranked.hits)
     elif intent == "insight":
         cards = entities.get("card_ids") or top_today_cards(6)
         sub_result = await InsightCascadeAgent().generate(cards, user_guidance=user_guidance)
@@ -285,7 +285,7 @@ def generate_typed_follow_ups(intent_result, sub_result, deep_dive_context):
 | 16 | 리스크 분석 | Insight / ITTrend risk signal | deep_dive lens=regulatory 시 노출 |
 | **17** | **반복 추적 구조** | **`follow_up_suggestions` (typed) + deep_dive_context carry-over + deep_dive_depth** | **필수 — PDF §6 꼬리 물기의 핵심** |
 
-orchestrator 자체는 routing 이므로 sub-agent 의 17 요소 충족을 reply 에 누락 없이 surface 하는 것이 책임. 위 표는 통과한다고 가정한 sub-agent 결과를 어떻게 reply 에 노출하는지의 mapping.
+orchestrator 자체는 routing 이므로 sub-component 의 17 요소 충족을 reply 에 누락 없이 surface 하는 것이 책임. 위 표는 통과한다고 가정한 sub-component 결과를 어떻게 reply 에 노출하는지의 mapping.
 
 ### 6.4 Context Window 관리
 
@@ -300,7 +300,7 @@ orchestrator 자체는 routing 이므로 sub-agent 의 17 요소 충족을 reply
 | Intent Router | gpt-4o-mini | ~500 | ~50 | ₩30 |
 | Chat compose | gpt-4o-mini | ~1,500 | ~50 | ₩200 |
 | smalltalk (직접) | gpt-4o-mini | ~1,000 | ~10 | ₩30 |
-| Sub-agent 호출 | 별도 카운트 | | | |
+| Sub-component 호출 | 별도 카운트 | | | |
 | **합계 (orchestrator 만)** | | | | **~₩260/일** |
 
 ## 8. 에러 처리
@@ -308,7 +308,7 @@ orchestrator 자체는 routing 이므로 sub-agent 의 17 요소 충족을 reply
 | 시나리오 | 대응 |
 |---|---|
 | Intent classification fail | intent='search' fallback (보수적) |
-| Sub-agent fail | "분석 일시 불가, 다시 시도" reply |
+| Sub-component fail | "분석 일시 불가, 다시 시도" reply |
 | session_id null | 신규 session 생성 + 응답에 포함 |
 | history > 10 turn | 요약 압축 |
 
@@ -316,7 +316,7 @@ orchestrator 자체는 routing 이므로 sub-agent 의 17 요소 충족을 reply
 
 - **외부 API**: OpenAI gpt-4o-mini
 - **DB**: `chat_sessions` (UPSERT — 신규 **V10** migration; 현재 master V9 다음)
-- **Sub-agents**: HybridSearch, Rerank, Answer, InsightCascade, MixerAnalysis, ITTrend
+- **Sub-components**: HybridSearchService, RerankService, AnswerService, InsightCascade, MixerAnalysis, ITTrend
 
 ## 10. State 흐름
 

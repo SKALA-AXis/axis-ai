@@ -22,7 +22,7 @@
 
 ## 3. 책임 NOT
 
-- **사실 검증** — EvidenceAgent 의 `pass / missing` (out-of-evidence 추적). Confidence 는 *추정의 신뢰도*, evidence 는 *추적 가능성*. 두 축이 다름.
+- **사실 검증** — EvidenceBuilder 의 `pass / missing` (out-of-evidence 추적). Confidence 는 *추정의 신뢰도*, evidence 는 *추적 가능성*. 두 축이 다름.
 - **품질 등급** — exposure_score (영향력 산식) 와 분리. Confidence ≠ exposure.
 - **A/B 비교용 score** — MLflow 의 model evaluation metric 은 별도 (precision / recall).
 
@@ -68,7 +68,7 @@ confidence = 1.0  # 산식 = 결정적, 입력 검증만 통과하면 100%
 ### 6.2 LLM 단일 호출 agent
 
 ```python
-# Classification / IRParser (PDF OCR) / KeywordExtractionAgent (LLM 모드)
+# Classification / IRParser (PDF OCR) / KeywordExtractionService (LLM 모드)
 def compute(ctx):
     llm_self = ctx.raw_output.get("confidence", 0.7)
     retry_penalty = max(0, 1.0 - 0.1 * ctx.error_count)
@@ -92,7 +92,7 @@ def compute_card_composer(phase_scores):
 ### 6.4 Self-Consistency agent (Answer)
 
 ```python
-# AnswerAgent — SC ×3 + judge
+# AnswerService — SC ×3 + judge
 def compute_answer(sc_agreement, judge_score):
     # sc_agreement (0~1) 는 가장 직접적 indicator
     # judge_score = 0 ~ 1 (LLM judge 의 일치 점수)

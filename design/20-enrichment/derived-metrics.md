@@ -1,10 +1,10 @@
-# DerivedMetricsAgent — Design Plan
+# DerivedMetricsService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `DerivedMetricsAgent` (4-mode: TopInsight / Trend / MonitoringOverview / PeerOverview 통합) |
+| **이름** | `DerivedMetricsService` (4-mode: TopInsight / Trend / MonitoringOverview / PeerOverview 통합) |
 | **Supervisor** | Enrichment |
 | **상태** | 🟡 부분 (산식 only — P6) |
 | **Trigger** | Ingestion 후 매시 후속 + nightly 04:00 |
@@ -22,9 +22,9 @@
 
 ## 3. 책임 NOT
 
-- 키워드 추출 — KeywordExtractionAgent
+- 키워드 추출 — KeywordExtractionService
 - LLM 분석 — Analysis supervisor
-- 시계열 차트 데이터 (예: 일별 카드 수) — 본 agent 가 7일 daily count 만 생성 (실 차트는 frontend 가 렌더)
+- 시계열 차트 데이터 (예: 일별 카드 수) — 본 service 가 7일 daily count 만 생성 (실 차트는 frontend 가 렌더)
 
 ## 4. 입력 스펙
 
@@ -135,8 +135,8 @@ def trend(window_days=7):
     delta_pct = (len(cards_this) - len(cards_last)) / max(len(cards_last), 1) * 100
 
     # hot keywords — frequency 급증
-    keywords_this = KeywordExtractionAgent().extract(window_days=7)
-    keywords_last = KeywordExtractionAgent().extract(window_days=14)  # caching needed
+    keywords_this = KeywordExtractionService().extract(window_days=7)
+    keywords_last = KeywordExtractionService().extract(window_days=14)  # caching needed
     # ... compute delta per keyword
 
     daily = [{
@@ -254,7 +254,7 @@ def peer_overview(analysis_period):
 ## 9. 외부 의존성
 
 - **DB**: `card_news` (READ + 집계), `enrichment_cache` (UPSERT)
-- **sub**: KeywordExtractionAgent (hot keywords)
+- **sub**: KeywordExtractionService (hot keywords)
 
 ## 10. State 흐름
 
