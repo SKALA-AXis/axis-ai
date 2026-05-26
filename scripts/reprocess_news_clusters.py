@@ -173,10 +173,7 @@ def _normalize_source_types(values: list[str]) -> list[str]:
 
 def _normalize_statuses(values: list[str], *, include_skipped: bool) -> list[str]:
     statuses = [
-        status.strip().upper()
-        for value in values
-        for status in value.split(",")
-        if status.strip()
+        status.strip().upper() for value in values for status in value.split(",") if status.strip()
     ]
     if include_skipped:
         statuses.append("SKIPPED")

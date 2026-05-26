@@ -336,9 +336,7 @@ class DartCrawler(BaseCrawler):
             }
 
             article_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={receipt_no}"
-            if article_exists_by_url(article_url) and not _should_refetch_existing_url(
-                article_url
-            ):
+            if article_exists_by_url(article_url) and not _should_refetch_existing_url(article_url):
                 log.info(
                     "DART 기존 URL 스킵 | peer_id=%s receipt_no=%s url=%s",
                     self.peer_id,

@@ -557,11 +557,7 @@ def _chunk_without_text(chunk: Any) -> dict[str, Any]:
     if not isinstance(chunk, dict):
         return {}
     text = str(chunk.get("text") or "")
-    return {
-        key: value
-        for key, value in chunk.items()
-        if key != "text"
-    } | {
+    return {key: value for key, value in chunk.items() if key != "text"} | {
         "text_chars": len(text) or chunk.get("text_chars"),
         "text_omitted_for_metadata": True,
     }

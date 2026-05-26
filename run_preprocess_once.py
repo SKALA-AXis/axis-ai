@@ -18,10 +18,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.preprocessing.classification import classify_preprocessed_cluster
-from src.preprocessing.dedup import deduplicate_articles
 from src.parsers.parser_quality import analyze_parser_quality_article
 from src.parsers.parser_router import DocumentParserRouter
+from src.preprocessing.classification import classify_preprocessed_cluster
+from src.preprocessing.dedup import deduplicate_articles
 from src.preprocessing.relevance import analyze_relevance_article
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")

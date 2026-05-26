@@ -112,7 +112,7 @@ def search_dart_chunks(
         log.warning("DART chunk 검색 임베딩 실패 | error=%s", exc)
         return []
 
-    conditions = []
+    conditions: list[qm.Condition] = []
     if peer_id:
         conditions.append(FieldCondition(key="peer_id", match=MatchValue(value=peer_id)))
     if period:

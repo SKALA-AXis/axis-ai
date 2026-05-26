@@ -19,6 +19,7 @@ from src.config.preprocessing import (
     COMPANY_SITE_SOURCE_TYPES,
     DEFAULT_GPT_WORKERS,
     INDUSTRY_DOCUMENT_SOURCE_TYPES,
+    METADATA_CHUNK_TEXT_CHARS,
     NEWS_SOURCE_TYPES,
     OFFICIAL_SOURCE_TYPES,
     PARSED_DOCUMENT_SOURCE_TYPES,
@@ -637,14 +638,11 @@ def _compact_document_chunks(chunks: Any) -> list[dict[str, Any]]:
             continue
         text = str(chunk.get("text") or "")
         compacted.append(
-            {
-                key: value
-                for key, value in chunk.items()
-                if key != "text"
-            }
+            {key: value for key, value in chunk.items() if key != "text"}
             | {
+                "text": text[:METADATA_CHUNK_TEXT_CHARS],
                 "text_chars": len(text) or chunk.get("text_chars"),
-                "text_omitted_for_metadata": True,
+                "text_is_truncated_for_metadata": len(text) > METADATA_CHUNK_TEXT_CHARS,
             }
         )
     return compacted
