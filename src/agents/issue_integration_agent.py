@@ -15,7 +15,7 @@ from typing import Any
 
 from src.analysis.models import AnalysisInputBundle, NormalizedDataBundle
 from src.analysis.summarizer import SourceSummarizer
-from src.db.article_store import get_articles_by_ids
+from src.db.article_store import fetch_latest_trend_context, get_articles_by_ids
 
 
 class IssueIntegrationAgent:
@@ -107,7 +107,10 @@ def analysis_input_bundle_from_bundle(bundle: NormalizedDataBundle) -> AnalysisI
         facts=bundle.facts,
         evidence_snippets=_evidence_snippets(bundle.items, bundle.facts),
         sources=bundle.sources,
-        metadata={"collected_at": bundle.collected_at},
+        metadata={
+            "collected_at": bundle.collected_at,
+            "trend_context": _safe_trend_context(),
+        },
     )
 
 
@@ -156,8 +159,35 @@ def analysis_input_bundle_from_articles(
             "cluster_article_ids": cluster_article_ids or _item_ids(articles),
             "classification": classification,
             "created_at": datetime.now(UTC).isoformat(),
+            "trend_context": _safe_trend_context(),
         },
     )
+
+
+_trend_context_failure_logged = False
+
+
+def _safe_trend_context() -> dict[str, Any]:
+    """`fetch_latest_trend_context` 의 graceful wrapper.
+
+    DB 실패 / table 미생성 시 빈 dict 반환 — analyzer.py 가 already-empty-safe.
+    첫 실패만 warning 으로 emit (hot path 라 반복 로그 회피).
+    design: global-trends.md §5.2.
+    """
+    global _trend_context_failure_logged
+    try:
+        return fetch_latest_trend_context(within_days=7) or {}
+    except Exception:  # noqa: BLE001
+        import logging
+
+        if not _trend_context_failure_logged:
+            logging.getLogger(__name__).warning(
+                "fetch_latest_trend_context() 실패 — trend_context 비워둔 채로 진행 "
+                "(이후 동일 오류는 반복 출력 안 함). design: global-trends.md §5.2.",
+                exc_info=True,
+            )
+            _trend_context_failure_logged = True
+        return {}
 
 
 def _build_fetch_ids(
