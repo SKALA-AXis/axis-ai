@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sys
 import time
 from typing import Any
@@ -32,11 +31,11 @@ def main(cluster_id: int) -> None:
         analysis_input_bundle_from_articles,
     )
     from src.db.article_store import get_articles_by_ids
+    from src.pipeline.analysis_flow_graph import run_supervisor
     from src.pipeline.analysis_pipeline import (
         build_classification_from_articles,
         list_cluster_article_ids,
     )
-    from src.pipeline.analysis_flow_graph import run_supervisor
 
     article_ids = list_cluster_article_ids(cluster_id)
     print(f"\n=== cluster {cluster_id} | article_ids={article_ids}")
@@ -71,7 +70,6 @@ def main(cluster_id: int) -> None:
     elapsed = time.perf_counter() - t0
     print(f"\n=== supervisor done | elapsed={elapsed:.2f}s")
 
-    package = state.get("analysis_package")
     validation = state.get("validation")
     impl = state.get("implication") or {}
     metrics = validation.metrics if validation and validation.metrics else None
@@ -99,7 +97,9 @@ def main(cluster_id: int) -> None:
     analysis = state.get("analysis") or {}
     print(f"is_valid_analysis = {analysis.get('is_valid_analysis')}")
     print(f"analysis_summary = {analysis.get('analysis_summary', '')[:160]}")
-    print(f"impact_level = {analysis.get('impact_level')} | risk_or_opportunity = {analysis.get('risk_or_opportunity')}")
+    impact_level = analysis.get("impact_level")
+    risk_or_opportunity = analysis.get("risk_or_opportunity")
+    print(f"impact_level = {impact_level} | risk_or_opportunity = {risk_or_opportunity}")
     print(f"market_signal = {analysis.get('market_signal', '')[:160]}")
     print(f"strategic_meaning = {analysis.get('strategic_meaning')}")
     print(f"confidence = {analysis.get('confidence')}")

@@ -21,5 +21,6 @@ DEFAULT_GPT_WORKERS: Final[int] = 5
 
 STATUS_RAW: Final[str] = "RAW"
 STATUS_PROCESSED: Final[str] = "PROCESSED"
+STATUS_REVIEW: Final[str] = "REVIEW"
 STATUS_SKIPPED: Final[str] = "SKIPPED"
 STATUS_FAILED: Final[str] = "FAILED"

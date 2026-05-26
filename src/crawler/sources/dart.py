@@ -11,11 +11,14 @@ from xml.etree import ElementTree
 import httpx
 from bs4 import BeautifulSoup
 from bs4.element import Tag
+from sqlalchemy import text
 
 from src.crawler.article_filter import strip_html
 from src.crawler.base import RawArticle
 from src.crawler.base_crawler import BaseCrawler
 from src.db.article_store import article_exists_by_url
+from src.db.postgres import SessionLocal
+from src.parsers.dart_parser import extract_dart_storage_content
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +34,9 @@ DEFAULT_LOOKBACK_DAYS = 365
 DEFAULT_PAGE_COUNT = 100
 DEFAULT_FETCH_DOCUMENT = True
 DEFAULT_MAX_DOCUMENT_LENGTH = 0
-DEFAULT_DISCLOSURE_TYPES = ("A", "B", "F")
+DEFAULT_DISCLOSURE_TYPES = ("A",)
+_PERIODIC_REPORT_NAME_KEYWORDS = ("사업보고서", "반기보고서", "분기보고서")
+DEFAULT_REFETCH_SHORT_CONTENT_CHARS = 1000
 DEFAULT_MAX_STRUCTURED_TABLES = 80
 DEFAULT_MAX_STRUCTURED_TABLE_ROWS = 80
 DEFAULT_MAX_STRUCTURED_TABLE_COLS = 20
@@ -301,6 +306,8 @@ class DartCrawler(BaseCrawler):
         for item in items:
             receipt_no = item.get("rcept_no", "")
             report_name = strip_html(item.get("report_nm", ""))
+            if not _is_periodic_report_name(report_name):
+                continue
             published_at = _parse_dart_date(item.get("rcept_dt", ""))
 
             if published_at is None:
@@ -329,7 +336,7 @@ class DartCrawler(BaseCrawler):
             }
 
             article_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={receipt_no}"
-            if article_exists_by_url(article_url):
+            if article_exists_by_url(article_url) and not _should_refetch_existing_url(article_url):
                 log.info(
                     "DART 기존 URL 스킵 | peer_id=%s receipt_no=%s url=%s",
                     self.peer_id,
@@ -355,7 +362,7 @@ class DartCrawler(BaseCrawler):
             raw_content = document_text or fallback_content
             raw_content_length = len(raw_content)
 
-            content = raw_content
+            content, stored_sections = extract_dart_storage_content(raw_content)
             content_truncated = False
 
             if self.max_document_length > 0 and len(content) > self.max_document_length:
@@ -395,6 +402,8 @@ class DartCrawler(BaseCrawler):
                         "document_text_length": len(document_text),
                         "raw_content_chars": raw_content_length,
                         "content_chars": len(content),
+                        "stored_sections": stored_sections,
+                        "content_compacted_for_rdb": True,
                         "content_truncated": content_truncated,
                         "max_document_length": self.max_document_length,
                         "contains_tables": bool(document_payload.get("contains_tables")),
@@ -544,6 +553,29 @@ def _extract_payload_from_dart_document(content: bytes, receipt_no: str) -> dict
             "parsed_file_count": 1 if text else 0,
             "parse_strategy": "table_preserved_text_bad_zip_fallback",
         }
+
+
+def _is_periodic_report_name(report_name: str) -> bool:
+    return any(keyword in report_name for keyword in _PERIODIC_REPORT_NAME_KEYWORDS)
+
+
+def _should_refetch_existing_url(article_url: str) -> bool:
+    if os.getenv("DART_REFETCH_EXISTING", "").lower() in {"1", "true", "yes", "on"}:
+        return True
+
+    threshold = int(
+        os.getenv(
+            "DART_REFETCH_SHORT_CONTENT_CHARS",
+            str(DEFAULT_REFETCH_SHORT_CONTENT_CHARS),
+        )
+    )
+    with SessionLocal() as db:
+        content_chars = db.execute(
+            text("SELECT length(content) FROM raw_articles WHERE url = :url LIMIT 1"),
+            {"url": article_url},
+        ).scalar_one_or_none()
+
+    return isinstance(content_chars, int) and content_chars < threshold
 
 
 def _extract_text_payload_from_markup(
