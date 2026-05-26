@@ -31,7 +31,8 @@ DEFAULT_LOOKBACK_DAYS = 365
 DEFAULT_PAGE_COUNT = 100
 DEFAULT_FETCH_DOCUMENT = True
 DEFAULT_MAX_DOCUMENT_LENGTH = 0
-DEFAULT_DISCLOSURE_TYPES = ("A", "B", "F")
+DEFAULT_DISCLOSURE_TYPES = ("A",)
+_PERIODIC_REPORT_NAME_KEYWORDS = ("사업보고서", "반기보고서", "분기보고서")
 DEFAULT_MAX_STRUCTURED_TABLES = 80
 DEFAULT_MAX_STRUCTURED_TABLE_ROWS = 80
 DEFAULT_MAX_STRUCTURED_TABLE_COLS = 20
@@ -301,6 +302,8 @@ class DartCrawler(BaseCrawler):
         for item in items:
             receipt_no = item.get("rcept_no", "")
             report_name = strip_html(item.get("report_nm", ""))
+            if not _is_periodic_report_name(report_name):
+                continue
             published_at = _parse_dart_date(item.get("rcept_dt", ""))
 
             if published_at is None:
@@ -544,6 +547,10 @@ def _extract_payload_from_dart_document(content: bytes, receipt_no: str) -> dict
             "parsed_file_count": 1 if text else 0,
             "parse_strategy": "table_preserved_text_bad_zip_fallback",
         }
+
+
+def _is_periodic_report_name(report_name: str) -> bool:
+    return any(keyword in report_name for keyword in _PERIODIC_REPORT_NAME_KEYWORDS)
 
 
 def _extract_text_payload_from_markup(

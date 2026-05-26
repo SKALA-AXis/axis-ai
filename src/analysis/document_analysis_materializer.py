@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 from typing import Any
 
 from src.db.article_store import (
@@ -27,10 +28,17 @@ from src.extractors.securities_report_analysis_extractor import (
     business_signals_from_securities_report,
     financial_metrics_from_securities_report,
 )
+from src.parsers.dart_parser import DartParser
 
 log = logging.getLogger(__name__)
 
 DOCUMENT_ANALYSIS_SOURCE_TYPES = {"dart", "ir", "securities_report"}
+DART_VECTOR_INDEX_ENABLED = os.getenv("DART_VECTOR_INDEX_ENABLED", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def materialize_document_analysis(
@@ -63,6 +71,10 @@ def materialize_document_analysis(
         source_type = _source_type(article)
         source_counts[source_type] = source_counts.get(source_type, 0) + 1
         parser_result = _parser_result(article)
+        if source_type == "dart":
+            parser_result = _ensure_dart_chunks(article, parser_result)
+            if DART_VECTOR_INDEX_ENABLED:
+                _index_dart_chunks(article, parser_result)
         if not parser_result:
             errors.append(f"{article.get('id')}: empty parser_result")
             continue
@@ -170,6 +182,45 @@ def _normalize_article(row: dict[str, Any]) -> dict[str, Any]:
 def _parser_result(article: dict[str, Any]) -> dict[str, Any]:
     extra = _dict_or_empty(article.get("extra"))
     return _dict_or_empty(extra.get("parser_result") or article.get("parser_result"))
+
+
+def _ensure_dart_chunks(
+    article: dict[str, Any],
+    parser_result: dict[str, Any],
+) -> dict[str, Any]:
+    chunks = parser_result.get("document_chunks")
+    if _has_chunk_text(chunks):
+        return parser_result
+
+    parsed = DartParser().parse_article(article)
+    merged = {**parser_result}
+    parser_result_keys = (
+        "document_chunks",
+        "sections",
+        "section_index",
+        "section_tree",
+        "topic_signals",
+        "topics",
+    )
+    for key in parser_result_keys:
+        if parsed.get(key) is not None:
+            merged[key] = parsed.get(key)
+    return merged
+
+
+def _index_dart_chunks(article: dict[str, Any], parser_result: dict[str, Any]) -> None:
+    try:
+        from src.rag.document_index import index_dart_chunks
+
+        index_dart_chunks(article=article, parser_result=parser_result)
+    except Exception as exc:
+        log.warning("DART chunk vector index 스킵 | article=%s error=%s", article.get("id"), exc)
+
+
+def _has_chunk_text(chunks: Any) -> bool:
+    if not isinstance(chunks, list):
+        return False
+    return any(isinstance(chunk, dict) and chunk.get("text") for chunk in chunks)
 
 
 def _source_type(article: dict[str, Any]) -> str:

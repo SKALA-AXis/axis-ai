@@ -57,6 +57,8 @@ _DART_MAJOR_HEADING_PATTERN = re.compile(
     r"(?:(?<=\n)|^)\s*"
     r"(?P<roman>XII|XI|IX|VIII|VII|VI|IV|III|II|X|V|I|Ⅻ|Ⅺ|Ⅸ|Ⅷ|Ⅶ|Ⅵ|Ⅳ|Ⅲ|Ⅱ|Ⅹ|Ⅴ|Ⅰ)"
     r"\s*[.\)]?\s*"
+    r"(?:(?:XII|XI|IX|VIII|VII|VI|IV|III|II|X|V|I|Ⅻ|Ⅺ|Ⅸ|Ⅷ|Ⅶ|Ⅵ|Ⅳ|Ⅲ|Ⅱ|Ⅹ|Ⅴ|Ⅰ)"
+    r"\s*[.\)]?\s*)?"
     r"(?P<title>"
     r"회사의\s*개요|사업의\s*내용|재무에\s*관한\s*사항|"
     r"이사의\s*경영진단\s*및\s*분석의견|회계감사인의\s*감사의견|"
@@ -66,6 +68,14 @@ _DART_MAJOR_HEADING_PATTERN = re.compile(
     r"상세표"
     r")",
     re.MULTILINE,
+)
+_DART_MAJOR_TITLE_TEXT_PATTERN = re.compile(
+    r"회사의\s*개요|사업의\s*내용|재무에\s*관한\s*사항|"
+    r"이사의\s*경영진단\s*및\s*분석의견|회계감사인의\s*감사의견|"
+    r"이사회\s*등\s*회사의\s*기관에\s*관한\s*사항|주주에\s*관한\s*사항|"
+    r"임원\s*및\s*직원\s*등에\s*관한\s*사항|계열회사\s*등에\s*관한\s*사항|"
+    r"대주주\s*등과의\s*거래내용|그\s*밖에\s*투자자\s*보호를\s*위하여\s*필요한\s*사항|"
+    r"상세표"
 )
 _DART_EXPERT_HEADING_PATTERN = re.compile(
     r"(?:(?<=\n)|^)\s*(?:【\s*)?(?P<title>전문가의\s*확인)(?:\s*】)?",
@@ -109,6 +119,7 @@ _FINANCIAL_METRIC_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("financing_cash_flow", ("재무활동현금흐름", "재무활동으로 인한 현금흐름")),
     ("cash_and_cash_equivalents", ("현금및현금성자산", "기말현금및현금성자산")),
 )
+_DART_RDB_CONTENT_SECTION_KEYS = {"company_overview", "business"}
 
 
 def _article_get(article: Any, key: str, default: Any = None) -> Any:
@@ -892,6 +903,38 @@ def _extract_sections_and_chunks(
     return sections, chunks
 
 
+def extract_dart_storage_content(
+    text: str,
+    *,
+    section_keys: set[str] | None = None,
+) -> tuple[str, list[str]]:
+    """Return the DART section text worth keeping in raw_articles.content."""
+    allowed = section_keys or _DART_RDB_CONTENT_SECTION_KEYS
+    if not text:
+        return "", []
+
+    anchors = _major_section_anchors(text)
+    if not anchors:
+        return _clean_section_text(text), ["unclassified"]
+
+    selected_texts: list[str] = []
+    selected_keys: list[str] = []
+    for index, anchor in enumerate(anchors):
+        section_key = str(anchor["key"])
+        if section_key not in allowed:
+            continue
+        end = anchors[index + 1]["start"] if index + 1 < len(anchors) else len(text)
+        section_text = _clean_section_text(text[anchor["start"] : end])
+        if not section_text:
+            continue
+        selected_keys.append(section_key)
+        selected_texts.append(section_text)
+
+    if not selected_texts:
+        return _clean_section_text(text), ["unclassified"]
+    return "\n\n".join(selected_texts), selected_keys
+
+
 def _section_index(sections: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     """Compact major-section index for downstream agents."""
     if not sections:
@@ -916,6 +959,8 @@ def _major_section_anchors(text: str) -> list[dict[str, Any]]:
     seen_keys: set[str] = set()
 
     for match in _DART_MAJOR_HEADING_PATTERN.finditer(text):
+        if _is_likely_toc_anchor(text, match.start()):
+            continue
         roman = _normalize_roman(match.group("roman"))
         mapped = _ROMAN_TO_KEY.get(roman)
         if not mapped:
@@ -949,6 +994,27 @@ def _major_section_anchors(text: str) -> list[dict[str, Any]]:
 
     anchors.sort(key=lambda item: int(item["start"]))
     return anchors
+
+
+def _is_likely_toc_anchor(text: str, start: int) -> bool:
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", start)
+    if line_end < 0:
+        line_end = len(text)
+
+    line = text[line_start:line_end]
+    if len(_DART_MAJOR_TITLE_TEXT_PATTERN.findall(line)) >= 2:
+        return True
+
+    last_toc = text.rfind("목 차", 0, start)
+    last_confirmation = max(
+        text.rfind("대표이사", 0, start),
+        text.rfind("확인", 0, start),
+    )
+    if last_toc > last_confirmation and start - last_toc < 1200 and len(line) < 300:
+        return True
+
+    return False
 
 
 def _normalize_roman(value: str) -> str:
@@ -1562,4 +1628,4 @@ class DartParser:
         return result
 
 
-__all__ = ["DartParser"]
+__all__ = ["DartParser", "extract_dart_storage_content"]

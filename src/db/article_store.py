@@ -36,6 +36,17 @@ _INSERT_SQL = text("""
 
 _SELECT_ARTICLE_ID_BY_URL = text("SELECT id FROM raw_articles WHERE url = :url")
 
+_UPDATE_DART_CONTENT_IF_BETTER_SQL = text("""
+    UPDATE raw_articles
+    SET content = :content,
+        content_type = COALESCE(:content_type, content_type),
+        error_message = COALESCE(:error_message, error_message)
+    WHERE id = :id
+      AND source_type = 'dart'
+      AND length(COALESCE(content, '')) < :new_content_length
+      AND :new_content_length >= 1000
+""")
+
 _INSERT_CRAWL_RUN_ARTICLE = text("""
     INSERT INTO crawl_run_articles (
         crawl_run_id, raw_article_id, url, url_hash, discovered_at,
@@ -272,6 +283,12 @@ def save_articles(
                     article_id = existing[0] if existing else None
                     action = "duplicate"
                 if article_id:
+                    _update_dart_content_if_better(
+                        db,
+                        article_id=article_id,
+                        article=article,
+                        sanitized_content=sanitized_content,
+                    )
                     _upsert_source_metadata(
                         db,
                         article_id=article_id,
@@ -299,6 +316,27 @@ def save_articles(
         len(articles) - inserted,
     )
     return inserted
+
+
+def _update_dart_content_if_better(
+    db,
+    *,
+    article_id: int,
+    article: RawArticle,
+    sanitized_content: str,
+) -> None:
+    if article.source_type != "dart":
+        return
+    db.execute(
+        _UPDATE_DART_CONTENT_IF_BETTER_SQL,
+        {
+            "id": article_id,
+            "content": sanitized_content,
+            "content_type": article.content_type,
+            "error_message": article.error_message,
+            "new_content_length": len(sanitized_content),
+        },
+    )
 
 
 def article_exists_by_url(url: str) -> bool:
