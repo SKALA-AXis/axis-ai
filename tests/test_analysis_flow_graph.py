@@ -130,7 +130,7 @@ def test_supervisor_graph_happy_path_writes_card():
         patch("src.pipeline.analysis_flow_graph.save_card_news", return_value="CN-OK"),
         patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
         patch(
-            "src.pipeline.analysis_flow_graph.build_profile_context_v2",
+            "src.services.profile_context_loader.build_profile_context_v2",
             side_effect=RuntimeError("force legacy"),
         ),
     ):
@@ -169,7 +169,7 @@ def test_supervisor_graph_routes_human_review_on_fake_numeric():
         patch("src.pipeline.analysis_flow_graph.save_card_news"),
         patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
         patch(
-            "src.pipeline.analysis_flow_graph.build_profile_context_v2",
+            "src.services.profile_context_loader.build_profile_context_v2",
             side_effect=RuntimeError("force legacy"),
         ),
     ):

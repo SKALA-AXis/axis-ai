@@ -56,7 +56,7 @@ from src.analysis.models import (
 from src.db.article_store import save_card_news, save_pipeline_log
 from src.services.agent_output_validation import confidence_in_range
 from src.services.analysis_context_builder import AnalysisContextBuilder
-from src.services.profile_context_v2 import build_profile_context_v2
+from src.services.profile_context_loader import ProfileContextLoader
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +88,7 @@ class SupervisorState(TypedDict, total=False):
     card_news_id: str | None
     card_news_payload: dict[str, Any] | None
     rolling_confidence_avg: float | None
+    stage_outputs: dict[str, Any]
     # outputs / observability
     errors: Annotated[list[NodeError], operator.add]
     human_review_flags: list[str]
@@ -162,6 +163,7 @@ class SupervisorDeps:
         implication_agent: ImplicationAgent | None = None,
         evaluator: EvaluatorAgent | None = None,
         context_builder: AnalysisContextBuilder | None = None,
+        profile_context_loader: ProfileContextLoader | None = None,
         card_news_agent: CardNewsAgent | None = None,
         implication_fallback: ImplicationGenerator | None = None,
     ) -> None:
@@ -173,6 +175,7 @@ class SupervisorDeps:
         )
         self.evaluator = evaluator or EvaluatorAgent()
         self.context_builder = context_builder or AnalysisContextBuilder()
+        self.profile_context_loader = profile_context_loader or ProfileContextLoader()
         self.card_news_agent = card_news_agent or CardNewsAgent()
 
 
@@ -186,7 +189,14 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
     def issue_integrate_node(state: SupervisorState) -> SupervisorState:
         bundle = state["input_bundle"]
         integrated = deps.issue_integrator.integrate_input_bundle(bundle)
-        return cast(SupervisorState, {**state, "integrated_issue": integrated})
+        return cast(
+            SupervisorState,
+            {
+                **state,
+                "integrated_issue": integrated,
+                "stage_outputs": _with_stage_output(state, "issue_integration", integrated),
+            },
+        )
 
     @_logged_step("profile_context")
     def profile_context_node(state: SupervisorState) -> SupervisorState:
@@ -196,10 +206,12 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         sectors = list(bundle.sectors or [])
         companies = _companies_for_context(bundle=bundle, integrated_issue=integrated)
         try:
-            ctx = build_profile_context_v2(
+            ctx = deps.profile_context_loader.load(
                 companies=companies,
                 sectors=sectors,
                 event_type=bundle.event_type,
+                integrated_issue=integrated,
+                input_bundle=bundle,
             )
             return cast(SupervisorState, {**state, "profile_context": ctx})
         except Exception as exc:  # noqa: BLE001
@@ -237,8 +249,16 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
             integrated_issue=integrated,
             classification=classification,
             cluster_metadata=_cluster_metadata(bundle, state.get("profile_context")),
+            analysis_context=state.get("analysis_context"),
         )
-        return cast(SupervisorState, {**state, "analysis": analysis})
+        return cast(
+            SupervisorState,
+            {
+                **state,
+                "analysis": analysis,
+                "stage_outputs": _with_stage_output(state, "content_analysis", analysis),
+            },
+        )
 
     @_logged_step("implication")
     def implication_node(state: SupervisorState) -> SupervisorState:
@@ -252,7 +272,14 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
             analysis_context=state.get("analysis_context"),
             classification=state.get("classification"),
         )
-        return cast(SupervisorState, {**state, "implication": impl})
+        return cast(
+            SupervisorState,
+            {
+                **state,
+                "implication": impl,
+                "stage_outputs": _with_stage_output(state, "skax_implication", impl),
+            },
+        )
 
     @_logged_step("validate")
     def validate_node(state: SupervisorState) -> SupervisorState:
@@ -591,6 +618,7 @@ def _evidence_payload_from_state(state: SupervisorState) -> dict[str, Any]:
             "analysis": analysis,
             "implication": implication,
             "classification": classification,
+            "stage_outputs": state.get("stage_outputs") or {},
         },
     }
     validation = state.get("validation")
@@ -633,15 +661,52 @@ def _cluster_metadata(
     profile_context: ProfileContext | None,
 ) -> dict[str, Any]:
     trend_context = bundle.metadata.get("trend_context") or {}
+    source_types = _dedupe_sorted(
+        [
+            str(item.get("source_type") or "").strip()
+            for item in bundle.items
+            if isinstance(item, dict) and item.get("source_type")
+        ]
+    )
+    content_types = _dedupe_sorted(
+        [
+            str(item.get("content_type") or "").strip()
+            for item in bundle.items
+            if isinstance(item, dict) and item.get("content_type")
+        ]
+    )
     return {
         "bundle_id": bundle.bundle_id,
         "cluster_id": bundle.cluster_id,
         "source_type": bundle.source_type,
+        "source_types": source_types or [bundle.source_type],
+        "content_types": content_types,
+        "document_source_family": _document_source_family(source_types or [bundle.source_type]),
         "companies": list(bundle.companies),
         "sectors": list(bundle.sectors),
         "event_type": bundle.event_type,
         "cluster_size": len(bundle.items),
         "source_count": len(bundle.sources),
+        "source_names": _dedupe_sorted(
+            [
+                str(source.get("source_name") or "").strip()
+                for source in bundle.sources
+                if source.get("source_name")
+            ]
+        ),
+        "has_structured_metrics": any(
+            isinstance(item, dict) and bool(item.get("financial_metrics"))
+            for item in bundle.items
+        ),
+        "has_business_signals": any(
+            isinstance(item, dict) and bool(item.get("business_signals"))
+            for item in bundle.items
+        ),
+        "parser_warning_count": sum(
+            len(item.get("parser_warnings") or [])
+            for item in bundle.items
+            if isinstance(item, dict) and isinstance(item.get("parser_warnings"), list)
+        ),
         "has_peer_profile_context": bool(
             profile_context is not None and profile_context.peer_profiles
         ),
@@ -651,6 +716,42 @@ def _cluster_metadata(
         "has_trend_context": bool(trend_context),
         "trend_context": trend_context if isinstance(trend_context, dict) else {},
     }
+
+
+def _with_stage_output(
+    state: SupervisorState,
+    stage_name: str,
+    value: dict[str, Any],
+) -> dict[str, Any]:
+    stage_outputs = dict(state.get("stage_outputs") or {})
+    stage_outputs[stage_name] = value
+    return stage_outputs
+
+
+def _dedupe_sorted(values: list[str]) -> list[str]:
+    return sorted({value for value in values if value})
+
+
+def _document_source_family(source_types: list[str]) -> str:
+    values = {source_type.lower() for source_type in source_types if source_type}
+    if not values:
+        return "unknown"
+    families = {_source_family(source_type) for source_type in values}
+    return next(iter(families)) if len(families) == 1 else "mixed"
+
+
+def _source_family(source_type: str) -> str:
+    if source_type in {"news", "news_cluster", "company_news", "global_newsroom", "official"}:
+        return "news"
+    if source_type in {"dart", "disclosure", "filing"}:
+        return "filing"
+    if source_type in {"ir", "earnings_presentation"}:
+        return "ir"
+    if source_type in {"securities_report", "analyst_report", "research_report"}:
+        return "research"
+    if source_type in {"trend_report", "industry_report", "global_report", "spri", "bcg"}:
+        return "trend"
+    return "unknown"
 
 
 def _load_calibrated_thresholds() -> dict[str, float] | None:

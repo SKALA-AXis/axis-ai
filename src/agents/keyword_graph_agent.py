@@ -1,6 +1,6 @@
-"""Keyword graph agent structure.
+"""Keyword graph builder structure.
 
-KeywordGraphAgent belongs to the 2단계 data-usage pipeline. It will generate
+KeywordGraphBuilder belongs to the 2단계 data-usage pipeline. It will generate
 company/sector/keyword nodes, edges, and time-series signals from stored
 classified data and card news. The graph-building logic is left for a later
 implementation pass.
@@ -12,10 +12,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-class KeywordGraphAgent:
+class KeywordGraphBuilder:
     """Generate keyword graph-shaped outputs from stored monitoring data."""
 
-    prompt_version = "keyword-graph-agent-structure-v0"
+    prompt_version = "keyword-graph-builder-structure-v0"
 
     def build(
         self,
@@ -24,6 +24,7 @@ class KeywordGraphAgent:
         filters: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
+            "builder": type(self).__name__,
             "agent": type(self).__name__,
             "prompt_version": self.prompt_version,
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -39,4 +40,8 @@ class KeywordGraphAgent:
         }
 
 
-__all__ = ["KeywordGraphAgent"]
+class KeywordGraphAgent(KeywordGraphBuilder):
+    """Backward compatible alias for KeywordGraphBuilder."""
+
+
+__all__ = ["KeywordGraphAgent", "KeywordGraphBuilder"]

@@ -271,6 +271,13 @@ class AnalysisResult:
 
     is_valid_analysis: bool = False
     analysis_scope: str = "peer_and_industry"
+    analysis_mode: str = "multi_source_document_intelligence"
+    prompt_version: str = ""
+    source_profile: dict[str, Any] = field(default_factory=dict)
+    content_analysis: dict[str, Any] = field(default_factory=dict)
+    detailed_findings: list[dict[str, Any]] = field(default_factory=list)
+    evidence_map: list[dict[str, Any]] = field(default_factory=list)
+    uncertainty_notes: list[str] = field(default_factory=list)
     analysis_summary: str = ""
     strategic_meaning: list[str] = field(default_factory=list)
     market_signal: str = ""
@@ -278,6 +285,7 @@ class AnalysisResult:
     impact_reason: str = ""
     risk_or_opportunity: Literal["risk", "opportunity", "neutral"] = "neutral"
     confidence: float = 0.0
+    handoff: dict[str, Any] = field(default_factory=dict)
     reason: str = ""
     model: str = ""
     cluster_id: int | str | None = None
@@ -293,6 +301,16 @@ class AnalysisResult:
     def from_dict(cls, data: dict[str, Any] | None) -> AnalysisResult:
         if not data:
             return cls()
+        source_profile_raw = data.get("source_profile")
+        source_profile: dict[str, Any] = (
+            source_profile_raw if isinstance(source_profile_raw, dict) else {}
+        )
+        content_analysis_raw = data.get("content_analysis")
+        content_analysis: dict[str, Any] = (
+            content_analysis_raw if isinstance(content_analysis_raw, dict) else {}
+        )
+        handoff_raw = data.get("handoff")
+        handoff: dict[str, Any] = handoff_raw if isinstance(handoff_raw, dict) else {}
         impact_level = str(data.get("impact_level") or "low").lower()
         if impact_level not in {"high", "medium", "low"}:
             impact_level = "low"
@@ -302,6 +320,21 @@ class AnalysisResult:
         return cls(
             is_valid_analysis=bool(data.get("is_valid_analysis", False)),
             analysis_scope=str(data.get("analysis_scope") or "peer_and_industry"),
+            analysis_mode=str(
+                data.get("analysis_mode") or "multi_source_document_intelligence"
+            ),
+            prompt_version=str(data.get("prompt_version") or ""),
+            source_profile=source_profile,
+            content_analysis=content_analysis,
+            detailed_findings=[
+                item for item in (data.get("detailed_findings") or []) if isinstance(item, dict)
+            ],
+            evidence_map=[
+                item for item in (data.get("evidence_map") or []) if isinstance(item, dict)
+            ],
+            uncertainty_notes=[
+                str(item) for item in (data.get("uncertainty_notes") or []) if str(item)
+            ],
             analysis_summary=str(data.get("analysis_summary") or ""),
             strategic_meaning=[str(item) for item in (data.get("strategic_meaning") or [])],
             market_signal=str(data.get("market_signal") or ""),
@@ -309,6 +342,7 @@ class AnalysisResult:
             impact_reason=str(data.get("impact_reason") or ""),
             risk_or_opportunity=rop,  # type: ignore[arg-type]
             confidence=_safe_float(data.get("confidence"), 0.0),
+            handoff=handoff,
             reason=str(data.get("reason") or ""),
             model=str(data.get("model") or ""),
             cluster_id=data.get("cluster_id"),

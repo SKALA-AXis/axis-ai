@@ -484,6 +484,7 @@ def _facts_from_articles(articles: list[dict[str, Any]]) -> list[dict[str, Any]]
             }
         )
         facts.extend(_facts_from_structured_rows(article, article_id))
+        facts.extend(_facts_from_parser_result(article, article_id))
     return facts
 
 
@@ -524,6 +525,89 @@ def _facts_from_structured_rows(article: dict[str, Any], article_id: int) -> lis
     return facts
 
 
+def _facts_from_parser_result(article: dict[str, Any], article_id: int) -> list[dict[str, Any]]:
+    """Parser 결과의 문서 chunk/topic 신호를 analysis facts 로 승격한다.
+
+    DART/IR/리포트는 제목만으로는 분석 밀도가 낮다. 이미 파서가 만든
+    document_chunks/topic_signals/sections 를 통합 이슈의 근거 후보로 사용해
+    AnalysisAgent 가 세부 내용을 읽을 수 있게 한다.
+    """
+    parser_result = _parser_result(article)
+    if not parser_result:
+        return []
+
+    facts: list[dict[str, Any]] = []
+    source_type = article.get("source_type")
+
+    for index, signal in enumerate(_as_dict_list(parser_result.get("topic_signals")), start=1):
+        summary = str(
+            signal.get("summary")
+            or signal.get("topic")
+            or signal.get("signal")
+            or signal.get("text")
+            or ""
+        ).strip()
+        evidence = str(signal.get("evidence_text") or signal.get("evidence") or summary).strip()
+        if not summary and not evidence:
+            continue
+        facts.append(
+            {
+                "fact_id": f"article:{article_id}:topic_signal:{index}",
+                "article_id": article_id,
+                "fact": summary or evidence,
+                "evidence_text": evidence or summary,
+                "source_type": source_type,
+                "fact_type": "business_signal",
+                "section_key": signal.get("section_key"),
+                "source_chunk_uid": signal.get("chunk_id") or signal.get("source_chunk_uid"),
+            }
+        )
+
+    for index, chunk in enumerate(_as_dict_list(parser_result.get("document_chunks")), start=1):
+        text = _compact_text(chunk.get("text"), limit=360)
+        if not text:
+            continue
+        section_key = str(chunk.get("section_key") or "").strip()
+        section_title = str(chunk.get("section_title") or "").strip()
+        facts.append(
+            {
+                "fact_id": f"article:{article_id}:chunk:{chunk.get('chunk_id') or index}",
+                "article_id": article_id,
+                "fact": f"{section_title}: {text}" if section_title else text,
+                "evidence_text": text,
+                "source_type": source_type,
+                "fact_type": _fact_type_for_section(section_key),
+                "section_key": section_key,
+                "section_title": section_title,
+                "source_chunk_uid": chunk.get("chunk_id"),
+            }
+        )
+        if len(facts) >= 18:
+            return facts[:18]
+
+    sections = parser_result.get("sections")
+    if isinstance(sections, dict):
+        for index, (section_key, section_value) in enumerate(sections.items(), start=1):
+            text = _compact_text(section_value, limit=320)
+            if not text:
+                continue
+            facts.append(
+                {
+                    "fact_id": f"article:{article_id}:section:{section_key}",
+                    "article_id": article_id,
+                    "fact": text,
+                    "evidence_text": text,
+                    "source_type": source_type,
+                    "fact_type": _fact_type_for_section(str(section_key)),
+                    "section_key": str(section_key),
+                }
+            )
+            if index >= 6 or len(facts) >= 18:
+                break
+
+    return facts[:18]
+
+
 def _evidence_snippets(
     items: list[dict[str, Any]],
     facts: list[dict[str, Any]],
@@ -557,6 +641,7 @@ def _sources_from_articles(articles: list[dict[str, Any]]) -> list[dict[str, Any
             "url": article.get("url"),
             "source_name": article.get("source_name") or article.get("publisher"),
             "source_type": article.get("source_type"),
+            "content_type": article.get("content_type"),
             "published_at": article.get("published_at"),
             "collected_at": article.get("collected_at"),
         }
@@ -579,6 +664,32 @@ def _as_dict_list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _parser_result(article: dict[str, Any]) -> dict[str, Any]:
+    parser_result = article.get("parser_result")
+    if isinstance(parser_result, dict):
+        return parser_result
+    metadata = article.get("metadata") or {}
+    if isinstance(metadata, dict) and isinstance(metadata.get("parser_result"), dict):
+        return metadata["parser_result"]
+    return {}
+
+
+def _compact_text(value: Any, *, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    return text[:limit].strip()
+
+
+def _fact_type_for_section(section_key: str) -> str:
+    normalized = section_key.lower()
+    if any(token in normalized for token in ("risk", "위험", "uncertain")):
+        return "risk_fact"
+    if any(token in normalized for token in ("financial", "finance", "재무", "실적")):
+        return "financial_metric"
+    if any(token in normalized for token in ("business", "segment", "사업", "전략")):
+        return "business_signal"
+    return "general_fact"
 
 
 def _dedupe_strings(values: list[str]) -> list[str]:

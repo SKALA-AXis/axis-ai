@@ -1,5 +1,12 @@
 # AXIS AI Agent Architecture
 
+> Canonical draft: [`00-agent-architecture/README.md`](00-agent-architecture/README.md)
+>
+> 2026-05-26 이후 agent/service/job 이름과 0단계 Context Maintenance Layer,
+> 1단계 AnalysisGraphRunner, 2단계 DataUsageOrchestrator 구조는
+> `design/00-agent-architecture/`를 기준으로 갱신한다. 본 문서는 기존 상세 설계의
+> 상위 reference로 유지하며, 세부 문서는 점진적으로 canonical naming에 맞춘다.
+
 > 기준: Peer사 동향 모니터링 시스템의 2단계 Agent 아키텍처
 
 AXIS AI는 뉴스, DART/IR/공시, 시장·증권 리포트, Peer사 동향, 산업 동향 브리핑을 수집하고,

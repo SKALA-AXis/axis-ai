@@ -1107,7 +1107,7 @@ class ProfileAgent:
     ) -> dict[str, Any]:
         """Return lightweight ProfileContext for the analysis workflow.
 
-        이 메서드는 DB schema나 저장 구조를 만들지 않는다. DataAnalysisSupervisorAgent가
+        이 메서드는 DB schema나 저장 구조를 만들지 않는다. AnalysisGraphRunner가
         시사점 생성을 위해 필요한 SK AX / Peer / sector context를 런타임 dict로 묶는
         용도다. 무거운 회사별 프로필 생성은 ``build_profile``을 명시적으로 호출할 때만
         수행한다.

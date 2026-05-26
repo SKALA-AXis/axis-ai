@@ -1,9 +1,10 @@
-"""AnalysisGraphRunner / DataAnalysisSupervisorAgent — Analysis Flow LangGraph 의
-얇은 wrapper.
+"""AnalysisGraphRunner / DataAnalysisSupervisorAgent — Analysis Flow LangGraph wrapper.
 
-W2-1 이후 본 클래스는 직접 child agent 를 조율하지 않고 LangGraph 상에서 정의된
-고정 순서 DAG pipeline (`src.pipeline.supervisor_graph` 의
-``build_analysis_flow_graph()``) 을 호출하는 wrapper 다.
+본 클래스는 LangGraph 상에서 정의된 고정 순서 DAG pipeline
+(`src.pipeline.analysis_flow_graph.build_analysis_flow_graph()`) 을 호출한다.
+현재 활성 단계는 이슈 통합 → content analysis → SK AX implication 이며,
+stage_outputs 계약으로 이후 요약, 인사이트 도출, SK AX 대응방향 agent를
+같은 supervisor 아래에 추가할 수 있게 한다.
 
 명칭 주의 (외부 리뷰 2026-05-21):
 * "Supervisor" 이름은 LLM-router 가 worker 를 동적 선택하는 multi-agent supervisor
@@ -44,12 +45,18 @@ log = logging.getLogger(__name__)
 
 
 class DataAnalysisSupervisorAgent:
-    """AnalysisInputBundle 기반 1단계 분석 workflow runner (LangGraph DAG wrapper).
+    """AnalysisInputBundle 기반 1단계 분석 workflow runner.
 
     명명 (외부 리뷰 2026-05-21):
     * 정확한 역할 명은 ``AnalysisGraphRunner`` — multi-agent supervisor pattern 이 아닌
       고정 순서 DAG pipeline 의 실행자.
     * 본 클래스명 (``DataAnalysisSupervisorAgent``) 은 backward-compat 으로 유지.
+
+    확장 방향:
+    * 현재: issue_integration, content_analysis, skax_implication stage 산출물을
+      ``stage_outputs`` 로 누적한다.
+    * 다음: summary_agent, insight_agent, skax_response_agent 를 graph node 로 추가하고
+      동일한 evidence_payload / validation gate 를 공유한다.
     """
 
     def __init__(
@@ -158,6 +165,32 @@ class DataAnalysisSupervisorAgent:
                 classification=classification_payload,
             )
         return pkg
+
+    def workflow_overview(self) -> dict[str, Any]:
+        """Supervisor 설계 개요를 런타임에서 확인하기 위한 lightweight contract."""
+        return {
+            "runner": "AnalysisGraphRunner",
+            "execution_model": "fixed_langgraph_dag",
+            "active_stages": [
+                "issue_integration",
+                "profile_context",
+                "analysis_context",
+                "content_analysis",
+                "skax_implication",
+                "validation",
+                "card_writer",
+            ],
+            "stage_output_contract": [
+                "issue_integration",
+                "content_analysis",
+                "skax_implication",
+            ],
+            "planned_stages": [
+                "summary_agent",
+                "insight_agent",
+                "skax_response_agent",
+            ],
+        }
 
 
 class AnalysisSupervisorAgent(DataAnalysisSupervisorAgent):

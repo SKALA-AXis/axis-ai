@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from src.agents.analysis_supervisor_agent import DataAnalysisSupervisorAgent
+from src.agents.analysis_supervisor_agent import AnalysisGraphRunner
 from src.agents.card_news_agent import CardNewsAgent
 from src.analysis.models import AnalysisInputBundle
 from src.db.article_store import get_articles_by_ids, save_card_news
@@ -29,10 +29,10 @@ class AnalysisPipelineRunner:
     def __init__(
         self,
         *,
-        analysis_supervisor: DataAnalysisSupervisorAgent | None = None,
+        analysis_supervisor: AnalysisGraphRunner | None = None,
         card_news_agent: CardNewsAgent | None = None,
     ) -> None:
-        self.analysis_supervisor = analysis_supervisor or DataAnalysisSupervisorAgent()
+        self.analysis_supervisor = analysis_supervisor or AnalysisGraphRunner()
         self.card_news_agent = card_news_agent or CardNewsAgent()
 
     def run_cluster(

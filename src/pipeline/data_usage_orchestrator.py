@@ -12,7 +12,7 @@ from typing import Any
 from src.agents.chatbot_agent import ChatbotAgent
 from src.agents.insight_cascade_agent import InsightAgent
 from src.agents.it_trend_agent import ITTrendAgent
-from src.agents.keyword_graph_agent import KeywordGraphAgent
+from src.agents.keyword_graph_agent import KeywordGraphAgent, KeywordGraphBuilder
 from src.agents.mixer_analysis_agent import MixerAgent
 from src.agents.report_agent import ReportAgent
 
@@ -28,6 +28,7 @@ class DataUsageOrchestrator:
         report_agent: ReportAgent | None = None,
         insight_agent: InsightAgent | None = None,
         chatbot_agent: ChatbotAgent | None = None,
+        keyword_graph_builder: KeywordGraphBuilder | None = None,
         keyword_graph_agent: KeywordGraphAgent | None = None,
     ) -> None:
         self.mixer_agent = mixer_agent or MixerAgent()
@@ -35,7 +36,10 @@ class DataUsageOrchestrator:
         self.report_agent = report_agent or ReportAgent()
         self.insight_agent = insight_agent or InsightAgent()
         self.chatbot_agent = chatbot_agent or ChatbotAgent()
-        self.keyword_graph_agent = keyword_graph_agent or KeywordGraphAgent()
+        self.keyword_graph_builder = (
+            keyword_graph_builder or keyword_graph_agent or KeywordGraphBuilder()
+        )
+        self.keyword_graph_agent = self.keyword_graph_builder
 
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
         """요청 목적에 맞는 활용 Agent를 실행한다."""
@@ -80,7 +84,7 @@ class DataUsageOrchestrator:
             )
 
         if task in {"keyword_graph", "keywords", "graph"}:
-            return self.keyword_graph_agent.build(
+            return self.keyword_graph_builder.build(
                 items=request.get("items") or [],
                 filters=request.get("filters"),
             )

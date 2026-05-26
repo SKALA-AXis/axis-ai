@@ -10,6 +10,7 @@ from typing import Any
 
 _EXPORT_MODULES = {
     "AnalysisAgent": "src.agents.analysis_agent",
+    "AnalysisFlowInsightAgent": "src.agents.analysis_flow.insight_agent",
     "AnalysisGraphRunner": "src.agents.analysis_supervisor_agent",
     "AnalysisSupervisorAgent": "src.agents.analysis_supervisor_agent",
     "CardNewsAgent": "src.agents.card_news_agent",
@@ -21,10 +22,13 @@ _EXPORT_MODULES = {
     "IssueIntegrationAgent": "src.agents.issue_integration_agent",
     "ITTrendAgent": "src.agents.it_trend_agent",
     "KeywordGraphAgent": "src.agents.keyword_graph_agent",
+    "KeywordGraphBuilder": "src.agents.keyword_graph_agent",
     "MixerAgent": "src.agents.mixer_analysis_agent",
     "MixerAnalysisAgent": "src.agents.mixer_analysis_agent",
     "ProfileAgent": "src.agents.profile_agent",
     "ReportAgent": "src.agents.report_agent",
+    "SkaxResponseAgent": "src.agents.analysis_flow.skax_response_agent",
+    "SummaryAgent": "src.agents.analysis_flow.summary_agent",
 }
 
 __all__ = list(_EXPORT_MODULES)

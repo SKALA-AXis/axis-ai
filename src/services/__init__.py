@@ -11,6 +11,7 @@ from src.services.agent_output_validation import (
     normalize_intent,
     normalize_strategy_label,
 )
+from src.services.profile_context_loader import ProfileContextLoader
 from src.services.skax_profile_context_loader import (
     SKAXProfileLoader,
     build_skax_context,
@@ -19,6 +20,7 @@ from src.services.skax_profile_context_loader import (
 )
 
 __all__ = [
+    "ProfileContextLoader",
     "SKAXProfileLoader",
     "build_skax_context",
     "cap_reasoning_steps",

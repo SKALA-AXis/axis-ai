@@ -393,7 +393,7 @@ def _check_qdrant() -> bool:
 
 def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
     """DB 대표 클러스터를 요약·분석·카드뉴스 에이전트 흐름으로 변환한다."""
-    from src.agents.analysis_supervisor_agent import AnalysisSupervisorAgent
+    from src.agents.analysis_supervisor_agent import AnalysisGraphRunner
     from src.agents.card_news_agent import CardNewsAgent
     from src.config.company_tiers import SELF_COMPANY_IDS
     from src.db.article_store import get_articles_by_ids, list_card_news_cluster_candidates
@@ -408,7 +408,7 @@ def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
         return []
 
     classifier = ClusterClassifier()
-    analysis_supervisor = AnalysisSupervisorAgent()
+    analysis_supervisor = AnalysisGraphRunner()
     card_agent = CardNewsAgent()
     cards: list[dict] = []
     seen_cluster_ids: set[int] = set()
