@@ -2092,7 +2092,9 @@ def _qdrant_chunk_unit_from_payload(
         "unit_type": "qdrant_document_chunk",
         "source_type": f"qdrant_{source_type}",
         "company_id": company_config.get("company_id"),
-        "title": str(payload.get("section_title") or payload.get("report_name") or "document chunk"),
+        "title": str(
+            payload.get("section_title") or payload.get("report_name") or "document chunk"
+        ),
         "article_ids": article_ids,
         "cluster_id": None,
         "source_count": 1,
@@ -2108,9 +2110,7 @@ def _qdrant_chunk_unit_from_payload(
         },
         "business_area_candidates": [],
         "capability_keywords": [
-            str(item)
-            for item in (payload.get("matched_keywords") or [])
-            if str(item).strip()
+            str(item) for item in (payload.get("matched_keywords") or []) if str(item).strip()
         ],
         "strategic_keywords": [],
         "target_industries": [],

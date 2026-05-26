@@ -1000,9 +1000,7 @@ def _extract_financial_table_candidates(
                         candidate_value_kind = "percentage"
                         candidate_unit = "%"
                         period_column = (
-                            _report_period_column(report_period)
-                            or primary_period_column
-                            or column
+                            _report_period_column(report_period) or primary_period_column or column
                         )
                     comparison_base = (
                         _comparison_base_cell(
