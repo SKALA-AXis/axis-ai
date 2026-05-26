@@ -1371,22 +1371,40 @@ def _source_groups(
 
 
 def _reference_issue_ids(reference_issue_results: list[dict[str, Any]]) -> list[str]:
+    """글로벌 뉴스룸 분석 결과의 추적 ID 목록.
+
+    추적성 우선순위 (외부 리뷰 R-2 반영):
+      ``integrated_issue`` / ``analysis_result`` 의 ``bundle_id`` / ``cluster_id``
+      가 wrapper item 의 ``source_id`` 보다 우선한다. wrapper ``source_id`` 는
+      원문 단건 식별자라 분석 결과 추적에 약하기 때문에 nested 의 분석 단위
+      bundle_id / cluster_id 를 먼저 잡는다.
+    """
     values: list[str] = []
     for item in reference_issue_results:
-        integrated = item.get("integrated_issue") if isinstance(item, dict) else {}
-        analysis = item.get("analysis_result") if isinstance(item, dict) else {}
-        for source in (item, integrated, analysis):
-            if not isinstance(source, dict):
-                continue
-            value = (
-                source.get("bundle_id")
-                or source.get("cluster_id")
-                or source.get("source_id")
-                or source.get("id")
-            )
+        if not isinstance(item, dict):
+            continue
+        integrated = item.get("integrated_issue") if isinstance(item, dict) else None
+        analysis = item.get("analysis_result") if isinstance(item, dict) else None
+        nested_sources = [s for s in (integrated, analysis) if isinstance(s, dict)]
+        value: str | None = None
+        for source in nested_sources:
+            value = source.get("bundle_id") or source.get("cluster_id")
             if value:
-                values.append(str(value))
                 break
+        if not value:
+            for source in nested_sources:
+                value = source.get("id") or source.get("source_id")
+                if value:
+                    break
+        if not value:
+            value = (
+                item.get("bundle_id")
+                or item.get("cluster_id")
+                or item.get("id")
+                or item.get("source_id")
+            )
+        if value:
+            values.append(str(value))
     return _dedupe_strings(values)
 
 
