@@ -120,8 +120,8 @@ _IR_TABLE_METRIC_ALIASES: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("capex", ("capex", "설비투자", "투자금액", "자본적지출"), "amount_krwbn"),
 )
 _IR_TABLE_NON_METRIC_LABEL_PATTERN = re.compile(
-    r"매출\s*원가|원가|매출\s*총이익|총이익|gross\s*profit|cost\s*of\s*sales|"
-    r"이익률|margin\s*rate",
+    r"매출\s*원가|원가|판매\s*관리비|판관비|영업\s*외\s*손익|"
+    r"법인세\s*차감\s*전|세\s*전\s*이\s*익|cost\s*of\s*sales|이익률|margin\s*rate",
     re.IGNORECASE,
 )
 _IR_TABLE_PERIOD_PATTERN = re.compile(
@@ -130,6 +130,10 @@ _IR_TABLE_PERIOD_PATTERN = re.compile(
     r"20\d{2}\s*Q\s*[1-4]|"
     r"[1-4]\s*Q\s*['’]?\s*\d{2}|"
     r"\b20\d{2}\b",
+    re.IGNORECASE,
+)
+_IR_TABLE_COMPARISON_PATTERN = re.compile(
+    r"\bQoQ\b|\bYoY\b|전분기\s*대비|전년\s*(?:동기\s*)?대비",
     re.IGNORECASE,
 )
 _IR_TABLE_NUMBER_PATTERN = re.compile(r"\(?-?\d[\d,]*(?:\.\d+)?\)?%?")
@@ -295,6 +299,9 @@ _IR_PORTFOLIO_TERMS = (
     "subsidiar",
     "affiliate",
     "sk inc. at a glance",
+    "주요비상장자회사",
+    "비상장자회사",
+    "자회사분기별실적",
     "투자회사",
     "투자 포트폴리오",
     "자회사",
@@ -356,15 +363,22 @@ _SK_AX_PAGE_STRONG_TERMS = (
     "sk ax",
     "sk에이엑스",
     "sk㈜ c&c",
+    "sk(주) c&c",
+    "sk 주식회사 c&c",
     "sk주식회사 c&c",
+    "sk주식회사 사업부문",
     "sk c&c",
     "sk c & c",
+    "sk cnc",
+    "에스케이씨앤씨",
     "c&c",
     "씨앤씨",
 )
 _SK_AX_PAGE_BUSINESS_TERMS = (
     "it서비스",
     "it 서비스",
+    "it서비스 부문",
+    "사업부문",
     "it services",
     "information technology services",
     "enterprise it",
@@ -859,22 +873,35 @@ def _extract_financial_table_candidates(
         lines = [re.sub(r"\s+", " ", line).strip() for line in page_text.splitlines()]
         lines = [line for line in lines if line]
         unit = _table_unit(page_text)
-        if not unit:
-            continue
+        unit_evidence = _table_unit_evidence(lines)
 
         for header_index, line in enumerate(lines):
-            columns = _period_columns_from_header(line)
-            if len(columns) < 2:
+            columns = _table_columns_from_header(line)
+            if header_index + 1 < len(lines):
+                columns.extend(_comparison_columns_from_continuation(lines[header_index + 1]))
+            period_columns = [column for column in columns if column.get("period")]
+            if len(period_columns) < 2:
                 continue
+            required_value_count = len(period_columns)
 
             table_uid = f"ir-p{page_no or 'x'}-t{len(tables) + 1}"
             table_title = _nearby_table_title(lines, header_index)
+            if _should_skip_financial_table(
+                peer_id=peer_id,
+                table_title=table_title,
+                lines=lines,
+                header_index=header_index,
+            ):
+                continue
             table_context_business_area = _table_context_business_area(lines, header_index)
             table_rows: list[dict[str, Any]] = []
             active_metric: tuple[str, str] | None = None
             active_metric_parent_label: str | None = None
+            active_amount_metric: tuple[str, str] | None = None
+            active_amount_metric_parent_label: str | None = None
+            miss_count = 0
             for row_index, row_line in enumerate(
-                lines[header_index + 1 : header_index + 14], start=1
+                lines[header_index + 1 : header_index + 24], start=1
             ):
                 row_metric = _table_metric_from_label(row_line)
                 row_label = _table_row_label(row_line)
@@ -882,25 +909,53 @@ def _extract_financial_table_candidates(
                 if row_metric is not None:
                     active_metric = row_metric
                     active_metric_parent_label = row_label
-                elif active_metric and _looks_like_segment_value_row(row_line, len(columns)):
-                    row_metric = active_metric
+                    if row_metric[1] != "percentage":
+                        active_amount_metric = row_metric
+                        active_amount_metric_parent_label = row_label
+                elif _looks_like_segment_value_row(row_line, required_value_count):
+                    row_values_for_kind = _table_row_values(row_line, len(columns))
+                    if _row_values_are_percentage(row_values_for_kind) and active_metric:
+                        row_metric = active_metric
+                    elif active_amount_metric:
+                        row_metric = active_amount_metric
+                        active_metric_parent_label = active_amount_metric_parent_label
+                    elif active_metric:
+                        row_metric = active_metric
+                    else:
+                        if table_rows:
+                            miss_count += 1
+                            if miss_count >= 3:
+                                break
+                        continue
                 else:
                     if table_rows:
-                        break
+                        miss_count += 1
+                        if miss_count >= 3:
+                            break
                     continue
 
                 metric_name, value_kind = row_metric
                 row_values = _table_row_values(row_line, len(columns))
-                if len(row_values) < len(columns):
+                if len(row_values) < required_value_count:
                     if table_rows:
-                        break
+                        miss_count += 1
+                        if miss_count >= 3:
+                            break
                     continue
 
                 if not _is_valid_table_metric_row(row_label, row_metric):
                     if table_rows:
-                        break
+                        miss_count += 1
+                        if miss_count >= 3:
+                            break
                     continue
                 display_unit = _table_display_unit(unit=unit, value_kind=value_kind)
+                row_unit_evidence = _effective_row_unit_evidence(
+                    unit_evidence=unit_evidence,
+                    row_label=row_label,
+                    metric_parent_label=active_metric_parent_label,
+                    value_kind=value_kind,
+                )
                 row_evidence = _table_row_evidence(
                     table_title=table_title,
                     context_business_area=table_context_business_area,
@@ -909,6 +964,7 @@ def _extract_financial_table_candidates(
                     columns=columns,
                     row_values=row_values,
                     unit=display_unit,
+                    unit_evidence=row_unit_evidence,
                 )
                 business_area = _table_business_area(
                     row_label,
@@ -929,22 +985,59 @@ def _extract_financial_table_candidates(
                     explicit_metric=explicit_metric,
                 )
                 table_cells: list[dict[str, Any]] = []
+                primary_period_column = _primary_period_column(columns)
                 for column, raw_value in zip(columns, row_values, strict=False):
-                    normalized = _table_value(raw_value, unit=unit, value_kind=value_kind)
+                    comparison_type = column.get("comparison_type")
+                    candidate_metric_name = metric_name
+                    candidate_value_kind = value_kind
+                    candidate_unit = unit
+                    period_column = column
+                    if comparison_type:
+                        candidate_metric_name = _comparison_metric_name(
+                            metric_name,
+                            str(comparison_type),
+                        )
+                        candidate_value_kind = "percentage"
+                        candidate_unit = "%"
+                        period_column = (
+                            _report_period_column(report_period)
+                            or primary_period_column
+                            or column
+                        )
+                    comparison_base = (
+                        _comparison_base_cell(
+                            comparison_type=str(comparison_type),
+                            columns=columns,
+                            row_values=row_values,
+                            current_period=period_column.get("period"),
+                            unit=unit,
+                        )
+                        if comparison_type
+                        else {}
+                    )
+
+                    normalized = _table_value(
+                        raw_value,
+                        unit=candidate_unit,
+                        value_kind=candidate_value_kind,
+                    )
                     if normalized is None:
                         continue
                     cell_unit = _table_cell_unit(
                         raw_value,
-                        table_unit=unit,
-                        value_kind=value_kind,
+                        table_unit=candidate_unit,
+                        value_kind=candidate_value_kind,
                     )
-                    period = column["period"]
+                    period = period_column.get("period")
                     candidate: dict[str, Any] = {
                         "page": page_no,
-                        "type": metric_name,
-                        "value_kind": value_kind,
-                        _candidate_value_key(value_kind): normalized,
+                        "type": candidate_metric_name,
+                        "base_metric_type": metric_name,
+                        "comparison_type": comparison_type,
+                        "value_kind": candidate_value_kind,
+                        _candidate_value_key(candidate_value_kind): normalized,
                         "unit": cell_unit,
+                        "unit_evidence": row_unit_evidence,
                         "raw": f"{row_label} {column['label']} {raw_value} ({cell_unit})",
                         "source": "ir_table_matrix",
                         "source_table_uid": table_uid,
@@ -962,10 +1055,11 @@ def _extract_financial_table_candidates(
                         "classification_reason": classification_reason,
                         "context_evidence": row_evidence,
                         "period": period,
-                        "period_year": column.get("period_year"),
-                        "period_quarter": column.get("period_quarter"),
-                        "period_type": column.get("period_type"),
+                        "period_year": period_column.get("period_year"),
+                        "period_quarter": period_column.get("period_quarter"),
+                        "period_type": period_column.get("period_type"),
                         "is_historical": _is_historical_period(period, report_period),
+                        **comparison_base,
                         "metric_scope": metric_scope,
                         "business_area": business_area,
                         "entity_name": peer_id,
@@ -974,6 +1068,7 @@ def _extract_financial_table_candidates(
                     candidates.append(candidate)
                     table_cells.append(candidate)
                 if table_cells:
+                    miss_count = 0
                     table_rows.append(
                         {
                             "row_index": row_index,
@@ -985,7 +1080,9 @@ def _extract_financial_table_candidates(
                                     "column_label": cell["column_label"],
                                     "period": cell["period"],
                                     "raw": cell["raw"],
-                                    "value": cell.get(_candidate_value_key(value_kind)),
+                                    "type": cell.get("type"),
+                                    "comparison_type": cell.get("comparison_type"),
+                                    "value": cell.get(_candidate_value_key(cell["value_kind"])),
                                 }
                                 for cell in table_cells
                             ],
@@ -1000,6 +1097,7 @@ def _extract_financial_table_candidates(
                         "title": table_title,
                         "context_business_area": table_context_business_area,
                         "unit": unit,
+                        "unit_evidence": unit_evidence,
                         "columns": columns,
                         "rows": table_rows,
                     }
@@ -1008,7 +1106,7 @@ def _extract_financial_table_candidates(
     return candidates, tables
 
 
-def _period_columns_from_header(line: str) -> list[dict[str, Any]]:
+def _table_columns_from_header(line: str) -> list[dict[str, Any]]:
     columns: list[dict[str, Any]] = []
     for match in _IR_TABLE_PERIOD_PATTERN.finditer(line or ""):
         label = match.group(0).strip()
@@ -1022,9 +1120,127 @@ def _period_columns_from_header(line: str) -> list[dict[str, Any]]:
                 "period_year": period_year,
                 "period_quarter": period_quarter,
                 "period_type": period_type,
+                "start": match.start(),
             }
         )
+    for match in _IR_TABLE_COMPARISON_PATTERN.finditer(line or ""):
+        label = match.group(0).strip()
+        columns.append(
+            {
+                "label": label,
+                "comparison_type": _comparison_column_type(label),
+                "start": match.start(),
+            }
+        )
+    columns.sort(key=lambda column: int(column.get("start") or 0))
+    for column in columns:
+        column.pop("start", None)
     return columns
+
+
+def _comparison_columns_from_continuation(line: str) -> list[dict[str, Any]]:
+    if _IR_TABLE_NUMBER_PATTERN.search(line or ""):
+        return []
+    return [
+        {
+            "label": match.group(0).strip(),
+            "comparison_type": _comparison_column_type(match.group(0).strip()),
+        }
+        for match in _IR_TABLE_COMPARISON_PATTERN.finditer(line or "")
+    ]
+
+
+def _period_columns_from_header(line: str) -> list[dict[str, Any]]:
+    return [column for column in _table_columns_from_header(line) if column.get("period")]
+
+
+def _comparison_column_type(label: str) -> str:
+    value = re.sub(r"\s+", "", label or "").lower()
+    if value == "qoq" or "전분기" in value:
+        return "qoq"
+    return "yoy"
+
+
+def _comparison_metric_name(metric_name: str, comparison_type: str) -> str:
+    return f"{metric_name}_{comparison_type}"
+
+
+def _primary_period_column(columns: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return next((column for column in columns if column.get("period")), None)
+
+
+def _report_period_column(report_period: str | None) -> dict[str, Any] | None:
+    year, quarter, period_type = _period_parts(report_period)
+    if not report_period or not year:
+        return None
+    return {
+        "label": report_period,
+        "period": report_period,
+        "period_year": year,
+        "period_quarter": quarter,
+        "period_type": period_type,
+    }
+
+
+def _comparison_base_cell(
+    *,
+    comparison_type: str,
+    columns: list[dict[str, Any]],
+    row_values: list[str],
+    current_period: str | None,
+    unit: str | None,
+) -> dict[str, Any]:
+    period_cells = [
+        (column, value)
+        for column, value in zip(columns, row_values, strict=False)
+        if column.get("period")
+    ]
+    if not period_cells:
+        return {}
+
+    current_index = next(
+        (
+            index
+            for index, (column, _value) in enumerate(period_cells)
+            if column.get("period") == current_period
+        ),
+        len(period_cells) - 1,
+    )
+
+    base_index: int | None = None
+    if comparison_type == "qoq":
+        base_index = current_index - 1 if current_index > 0 else None
+    elif comparison_type == "yoy":
+        current_column = period_cells[current_index][0]
+        current_year = current_column.get("period_year")
+        current_quarter = current_column.get("period_quarter")
+        for index, (column, _value) in enumerate(period_cells):
+            if (
+                isinstance(current_year, int)
+                and column.get("period_year") == current_year - 1
+                and column.get("period_quarter") == current_quarter
+            ):
+                base_index = index
+                break
+        if base_index is None and current_index > 0:
+            base_index = current_index - 1
+
+    if base_index is None or base_index < 0 or base_index >= len(period_cells):
+        return {}
+
+    base_column, base_raw_value = period_cells[base_index]
+    base_value = _table_value(base_raw_value, unit=unit, value_kind="amount_krwbn")
+    if base_value is None:
+        base_value = _table_value(base_raw_value, unit="%", value_kind="percentage")
+    return {
+        "comparison_base_period": base_column.get("period"),
+        "comparison_base_period_year": base_column.get("period_year"),
+        "comparison_base_period_quarter": base_column.get("period_quarter"),
+        "comparison_base_period_type": base_column.get("period_type"),
+        "comparison_base_column_label": base_column.get("label"),
+        "comparison_base_raw_value": base_raw_value,
+        "comparison_base_value": base_value,
+    }
 
 
 def _table_row_evidence(
@@ -1036,6 +1252,7 @@ def _table_row_evidence(
     columns: list[dict[str, Any]],
     row_values: list[str],
     unit: str,
+    unit_evidence: str | None,
 ) -> str:
     path = [
         part
@@ -1051,7 +1268,27 @@ def _table_row_evidence(
         f"{column['label']} {value}" for column, value in zip(columns, row_values, strict=False)
     ]
     prefix = " > ".join(path) if path else row_label
-    return f"{prefix} | {' | '.join(series)} ({unit})"
+    unit_part = f"단위: {unit}"
+    if unit_evidence:
+        unit_part = f"{unit_part} | 단위 근거: {unit_evidence}"
+    else:
+        unit_part = f"{unit_part} | 단위 근거 없음"
+    return f"{prefix} | {' | '.join(series)} ({unit_part})"
+
+
+def _effective_row_unit_evidence(
+    *,
+    unit_evidence: str | None,
+    row_label: str,
+    metric_parent_label: str | None,
+    value_kind: str,
+) -> str | None:
+    if value_kind == "percentage":
+        if "%" in (row_label or ""):
+            return row_label
+        if metric_parent_label and "%" in metric_parent_label:
+            return metric_parent_label
+    return unit_evidence
 
 
 def _table_classification_reason(
@@ -1156,6 +1393,8 @@ def _looks_like_non_target_metric_label(label: str) -> bool:
         return False
     if "영업이익률" in compact or "operatingmargin" in compact or compact in {"opm", "margin"}:
         return False
+    if compact in {"총이익", "총이익률"}:
+        return True
     return bool(_IR_TABLE_NON_METRIC_LABEL_PATTERN.search(label or ""))
 
 
@@ -1173,6 +1412,8 @@ def _is_valid_table_metric_row(row_label: str, row_metric: tuple[str, str]) -> b
     if len(cleaned_label) > 60:
         return False
     if re.search(r"[.!?。]|다$", cleaned_label):
+        return False
+    if _looks_like_non_target_metric_label(row_label):
         return False
 
     compact = re.sub(r"[\sㆍ·\[\]\(\)]", "", row_label or "").lower()
@@ -1222,8 +1463,22 @@ def _looks_like_table_noise_label(label: str) -> bool:
 
 def _table_row_values(line: str, expected_count: int) -> list[str]:
     values = _IR_TABLE_NUMBER_PATTERN.findall(line or "")
-    clean_values = [value for value in values if not re.fullmatch(r"20\d{2}", value.strip())]
+    clean_values = [
+        value
+        for value in values
+        if not re.fullmatch(r"20\d{2}", value.strip())
+        and not _looks_like_table_footnote_marker(value)
+    ]
     return clean_values[:expected_count]
+
+
+def _row_values_are_percentage(values: list[str]) -> bool:
+    return bool(values) and all(str(value).strip().endswith("%") for value in values)
+
+
+def _looks_like_table_footnote_marker(value: str) -> bool:
+    stripped = value.strip()
+    return bool(re.fullmatch(r"\d+\)", stripped))
 
 
 def _table_row_label(line: str) -> str:
@@ -1231,11 +1486,13 @@ def _table_row_label(line: str) -> str:
     return re.sub(r"\s+", " ", label).strip(" :-|'\"`‘’“”.,;")
 
 
-def _table_value(raw_value: str, *, unit: str, value_kind: str) -> float | None:
+def _table_value(raw_value: str, *, unit: str | None, value_kind: str) -> float | None:
     value = raw_value.strip()
     if not value:
         return None
     has_pct_marker = value.endswith("%")
+    if value_kind != "percentage" and has_pct_marker:
+        return None
     if value_kind == "percentage" and unit != "%" and not has_pct_marker:
         return None
     if value_kind == "percentage" or has_pct_marker:
@@ -1243,26 +1500,28 @@ def _table_value(raw_value: str, *, unit: str, value_kind: str) -> float | None:
             return float(value.rstrip("%").replace(",", ""))
         except ValueError:
             return None
+    if not unit:
+        return None
     return _normalize_table_amount_krwbn(value.strip("()"), unit)
 
 
-def _table_display_unit(*, unit: str, value_kind: str) -> str:
+def _table_display_unit(*, unit: str | None, value_kind: str) -> str:
     if value_kind == "percentage":
         return "%"
-    return unit
+    return unit or "단위 미확인"
 
 
-def _table_cell_unit(raw_value: str, *, table_unit: str, value_kind: str) -> str:
+def _table_cell_unit(raw_value: str, *, table_unit: str | None, value_kind: str) -> str:
     if value_kind == "percentage" or raw_value.strip().endswith("%"):
         return "%"
-    return table_unit
+    return table_unit or "단위 미확인"
 
 
 def _normalize_table_amount_krwbn(value: str, unit: str) -> float:
     number = float(value.replace(",", ""))
     if unit in {"조원", "조"}:
         return number * 10_000
-    if unit in {"십억원", "KRW bn"}:
+    if unit in {"십억원", "KRW bn", "krw bn"}:
         return number * 10
     if unit == "백만원":
         return number / 100
@@ -1270,17 +1529,47 @@ def _normalize_table_amount_krwbn(value: str, unit: str) -> float:
 
 
 def _table_unit(text: str) -> str | None:
-    lowered = text or ""
-    if "십억원" in lowered or "십억 원" in lowered or "KRW bn" in lowered:
+    value = text or ""
+    lowered = value.lower()
+    compact = re.sub(r"\s+", "", lowered)
+    if (
+        "십억원" in compact
+        or "십억krw" in compact
+        or "krwbn" in compact
+        or "krwbillion" in compact
+        or "billionkrw" in compact
+    ):
         return "십억원"
-    if "백만원" in lowered or "백만 원" in lowered:
+    if "백만원" in compact or "krwmn" in compact or "krwmillion" in compact:
         return "백만원"
-    if "억원" in lowered:
-        return "억원"
-    if "조원" in lowered:
+    if "조원" in compact:
         return "조원"
-    if "%" in lowered:
-        return "%"
+    if "억원" in compact:
+        return "억원"
+    return None
+
+
+def _table_unit_evidence(lines: list[str]) -> str | None:
+    for line in lines:
+        compact = re.sub(r"\s+", "", line.lower())
+        if any(
+            token in compact
+            for token in (
+                "단위:",
+                "unit:",
+                "unitof",
+                "억원",
+                "조원",
+                "백만원",
+                "십억원",
+                "krwbn",
+                "krwmn",
+                "krwbillion",
+                "krwmillion",
+                "billionkrw",
+            )
+        ):
+            return line[:300]
     return None
 
 
@@ -1291,6 +1580,20 @@ def _nearby_table_title(lines: list[str], header_index: int) -> str | None:
         if len(_period_columns_from_header(line)) < 2:
             return line
     return None
+
+
+def _should_skip_financial_table(
+    *,
+    peer_id: str | None,
+    table_title: str | None,
+    lines: list[str],
+    header_index: int,
+) -> bool:
+    if peer_id != "sk_ax":
+        return False
+    context = " ".join(lines[max(0, header_index - 5) : header_index + 1])
+    text = f"{table_title or ''} {context}".lower()
+    return any(term.lower() in text for term in _IR_PORTFOLIO_TERMS if term != "appendix")
 
 
 def _looks_like_unit_line(line: str) -> bool:
@@ -1755,11 +2058,22 @@ def _build_financial_record(
                 "evidence_text",
                 "classification_reason",
                 "context_evidence",
+                "base_metric_type",
+                "comparison_type",
+                "unit",
+                "unit_evidence",
                 "period",
                 "period_year",
                 "period_quarter",
                 "period_type",
                 "is_historical",
+                "comparison_base_period",
+                "comparison_base_period_year",
+                "comparison_base_period_quarter",
+                "comparison_base_period_type",
+                "comparison_base_column_label",
+                "comparison_base_raw_value",
+                "comparison_base_value",
             }
         }
         for candidate in candidates
@@ -1830,13 +2144,16 @@ def _candidate_value(
     *,
     allowed_scopes: set[str] | None = None,
 ) -> float | None:
-    for candidate in candidates:
-        if candidate.get("type") != metric_type:
-            continue
-        if allowed_scopes is not None and candidate.get("metric_scope") not in allowed_scopes:
-            continue
+    matching = [
+        candidate
+        for candidate in candidates
+        if candidate.get("type") == metric_type
+        and (allowed_scopes is None or candidate.get("metric_scope") in allowed_scopes)
+    ]
+    for candidate in sorted(matching, key=lambda item: bool(item.get("is_historical"))):
         value = candidate.get(value_key)
-        return float(value) if isinstance(value, int | float) else None
+        if isinstance(value, int | float):
+            return float(value)
     return None
 
 

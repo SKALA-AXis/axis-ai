@@ -552,7 +552,7 @@ def _metrics_from_candidates(
                 metric_uid=f"dart:{metric_name}:candidate:{index}:{period or 'unknown'}",
                 metric_name=metric_name,
                 metric_label=_DART_METRIC_LABELS[metric_name],
-                metric_scope=str(candidate.get("metric_scope") or "company_total"),
+                metric_scope=_candidate_metric_scope(candidate, peer_id=peer_id),
                 business_area=_candidate_business_area(candidate, peer_id=peer_id),
                 value_numeric=float(value),
                 source_table_uid=(
@@ -569,9 +569,17 @@ def _metrics_from_candidates(
     return metrics
 
 
+def _candidate_metric_scope(candidate: dict[str, Any], *, peer_id: str | None) -> str:
+    return str(candidate.get("metric_scope") or "company_total")
+
+
 def _is_sk_ax_financial_metric_candidate(candidate: dict[str, Any]) -> bool:
     if candidate.get("metric_scope") != "segment":
         return False
+    if _is_sk_investment_segment_candidate(candidate):
+        return False
+    if _is_sk_ax_business_segment_candidate(candidate):
+        return True
     if candidate.get("standard_business_area") == "sk_ax":
         return True
 
@@ -580,6 +588,37 @@ def _is_sk_ax_financial_metric_candidate(candidate: dict[str, Any]) -> bool:
         for key in ("business_area", "segment_label", "raw", "table_title")
     )
     return _is_sk_ax_relevant_sentence(evidence)
+
+
+def _is_sk_investment_segment_candidate(candidate: dict[str, Any]) -> bool:
+    evidence = _candidate_evidence(candidate)
+    return "투자부문" in evidence and not _is_sk_ax_business_segment_text(evidence)
+
+
+def _is_sk_ax_business_segment_candidate(candidate: dict[str, Any]) -> bool:
+    return _is_sk_ax_business_segment_text(_candidate_evidence(candidate))
+
+
+def _is_sk_ax_business_segment_text(value: str) -> bool:
+    compact = re.sub(r"\s+", "", value.lower())
+    return any(
+        token in compact
+        for token in (
+            "사업부문",
+            "it서비스",
+            "itservice",
+            "digital기술",
+            "ai/digital",
+            "aidigital",
+        )
+    )
+
+
+def _candidate_evidence(candidate: dict[str, Any]) -> str:
+    return " ".join(
+        str(candidate.get(key) or "")
+        for key in ("business_area", "segment_label", "raw", "table_title")
+    )
 
 
 def _candidate_business_area(candidate: dict[str, Any], *, peer_id: str | None) -> str:

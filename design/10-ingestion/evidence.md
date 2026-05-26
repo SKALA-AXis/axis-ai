@@ -1,13 +1,13 @@
-# EvidenceAgent — Design Plan
+# EvidenceBuilder — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `EvidenceAgent` |
+| **이름** | `EvidenceBuilder` |
 | **Supervisor** | Ingestion |
 | **LangGraph node** | `evidence` (#7) |
-| **상태** | ✅ 구현 — `src/agents/evidence_agent.py` |
+| **상태** | 🔴 미구현 — `EvidenceBuilder` 단일 구현체 없음. 카드 저장 경로의 source/evidence payload 일부와 `analysis_context_builder` 조회 로직만 존재 |
 | **Trigger** | CardNewsAgent 후 — card_news row 마다 1회 |
 
 ## 2. 책임
@@ -18,7 +18,7 @@
 
 1. **source_links** (산식) — sources[] 를 trim 하여 evidence_chain.source_links 에 복제
 2. **provenance** (산식) — LLM model + prompt_version + run_at + raw_article_ids + git_sha 기록
-3. **financial_refs** — FinancialLinkerAgent (sub) 호출 → segment QoQ/YoY delta + DART rcept_no + IR page
+3. **financial_refs** — FinancialLinkerService (sub) 호출 → segment QoQ/YoY delta + DART rcept_no + IR page
 4. **mbb_refs** — 컨설팅사 보고서 자동 매칭 (W5+, BCG/McKinsey)
 5. **pass 평가** — 4종 모두 부착 = pass=true, 누락 = missing[] 마킹 + human_review_flag
 6. `save_card_news` + `save_evidence_chain` 호출하여 DB 영속
@@ -26,8 +26,8 @@
 ## 3. 책임 NOT
 
 - card 본문 생성 — CardNewsAgent (이전 노드)
-- LLM 자유형 사실 추출 — 산식 + sub-agent 의 deterministic 책임
-- Qdrant 인덱싱 — EmbedIndexAgent (다음 노드)
+- LLM 자유형 사실 추출 — 산식 + sub-service 의 deterministic 책임
+- Qdrant 인덱싱 — EmbedIndexService (다음 노드)
 
 ## 4. 입력 스펙
 
@@ -83,15 +83,15 @@ def attach(card: CardNewsRow, cluster_article_ids: list[int]) -> EvidenceResult:
         "evidence_version": "v3.0",
         "run_at": datetime.utcnow().isoformat(),
         "git_sha": GIT_SHA,
-        "agent": "EvidenceAgent",
+        "agent": "EvidenceBuilder",
         "cluster_id": card["cluster_id"],
     }
 
-    # 3) financial_refs (sub-agent)
+    # 3) financial_refs (sub-service)
     financial_link = None
     financial_refs = []
     if card.get("event_type") in ("ma", "tech", "new_biz") or card.get("sector") == "deal":
-        financial_linker = FinancialLinkerAgent()
+        financial_linker = FinancialLinkerService()
         result = financial_linker.link(
             peer_id=card["company"],
             sector=card["sector"],
@@ -101,7 +101,7 @@ def attach(card: CardNewsRow, cluster_article_ids: list[int]) -> EvidenceResult:
         financial_link = result.get("link")           # {linked, segment, highlights, headcount_delta}
         financial_refs = result.get("refs", [])
 
-    # 4) mbb_refs (sub-agent, W5+)
+    # 4) mbb_refs (sub-service, W5+)
     mbb_refs = []
     if card.get("sector") in ("ax", "infra"):
         mbb_matcher = MbbMatcherAgent()
@@ -135,28 +135,28 @@ def attach(card: CardNewsRow, cluster_article_ids: list[int]) -> EvidenceResult:
 
 ### 6.3 Prompt audit — 02-prompt-design-checklist 17 요소
 
-Evidence 는 LLM 미사용 (산식 + sub-agent 위임). 필수 1, 4, 11, 12, 14.
+Evidence 는 LLM 미사용 (산식 + sub-service 위임). 필수 1, 4, 11, 12, 14.
 
 | # | 요소 | 충족 위치 | 비고 |
 |---|---|---|---|
-| **1** | 역할 정의 | (LLM 미사용) | sub-agent (FinancialLinker/IRParser) 가 자기 prompt 에서 충족 |
+| **1** | 역할 정의 | (LLM 미사용) | sub-service (FinancialLinker/IRParser) 가 자기 prompt 에서 충족 |
 | **4** | 출처 우선순위 | source_links[].credibility_score + tier1_diversity carry | Tier1>Tier2>Tier3 우선 |
 | **11** | 정량 수치 우선 | financial_refs[] segment QoQ/YoY delta + headcount_delta | DART/IR 수치만 carry |
 | **12** | 공식 vs 추정 구분 | provenance.evidence_version='v3.0' + source_links[].source_name 마킹 | DART = 공식, 자체 산식 = 추정 |
 | **14** | 출력 형식 | EvidenceChain TypedDict + pass/missing 필드 | 4종 missing 강제 표면화 |
 
-→ **5/5 필수 충족** (LLM 미사용이라 1번은 sub-agent 가 책임). 환각 방지의 v3 핵심 — checklist 11/12 의 "정량 + 공식 vs 추정" 강제 적용 지점.
+→ **5/5 필수 충족** (LLM 미사용이라 1번은 sub-service 가 책임). 환각 방지의 v3 핵심 — checklist 11/12 의 "정량 + 공식 vs 추정" 강제 적용 지점.
 
 ## 7. LLM 모델 + token 예산
 
-- **본 agent: LLM 미사용** — 산식 + sub-agent 위임
+- **본 builder: LLM 미사용** — 산식 + sub-service 위임
 - 토큰 예산 (sub 포함): ~₩200/일
 
 ## 8. 에러 처리
 
 | 시나리오 | 대응 |
 |---|---|
-| FinancialLinkerAgent 가 segment 못 찾음 | financial_link=null, financial_refs=[] + missing 에 추가 |
+| FinancialLinkerService 가 segment 못 찾음 | financial_link=null, financial_refs=[] + missing 에 추가 |
 | MbbMatcherAgent W5 미활성 | mbb_refs=[] (의도된 미구현) |
 | DB INSERT 실패 (evidence_chain) | rollback + retry 1회 → 실패 시 `errors` append, card 보존 (다음 cycle 재시도) |
 | sources[] 가 0개 | source_links=[] + missing=["source_links"] + pass=false |
@@ -165,8 +165,8 @@ Evidence 는 LLM 미사용 (산식 + sub-agent 위임). 필수 1, 4, 11, 12, 14.
 
 - **DB**: `card_news` (INSERT), `evidence_chain` (UPSERT), `raw_articles` (READ)
 - **DB**: `card_news_articles` (V20, evidence_chain.provenance.raw_article_ids 백필/신규 upsert 대상)
-- **Sub-agent**: FinancialLinkerAgent (`src/agents/financial_linker_agent.py`)
-- **Sub-agent (W5+)**: MbbMatcherAgent / IRParserAgent
+- **Sub-service**: FinancialLinkerService (`src/services/financial_linker_service.py`, 계획)
+- **Sub-service (W5+)**: MbbMatcherAgent / IRParserService
 
 ## 10. State 흐름 (LangGraph)
 
@@ -175,14 +175,14 @@ Evidence 는 LLM 미사용 (산식 + sub-agent 위임). 필수 1, 4, 11, 12, 14.
 
 ## 11. Provenance + Confidence
 
-- **Provenance**: 본 agent 가 provenance 자체를 채움 (`evidence_chain.provenance` jsonb + V20 `evidence_chain.card_news_id` alias + `card_news_articles`)
+- **Provenance**: 본 builder 가 provenance 자체를 채움 (`evidence_chain.provenance` jsonb + V20 `evidence_chain.card_news_id` alias + `card_news_articles`)
 - **Confidence**: `pass: bool` 이 거시 confidence. UI 가 `pass=false` 시 ⚠️ 인 human_review 마킹.
 
 ## 12. 테스트 시나리오
 
 | 유형 | 시나리오 | 검증 |
 |---|---|---|
-| Unit | 모든 sub-agent OK | pass=true, missing=[] |
+| Unit | 모든 sub-service OK | pass=true, missing=[] |
 | Unit | event_type='ma' + financial_link=null | missing=['financial_refs'], pass=false |
 | Unit | sector='ax' + mbb_refs=[] (W5 미활성) | missing=['mbb_refs'], pass=false (의도) |
 | Integration | 5 card → 5 evidence_chain INSERT | DB row 5 + pipeline_logs 1 entry |
@@ -195,21 +195,21 @@ Evidence 는 LLM 미사용 (산식 + sub-agent 위임). 필수 1, 4, 11, 12, 14.
   - pass=true 비율 ≥ 70%
   - missing 분포 (sampling): financial_refs 부재 비율 ~30% (improvement target — segment 매칭 강화)
   - `out_of_evidence` 누적 ≤ 5% (CardComposer 단계에서 검증)
-- **token 예산**: 본 agent ₩0, sub-agent 포함 ~₩200/일
+- **token 예산**: 본 builder ₩0, sub-service 포함 ~₩200/일
 
 ## 14. 구현 메모 + Changelog
 
 ### 핵심 파일
 
-- `src/agents/evidence_agent.py` — 본 agent
-- `src/agents/financial_linker_agent.py` — sub
-- `src/agents/ir_parser_agent.py` — sub (W5 부터)
+- `src/services/evidence_builder.py` — 계획
+- `src/services/financial_linker_service.py` — 계획
+- `src/parsers/ir_parser.py` — 구현됨, sub parser로 재사용
 - DB save: `src/db/article_store.py` 의 `save_card_news`, `save_evidence_chain`
 
 ### Changelog
 
 - **v1 (2026-04-W2)** — source_links + provenance 만
-- **v2 (2026-04-W3)** — financial_refs + financial_link 추가 (FinancialLinkerAgent 분리)
+- **v2 (2026-04-W3)** — financial_refs + financial_link 추가 (FinancialLinkerService 분리)
 - **v3 (2026-05-W1)** — mbb_refs 추가 (W5)
 - **v3.1 (2026-05-12)** — V9 column rename 후에도 evidence_chain.issue_card_id 컬럼 유지 (V10 분리). Python SQL 의 column 이름 그대로 (placeholder 만 :card_news_id 로 변경)
 - **v3.2 (2026-05-15)** — V20 관계 정비 반영: `evidence_chain.card_news_id` alias, `card_news_articles` mapping. legacy `issue_card_id` 는 후속 writer 전환 전까지 유지

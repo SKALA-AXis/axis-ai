@@ -57,6 +57,17 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="DART parser 결과 및 분석 fact/signal 재생성")
     parser.add_argument("--limit", type=int, default=0, help="처리할 DART 문서 수 제한")
     parser.add_argument(
+        "--peer-id",
+        default="",
+        help="특정 peer_id/company만 처리. 예: sk_ax",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=5,
+        help="metrics/signals 삭제·적재를 몇 개 문서 단위로 flush할지 지정",
+    )
+    parser.add_argument(
         "--reparse",
         action="store_true",
         help="DartParser를 다시 실행해 DART parser 관련 필드를 갱신",
@@ -124,12 +135,18 @@ def main() -> None:
         _ensure_financial_metrics_schema()
     if args.upsert_signals or args.replace_signals:
         _ensure_business_signals_schema()
-    articles = _load_dart_articles(limit=args.limit)
+    articles = _load_dart_articles(limit=args.limit, peer_id=args.peer_id or None)
     log.info("DART 문서 로드 완료 | count=%d", len(articles))
 
-    all_metrics: list[dict[str, Any]] = []
-    all_signals: list[dict[str, Any]] = []
-    for article in articles:
+    batch_size = max(1, int(args.batch_size))
+    batch_article_ids: list[int] = []
+    batch_metrics: list[dict[str, Any]] = []
+    batch_signals: list[dict[str, Any]] = []
+    total_metrics = 0
+    total_signals = 0
+
+    for index, article in enumerate(articles, start=1):
+        article_id = int(article["id"])
         parser_result = (
             _reparse_dart_article(article) if args.reparse else _stored_parser_result(article)
         )
@@ -152,11 +169,11 @@ def main() -> None:
 
         if args.upsert_metrics:
             metrics = financial_metrics_from_dart(article, parser_result)
-            all_metrics.extend(metrics)
+            batch_metrics.extend(metrics)
 
         if args.upsert_signals:
             signals = business_signals_from_dart(article, parser_result)
-            all_signals.extend(signals)
+            batch_signals.extend(signals)
 
         if args.index_vector:
             _index_dart_chunks(article, parser_result)
@@ -164,41 +181,110 @@ def main() -> None:
         if args.compact_content:
             _compact_article_content(article)
 
+        batch_article_ids.append(article_id)
         log.info(
-            "DART 처리 완료 | id=%s period=%s metrics=%d signals=%d",
+            "DART 문서 처리 완료 | id=%s period=%s metrics=%d signals=%d batch=%d/%d",
             article["id"],
             parser_result.get("period") or article["extra"].get("period"),
-            len(all_metrics),
-            len(all_signals),
+            len(metrics) if args.upsert_metrics else 0,
+            len(signals) if args.upsert_signals else 0,
+            len(batch_article_ids),
+            batch_size,
         )
 
-    article_ids = [int(article["id"]) for article in articles]
-    if args.upsert_metrics:
-        if args.replace_metrics:
+        if len(batch_article_ids) >= batch_size:
+            flushed_metrics, flushed_signals = _flush_analysis_batch(
+                article_ids=batch_article_ids,
+                metrics=batch_metrics,
+                signals=batch_signals,
+                upsert_metrics=args.upsert_metrics,
+                replace_metrics=args.replace_metrics,
+                upsert_signals=args.upsert_signals,
+                replace_signals=args.replace_signals,
+            )
+            total_metrics += flushed_metrics
+            total_signals += flushed_signals
+            batch_article_ids = []
+            batch_metrics = []
+            batch_signals = []
+            log.info(
+                "DART batch flush 완료 | processed=%d/%d total_metrics=%d total_signals=%d",
+                index,
+                len(articles),
+                total_metrics,
+                total_signals,
+            )
+
+    flushed_metrics, flushed_signals = _flush_analysis_batch(
+        article_ids=batch_article_ids,
+        metrics=batch_metrics,
+        signals=batch_signals,
+        upsert_metrics=args.upsert_metrics,
+        replace_metrics=args.replace_metrics,
+        upsert_signals=args.upsert_signals,
+        replace_signals=args.replace_signals,
+    )
+    total_metrics += flushed_metrics
+    total_signals += flushed_signals
+    log.info(
+        "DART 재전처리 완료 | articles=%d metrics=%d signals=%d batch_size=%d",
+        len(articles),
+        total_metrics,
+        total_signals,
+        batch_size,
+    )
+
+
+def _flush_analysis_batch(
+    *,
+    article_ids: list[int],
+    metrics: list[dict[str, Any]],
+    signals: list[dict[str, Any]],
+    upsert_metrics: bool,
+    replace_metrics: bool,
+    upsert_signals: bool,
+    replace_signals: bool,
+) -> tuple[int, int]:
+    if not article_ids:
+        return 0, 0
+
+    metric_count = 0
+    signal_count = 0
+    if upsert_metrics:
+        if replace_metrics:
             deleted_count = delete_raw_article_financial_metrics(
                 article_ids,
                 source_type="dart",
             )
-            log.info("기존 DART financial metrics 삭제 완료 | count=%d", deleted_count)
-        count = upsert_raw_article_financial_metrics(all_metrics)
-        log.info("DART financial metrics upsert 완료 | count=%d", count)
+            log.info("기존 DART financial metrics batch 삭제 완료 | count=%d", deleted_count)
+        metric_count = upsert_raw_article_financial_metrics(metrics)
+        log.info("DART financial metrics batch upsert 완료 | count=%d", metric_count)
 
-    if args.upsert_signals:
-        if args.replace_signals:
+    if upsert_signals:
+        if replace_signals:
             deleted_count = delete_raw_article_business_signals(
                 article_ids,
                 source_type="dart",
             )
-            log.info("기존 DART business signals 삭제 완료 | count=%d", deleted_count)
-        count = upsert_raw_article_business_signals(all_signals)
-        log.info("DART business signals upsert 완료 | count=%d", count)
+            log.info("기존 DART business signals batch 삭제 완료 | count=%d", deleted_count)
+        signal_count = upsert_raw_article_business_signals(signals)
+        log.info("DART business signals batch upsert 완료 | count=%d", signal_count)
+
+    return metric_count, signal_count
 
 
-def _load_dart_articles(*, limit: int = 0) -> list[dict[str, Any]]:
+def _load_dart_articles(*, limit: int = 0, peer_id: str | None = None) -> list[dict[str, Any]]:
     limit_sql = "LIMIT :limit" if limit > 0 else ""
-    params = {"limit": limit} if limit > 0 else {}
+    params: dict[str, Any] = {}
+    if limit > 0:
+        params["limit"] = limit
+    if peer_id:
+        params["peer_id"] = peer_id
     with SessionLocal() as db:
-        rows = db.execute(text(_dart_article_select_sql(limit_sql)), params).fetchall()
+        rows = db.execute(
+            text(_dart_article_select_sql(limit_sql, peer_id=peer_id)),
+            params,
+        ).fetchall()
 
     articles = []
     for row in rows:
@@ -209,7 +295,7 @@ def _load_dart_articles(*, limit: int = 0) -> list[dict[str, Any]]:
     return articles
 
 
-def _dart_article_select_sql(limit_sql: str) -> str:
+def _dart_article_select_sql(limit_sql: str, *, peer_id: str | None = None) -> str:
     """Return a DART article query for legacy, unified, or parse-result schemas."""
     with SessionLocal() as db:
         has_unified = _table_exists(db, "raw_article_metadata_unified")
@@ -253,6 +339,15 @@ def _dart_article_select_sql(limit_sql: str) -> str:
         financial_record_expr = "COALESCE(pr.financial_record, '{}'::jsonb)"
         warnings_expr = "COALESCE(pr.warnings, '[]'::jsonb)"
 
+    peer_filter_sql = """
+                AND (
+                    ra.company ? :peer_id
+                    OR {metadata_expr}->>'peer_id' = :peer_id
+                    OR {metadata_expr}->>'company' = :peer_id
+                    OR {metadata_expr}->>'corp_name' = :peer_id
+                )
+    """.format(metadata_expr=metadata_expr) if peer_id else ""
+
     return f"""
                 SELECT
                     ra.id,
@@ -278,6 +373,7 @@ def _dart_article_select_sql(limit_sql: str) -> str:
                 {parse_join}
                 WHERE ra.source_type = 'dart'
                 {_PERIODIC_REPORT_NAME_SQL}
+                {peer_filter_sql}
                 ORDER BY ra.published_at DESC NULLS LAST, ra.id DESC
                 {limit_sql}
             """

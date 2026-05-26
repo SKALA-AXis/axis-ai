@@ -343,7 +343,7 @@ analysis_ledger.id
 - `mixer_analysis_agent.py`: `@with_ledger_writeback("MixerAnalysisAgent")`
 - `insight_cascade_agent.py`: `@with_ledger_writeback("InsightCascadeAgent")`
 - `it_trend_agent.py`: `@with_ledger_writeback("ITTrendAgent")`
-- `briefing_generation_agent.py`: `@with_ledger_writeback("BriefingGenerationAgent")` (briefing 전체 1 ledger entry — section 별 X)
+- `briefing_generation_agent.py`: `@with_ledger_writeback("BriefingGenerationService")` (briefing 전체 1 ledger entry — section 별 X)
 
 ### Phase K1 — 단독 도입 가능
 

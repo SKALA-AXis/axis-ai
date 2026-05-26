@@ -20,7 +20,7 @@ from sqlalchemy import text
 
 from src.config.companies import COMPANY_ALIASES
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES
-from src.config.openai_policy import openai_calls_enabled, openai_disabled_reason
+from src.config.openai_policy import relevance_llm_disabled_reason, relevance_llm_enabled
 from src.config.preprocessing import (
     COMPANY_SITE_SOURCE_TYPES,
     INDUSTRY_DOCUMENT_SOURCE_TYPES,
@@ -566,8 +566,8 @@ class RelevanceEvaluator:
         ]
         if not pending:
             return []
-        if not openai_calls_enabled():
-            log.warning("Gate 2.5 LLM batch 스킵 | reason=%s", openai_disabled_reason())
+        if not relevance_llm_enabled():
+            log.warning("Gate 2.5 LLM batch 스킵 | reason=%s", relevance_llm_disabled_reason())
             return fallback_results
 
         payloads = [result["_llm_payload"] for _, result in pending]

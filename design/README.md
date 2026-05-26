@@ -260,7 +260,7 @@ ProfileAgent 는 단순 context provider 가 아니라 **DART / IR / 공식 news
 
 현재 코드 기준:
 - `src/agents/profile_agent.py` (Tier A 합성)
-- `src/services/profile_context_v2.py` (Tier B runtime loader)
+- `src/services/profile_context_loader.py` (`ProfileContextLoader`, Tier B runtime loader)
 - `src/services/skax_profile_context_loader.py`
 - `scripts/refresh_peer_profile_snapshots.py` (Tier A CronJob entry)
 
@@ -325,7 +325,7 @@ DataUsageOrchestrator
         ├─ ReportAgent
         ├─ InsightAgent
         ├─ ChatbotAgent
-        └─ KeywordGraphAgent
+        └─ KeywordGraphBuilder
 ```
 
 ### DataUsageOrchestrator
@@ -336,7 +336,7 @@ DataUsageOrchestrator
 - 사용자 요청 또는 스케줄에 따라 필요한 활용 Agent를 호출한다.
 - 리포트 요청이면 `ReportAgent` 호출
 - 여러 기업 비교 요청이면 `MixerAgent` + `InsightAgent` 호출
-- 키워드 변화 요청이면 `KeywordGraphAgent` 호출
+- 키워드 변화 요청이면 `KeywordGraphBuilder` 호출
 - 질의응답 요청이면 `ChatbotAgent` 호출
 - IT 트렌드 연결 요청이면 `ITTrendAgent` 호출
 
@@ -378,7 +378,7 @@ DataUsageOrchestrator
 현재 코드 기준:
 - `src/agents/chatbot_agent.py`
 
-### KeywordGraphAgent
+### KeywordGraphBuilder
 
 기업별·섹터별 키워드의 등장 빈도, 연결 관계, 변화 흐름을 그래프로 생성한다.
 

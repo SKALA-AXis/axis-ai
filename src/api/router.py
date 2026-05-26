@@ -211,10 +211,8 @@ async def _run_collection_track(
             )
 
         preprocessing_service = PreprocessingService(
-            relevance_evaluator=RelevanceEvaluator(enable_llm=True),
-            # Classification is rule-first; LLM is only a last-resort fallback
-            # when OpenAI calls are explicitly enabled by policy.
-            classifier=ClusterClassifier(enable_llm=True),
+            relevance_evaluator=RelevanceEvaluator(enable_llm=(track == "a")),
+            classifier=ClusterClassifier(enable_llm=False),
         )
         crawl_run_ids = processor.last_crawl_run_ids
         if crawl_run_ids:

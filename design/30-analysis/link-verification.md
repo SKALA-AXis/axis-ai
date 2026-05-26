@@ -23,7 +23,7 @@
 
 ## 3. 책임 NOT
 
-- 원문 내용 재크롤 — CrawlerAgent (다음 cycle 에서)
+- 원문 내용 재크롤 — CrawlerJob (다음 cycle 에서)
 - LLM 분석 — 산식 only
 - 변경 감지 후 자동 재처리 — manual review 흐름
 

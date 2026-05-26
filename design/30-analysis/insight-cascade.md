@@ -26,7 +26,7 @@
 ## 3. 책임 NOT
 
 - 카드 선정 — 사용자가 frontend 에서 Top 6 선택 (또는 자동 Top 6 = DerivedMetrics 의 top5+1)
-- 출처 추적 — EvidenceAgent 가 사전에 부착 (재사용)
+- 출처 추적 — EvidenceBuilder 가 사전에 부착 (재사용)
 - 시각화 — frontend Insight 페이지가 4-tab 렌더
 
 ## 4. 입력 스펙

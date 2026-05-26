@@ -1,14 +1,14 @@
-# ClassificationAgent — Design Plan
+# ClassificationService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `ClassificationAgent` |
+| **이름** | `ClassificationService` |
 | **Supervisor** | Ingestion |
 | **LangGraph node** | `classify` (#5) |
-| **상태** | ✅ 구현 — `src/agents/classification_agent.py` |
-| **Trigger** | DedupAgent → cluster 마다 1회 (대표 기사 기준) |
+| **상태** | ✅ 구현 — `src/preprocessing/classification.py` (`ClusterClassifier`, `classify_preprocessed_cluster`) |
+| **Trigger** | DedupService → cluster 마다 1회 (대표 기사 기준) |
 
 ## 2. 책임
 
@@ -25,7 +25,7 @@
 ## 3. 책임 NOT
 
 - card 생성 (title/summary) — CardNewsAgent (다음 노드)
-- evidence 부착 — EvidenceAgent
+- evidence 부착 — EvidenceBuilder
 - 자유형 importance 분류 (v1 의 urgent/notable/reference) — 폐기 (v3 부터 exposure_band 단일)
 
 ## 4. 입력 스펙
@@ -228,7 +228,7 @@ openai = ">=1.30"
 
 ### 핵심 파일
 
-- `src/agents/classification_agent.py`
+- `src/preprocessing/classification.py`
 - 키워드 사전: `src/agents/sector_keywords.py`
 - `update_classification()` — `src/db/article_store.py` (signature: article_id, importance, importance_score, qdrant_vector_id)
 

@@ -123,7 +123,7 @@ class PreprocessingService:
         classifier: ClusterClassifier | None = None,
         max_workers: int = DEFAULT_GPT_WORKERS,
     ) -> None:
-        self.relevance_evaluator = relevance_evaluator or RelevanceEvaluator(enable_llm=True)
+        self.relevance_evaluator = relevance_evaluator or RelevanceEvaluator(enable_llm=False)
         self.deduplicator = deduplicator or ArticleDeduplicator()
         self.classifier = classifier or ClusterClassifier(enable_llm=False)
         self.max_workers = max_workers

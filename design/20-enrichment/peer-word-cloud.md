@@ -1,10 +1,10 @@
-# PeerWordCloudAgent — Design Plan
+# PeerWordCloudBuilder — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `PeerWordCloudAgent` |
+| **이름** | `PeerWordCloudBuilder` |
 | **Supervisor** | Enrichment |
 | **상태** | 🟡 부분 (frontend mock data 있음, P6 우선) |
 | **Trigger** | nightly 03:00 (peer 별 batch) |
@@ -23,9 +23,9 @@
 
 ## 3. 책임 NOT
 
-- 키워드 추출 자체 — KeywordExtractionAgent 결과 재사용
-- 그래프 노드/엣지 — KeywordGraphBuilderAgent (별도)
-- 전체 (peer 무관) 키워드 — KeywordExtractionAgent 의 전체 모드
+- 키워드 추출 자체 — KeywordExtractionService 결과 재사용
+- 그래프 노드/엣지 — KeywordGraphBuilder (별도)
+- 전체 (peer 무관) 키워드 — KeywordExtractionService 의 전체 모드
 
 ## 4. 입력 스펙
 
@@ -86,7 +86,7 @@ JSON 반환: {"keywords": [{"name": "에이전틱 AI", "category": "기술"}, ..
 
 ```python
 def build_wordcloud(peer_id, window_days=90):
-    keywords = KeywordExtractionAgent().extract(window_days, peer_id=peer_id)
+    keywords = KeywordExtractionService().extract(window_days, peer_id=peer_id)
     top_50 = keywords[:50]
 
     # Stage 1: 키워드 사전 매칭
@@ -140,7 +140,7 @@ def build_wordcloud(peer_id, window_days=90):
 - **DB**: `card_news` (READ), `enrichment_cache` (UPSERT)
 - **외부 API**: OpenAI gpt-4o-mini
 - **lib**: 없음
-- **sub**: KeywordExtractionAgent 재사용
+- **sub**: KeywordExtractionService 재사용
 
 ## 10. State 흐름
 

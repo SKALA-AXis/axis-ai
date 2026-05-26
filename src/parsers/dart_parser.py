@@ -96,6 +96,19 @@ _BUYBACK_NUMBER_PATTERNS = {
     "target_shares_preferred": re.compile(r"기타주식\s*([0-9][0-9,]*)"),
 }
 _BUYBACK_AMOUNT_PATTERN = re.compile(r"취득예정금액\s*\(원\)\s*([0-9][0-9,\s]{3,})")
+_SK_AX_BUSINESS_REVENUE_PATTERNS = (
+    re.compile(
+        r"사업부문의\s*영업수익은\s*(?P<amount>\d+(?:\.\d+)?\s*조\s*"
+        r"\d[\d,]*(?:\.\d+)?\s*억\s*원|\d+(?:\.\d+)?\s*조\s*원|"
+        r"\d[\d,]*(?:\.\d+)?\s*억\s*원)"
+    ),
+    re.compile(
+        r"사업부문의\s*영업수익은.{0,180}?총\s*매출\s*"
+        r"(?P<amount>\d+(?:\.\d+)?\s*조\s*"
+        r"\d[\d,]*(?:\.\d+)?\s*억\s*원|\d+(?:\.\d+)?\s*조\s*원|"
+        r"\d[\d,]*(?:\.\d+)?\s*억\s*원)"
+    ),
+)
 _BUYBACK_PERIOD_PATTERN = re.compile(
     r"취득예상기간\s*[:：]?\s*([0-9]{4}[.\-/][0-9]{2}[.\-/][0-9]{2}\s*[-~]\s*[0-9]{4}[.\-/][0-9]{2}[.\-/][0-9]{2})"
 )
@@ -303,6 +316,23 @@ def _normalize_dart_amount_krwbn(value: str, unit: str) -> float | None:
         return amount * 10_000
 
     return None
+
+
+def _normalize_korean_amount_expr_krwbn(value: str) -> float | None:
+    compact = re.sub(r"\s+", "", value or "")
+    mixed = re.fullmatch(
+        r"(?:(?P<trillion>\d+(?:\.\d+)?)조)?(?:(?P<eok>\d[\d,]*(?:\.\d+)?)억)?원?",
+        compact,
+    )
+    if not mixed:
+        return None
+
+    total = 0.0
+    if mixed.group("trillion"):
+        total += float(mixed.group("trillion")) * 10_000
+    if mixed.group("eok"):
+        total += float(mixed.group("eok").replace(",", ""))
+    return total or None
 
 
 def _dart_statement_unit(section: str) -> str | None:
@@ -778,6 +808,53 @@ def _extract_business_segment_candidates(
     return candidates
 
 
+def _extract_sk_ax_business_revenue_candidates(
+    text: str,
+    *,
+    peer_id: str | None,
+    period: str | None,
+    period_type: str | None,
+) -> list[dict[str, Any]]:
+    if peer_id != "sk_ax":
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, float]] = set()
+    for pattern in _SK_AX_BUSINESS_REVENUE_PATTERNS:
+        for match in pattern.finditer(text or ""):
+            amount_expr = match.group("amount")
+            value_krwbn = _normalize_korean_amount_expr_krwbn(amount_expr)
+            if value_krwbn is None:
+                continue
+            dedupe_key = ("revenue_total", round(value_krwbn, 6))
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            raw = _clean_section_text(match.group(0))
+            period_parts = _period_parts(period)
+            candidates.append(
+                {
+                    "page": None,
+                    "type": "revenue_total",
+                    "value_krwbn": value_krwbn,
+                    "value_krw": value_krwbn * 100_000_000,
+                    "raw": raw,
+                    "source": "sk_ax_business_revenue_text",
+                    "table_index": None,
+                    "unit": "억원",
+                    "confidence": 0.96,
+                    "metric_scope": "segment",
+                    "segment_label": "사업부문",
+                    "business_area": "sk_ax",
+                    "standard_business_area": "sk_ax",
+                    "period": period,
+                    **period_parts,
+                    "period_type": period_type,
+                }
+            )
+    return candidates
+
+
 def _segment_header_row(rows: list[Any]) -> tuple[int, int, int] | None:
     for row in rows[:3]:
         if not isinstance(row, list):
@@ -831,7 +908,17 @@ def _standard_business_area(
     peer_id: str | None,
 ) -> str | None:
     combined = f"{segment_label} {parent_segment}".lower()
-    if peer_id == "sk_ax" and any(token in combined for token in ("c&c", "씨앤씨", "sk주식회사")):
+    if peer_id == "sk_ax" and any(
+        token in combined
+        for token in (
+            "c&c",
+            "씨앤씨",
+            "sk주식회사",
+            "사업부문",
+            "it서비스",
+            "it 서비스",
+        )
+    ):
         return "sk_ax"
     if any(token in combined for token in ("클라우드", "cloud", "msp")):
         return "cloud"
@@ -1529,6 +1616,14 @@ class DartParser:
         candidates.extend(
             _extract_business_segment_candidates(
                 tables,
+                peer_id=peer_id,
+                period=period,
+                period_type=period_type,
+            )
+        )
+        candidates.extend(
+            _extract_sk_ax_business_revenue_candidates(
+                text,
                 peer_id=peer_id,
                 period=period,
                 period_type=period_type,

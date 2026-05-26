@@ -1,14 +1,14 @@
-# DedupAgent — Design Plan
+# DedupService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `DedupAgent` |
+| **이름** | `DedupService` |
 | **Supervisor** | Ingestion |
 | **LangGraph node** | `dedup` (#4) |
-| **상태** | ✅ 구현 — `src/agents/dedup_agent.py` |
-| **Trigger** | RelevanceAgent → `relevant_ids` 입력 시 |
+| **상태** | ✅ 구현 — `src/preprocessing/dedup.py` (`ArticleDeduplicator`, `deduplicate_articles`) |
+| **Trigger** | RelevanceService → `relevant_ids` 입력 시 |
 
 ## 2. 책임
 
@@ -25,9 +25,9 @@
 
 ## 3. 책임 NOT
 
-- 분류 (event/sector) — ClassificationAgent (다음 노드)
-- 임베딩 자체는 BGE-M3 — 본 agent 의 핵심 의존성
-- Qdrant 인덱싱 — `vector_index` 노드 (#8, EmbedIndexAgent)
+- 분류 (event/sector) — ClassificationService (다음 노드)
+- 임베딩 자체는 BGE-M3 — 본 service 의 핵심 의존성
+- Qdrant 인덱싱 — `vector_index` 노드 (#8, EmbedIndexService)
 
 ## 4. 입력 스펙
 
@@ -164,7 +164,7 @@ torch = ">=2.0"
 
 ### 핵심 파일
 
-- `src/agents/dedup_agent.py`
+- `src/preprocessing/dedup.py`
 - 임베딩 wrapper: `src/rag/embedder.py` (BGE-M3 공유 인스턴스)
 
 ### Changelog

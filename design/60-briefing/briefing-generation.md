@@ -1,10 +1,10 @@
-# BriefingGenerationAgent — Design Plan
+# BriefingGenerationService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `BriefingGenerationAgent` (async, user-triggered) |
+| **이름** | `BriefingGenerationService` (async, user-triggered) |
 | **Supervisor** | Briefing (신규 sub-supervisor; 단일 agent 라 supervisor==agent) |
 | **상태** | 🔴 신규 — backend `POST /api/briefings/generate` 가 fixture (202 Accepted 만). 실 generation 미구현. `/pipeline/delivery` 와는 별개 (daily 메일 vs user 요청 briefing 문서) |
 | **Trigger** | user POST `/api/briefings/generate` → BE 가 axis-ai 호출 → 비동기 background task → poll `/api/briefings/{id}/status` |
@@ -25,7 +25,7 @@
 
 ## 3. 책임 NOT
 
-- **Daily scheduled 이메일** — `BriefingService.generateAndSend()` (BE) + axis-ai `/pipeline/delivery` 의 책임. 본 agent 는 *user-triggered 화면용 briefing 문서*.
+- **Daily scheduled 이메일** — `BriefingService.generateAndSend()` (BE) + axis-ai `/pipeline/delivery` 의 책임. 본 service 는 *user-triggered 화면용 briefing 문서*.
 - **카드 자체 생성** — CardNewsAgent (1단계 카드뉴스 생성).
 - **PDF/Word export** — 별도 export service (W7+, 미구현).
 - **이메일 발송** — `BriefingService` (Java SES) — frontend 가 share link 제공.
@@ -370,7 +370,7 @@ LangGraph 가 아닌 *async function chain* (BackgroundTasks). state 없음. 진
 
 ### 핵심 파일 (신규 P7+)
 
-- `src/agents/briefing_generation_agent.py` (신규) — 5-phase orchestrator
+- `src/services/briefing_generation_service.py` (신규) — 5-phase orchestrator
 - `src/api/router.py` 의 `/briefings/generate`, `/briefings/{id}/status`, `/briefings/{id}` 신규 endpoint
 - `src/db/briefing_reports.py` (신규) — DAO
 
