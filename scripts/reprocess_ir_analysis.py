@@ -706,8 +706,6 @@ def _select_ir_metric_candidates(
         if metric_name not in _METRIC_SPECS:
             continue
         candidate_period, period_patch = _candidate_period_for_report(candidate, report_period)
-        if report_period and candidate_period and str(candidate_period) != str(report_period):
-            continue
         metric_scope = str(candidate.get("metric_scope") or "unknown")
         if metric_scope == "portfolio_company" or metric_scope == "unknown":
             continue
@@ -720,18 +718,26 @@ def _select_ir_metric_candidates(
             business_area=business_area,
         )
         scope_key = _metric_scope_key(metric_scope, business_area, candidate.get("entity_name"))
-        key = (metric_name, metric_scope, scope_key, str(candidate_period or "unknown"))
-        enriched = {**candidate, **period_patch, "_candidate_order": order}
+        key = (metric_name, metric_scope, scope_key)
+        enriched = {
+            **candidate,
+            **period_patch,
+            "_candidate_order": order,
+            "period_matches_report": bool(
+                report_period and candidate_period and str(candidate_period) == str(report_period)
+            ),
+        }
         current = selected.get(key)
         if current is None or _metric_candidate_rank(enriched) > _metric_candidate_rank(current):
             selected[key] = enriched
     return list(selected.values())
 
 
-def _metric_candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, int, float, int, int]:
+def _metric_candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, int, int, float, int, int]:
     source_priority = 3 if candidate.get("source") == "ir_table_matrix" else 2
     if candidate.get("source") == "ir_llm_analysis":
         source_priority = 4
+    report_period_score = 1 if candidate.get("period_matches_report") else 0
     period_score = 0 if candidate.get("period_inferred_from_report") else 1
     has_evidence = 1 if candidate.get("evidence_text") or candidate.get("raw") else 0
     confidence = candidate.get("confidence")
@@ -739,7 +745,15 @@ def _metric_candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, int, fl
     page = candidate.get("page")
     page_score = -int(page) if isinstance(page, int) else -9999
     order_score = -int(candidate.get("_candidate_order") or 0)
-    return (source_priority, period_score, has_evidence, confidence_score, page_score, order_score)
+    return (
+        report_period_score,
+        source_priority,
+        period_score,
+        has_evidence,
+        confidence_score,
+        page_score,
+        order_score,
+    )
 
 
 def _candidate_period_for_report(
