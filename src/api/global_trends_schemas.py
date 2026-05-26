@@ -151,7 +151,9 @@ class CoTStep(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     step_idx: int
-    phase: Literal["snapshot", "trend_detect", "peer_alignment", "impact_map", "forecast", "synthesis"]
+    phase: Literal[
+        "snapshot", "trend_detect", "peer_alignment", "impact_map", "forecast", "synthesis"
+    ]
     question: str
     inputs_used: list[str] = Field(default_factory=list)
     answer: str

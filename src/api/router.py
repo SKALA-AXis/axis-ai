@@ -382,27 +382,29 @@ async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsRespons
         },
     )
     result = ITTrendAgent().generate(trend_input)
-    return GlobalTrendsResponse.model_validate({
-        "analysis_id": result.get("analysis_id", ""),
-        "analysis_period": result.get("analysis_period", {}),
-        "snapshots": result.get("snapshots", []),
-        "trend_detections": result.get("trend_detections", []),
-        "peer_alignment": result.get("peer_alignment", {}),
-        "impact_matrix": result.get("impact_matrix", []),
-        "forecasts": result.get("forecasts", []),
-        "final_one_liner": result.get("final_one_liner", ""),
-        "sk_ax_implication": result.get("sk_ax_implication", ""),
-        "reasoning_steps": result.get("reasoning_steps", []),
-        "confidence": result.get("confidence", 0.0),
-        "persisted_row_count": result.get("persisted_row_count", 0),
-        "validation": result.get("validation", {}),
-        "warning": result.get("warning"),
-        "company_ids": request.company_ids or [],
-        "provenance": {
-            "prompt_version": result.get("prompt_version"),
-            "agent": result.get("agent"),
-        },
-    })
+    return GlobalTrendsResponse.model_validate(
+        {
+            "analysis_id": result.get("analysis_id", ""),
+            "analysis_period": result.get("analysis_period", {}),
+            "snapshots": result.get("snapshots", []),
+            "trend_detections": result.get("trend_detections", []),
+            "peer_alignment": result.get("peer_alignment", {}),
+            "impact_matrix": result.get("impact_matrix", []),
+            "forecasts": result.get("forecasts", []),
+            "final_one_liner": result.get("final_one_liner", ""),
+            "sk_ax_implication": result.get("sk_ax_implication", ""),
+            "reasoning_steps": result.get("reasoning_steps", []),
+            "confidence": result.get("confidence", 0.0),
+            "persisted_row_count": result.get("persisted_row_count", 0),
+            "validation": result.get("validation", {}),
+            "warning": result.get("warning"),
+            "company_ids": request.company_ids or [],
+            "provenance": {
+                "prompt_version": result.get("prompt_version"),
+                "agent": result.get("agent"),
+            },
+        }
+    )
 
 
 @app.post("/link/verify", response_model=LinkVerificationResponse)

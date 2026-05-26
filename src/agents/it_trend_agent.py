@@ -252,14 +252,16 @@ class ITTrendAgent:
         # 2) Phase 1 — Snapshot (deterministic).
         snapshots = _phase1_snapshot(global_rows)
         snapshot_card_total = sum(s["card_count"] for s in snapshots)
-        reasoning_steps.append({
-            "step_idx": 1,
-            "phase": "snapshot",
-            "question": "글로벌 6 사 newsroom 카드 분포는?",
-            "answer": f"총 {snapshot_card_total} 건, 회사별 분포: "
-                      + ", ".join(f"{s['company_id']}={s['card_count']}" for s in snapshots),
-            "confidence": 0.95 if snapshot_card_total > 0 else 0.0,
-        })
+        reasoning_steps.append(
+            {
+                "step_idx": 1,
+                "phase": "snapshot",
+                "question": "글로벌 6 사 newsroom 카드 분포는?",
+                "answer": f"총 {snapshot_card_total} 건, 회사별 분포: "
+                + ", ".join(f"{s['company_id']}={s['card_count']}" for s in snapshots),
+                "confidence": 0.95 if snapshot_card_total > 0 else 0.0,
+            }
+        )
         if snapshot_card_total == 0:
             warning = "Phase 1 snapshot empty (global newsroom rows = 0) — global_industry_trends 저장 skip."
             log.warning("ITTrendAgent | %s", warning)
@@ -282,13 +284,15 @@ class ITTrendAgent:
             max_trend_count=max_trend_count,
             focus_themes=focus_themes,
         )
-        reasoning_steps.append({
-            "step_idx": 2,
-            "phase": "trend_detect",
-            "question": "글로벌 6 사 + 리서치에서 반복되는 trend keyword 는?",
-            "answer": ", ".join(d["theme"] for d in detections) or "(detections empty)",
-            "confidence": 0.85 if detections else 0.0,
-        })
+        reasoning_steps.append(
+            {
+                "step_idx": 2,
+                "phase": "trend_detect",
+                "question": "글로벌 6 사 + 리서치에서 반복되는 trend keyword 는?",
+                "answer": ", ".join(d["theme"] for d in detections) or "(detections empty)",
+                "confidence": 0.85 if detections else 0.0,
+            }
+        )
         if not detections:
             warning = "Phase 2 detections empty — global_industry_trends 저장 skip."
             log.warning("ITTrendAgent | %s", warning)
@@ -311,26 +315,30 @@ class ITTrendAgent:
             )
         else:
             alignment = {}
-        reasoning_steps.append({
-            "step_idx": 3,
-            "phase": "peer_alignment",
-            "question": "AX 와 peer 4 사의 동향이 글로벌 트렌드와 같은 결로 가는가?",
-            "answer": _summarize_alignment(alignment),
-            "confidence": 0.7 if alignment else 0.0,
-        })
+        reasoning_steps.append(
+            {
+                "step_idx": 3,
+                "phase": "peer_alignment",
+                "question": "AX 와 peer 4 사의 동향이 글로벌 트렌드와 같은 결로 가는가?",
+                "answer": _summarize_alignment(alignment),
+                "confidence": 0.7 if alignment else 0.0,
+            }
+        )
 
         # 5) Phase 4 — Impact Mapping (LLM).
         impact_matrix = _phase4_impact(
             detections=detections,
             sk_ax_business_lines=sk_ax_business_lines,
         )
-        reasoning_steps.append({
-            "step_idx": 4,
-            "phase": "impact_map",
-            "question": "각 trend 가 SK AX 사업라인에 어떤 영향을 주는가?",
-            "answer": _summarize_impact(impact_matrix),
-            "confidence": 0.65 if impact_matrix else 0.0,
-        })
+        reasoning_steps.append(
+            {
+                "step_idx": 4,
+                "phase": "impact_map",
+                "question": "각 trend 가 SK AX 사업라인에 어떤 영향을 주는가?",
+                "answer": _summarize_impact(impact_matrix),
+                "confidence": 0.65 if impact_matrix else 0.0,
+            }
+        )
 
         # 6) Phase 5 — Forecast + Synthesis (LLM).
         synthesis = _phase5_forecast_synthesis(
@@ -345,13 +353,15 @@ class ITTrendAgent:
         per_keyword_summary: dict[str, str] = synthesis.get("per_keyword_summary", {}) or {}
         per_keyword_implication: dict[str, str] = synthesis.get("per_keyword_implication", {}) or {}
         confidence: float = float(synthesis.get("confidence", 0.6) or 0.6)
-        reasoning_steps.append({
-            "step_idx": 5,
-            "phase": "synthesis",
-            "question": "SK AX 가 다음 1Q / 6M / 1Y 에 어떤 자세를 가져야 하는가?",
-            "answer": final_one_liner or "(synthesis empty)",
-            "confidence": confidence,
-        })
+        reasoning_steps.append(
+            {
+                "step_idx": 5,
+                "phase": "synthesis",
+                "question": "SK AX 가 다음 1Q / 6M / 1Y 에 어떤 자세를 가져야 하는가?",
+                "answer": final_one_liner or "(synthesis empty)",
+                "confidence": confidence,
+            }
+        )
 
         # 7) Persistence — direct upsert to global_industry_trends (design §7).
         rows = _build_persistence_rows(
@@ -458,32 +468,39 @@ def _phase1_snapshot(global_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for company_id in GLOBAL_COMPANY_IDS:
         rows = by_company.get(company_id, [])
         keywords = _extract_keywords_from_rows(rows)
-        snapshots.append({
-            "company_id": company_id,
-            "card_count": len(rows),
-            "top_themes": [kw for kw, _ in keywords.most_common(5)],
-            "headline_announcements": [
-                {
-                    "title": (r.get("title") or "")[:200],
-                    "url": r.get("url"),
-                    "published_at": _iso(r.get("published_at") or r.get("collected_at")),
-                }
-                for r in rows[:3]
-            ],
-            "source_marker": f"raw_articles WHERE source_name~{company_id}",
-        })
+        snapshots.append(
+            {
+                "company_id": company_id,
+                "card_count": len(rows),
+                "top_themes": [kw for kw, _ in keywords.most_common(5)],
+                "headline_announcements": [
+                    {
+                        "title": (r.get("title") or "")[:200],
+                        "url": r.get("url"),
+                        "published_at": _iso(r.get("published_at") or r.get("collected_at")),
+                    }
+                    for r in rows[:3]
+                ],
+                "source_marker": f"raw_articles WHERE source_name~{company_id}",
+            }
+        )
     # 6사 외 row 가 남아 있으면 별도 group 으로 모음 (graceful).
     other_rows = [r for r in global_rows if not _global_company_id_from_row(r)]
     if other_rows:
-        snapshots.append({
-            "company_id": "other",
-            "card_count": len(other_rows),
-            "top_themes": [kw for kw, _ in _extract_keywords_from_rows(other_rows).most_common(5)],
-            "headline_announcements": [
-                {"title": (r.get("title") or "")[:200], "url": r.get("url")} for r in other_rows[:3]
-            ],
-            "source_marker": "raw_articles unmatched global newsroom",
-        })
+        snapshots.append(
+            {
+                "company_id": "other",
+                "card_count": len(other_rows),
+                "top_themes": [
+                    kw for kw, _ in _extract_keywords_from_rows(other_rows).most_common(5)
+                ],
+                "headline_announcements": [
+                    {"title": (r.get("title") or "")[:200], "url": r.get("url")}
+                    for r in other_rows[:3]
+                ],
+                "source_marker": "raw_articles unmatched global newsroom",
+            }
+        )
     return snapshots
 
 
@@ -528,15 +545,17 @@ def _phase2_trends(
         intensity = _classify_intensity(n)
         leading = _leading_companies_for_keyword(snapshots, kw)
         category = _keyword_category(kw)
-        detections.append({
-            "theme": kw,
-            "mention_count": n,
-            "frequency_delta_pct": round(delta, 2),
-            "intensity": intensity,
-            "leading_companies": leading,
-            "evidence_card_ids": [],
-            "keyword_category": category,
-        })
+        detections.append(
+            {
+                "theme": kw,
+                "mention_count": n,
+                "frequency_delta_pct": round(delta, 2),
+                "intensity": intensity,
+                "leading_companies": leading,
+                "evidence_card_ids": [],
+                "keyword_category": category,
+            }
+        )
     detections.sort(key=lambda d: (d["mention_count"], d["frequency_delta_pct"]), reverse=True)
     return detections[:max_trend_count]
 
@@ -549,9 +568,7 @@ def _classify_intensity(n: int) -> str:
     return "weak"
 
 
-def _leading_companies_for_keyword(
-    snapshots: list[dict[str, Any]], keyword: str
-) -> list[str]:
+def _leading_companies_for_keyword(snapshots: list[dict[str, Any]], keyword: str) -> list[str]:
     company_match_counts: dict[str, int] = {}
     for snap in snapshots:
         if snap["company_id"] == "other":
@@ -610,16 +627,18 @@ def _phase3_peer_alignment(
                 peer_age = (today - latest_peer).days
                 recency_gap_days = peer_age - global_recency
 
-            per_peer.append({
-                "peer_id": peer_id,
-                "alignment_type": alignment_type,
-                "alignment_score": round(score, 3),
-                "peer_mention_count": peer_n,
-                "global_mention_count": global_mention_count,
-                "recency_gap_days": recency_gap_days,
-                "evidence_card_ids": [str(c.get("id")) for c in cards[:5] if c.get("id")],
-                "strategic_note": "",
-            })
+            per_peer.append(
+                {
+                    "peer_id": peer_id,
+                    "alignment_type": alignment_type,
+                    "alignment_score": round(score, 3),
+                    "peer_mention_count": peer_n,
+                    "global_mention_count": global_mention_count,
+                    "recency_gap_days": recency_gap_days,
+                    "evidence_card_ids": [str(c.get("id")) for c in cards[:5] if c.get("id")],
+                    "strategic_note": "",
+                }
+            )
         result[keyword] = per_peer
 
     # LLM batch — 모든 (theme × peer) strategic_note 한 번에 채움.
@@ -664,20 +683,22 @@ def _llm_fill_strategic_notes(
     for det in detections:
         keyword = det["theme"]
         peers = result.get(keyword, [])
-        payload.append({
-            "theme": keyword,
-            "intensity": det.get("intensity"),
-            "leading_companies": det.get("leading_companies", []),
-            "peers": [
-                {
-                    "peer_id": p["peer_id"],
-                    "alignment_type": p["alignment_type"],
-                    "peer_mention_count": p["peer_mention_count"],
-                    "global_mention_count": p["global_mention_count"],
-                }
-                for p in peers
-            ],
-        })
+        payload.append(
+            {
+                "theme": keyword,
+                "intensity": det.get("intensity"),
+                "leading_companies": det.get("leading_companies", []),
+                "peers": [
+                    {
+                        "peer_id": p["peer_id"],
+                        "alignment_type": p["alignment_type"],
+                        "peer_mention_count": p["peer_mention_count"],
+                        "global_mention_count": p["global_mention_count"],
+                    }
+                    for p in peers
+                ],
+            }
+        )
     if not payload:
         return result
 
@@ -690,8 +711,7 @@ def _llm_fill_strategic_notes(
         "- diverging: 다른 방향이 맞는지\n\n"
         "응답은 반드시 다음 JSON object:\n"
         '{"notes": [{"theme":"...", "peer_id":"...", "strategic_note":"..."}, ...]}\n\n'
-        "입력:\n"
-        + json.dumps(payload, ensure_ascii=False, indent=2)
+        "입력:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
     )
     response = _get_llm().invoke(
         prompt,
@@ -752,8 +772,7 @@ def _phase4_impact(
         '{"impact_matrix": [{"trend_theme":"...", "sk_ax_line":"...", '
         '"direction":"...", "magnitude":"...", "channel":"...", "quant_hint":"..."}]}\n\n'
         "각 trend 마다 최소 1 개 (가장 관련 깊은) sk_ax_line 매칭. 너무 많이 만들지 말 것.\n\n"
-        "입력 trends:\n"
-        + json.dumps(trend_payload, ensure_ascii=False, indent=2)
+        "입력 trends:\n" + json.dumps(trend_payload, ensure_ascii=False, indent=2)
     )
     try:
         response = _get_llm().invoke(
@@ -778,15 +797,19 @@ def _phase4_impact(
         theme = str(cell.get("trend_theme") or "").strip().lower()
         if theme not in valid_themes:
             continue
-        result.append({
-            "trend_theme": theme,
-            "sk_ax_line": str(cell.get("sk_ax_line") or "").strip(),
-            "direction": _clip_enum(cell.get("direction"), {"positive", "neutral", "negative"}, "neutral"),
-            "magnitude": _clip_enum(cell.get("magnitude"), {"low", "medium", "high"}, "low"),
-            "channel": str(cell.get("channel") or "")[:200],
-            "quant_hint": str(cell.get("quant_hint") or "")[:200] or None,
-            "source_marker": "llm_phase4_impact",
-        })
+        result.append(
+            {
+                "trend_theme": theme,
+                "sk_ax_line": str(cell.get("sk_ax_line") or "").strip(),
+                "direction": _clip_enum(
+                    cell.get("direction"), {"positive", "neutral", "negative"}, "neutral"
+                ),
+                "magnitude": _clip_enum(cell.get("magnitude"), {"low", "medium", "high"}, "low"),
+                "channel": str(cell.get("channel") or "")[:200],
+                "quant_hint": str(cell.get("quant_hint") or "")[:200] or None,
+                "source_marker": "llm_phase4_impact",
+            }
+        )
     return result
 
 
@@ -858,17 +881,19 @@ def _phase5_forecast_synthesis(
         horizon = str(f.get("horizon") or "").strip()
         if horizon not in valid_horizons:
             continue
-        forecasts.append({
-            "horizon": horizon,
-            "scenario": _clip_enum(
-                f.get("scenario"), {"optimistic", "baseline", "pessimistic"}, "baseline"
-            ),
-            "narrative": str(f.get("narrative") or "")[:600],
-            "sk_ax_impact": str(f.get("sk_ax_impact") or "")[:400],
-            "drivers": [str(d)[:120] for d in (f.get("drivers") or []) if d][:6],
-            "risk_level": _clip_enum(f.get("risk_level"), {"low", "medium", "high"}, "medium"),
-            "recommended_response": str(f.get("recommended_response") or "")[:400],
-        })
+        forecasts.append(
+            {
+                "horizon": horizon,
+                "scenario": _clip_enum(
+                    f.get("scenario"), {"optimistic", "baseline", "pessimistic"}, "baseline"
+                ),
+                "narrative": str(f.get("narrative") or "")[:600],
+                "sk_ax_impact": str(f.get("sk_ax_impact") or "")[:400],
+                "drivers": [str(d)[:120] for d in (f.get("drivers") or []) if d][:6],
+                "risk_level": _clip_enum(f.get("risk_level"), {"low", "medium", "high"}, "medium"),
+                "recommended_response": str(f.get("recommended_response") or "")[:400],
+            }
+        )
 
     per_keyword_raw = data.get("per_keyword") or []
     per_keyword_title: dict[str, str] = {}
@@ -925,42 +950,44 @@ def _build_persistence_rows(
         category = det.get("keyword_category") or "other"
         peers = alignment.get(keyword, [])
         aligned_peers = [p["peer_id"] for p in peers if p["alignment_type"] == "aligned"]
-        evidence_card_ids = [
-            cid for p in peers for cid in p.get("evidence_card_ids", []) if cid
-        ]
+        evidence_card_ids = [cid for p in peers for cid in p.get("evidence_card_ids", []) if cid]
         evidence_raw_ids = _evidence_raw_ids(global_rows, keyword)
         impact_score = _impact_score_for_keyword(det, peers)
-        rows.append({
-            "source_analysis_id": _make_source_analysis_id(batch_id, idx, keyword),
-            "trend_date": trend_date,
-            "industry": _industry_for_category(category),
-            "region": "global",
-            "keyword": keyword,
-            "keyword_category": category,
-            "title": per_keyword_title.get(keyword) or _fallback_title(keyword, det) or final_one_liner[:200],
-            "summary": per_keyword_summary.get(keyword) or _fallback_summary(keyword, det),
-            "mention_count": int(det.get("mention_count", 0) or 0),
-            "impact_score": impact_score,
-            "confidence": confidence,
-            "related_peer_ids": aligned_peers,
-            "related_card_ids": evidence_card_ids,
-            "source_raw_article_ids": evidence_raw_ids,
-            "sk_ax_implication": per_keyword_implication.get(keyword) or sk_ax_implication,
-            "payload": {
-                "peer_alignment": peers,
-                "impact_matrix": [c for c in impact_matrix if c["trend_theme"] == keyword],
-                "forecasts": forecasts,
-                "leading_companies": det.get("leading_companies", []),
-                "intensity": det.get("intensity"),
-                "frequency_delta_pct": det.get("frequency_delta_pct"),
-                "snapshots_summary": [
-                    {"company_id": s["company_id"], "card_count": s["card_count"]}
-                    for s in snapshots
-                ],
-                "prompt_version": _PROMPT_VERSION,
-                "batch_id": batch_id,
-            },
-        })
+        rows.append(
+            {
+                "source_analysis_id": _make_source_analysis_id(batch_id, idx, keyword),
+                "trend_date": trend_date,
+                "industry": _industry_for_category(category),
+                "region": "global",
+                "keyword": keyword,
+                "keyword_category": category,
+                "title": per_keyword_title.get(keyword)
+                or _fallback_title(keyword, det)
+                or final_one_liner[:200],
+                "summary": per_keyword_summary.get(keyword) or _fallback_summary(keyword, det),
+                "mention_count": int(det.get("mention_count", 0) or 0),
+                "impact_score": impact_score,
+                "confidence": confidence,
+                "related_peer_ids": aligned_peers,
+                "related_card_ids": evidence_card_ids,
+                "source_raw_article_ids": evidence_raw_ids,
+                "sk_ax_implication": per_keyword_implication.get(keyword) or sk_ax_implication,
+                "payload": {
+                    "peer_alignment": peers,
+                    "impact_matrix": [c for c in impact_matrix if c["trend_theme"] == keyword],
+                    "forecasts": forecasts,
+                    "leading_companies": det.get("leading_companies", []),
+                    "intensity": det.get("intensity"),
+                    "frequency_delta_pct": det.get("frequency_delta_pct"),
+                    "snapshots_summary": [
+                        {"company_id": s["company_id"], "card_count": s["card_count"]}
+                        for s in snapshots
+                    ],
+                    "prompt_version": _PROMPT_VERSION,
+                    "batch_id": batch_id,
+                },
+            }
+        )
     return rows
 
 
@@ -981,9 +1008,7 @@ def _evidence_raw_ids(global_rows: list[dict[str, Any]], keyword: str) -> list[i
     return ids
 
 
-def _impact_score_for_keyword(
-    det: dict[str, Any], peers: list[dict[str, Any]]
-) -> float:
+def _impact_score_for_keyword(det: dict[str, Any], peers: list[dict[str, Any]]) -> float:
     """결정적 산식 — frequency × intensity × peer_alignment_coverage."""
     mention_count = float(det.get("mention_count", 0) or 0)
     intensity_weight = {"weak": 0.3, "moderate": 0.6, "strong": 1.0}.get(
@@ -1060,7 +1085,9 @@ def _build_trend_context(
         trend_summary=" / ".join(trend_lines[:3]),
         trend_lines=trend_lines,
         signals=signals,
-        source_groups=sorted({(r.get("source_name") or "") for r in global_rows if r.get("source_name")}),
+        source_groups=sorted(
+            {(r.get("source_name") or "") for r in global_rows if r.get("source_name")}
+        ),
         sources=sources,
         reference_issue_ids=[],
         updated_at=generated_at.isoformat(timespec="seconds"),
@@ -1181,9 +1208,7 @@ def _dedupe_items_by_id(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
-def _latest_global_date_for_keyword(
-    snapshots: list[dict[str, Any]], keyword: str
-) -> date | None:
+def _latest_global_date_for_keyword(snapshots: list[dict[str, Any]], keyword: str) -> date | None:
     latest: date | None = None
     for snap in snapshots:
         for ann in snap.get("headline_announcements", []) or []:

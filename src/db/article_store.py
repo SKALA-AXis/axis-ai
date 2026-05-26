@@ -1896,23 +1896,27 @@ def _sanitize_jsonish(value: Any) -> Any:
 # design: axis-ai/design/30-analysis/global-trends.md §3.2 / §5.2 / §7.
 # ──────────────────────────────────────────────────────────────────────────
 
-GLOBAL_NEWSROOM_SOURCE_NAMES: frozenset[str] = frozenset({
-    "nvidia_official",
-    "microsoft_official",
-    "google_official",
-    "amazon_official",
-    "meta_official",
-    "apple_newsroom",
-})
+GLOBAL_NEWSROOM_SOURCE_NAMES: frozenset[str] = frozenset(
+    {
+        "nvidia_official",
+        "microsoft_official",
+        "google_official",
+        "amazon_official",
+        "meta_official",
+        "apple_newsroom",
+    }
+)
 
 GLOBAL_RESEARCH_SOURCE_NAMES: frozenset[str] = frozenset({"spri", "bcg"})
 
-SK_AX_RAW_SOURCE_NAMES: frozenset[str] = frozenset({
-    "SK AX Site",
-    "SK AX Newsroom",
-    "dart",
-    "ir_pdf",
-})
+SK_AX_RAW_SOURCE_NAMES: frozenset[str] = frozenset(
+    {
+        "SK AX Site",
+        "SK AX Newsroom",
+        "dart",
+        "ir_pdf",
+    }
+)
 
 DEFAULT_PEER_COMPANY_IDS: tuple[str, ...] = (
     "sk_ax",
@@ -1932,9 +1936,10 @@ def fetch_global_trend_inputs(window_days: int = 30) -> list[dict[str, Any]]:
     """
     names = list(GLOBAL_NEWSROOM_SOURCE_NAMES | GLOBAL_RESEARCH_SOURCE_NAMES)
     with SessionLocal() as db:
-        rows = db.execute(
-            text(
-                """
+        rows = (
+            db.execute(
+                text(
+                    """
                 SELECT id, source_name, source_type, publisher, title, content, url,
                        published_at, collected_at, metadata, company
                 FROM raw_articles
@@ -1942,9 +1947,12 @@ def fetch_global_trend_inputs(window_days: int = 30) -> list[dict[str, Any]]:
                   AND collected_at >= NOW() - make_interval(days => :days)
                 ORDER BY collected_at DESC NULLS LAST
                 """
-            ),
-            {"names": names, "days": window_days},
-        ).mappings().all()
+                ),
+                {"names": names, "days": window_days},
+            )
+            .mappings()
+            .all()
+        )
 
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -1980,9 +1988,10 @@ def fetch_sk_ax_raw_for_alignment(
         params["kw"] = f"%{keyword}%"
 
     with SessionLocal() as db:
-        rows = db.execute(
-            text(
-                f"""
+        rows = (
+            db.execute(
+                text(
+                    f"""
                 SELECT id, source_name, source_type, title, content, url,
                        published_at, collected_at, metadata
                 FROM raw_articles
@@ -1992,9 +2001,12 @@ def fetch_sk_ax_raw_for_alignment(
                 ORDER BY COALESCE(published_at, collected_at) DESC NULLS LAST
                 LIMIT 100
                 """
-            ),
-            params,
-        ).mappings().all()
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
     return [dict(r) for r in rows]
 
 
@@ -2035,9 +2047,10 @@ def fetch_peer_cards_for_alignment(
     filter_sql = (" AND " + " AND ".join(clauses)) if clauses else ""
 
     with SessionLocal() as db:
-        rows = db.execute(
-            text(
-                f"""
+        rows = (
+            db.execute(
+                text(
+                    f"""
                 SELECT id, title, summary_lines, primary_keyword_category,
                        peer_company_id, importance_score, created_at,
                        keywords, keyword_categories
@@ -2049,9 +2062,12 @@ def fetch_peer_cards_for_alignment(
                 ORDER BY created_at DESC NULLS LAST
                 LIMIT 50
                 """
-            ),
-            params,
-        ).mappings().all()
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
     return [dict(r) for r in rows]
 
 
@@ -2132,18 +2148,22 @@ def fetch_latest_trend_context(within_days: int = 7) -> dict[str, Any]:
             return cached[1]
 
     with SessionLocal() as db:
-        rows = db.execute(
-            text(
-                """
+        rows = (
+            db.execute(
+                text(
+                    """
                 SELECT keyword, summary, payload, trend_date, source_analysis_id
                 FROM global_industry_trends
                 WHERE trend_date >= CURRENT_DATE - make_interval(days => :days)
                 ORDER BY impact_score DESC NULLS LAST, trend_date DESC
                 LIMIT 10
                 """
-            ),
-            {"days": within_days},
-        ).mappings().all()
+                ),
+                {"days": within_days},
+            )
+            .mappings()
+            .all()
+        )
 
     result: dict[str, Any]
     if not rows:
@@ -2180,7 +2200,9 @@ def fetch_latest_trend_context(within_days: int = 7) -> dict[str, Any]:
             "source_groups": ["global_industry_trends"],
             "sources": sources,
             "reference_issue_ids": [],
-            "updated_at": latest_date.isoformat() if hasattr(latest_date, "isoformat") else str(latest_date),
+            "updated_at": latest_date.isoformat()
+            if hasattr(latest_date, "isoformat")
+            else str(latest_date),
             "validation": {"pass": True},
             "metadata": {"row_count": len(rows)},
         }
