@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.global_trends_schemas import GlobalTrendsRequest, GlobalTrendsResponse
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
 from src.api.link_verification_schemas import LinkVerificationRequest, LinkVerificationResponse
 from src.api.mixer_schemas import MixerAnalysisRequest, MixerAnalysisResponse
@@ -339,6 +340,71 @@ async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
         user_context=request.user_context,
     )
     return MixerAnalysisResponse.model_validate(result)
+
+
+@app.post("/global/trends/run", response_model=GlobalTrendsResponse)
+async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsResponse:
+    """GlobalTrendsAgent — 5-phase 글로벌 IT 트렌드 + peer alignment.
+
+    design: ``axis-ai/design/30-analysis/global-trends.md``.
+    contract: ``axis-infra/api/openapi.yaml`` ``/global/trends/run`` (operationId
+    ``runGlobalTrends``).
+
+    Phase 1 (Snapshot) + Phase 2 (Trend Detection) 결정적 산식,
+    Phase 3 (Peer Alignment) + Phase 4 (Impact Mapping) + Phase 5 (Synthesis) LLM 3 호출.
+
+    결과는 ``global_industry_trends`` 에 keyword 별 row 로 직접 upsert. (V30 이후
+    ``analysis_ledger`` DROP 되어 ``@with_ledger_writeback`` 미사용 — 설계서 §7.)
+    """
+    from src.agents.it_trend_agent import ITTrendAgent, ITTrendInput
+
+    log.info(
+        "GlobalTrends 요청 | window_days=%s peers=%s themes=%s",
+        request.window_days,
+        request.peer_company_ids,
+        request.focus_themes,
+    )
+    trend_input = ITTrendInput(
+        trend_items=[],
+        period=None,
+        source_groups=[],
+        previous_trend_context=None,
+        reference_issue_results=[],
+        metadata={
+            "window_days": request.window_days,
+            "company_ids": request.company_ids,
+            "focus_themes": request.focus_themes,
+            "sk_ax_business_lines": request.sk_ax_business_lines,
+            "peer_company_ids": request.peer_company_ids,
+            "include_peer_alignment": request.include_peer_alignment,
+            "min_mention_count": request.min_mention_count,
+            "max_trend_count": request.max_trend_count,
+        },
+    )
+    result = ITTrendAgent().generate(trend_input)
+    return GlobalTrendsResponse.model_validate(
+        {
+            "analysis_id": result.get("analysis_id", ""),
+            "analysis_period": result.get("analysis_period", {}),
+            "snapshots": result.get("snapshots", []),
+            "trend_detections": result.get("trend_detections", []),
+            "peer_alignment": result.get("peer_alignment", {}),
+            "impact_matrix": result.get("impact_matrix", []),
+            "forecasts": result.get("forecasts", []),
+            "final_one_liner": result.get("final_one_liner", ""),
+            "sk_ax_implication": result.get("sk_ax_implication", ""),
+            "reasoning_steps": result.get("reasoning_steps", []),
+            "confidence": result.get("confidence", 0.0),
+            "persisted_row_count": result.get("persisted_row_count", 0),
+            "validation": result.get("validation", {}),
+            "warning": result.get("warning"),
+            "company_ids": request.company_ids or [],
+            "provenance": {
+                "prompt_version": result.get("prompt_version"),
+                "agent": result.get("agent"),
+            },
+        }
+    )
 
 
 @app.post("/link/verify", response_model=LinkVerificationResponse)
