@@ -108,6 +108,17 @@ def analyze_dart_with_llm(
     if not prompt:
         return {"llm_business_signals": []}
 
+    try:
+        from src.observability import tracing_config
+
+        config = tracing_config(
+            agent="DARTLLMAnalysisExtractor",
+            phase="extract",
+            peer_id=_peer_id(article, parser_result),
+        )
+    except Exception:
+        config = None
+
     response = _get_llm().invoke(
         [
             (
@@ -116,7 +127,8 @@ def analyze_dart_with_llm(
                 "Return JSON only. Do not infer facts that are not explicitly present.",
             ),
             ("user", prompt),
-        ]
+        ],
+        config=config,
     )
     parsed = _parse_json_response(getattr(response, "content", response))
     peer_id = _peer_id(article, parser_result)

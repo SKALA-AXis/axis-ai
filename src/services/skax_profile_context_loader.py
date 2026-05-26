@@ -539,7 +539,17 @@ class SKAXPerspectiveAgent:
         )
 
         try:
-            response = _get_viewpoint_llm().invoke(prompt)
+            from src.observability import tracing_config
+
+            vp_config = tracing_config(
+                agent="SKAXPerspectiveAgent",
+                phase="viewpoint_playbook",
+            )
+        except Exception:
+            vp_config = None
+
+        try:
+            response = _get_viewpoint_llm().invoke(prompt, config=vp_config)
             content = (
                 response.content if isinstance(response.content, str) else str(response.content)
             )
@@ -633,7 +643,19 @@ class SKAXPerspectiveAgent:
         )
 
         try:
-            response = _get_llm().invoke(prompt)
+            from src.observability import tracing_config
+
+            persp_config = tracing_config(
+                agent="SKAXPerspectiveAgent",
+                phase="analyze",
+                card_id=issue_card.get("id"),
+                cluster_id=issue_card.get("cluster_id") or summary.get("cluster_id"),
+            )
+        except Exception:
+            persp_config = None
+
+        try:
+            response = _get_llm().invoke(prompt, config=persp_config)
             content = (
                 response.content if isinstance(response.content, str) else str(response.content)
             )

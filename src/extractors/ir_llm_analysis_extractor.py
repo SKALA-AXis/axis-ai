@@ -142,6 +142,17 @@ def analyze_ir_with_llm(
     if not prompt:
         return {"llm_financial_metrics": [], "llm_business_signals": []}
 
+    try:
+        from src.observability import tracing_config
+
+        config = tracing_config(
+            agent="IRLLMAnalysisExtractor",
+            phase="extract",
+            peer_id=_peer_id(article, parser_result),
+        )
+    except Exception:
+        config = None
+
     response = _get_llm().invoke(
         [
             (
@@ -150,7 +161,8 @@ def analyze_ir_with_llm(
                 "Return JSON only. Do not infer numbers that are not explicitly present.",
             ),
             ("user", prompt),
-        ]
+        ],
+        config=config,
     )
     parsed = _parse_json_response(getattr(response, "content", response))
     peer_id = _peer_id(article, parser_result)

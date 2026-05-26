@@ -2728,7 +2728,17 @@ def _invoke_json_prompt(prompt: str, *, phase: str) -> dict[str, Any]:
 
 def _repair_json(raw_text: str, error: str) -> str:
     prompt = _JSON_REPAIR_PROMPT.replace("{error}", error).replace("{raw_text}", raw_text)
-    response = _get_llm().invoke(prompt)
+    try:
+        from src.observability import tracing_config
+
+        config = tracing_config(
+            agent="CompanyProfileAgent",
+            phase="repair_json",
+            prompt_version=_PROMPT_VERSION,
+        )
+    except Exception:
+        config = None
+    response = _get_llm().invoke(prompt, config=config)
     return response.content if isinstance(response.content, str) else str(response.content)
 
 
