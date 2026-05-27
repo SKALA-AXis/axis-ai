@@ -31,6 +31,15 @@ KST = ZoneInfo("Asia/Seoul")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("AXIS AI 서버 시작")
+    # BGE-M3 모델을 startup 시 preload — lazy load 로 인한 첫 cycle 의 메모리 spike
+    # (Python heap 확장 + colbert/sparse linear init) 를 제거. 실패해도 첫 호출 시
+    # 재시도되므로 서버 startup 자체를 막진 않는다.
+    try:
+        from src.rag.embedder import preload_embedder
+
+        preload_embedder()
+    except Exception as e:
+        log.warning("startup preload skipped: %s", e)
     yield
     log.info("AXIS AI 서버 종료")
 
@@ -52,12 +61,16 @@ app.add_middleware(
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
-    """헬스체크 — docker-compose healthcheck 대상"""
+    """헬스체크 — docker-compose healthcheck + k8s liveness/readiness probe 대상."""
     db_ok = _check_db()
     qdrant_ok = _check_qdrant()
+    try:
+        from src.rag.embedder import is_loaded as bge_m3_loaded
+    except Exception:
+        bge_m3_loaded = lambda: False  # noqa: E731
     return HealthResponse(
         status="ok" if (db_ok and qdrant_ok) else "degraded",
-        models_loaded={"bge_m3": False, "bge_reranker": False},  # 실제 로드 시 True
+        models_loaded={"bge_m3": bge_m3_loaded(), "bge_reranker": False},
         db_connected=db_ok,
         qdrant_connected=qdrant_ok,
     )

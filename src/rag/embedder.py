@@ -1,26 +1,59 @@
-"""BGE-M3 임베딩 — Dense + Sparse 원샷 생성"""
+"""BGE-M3 임베딩 — Dense + Sparse 원샷 생성.
+
+메모리 spike 방어 정책:
+  · 모델은 startup 시 preload (axis-ai/src/api/router.py lifespan) 해서 cold-start spike 제거.
+  · encode 시 max_length 를 EMBED_MAX_LENGTH (default 2048) 로 명시 → BGE-M3 default
+    8192 대비 attention matrix O(len²) 메모리 16x 감소.
+  · 실측 (raw_articles 200건 sample): 2048 token 으로 85.5% 통과, 평균 손실 183 token.
+    dedup 의 의미 시그널은 article 앞부분 (제목 + 리드 + 본문 상위) 에 집중되어 있어
+    후반부 truncate 영향 미미.
+  · 환경변수로 override 가능: EMBED_MAX_LENGTH.
+"""
 
 import logging
+import os
 
 log = logging.getLogger(__name__)
 
 _model = None
+_model_loaded = False
+
+EMBED_MAX_LENGTH = int(os.getenv("EMBED_MAX_LENGTH", "2048"))
 
 
 def get_embedder():
-    """BGE-M3 모델 싱글톤 로더 (첫 호출 시 모델 로드)"""
-    global _model
+    """BGE-M3 모델 싱글톤 로더 (첫 호출 시 모델 로드)."""
+    global _model, _model_loaded
     if _model is None:
         try:
             from FlagEmbedding import BGEM3FlagModel
 
-            log.info("BGE-M3 모델 로딩 중...")
+            log.info("BGE-M3 모델 로딩 중... (max_length=%d)", EMBED_MAX_LENGTH)
             _model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=True)
+            _model_loaded = True
             log.info("BGE-M3 모델 로딩 완료")
         except Exception as e:
             log.error("BGE-M3 모델 로딩 실패: %s", e)
             raise
     return _model
+
+
+def is_loaded() -> bool:
+    """모델이 메모리에 올라와 있는지 — /health 응답용."""
+    return _model_loaded
+
+
+def preload_embedder() -> bool:
+    """서버 startup 시 호출 — lazy load 로 인한 첫 cycle 의 메모리 spike 를 제거.
+
+    실패해도 서버 startup 자체를 막진 않는다 (첫 호출 시 다시 시도).
+    """
+    try:
+        get_embedder()
+        return True
+    except Exception as e:
+        log.warning("BGE-M3 preload 실패 (첫 호출 시 재시도): %s", e)
+        return False
 
 
 def embed_text(text: str, mode: str = "both") -> dict:
@@ -37,7 +70,12 @@ def embed_text(text: str, mode: str = "both") -> dict:
         RuntimeError: 모델 로딩 실패 시.
     """
     model = get_embedder()
-    result = model.encode([text], return_dense=True, return_sparse=True)
+    result = model.encode(
+        [text],
+        return_dense=True,
+        return_sparse=True,
+        max_length=EMBED_MAX_LENGTH,
+    )
     output = {}
     if mode in ("dense", "both"):
         output["dense"] = result["dense_vecs"][0].tolist()
