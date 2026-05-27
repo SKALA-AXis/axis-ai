@@ -1,10 +1,10 @@
-""" 단독 또는 전체 크롤러 실행 후 src/crawler/crawler_results 에 JSON 저장.
+"""단독 또는 전체 크롤러 실행 후 src/crawler/crawler_results 에 JSON 저장.
 
-    전체 수집
-    uv run python run_local_crawler_once.py
+전체 수집
+uv run python run_local_crawler_once.py
 
-    수집 데이터 유형 지정
-    uv run python run_local_crawler_once.py --source ir --company samsung_sds
+수집 데이터 유형 지정
+uv run python run_local_crawler_once.py --source ir --company samsung_sds
 """
 
 from __future__ import annotations
@@ -22,16 +22,16 @@ from src.crawler.base import DailyLimitGuard
 from src.crawler.local.bcg_crawler import BcgCrawler
 from src.crawler.local.company_news_crawler import CompanyNewsCrawler
 from src.crawler.local.dart_crawler import DartCrawler
-from src.crawler.sources.global_newsroom import GlobalNewsroomCrawler
 from src.crawler.local.ir_crawler import IRCrawler
 from src.crawler.local.job_crawler import JobCrawler
 from src.crawler.local.keyword_crawler import KeywordCrawler, save_trend_chart
 from src.crawler.local.naver_crawler import NaverNewsCrawler, annotate_peer_relevance
-from src.crawler.parsers.link_check import LinkChecker
 from src.crawler.local.research_crawler import NaverResearchCrawler
-from src.crawler.result_writer import DEFAULT_RESULTS_DIR, save_crawler_results
 from src.crawler.local.spri_crawler import SpriCrawler
 from src.crawler.local.stock_crawler import StockCrawler
+from src.crawler.parsers.link_check import LinkChecker
+from src.crawler.result_writer import DEFAULT_RESULTS_DIR, save_crawler_results
+from src.crawler.sources.global_newsroom import GlobalNewsroomCrawler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("run_local_crawler")
@@ -101,7 +101,8 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "실행할 크롤러. 쉼표 구분/공백 포함 쉼표 구분/반복 지정 가능. "
-            "예: --source naver_news,global_newsroom,naver_research 또는 --source naver_news, global_newsroom"
+            "예: --source naver_news,global_newsroom,naver_research 또는 "
+            "--source naver_news, global_newsroom"
         ),
     )
     parser.add_argument(
@@ -146,17 +147,14 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_NEWS_LIMIT,
         help=(
-            "네이버 뉴스 검색어별 최대 수집 결과 수. "
-            f"기본 base.py news 한도({DEFAULT_NEWS_LIMIT})."
+            f"네이버 뉴스 검색어별 최대 수집 결과 수. 기본 base.py news 한도({DEFAULT_NEWS_LIMIT})."
         ),
     )
     parser.add_argument(
         "--max-rss-entries",
         type=int,
         default=DEFAULT_NEWS_LIMIT,
-        help=(
-            "하위 호환용 인자. rss 크롤러 제거 후 global_newsroom에서는 사용하지 않음."
-        ),
+        help=("하위 호환용 인자. rss 크롤러 제거 후 global_newsroom에서는 사용하지 않음."),
     )
     parser.add_argument(
         "--rss-delay",
@@ -231,9 +229,7 @@ def _build_crawler(source: str, company: str | None, args: argparse.Namespace) -
         if company is None:
             raise ValueError("naver_news 크롤러는 company가 필요합니다.")
         cutoff_datetime = (
-            datetime.now().astimezone() - timedelta(hours=args.hours)
-            if args.hours > 0
-            else None
+            datetime.now().astimezone() - timedelta(hours=args.hours) if args.hours > 0 else None
         )
         return NaverNewsCrawler(
             peer_id=company,
@@ -615,8 +611,8 @@ async def _run() -> None:
 
     for (source, output_company), articles in articles_by_output.items():
         output_source_name = _make_output_source_name(source, output_company)
-        missing_companies = (
-            companies_by_output[(source, output_company)] - _article_company_ids(articles)
+        missing_companies = companies_by_output[(source, output_company)] - _article_company_ids(
+            articles
         )
         if missing_companies and source in RETRY_ON_EMPTY_SOURCES:
             log.error(

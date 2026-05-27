@@ -105,6 +105,9 @@ def _stub_deps() -> SupervisorDeps:
     context_builder = MagicMock()
     context_builder.build.return_value = AnalysisContext()
 
+    profile_context_loader = MagicMock()
+    profile_context_loader.load.side_effect = RuntimeError("force legacy")
+
     card_news_agent = MagicMock()
     card_news_agent.generate_from_analysis_package.return_value = {
         "id": "CN-20260520-0042",
@@ -119,6 +122,7 @@ def _stub_deps() -> SupervisorDeps:
         analyzer=analyzer,
         implication_agent=implication,
         context_builder=context_builder,
+        profile_context_loader=profile_context_loader,
         card_news_agent=card_news_agent,
     )
 
@@ -129,10 +133,6 @@ def test_supervisor_graph_happy_path_writes_card():
     with (
         patch("src.pipeline.analysis_flow_graph.save_card_news", return_value="CN-OK"),
         patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
-        patch(
-            "src.pipeline.analysis_flow_graph.build_profile_context_v2",
-            side_effect=RuntimeError("force legacy"),
-        ),
     ):
         result = graph.invoke(
             {
@@ -168,10 +168,6 @@ def test_supervisor_graph_routes_human_review_on_fake_numeric():
     with (
         patch("src.pipeline.analysis_flow_graph.save_card_news"),
         patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
-        patch(
-            "src.pipeline.analysis_flow_graph.build_profile_context_v2",
-            side_effect=RuntimeError("force legacy"),
-        ),
     ):
         result = graph.invoke(
             {

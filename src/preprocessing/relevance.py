@@ -20,12 +20,13 @@ from sqlalchemy import text
 
 from src.config.companies import COMPANY_ALIASES
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES
-from src.config.openai_policy import openai_calls_enabled, openai_disabled_reason
+from src.config.openai_policy import relevance_llm_disabled_reason, relevance_llm_enabled
 from src.config.preprocessing import (
     COMPANY_SITE_SOURCE_TYPES,
     INDUSTRY_DOCUMENT_SOURCE_TYPES,
     OFFICIAL_SOURCE_TYPES,
     PARSED_DOCUMENT_SOURCE_TYPES,
+    STATUS_REVIEW,
     STRUCTURED_SIGNAL_SOURCE_TYPES,
 )
 from src.config.relevance_policy import (
@@ -57,6 +58,7 @@ _llm: ChatOpenAI | None = None
 _PROMPT_VERSION = "relevance-v1.0"
 _LLM_BATCH_SIZE = int(os.getenv("RELEVANCE_LLM_BATCH_SIZE", "20"))
 _LLM_MAX_BATCHES_PER_RUN = int(os.getenv("RELEVANCE_LLM_MAX_BATCHES_PER_RUN", "1"))
+_LLM_MAX_COMPLETION_TOKENS = int(os.getenv("RELEVANCE_LLM_MAX_COMPLETION_TOKENS", "2000"))
 _LLM_ALLOWED_SOURCE_NAMES = {
     name.strip().lower()
     for name in os.getenv("RELEVANCE_LLM_SOURCE_NAMES", "naver_news").split(",")
@@ -68,7 +70,11 @@ def _get_llm() -> ChatOpenAI:
     global _llm
 
     if _llm is None:
-        _llm = ChatOpenAI(model="gpt-4o", temperature=0.1, max_completion_tokens=500)
+        _llm = ChatOpenAI(
+            model="gpt-4o",
+            temperature=0.1,
+            max_completion_tokens=_LLM_MAX_COMPLETION_TOKENS,
+        )
 
     return _llm
 
@@ -190,6 +196,7 @@ class RelevanceEvaluator:
     def __init__(self, *, enable_llm: bool = True, llm_batch_size: int = _LLM_BATCH_SIZE) -> None:
         self.enable_llm = enable_llm
         self.llm_batch_size = max(1, llm_batch_size)
+        self.review_ids: list[int] = []
 
     def filter(self, raw_article_ids: list[int]) -> tuple[list[int], list[int]]:
         """관련성 판단 후 relevant ID와 skipped ID를 반환한다.
@@ -205,6 +212,7 @@ class RelevanceEvaluator:
 
         relevant_ids: list[int] = []
         skipped_ids: list[int] = []
+        self.review_ids = []
 
         log.info("Gate 2.5 관련성 전처리 시작 | total=%d", len(raw_article_ids))
 
@@ -237,11 +245,21 @@ class RelevanceEvaluator:
 
             def apply_result(row: Any, result: dict[str, Any]) -> None:
                 is_relevant = _is_relevant(result)
+                needs_review = bool(result.pop("_needs_review", False))
                 result["matched_sector_details"] = _matched_sector_details_for_result(
                     row,
                     result["matched_sectors"],
                 )
                 metadata_patch = _metadata_patch_for_relevance(row, result, is_relevant)
+                if needs_review:
+                    metadata_patch.pop("skip_reason", None)
+                    metadata_patch.update(
+                        {
+                            "status_detail": "relevance_review",
+                            "review_reason": result["reason"],
+                            "decision_code": result.get("decision_code", "needs_llm_review"),
+                        }
+                    )
 
                 db.execute(
                     text("""
@@ -254,6 +272,7 @@ class RelevanceEvaluator:
                             matched_sector_details = CAST(:matched_sector_details AS jsonb),
                             processing_status = CASE
                                 WHEN :is_relevant THEN processing_status
+                                WHEN :needs_review THEN :review_status
                                 ELSE 'SKIPPED'
                             END
                         WHERE id = :id
@@ -275,6 +294,8 @@ class RelevanceEvaluator:
                             ensure_ascii=False,
                         ),
                         "is_relevant": is_relevant,
+                        "needs_review": needs_review,
+                        "review_status": STATUS_REVIEW,
                         "id": row.id,
                     },
                 )
@@ -298,6 +319,15 @@ class RelevanceEvaluator:
                         result["relevance_score"],
                         result["matched_companies"],
                         result["matched_sectors"],
+                    )
+                elif needs_review:
+                    self.review_ids.append(row.id)
+                    log.info(
+                        "관련성 REVIEW 보류 | id=%d label=%s score=%.2f reason=%s",
+                        row.id,
+                        result["relevance_label"],
+                        result["relevance_score"],
+                        result["reason"],
                     )
                 else:
                     skipped_ids.append(row.id)
@@ -473,12 +503,13 @@ class RelevanceEvaluator:
             return fast_pass_result
 
         if not self.enable_llm:
-            return _result(
+            return _review_result(
                 label="irrelevant",
                 score=0.35,
                 companies=matched_company_candidates,
                 sectors=matched_sector_candidates,
-                reason="scheduled no-llm mode: 규칙으로 확정되지 않은 후보는 비용 보호를 위해 제외",
+                reason="LLM 비활성화로 규칙 확정 불가: REVIEW 보류",
+                decision_code="llm_disabled_needs_review",
             )
 
         source_name = str(_row_value(row, "source_name", "") or "").strip().lower()
@@ -522,20 +553,21 @@ class RelevanceEvaluator:
         fallback_results = [
             (
                 row,
-                _result(
+                _review_result(
                     label="irrelevant",
                     score=0.35,
                     companies=result["matched_companies"],
                     sectors=result["matched_sectors"],
-                    reason="LLM batch 판단 실패 또는 비활성화: 비용 보호를 위해 제외",
+                    reason="LLM batch 판단 실패 또는 비활성화: REVIEW 보류",
+                    decision_code="llm_failed_needs_review",
                 ),
             )
             for row, result in pending
         ]
         if not pending:
             return []
-        if not openai_calls_enabled():
-            log.warning("Gate 2.5 LLM batch 스킵 | reason=%s", openai_disabled_reason())
+        if not relevance_llm_enabled():
+            log.warning("Gate 2.5 LLM batch 스킵 | reason=%s", relevance_llm_disabled_reason())
             return fallback_results
 
         payloads = [result["_llm_payload"] for _, result in pending]
@@ -568,12 +600,13 @@ class RelevanceEvaluator:
                     resolved.append(
                         (
                             row,
-                            _result(
+                            _review_result(
                                 label="irrelevant",
                                 score=0.35,
                                 companies=pending_result["matched_companies"],
                                 sectors=pending_result["matched_sectors"],
-                                reason="LLM batch 응답에 해당 id 없음: 비용 보호를 위해 제외",
+                                reason="LLM batch 응답에 해당 id 없음: REVIEW 보류",
+                                decision_code="llm_missing_id_needs_review",
                             ),
                         )
                     )
@@ -596,12 +629,13 @@ class RelevanceEvaluator:
         return [
             (
                 row,
-                _result(
+                _review_result(
                     label="irrelevant",
                     score=0.35,
                     companies=result["matched_companies"],
                     sectors=result["matched_sectors"],
-                    reason="LLM relevance batch cap 초과: 비용 보호를 위해 제외",
+                    reason="LLM relevance batch cap 초과: REVIEW 보류",
+                    decision_code="llm_cap_needs_review",
                 ),
             )
             for row, result in pending
@@ -614,13 +648,15 @@ def analyze_relevance_article(article: dict[str, Any]) -> tuple[dict[str, Any], 
     row = _DictRow(article)
     result = RelevanceEvaluator(enable_llm=False)._analyze(row)
     if result.pop("_llm_pending", False):
-        result = _result(
+        result = _review_result(
             label="irrelevant",
             score=0.35,
             companies=result["matched_companies"],
             sectors=result["matched_sectors"],
-            reason="LLM 판단 대기 후보는 로컬 relevance helper에서 제외",
+            reason="LLM 판단 대기 후보는 로컬 relevance helper에서 REVIEW 보류",
+            decision_code="local_helper_needs_review",
         )
+    needs_review = bool(result.pop("_needs_review", False))
     is_relevant = _is_relevant(result)
 
     item = dict(article)
@@ -635,7 +671,14 @@ def analyze_relevance_article(article: dict[str, Any]) -> tuple[dict[str, Any], 
     )
 
     if not is_relevant:
-        item["processing_status"] = "SKIPPED"
+        if needs_review:
+            item["processing_status"] = STATUS_REVIEW
+            item["status_detail"] = "relevance_review"
+            item["review_reason"] = result["reason"]
+            item["decision_code"] = result.get("decision_code", "needs_llm_review")
+        else:
+            item["processing_status"] = "SKIPPED"
+            item["skip_reason"] = result["reason"]
 
     return item, is_relevant
 
@@ -1478,6 +1521,26 @@ def _result(
         "matched_sectors": _normalize_sectors(sectors),
         "reason": reason,
     }
+
+
+def _review_result(
+    label: str,
+    score: float,
+    companies: list[str],
+    sectors: list[str],
+    reason: str,
+    decision_code: str,
+) -> dict[str, Any]:
+    result = _result(
+        label=label,
+        score=score,
+        companies=companies,
+        sectors=sectors,
+        reason=reason,
+    )
+    result["_needs_review"] = True
+    result["decision_code"] = decision_code
+    return result
 
 
 def _normalize_sectors(sectors: list[str]) -> list[str]:

@@ -32,9 +32,9 @@
 
 ---
 
-## 1. 만들 에이전트 (총 13종, 신규 9종)
+## 1. 만들 컴포넌트 (총 13종, 신규 9종)
 
-| # | Agent | 위치 | 호출 시점 | LLM |
+| # | Component | 위치 | 호출 시점 | LLM |
 |---|---|---|---|---|
 | 1 | **AnalysisGraphRunner** (재설계 — alias of `DataAnalysisSupervisorAgent`) | `pipeline/supervisor_graph.py` (= 곧 `analysis_flow_graph.py`) | cluster 마다 | ❌ (조율) |
 | 2 | IssueIntegrationAgent (유지) | `agents/issue_integration_agent.py` | Analysis Pipeline 노드 | ✅ |
@@ -44,8 +44,8 @@
 | 6 | CardNewsAgent (수정 + 이관) | `agents/card_news_agent.py` (호출은 Analysis Pipeline 의 `card_writer` 노드) | Analysis Pipeline 노드 (W2-1 작업 5) | ✅ |
 | 7 | **AnalysisContextBuilder** (신규) | `services/analysis_context_builder.py` | Analysis Pipeline 노드 | ❌ |
 | 8 | **CapabilityEvolutionAgent** (신규) | `agents/context/capability_evolution_agent.py` | 월1회 CronJob | ✅ |
-| 9 | **SectorPulseAggregator** (신규) | `agents/context/sector_pulse_aggregator.py` | 주1회 CronJob | ❌ |
-| 10 | **EventChainDiscoveryAgent** (옵션) | `agents/context/event_chain_discovery_agent.py` | 매일 CronJob | ✅ |
+| 9 | **SectorPulseAggregator** (신규) | `scripts/refresh_sector_pulse.py` | 주1회 CronJob | ❌ |
+| 10 | **EventChainDiscoveryJob** (옵션) | `scripts/event_chain_discovery_job.py` | 매일 CronJob | ✅ |
 | 11 | **ProfileSnapshotAgent** (신규) | `scripts/refresh_peer_profile_snapshots.py` | 주1회 CronJob | ✅ |
 | 12 | **EvaluatorAgent** (W5-1 신규, rule-based 5 metric) | `agents/evaluator_agent.py` + `validate` 노드 확장 | Analysis Pipeline 노드 (in-graph) | ❌ |
 | 13 | **CardEvaluatorSidecar** (W5-2 신규, LLM-as-Judge 4 score) | `scripts/evaluate_recent_cards.py` | 5분 주기 CronJob (sidecar) | ✅ gpt-4o-mini |
@@ -103,7 +103,7 @@
 
 ### 3.1 Analysis Pipeline 흐름 내 (cluster-time)
 
-| Agent | Input | Output |
+| Component | Input | Output |
 |---|---|---|
 | **ProfileAgent** (2-tier) | **READ**: `peer_companies.profile_snapshot` JSONB 컬럼 (Tier A) + `raw_article_business_signals` 최근 30일 top-3 + `raw_article_financial_metrics` 최근 분기 (Tier B) | `ProfileContext` (메모리) |
 | **AnalysisContextBuilder** ⭐신규 | **READ**: `peer_event_timeline` VIEW (90일) + `peer_companies.peer_plus_payload['capability_evolution']` + `sector_pulse` MV (4주) + `peer_financial_trend` VIEW (8분기) + `card_news.evidence_payload.financial_refs` + Qdrant `axis_main` (top-3) | `AnalysisContext` (메모리, ≤4k token) |
@@ -115,12 +115,12 @@
 
 ### 3.2 Context Layer CronJobs (배치) + Evaluation Sidecar (W5)
 
-| Agent | 주기 | Input | Output |
+| Component | 주기 | Input | Output |
 |---|---|---|---|
 | **ProfileSnapshotAgent** | 주1회 (월 03:00) | **READ**: `raw_articles` (sk_ax_site / official / DART) + `raw_article_business_signals` | **WRITE**: `peer_companies.profile_snapshot` JSONB 컬럼 (+ version / generated_at) |
 | **CapabilityEvolutionAgent** ⭐신규 | 월1회 (1일 03:00) | **READ**: `raw_article_business_signals` 4분기 top-5/group | **WRITE**: `peer_companies.peer_plus_payload['capability_evolution']` JSONB |
 | **SectorPulseAggregator** ⭐신규 | 주1회 (월 02:00) | **READ**: `card_news` (180일) | **WRITE**: `sector_pulse` MATERIALIZED VIEW REFRESH |
-| **EventChainDiscoveryAgent** (옵션) | 매일 (02:00) | **READ**: `card_news` 14일 + Qdrant 임베딩 | **WRITE**: `card_news.evidence_payload['related_card_ids']` JSONB |
+| **EventChainDiscoveryJob** (옵션) | 매일 (02:00) | **READ**: `card_news` 14일 + Qdrant 임베딩 | **WRITE**: `card_news.evidence_payload['related_card_ids']` JSONB |
 | **CardEvaluatorSidecar** ⭐신규 (W5-2) | **5분 주기** | **READ**: `card_news WHERE card_schema_version='v2' AND NOT (evaluation_payload ? 'llm_judge')` (최근 24h, batch 20, cost cap 적용) | **WRITE**: `card_news.evaluation_payload['llm_judge']` JSONB (4 score + reasoning) |
 | **EvalRegressionCheck** ⭐신규 (W5-3, **Phase 2, 운영 14일 후**) | 매일 (02:30) | **READ**: 최근 14일 `evaluation_payload` 평균 | Slack/email 알림 (delta < -15%) |
 

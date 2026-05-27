@@ -6,7 +6,7 @@
 |---|---|
 | **이름** | `ProvenanceTrackerMiddleware` (cross-cutting decorator + storage spec) |
 | **Supervisor** | (none — 모든 agent 에 주입) |
-| **상태** | ✅ 부분 구현 — `EvidenceAgent._build_provenance()` (`src/agents/evidence_agent.py`) 가 evidence_chain 한정 부착 중. 다른 agent 출력에는 미부착 → P9 표준화 |
+| **상태** | ✅ 부분 구현 — `EvidenceBuilder._build_provenance()` (`src/services/evidence_builder.py`) 가 evidence_chain 한정 부착 중. 다른 agent 출력에는 미부착 → P9 표준화 |
 | **Trigger** | 모든 LLM-derived 출력 생성 시점 |
 
 ## 2. 책임
@@ -23,7 +23,7 @@
 
 ## 3. 책임 NOT
 
-- **본문 fact 검증** — EvidenceAgent 의 source_links / out_of_evidence 책임
+- **본문 fact 검증** — EvidenceBuilder 의 source_links / out_of_evidence 책임
 - **점수화** — ConfidenceScoreMiddleware
 - **사용자 활동 추적** — AuditLogMiddleware (admin / login 등 user action)
 
@@ -72,8 +72,8 @@ class Provenance(TypedDict):
 
 | 저장 위치 | 채우는 agent | 형태 |
 |---|---|---|
-| `evidence_chain.provenance` jsonb | EvidenceAgent (ingestion 매시) | Provenance 전체 |
-| `briefing_reports.provenance` jsonb | BriefingGenerationAgent (user POST) | Provenance + briefing_type 필드 |
+| `evidence_chain.provenance` jsonb | EvidenceBuilder (ingestion 매시) | Provenance 전체 |
+| `briefing_reports.provenance` jsonb | BriefingGenerationService (user POST) | Provenance + briefing_type 필드 |
 | `mixer_results.provenance` jsonb (V12+) | MixerAnalysisAgent | Provenance + source_card_ids |
 | `insight_results.provenance` jsonb (V12+) | InsightCascadeAgent | Provenance + level (4단계) |
 | `weak_signal_cards.metadata.provenance` | WeakSignalAgent | Provenance + detection_version |
@@ -248,7 +248,7 @@ state["card_news"] = [
 | Unit | `_get_git_sha` (env 없음, git 있음) | git rev-parse 결과 |
 | Unit | `@with_provenance` decorator | result dict 에 provenance 키 자동 추가 |
 | Unit | non-dict 반환 agent | 무영향 (그대로 return) |
-| Integration | EvidenceAgent → DB 저장 → 재읽기 | 모든 field round-trip OK |
+| Integration | EvidenceBuilder → DB 저장 → 재읽기 | 모든 field round-trip OK |
 | Edge | prompt_version 미정의 | "unversioned" 저장 |
 | Edge | jsonb 직렬화 실패 (numpy array) | 해당 필드 drop, 나머지 보존 |
 
@@ -263,7 +263,7 @@ state["card_news"] = [
 
 ### 핵심 파일
 
-- 현재: `src/agents/evidence_agent.py` 의 `_build_provenance()` (evidence 한정)
+- 현재: `src/services/evidence_builder.py` 의 `_build_provenance()` (evidence 한정)
 - 신규 P9: `src/middleware/provenance.py` — decorator + git_sha cache
 - 신규 P9: 각 agent 파일 상단 `PROMPT_VERSION = "..."` 상수 통일
 
@@ -283,5 +283,5 @@ env:
 
 ### Changelog
 
-- **v1 (2026-04-W3)** — EvidenceAgent 단독 구현
+- **v1 (2026-04-W3)** — EvidenceBuilder 단독 구현
 - **v2 (제안, P9)** — 표준 decorator + 5 신규 jsonb column 확장

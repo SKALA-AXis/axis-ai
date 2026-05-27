@@ -35,6 +35,8 @@ from src.config.company_tiers import DOMESTIC_COMPANY_IDS, SELF_COMPANY_IDS
 from src.config.env_loader import load_profile
 from src.config.sectors import SECTOR_KEYWORDS
 from src.db.postgres import SessionLocal
+from src.services.metric_canonical import METRIC_CANONICAL
+from src.services.peer_id_aliases import expand_peer_aliases
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +64,7 @@ _MAX_RECENCY_FOCUS_DAYS = 730
 _PROCESSING_STATUS_BUCKETS: Final[tuple[str, ...]] = (
     "RAW",
     "PROCESSED",
+    "REVIEW",
     "SKIPPED",
     "FAILED",
     "OTHER",
@@ -1400,6 +1403,7 @@ def load_company_profile_documents(
     lookback_days: int | None,
     company_config: dict[str, Any] | None = None,
     sector_config: list[dict[str, Any]] | None = None,
+    include_qdrant_chunks: bool | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[str], dict[str, Any]]:
     end = datetime.now(timezone.utc)
     all_data_start = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -1409,6 +1413,11 @@ def load_company_profile_documents(
     source_counts = _empty_source_count_bundle()
     source_units: list[dict[str, Any]] = []
     notes: list[str] = []
+    qdrant_enabled = (
+        include_qdrant_chunks
+        if include_qdrant_chunks is not None
+        else os.getenv("PROFILE_AGENT_ENABLE_QDRANT_CHUNKS", "false").lower() == "true"
+    )
 
     with SessionLocal() as db:
         dart_rows = _fetch_rows_by_source(db=db, source_type="dart", company_json=company_json)
@@ -1421,6 +1430,12 @@ def load_company_profile_documents(
             source_type="securities_report",
             company_json=company_json,
         )
+        business_signal_rows = _fetch_business_signal_rows(
+            db=db,
+            company_id=company_id,
+            lookback_days=lookback_days or _DEFAULT_RECENCY_FOCUS_DAYS,
+        )
+        financial_metric_rows = _fetch_financial_metric_rows(db=db, company_id=company_id)
         representative_news_rows = _fetch_representative_news_rows(db=db, company_json=company_json)
         news_cluster_articles = _fetch_news_cluster_articles(
             db=db,
@@ -1500,6 +1515,14 @@ def load_company_profile_documents(
             )
             for rep_row in representative_news_rows
         )
+        source_units.extend(
+            _business_signal_unit_from_row(row._mapping, company_config=company_config)
+            for row in business_signal_rows
+        )
+        source_units.extend(
+            _financial_metric_unit_from_row(row._mapping, company_config=company_config)
+            for row in financial_metric_rows
+        )
 
         _populate_analysis_unit_counts(
             source_counts=source_counts,
@@ -1508,7 +1531,34 @@ def load_company_profile_documents(
             official_count=len(official_rows),
             securities_count=len(securities_rows),
             news_cluster_count=len(representative_news_rows),
+            business_signal_count=len(business_signal_rows),
+            financial_metric_count=len(financial_metric_rows),
+            qdrant_chunk_count=0,
         )
+        source_counts["structured_evidence"].update(
+            {
+                "business_signals": len(business_signal_rows),
+                "financial_metrics": len(financial_metric_rows),
+                "qdrant_chunks": 0,
+            }
+        )
+
+    qdrant_units = _load_qdrant_document_chunk_units(
+        company_id=company_id,
+        company_config=company_config,
+        enabled=bool(qdrant_enabled),
+    )
+    if qdrant_enabled and not qdrant_units:
+        notes.append("Qdrant DART/IR chunk 근거 없음 또는 조회 실패")
+    if qdrant_units:
+        source_units.extend(qdrant_units)
+        qdrant_count = len(qdrant_units)
+        source_counts["structured_evidence"]["qdrant_chunks"] = qdrant_count
+        source_counts["analysis_units"]["qdrant_document_chunks"] = qdrant_count
+        source_counts["document_or_cluster_intelligence_created"][
+            "qdrant_document_chunk_intelligence"
+        ] = qdrant_count
+        source_counts["used_for_final_profile"]["qdrant_document_chunk_intelligence"] = qdrant_count
 
     if not source_units:
         notes.append("조회 기간 내 raw_articles 근거 문서 없음")
@@ -1594,6 +1644,57 @@ def _fetch_news_cluster_articles(
         row_map = dict(row._mapping)
         grouped.setdefault(str(row_map.get("cluster_id")), []).append(row_map)
     return grouped
+
+
+def _fetch_business_signal_rows(
+    *,
+    db: Any,
+    company_id: str,
+    lookback_days: int,
+    limit: int = 80,
+) -> list[Any]:
+    aliases = expand_peer_aliases(company_id)
+    return db.execute(
+        text("""
+            SELECT id, peer_id, business_area, signal_type, sentiment, summary,
+                   evidence_text, confidence, period_year, period_quarter,
+                   raw_article_id, created_at
+              FROM raw_article_business_signals
+             WHERE peer_id = ANY(:aliases)
+               AND created_at >= NOW() - (:days || ' days')::interval
+             ORDER BY confidence DESC NULLS LAST,
+                      period_year DESC NULLS LAST,
+                      period_quarter DESC NULLS LAST,
+                      created_at DESC NULLS LAST
+             LIMIT :limit
+        """),
+        {"aliases": aliases, "days": int(lookback_days), "limit": int(limit)},
+    ).fetchall()
+
+
+def _fetch_financial_metric_rows(
+    *,
+    db: Any,
+    company_id: str,
+    limit: int = 48,
+) -> list[Any]:
+    aliases = expand_peer_aliases(company_id)
+    return db.execute(
+        text("""
+            SELECT id, peer_id, metric_name, metric_label, business_area,
+                   value_numeric, value_krwbn, unit, currency, period_year,
+                   period_quarter, period, confidence, raw_article_id, created_at
+              FROM raw_article_financial_metrics
+             WHERE peer_id = ANY(:aliases)
+               AND period_year IS NOT NULL
+             ORDER BY period_year DESC NULLS LAST,
+                      period_quarter DESC NULLS LAST,
+                      confidence DESC NULLS LAST,
+                      created_at DESC NULLS LAST
+             LIMIT :limit
+        """),
+        {"aliases": aliases, "limit": int(limit)},
+    ).fetchall()
 
 
 def _historical_baseline_period(baseline_documents: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1710,7 +1811,7 @@ def collect_processing_status_counts(
         text("""
             SELECT
                 CASE
-                    WHEN processing_status IN ('RAW', 'PROCESSED', 'SKIPPED', 'FAILED')
+                    WHEN processing_status IN ('RAW', 'PROCESSED', 'REVIEW', 'SKIPPED', 'FAILED')
                         THEN processing_status
                     ELSE 'OTHER'
                 END AS status_bucket,
@@ -1808,6 +1909,232 @@ def _document_unit_from_row(
         if compact
         else [],
         "confidence": _unit_confidence(source_type, direct_match),
+    }
+
+
+def _business_signal_unit_from_row(
+    row: Any,
+    *,
+    company_config: dict[str, Any],
+) -> dict[str, Any]:
+    signal_id = row.get("id")
+    business_area = str(row.get("business_area") or "").strip()
+    signal_type = str(row.get("signal_type") or "").strip()
+    summary = str(row.get("summary") or "").strip()
+    evidence_text = str(row.get("evidence_text") or "").strip()
+    title = " / ".join(item for item in [business_area, signal_type] if item) or "business signal"
+    article_id = row.get("raw_article_id")
+    article_ids = [int(article_id)] if isinstance(article_id, int) else []
+    return {
+        "unit_id": f"business_signal:{signal_id}",
+        "unit_type": "business_signal",
+        "source_type": "business_signal",
+        "company_id": company_config.get("company_id"),
+        "title": title,
+        "article_ids": article_ids,
+        "cluster_id": None,
+        "source_count": 1,
+        "published_at": "",
+        "collected_at": _iso_or_empty(row.get("created_at")),
+        "latest_collected_at": _iso_or_empty(row.get("created_at")),
+        "direct_company_match": {
+            "label_match": True,
+            "alias_match": False,
+            "corp_code_match": False,
+            "match_confidence": "high",
+            "match_reason": f"raw_article_business_signals.peer_id={row.get('peer_id')}",
+        },
+        "business_area_candidates": [business_area] if business_area else [],
+        "capability_keywords": [business_area] if business_area else [],
+        "strategic_keywords": [signal_type] if signal_type else [],
+        "target_industries": [],
+        "target_customer_groups": [],
+        "sector_signals": [],
+        "quantitative_signals": [],
+        "activity_signals": [signal_type] if signal_type else [],
+        "evidence_texts": [
+            {
+                "text": _compact_text(evidence_text or summary, limit=_UNIT_EVIDENCE_LIMIT),
+                "why_used": "정규화된 business signal 근거",
+            }
+        ]
+        if (evidence_text or summary)
+        else [],
+        "confidence": _confidence_band(row.get("confidence")),
+        "structured_payload": {
+            "signal_id": signal_id,
+            "peer_id": row.get("peer_id"),
+            "business_area": row.get("business_area"),
+            "signal_type": row.get("signal_type"),
+            "sentiment": row.get("sentiment"),
+            "confidence": _safe_float_or_none(row.get("confidence")),
+            "period_year": row.get("period_year"),
+            "period_quarter": row.get("period_quarter"),
+            "raw_article_id": row.get("raw_article_id"),
+        },
+    }
+
+
+def _financial_metric_unit_from_row(
+    row: Any,
+    *,
+    company_config: dict[str, Any],
+) -> dict[str, Any]:
+    metric_id = row.get("id")
+    metric_name_raw = str(row.get("metric_name") or "")
+    metric_name = METRIC_CANONICAL.get(metric_name_raw, metric_name_raw)
+    metric_label = row.get("metric_label") or metric_name
+    period = row.get("period") or _metric_period(row)
+    article_id = row.get("raw_article_id")
+    article_ids = [int(article_id)] if isinstance(article_id, int) else []
+    metric_signal = {
+        "metric_name": metric_name,
+        "metric_name_raw": metric_name_raw,
+        "metric_label": metric_label,
+        "metric_type": "official_metric",
+        "value_numeric": _safe_float_or_none(row.get("value_numeric")),
+        "value_krwbn": _safe_float_or_none(row.get("value_krwbn")),
+        "unit": row.get("unit"),
+        "currency": row.get("currency"),
+        "period": period,
+        "source_type": "financial_metric",
+        "article_id": row.get("raw_article_id"),
+        "confidence": _safe_float_or_none(row.get("confidence")),
+        "caution": "raw_article_financial_metrics 정규화 지표",
+    }
+    return {
+        "unit_id": f"financial_metric:{metric_id}",
+        "unit_type": "financial_metric",
+        "source_type": "financial_metric",
+        "company_id": company_config.get("company_id"),
+        "title": f"{metric_label} {period}".strip(),
+        "article_ids": article_ids,
+        "cluster_id": None,
+        "source_count": 1,
+        "published_at": "",
+        "collected_at": _iso_or_empty(row.get("created_at")),
+        "latest_collected_at": _iso_or_empty(row.get("created_at")),
+        "direct_company_match": {
+            "label_match": True,
+            "alias_match": False,
+            "corp_code_match": False,
+            "match_confidence": "high",
+            "match_reason": f"raw_article_financial_metrics.peer_id={row.get('peer_id')}",
+        },
+        "business_area_candidates": [str(row.get("business_area"))]
+        if row.get("business_area")
+        else [],
+        "capability_keywords": [],
+        "strategic_keywords": [],
+        "target_industries": [],
+        "target_customer_groups": [],
+        "sector_signals": [],
+        "quantitative_signals": [metric_signal],
+        "activity_signals": [],
+        "evidence_texts": [
+            {
+                "text": _metric_evidence_text(metric_signal),
+                "why_used": "정규화된 financial metric 근거",
+            }
+        ],
+        "confidence": _confidence_band(row.get("confidence")),
+        "structured_payload": {
+            "financial_metric_id": metric_id,
+            "peer_id": row.get("peer_id"),
+            "metric_name": metric_name,
+            "metric_name_raw": metric_name_raw,
+            "period_year": row.get("period_year"),
+            "period_quarter": row.get("period_quarter"),
+            "raw_article_id": row.get("raw_article_id"),
+        },
+    }
+
+
+def _load_qdrant_document_chunk_units(
+    *,
+    company_id: str,
+    company_config: dict[str, Any],
+    enabled: bool,
+    top_k: int = 8,
+) -> list[dict[str, Any]]:
+    if not enabled:
+        return []
+    try:
+        from src.rag.document_index import search_dart_chunks
+
+        chunks = search_dart_chunks(
+            "사업의 내용 주요 서비스 신규 사업 연구개발 리스크",
+            top_k=top_k,
+            peer_id=company_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — optional retrieval.
+        log.debug("profile qdrant chunk retrieval failed | company=%s error=%s", company_id, exc)
+        return []
+    return [
+        _qdrant_chunk_unit_from_payload(chunk, company_config=company_config)
+        for chunk in chunks
+        if isinstance(chunk, dict)
+    ]
+
+
+def _qdrant_chunk_unit_from_payload(
+    payload: dict[str, Any],
+    *,
+    company_config: dict[str, Any],
+) -> dict[str, Any]:
+    source_type = str(payload.get("source_type") or "document_chunk")
+    point_id = str(payload.get("point_id") or payload.get("chunk_id") or "")
+    article_id = payload.get("raw_article_id")
+    article_ids = [int(article_id)] if isinstance(article_id, int) else []
+    text_value = str(payload.get("text") or "")
+    return {
+        "unit_id": f"qdrant_chunk:{point_id}",
+        "unit_type": "qdrant_document_chunk",
+        "source_type": f"qdrant_{source_type}",
+        "company_id": company_config.get("company_id"),
+        "title": str(
+            payload.get("section_title") or payload.get("report_name") or "document chunk"
+        ),
+        "article_ids": article_ids,
+        "cluster_id": None,
+        "source_count": 1,
+        "published_at": str(payload.get("published_at") or ""),
+        "collected_at": "",
+        "latest_collected_at": "",
+        "direct_company_match": {
+            "label_match": True,
+            "alias_match": False,
+            "corp_code_match": False,
+            "match_confidence": "high",
+            "match_reason": f"qdrant peer_id={payload.get('peer_id')}",
+        },
+        "business_area_candidates": [],
+        "capability_keywords": [
+            str(item) for item in (payload.get("matched_keywords") or []) if str(item).strip()
+        ],
+        "strategic_keywords": [],
+        "target_industries": [],
+        "target_customer_groups": [],
+        "sector_signals": [],
+        "quantitative_signals": [],
+        "activity_signals": [],
+        "evidence_texts": [
+            {
+                "text": _compact_text(text_value, limit=_UNIT_EVIDENCE_LIMIT),
+                "why_used": "Qdrant DART/IR 본문 chunk 근거",
+            }
+        ]
+        if text_value
+        else [],
+        "confidence": "high",
+        "structured_payload": {
+            "point_id": point_id,
+            "raw_article_id": payload.get("raw_article_id"),
+            "section_key": payload.get("section_key"),
+            "section_title": payload.get("section_title"),
+            "period": payload.get("period"),
+            "score": _safe_float_or_none(payload.get("score")),
+        },
     }
 
 
@@ -2211,9 +2538,17 @@ def _manifest_line(item: dict[str, Any]) -> str:
 
 
 def _source_priority(source_type: str) -> int:
-    return {"dart": 0, "ir": 1, "official": 2, "news": 3, "securities_report": 4}.get(
-        source_type, 9
-    )
+    return {
+        "dart": 0,
+        "qdrant_dart": 0,
+        "ir": 1,
+        "qdrant_ir": 1,
+        "official": 2,
+        "business_signal": 3,
+        "financial_metric": 4,
+        "news": 5,
+        "securities_report": 6,
+    }.get(source_type, 9)
 
 
 def _update_counter(counter: Counter[str], values: Any) -> None:
@@ -2596,6 +2931,9 @@ def _populate_analysis_unit_counts(
     official_count: int,
     securities_count: int,
     news_cluster_count: int,
+    business_signal_count: int = 0,
+    financial_metric_count: int = 0,
+    qdrant_chunk_count: int = 0,
 ) -> None:
     analysis_units = {
         "news_clusters": news_cluster_count,
@@ -2603,6 +2941,9 @@ def _populate_analysis_unit_counts(
         "securities_report_documents": securities_count,
         "dart_documents": dart_count,
         "ir_documents": ir_count,
+        "business_signal_units": business_signal_count,
+        "financial_metric_units": financial_metric_count,
+        "qdrant_document_chunks": qdrant_chunk_count,
     }
     extracted = {
         "news_cluster_intelligence": news_cluster_count,
@@ -2610,6 +2951,9 @@ def _populate_analysis_unit_counts(
         "securities_report_document_intelligence": securities_count,
         "dart_document_intelligence": dart_count,
         "ir_document_intelligence": ir_count,
+        "business_signal_intelligence": business_signal_count,
+        "financial_metric_intelligence": financial_metric_count,
+        "qdrant_document_chunk_intelligence": qdrant_chunk_count,
     }
     source_counts["analysis_units"].update(analysis_units)
     source_counts["document_or_cluster_intelligence_created"].update(extracted)
@@ -2727,7 +3071,17 @@ def _invoke_json_prompt(prompt: str, *, phase: str) -> dict[str, Any]:
 
 def _repair_json(raw_text: str, error: str) -> str:
     prompt = _JSON_REPAIR_PROMPT.replace("{error}", error).replace("{raw_text}", raw_text)
-    response = _get_llm().invoke(prompt)
+    try:
+        from src.observability import tracing_config
+
+        config = tracing_config(
+            agent="CompanyProfileAgent",
+            phase="repair_json",
+            prompt_version=_PROMPT_VERSION,
+        )
+    except Exception:
+        config = None
+    response = _get_llm().invoke(prompt, config=config)
     return response.content if isinstance(response.content, str) else str(response.content)
 
 
@@ -3655,6 +4009,9 @@ def _empty_analysis_unit_counts() -> dict[str, int]:
         "securities_report_documents": 0,
         "dart_documents": 0,
         "ir_documents": 0,
+        "business_signal_units": 0,
+        "financial_metric_units": 0,
+        "qdrant_document_chunks": 0,
     }
 
 
@@ -3665,6 +4022,9 @@ def _empty_intelligence_counts() -> dict[str, int]:
         "securities_report_document_intelligence": 0,
         "dart_document_intelligence": 0,
         "ir_document_intelligence": 0,
+        "business_signal_intelligence": 0,
+        "financial_metric_intelligence": 0,
+        "qdrant_document_chunk_intelligence": 0,
     }
 
 
@@ -3682,6 +4042,11 @@ def _empty_source_count_bundle() -> dict[str, Any]:
             "unclustered_news_articles": 0,
         },
         "by_processing_status": _empty_processing_status_counts(),
+        "structured_evidence": {
+            "business_signals": 0,
+            "financial_metrics": 0,
+            "qdrant_chunks": 0,
+        },
     }
 
 
@@ -3771,6 +4136,48 @@ def _compact_text(value: str, *, limit: int) -> str:
     if len(compacted) <= limit:
         return compacted
     return compacted[:limit].rstrip() + "..."
+
+
+def _safe_float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _confidence_band(value: Any) -> str:
+    numeric = _safe_float_or_none(value)
+    if numeric is None:
+        return "medium"
+    if numeric >= 0.75:
+        return "high"
+    if numeric >= 0.45:
+        return "medium"
+    return "low"
+
+
+def _metric_period(row: Any) -> str:
+    year = row.get("period_year")
+    quarter = row.get("period_quarter")
+    if year and quarter:
+        return f"{year}Q{quarter}"
+    if year:
+        return str(year)
+    return ""
+
+
+def _metric_evidence_text(metric: dict[str, Any]) -> str:
+    value = metric.get("value_krwbn")
+    unit = "십억원"
+    if value is None:
+        value = metric.get("value_numeric")
+        unit = str(metric.get("unit") or "")
+    label = metric.get("metric_label") or metric.get("metric_name") or "metric"
+    period = metric.get("period") or ""
+    value_text = "" if value is None else f"{value:g}{unit}"
+    return " ".join(str(item) for item in [period, label, value_text] if str(item).strip())
 
 
 def _iso_or_empty(value: Any) -> str:

@@ -15,6 +15,7 @@ from bs4.element import Tag
 from src.crawler.article_filter import strip_html
 from src.crawler.base import RawArticle
 from src.crawler.base_crawler import BaseCrawler
+from src.parsers.dart_parser import extract_dart_storage_content
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +31,8 @@ DEFAULT_LOOKBACK_DAYS = 365
 DEFAULT_PAGE_COUNT = 100
 DEFAULT_FETCH_DOCUMENT = True
 DEFAULT_MAX_DOCUMENT_LENGTH = 0
-DEFAULT_DISCLOSURE_TYPES = ("A", "B", "F")
+DEFAULT_DISCLOSURE_TYPES = ("A",)
+_PERIODIC_REPORT_NAME_KEYWORDS = ("사업보고서", "반기보고서", "분기보고서")
 
 _DISCLOSURE_TYPE_LABELS = {
     "A": "regular",
@@ -271,6 +273,8 @@ class DartCrawler(BaseCrawler):
         for item in items:
             receipt_no = item.get("rcept_no", "")
             report_name = strip_html(item.get("report_nm", ""))
+            if not _is_periodic_report_name(report_name):
+                continue
             published_at = _parse_dart_date(item.get("rcept_dt", ""))
 
             if published_at is None:
@@ -315,7 +319,7 @@ class DartCrawler(BaseCrawler):
             raw_content = document_text or fallback_content
             raw_content_length = len(raw_content)
 
-            content = raw_content
+            content, stored_sections = extract_dart_storage_content(raw_content)
             content_truncated = False
 
             if self.max_document_length > 0 and len(content) > self.max_document_length:
@@ -356,6 +360,7 @@ class DartCrawler(BaseCrawler):
                         "raw_content_chars": raw_content_length,
                         "content_chars": len(content),
                         "content_truncated": content_truncated,
+                        "stored_sections": stored_sections,
                         "max_document_length": self.max_document_length,
                         "contains_tables": bool(document_payload.get("contains_tables")),
                         "table_count": int(document_payload.get("table_count", 0)),
@@ -496,6 +501,10 @@ def _extract_payload_from_dart_document(content: bytes, receipt_no: str) -> dict
             "parsed_file_count": 1 if text else 0,
             "parse_strategy": "table_preserved_text_bad_zip_fallback",
         }
+
+
+def _is_periodic_report_name(report_name: str) -> bool:
+    return any(keyword in report_name for keyword in _PERIODIC_REPORT_NAME_KEYWORDS)
 
 
 def _extract_text_payload_from_markup(

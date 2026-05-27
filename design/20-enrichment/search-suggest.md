@@ -1,10 +1,10 @@
-# SearchSuggestAgent — Design Plan
+# SearchSuggestService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `SearchSuggestAgent` |
+| **이름** | `SearchSuggestService` |
 | **Supervisor** | Enrichment (on-demand, cache + 산식) |
 | **상태** | 🟡 backend fixture 존재 (`GET /api/search/suggestions`), axis-ai 신규 |
 | **Trigger** | User 검색박스 입력 (debounced 300ms) |
@@ -22,7 +22,7 @@
 
 ## 3. 책임 NOT
 
-- 실제 검색 결과 — HybridSearchAgent (UserQuery supervisor)
+- 실제 검색 결과 — HybridSearchService (UserQuery supervisor)
 - 검색 history 학습 — 개인화 (out of scope v1)
 
 ## 4. 입력 스펙

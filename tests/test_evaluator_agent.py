@@ -14,7 +14,6 @@ from src.analysis.models import (
     TimelineEntry,
 )
 
-
 _DEFAULT_ACTIONS = [
     "에이전틱AI 협업 모델 PoC 제안서 작성 추진",
     "MSP 입찰 사전 자격 점검 착수",

@@ -67,8 +67,7 @@ def _parse_args() -> argparse.Namespace:
         "--full-pipeline-after-window",
         action="store_true",
         help=(
-            "각 backfill window 저장 후 issue_card/evidence/Qdrant까지 "
-            "전체 파이프라인을 실행한다."
+            "각 backfill window 저장 후 issue_card/evidence/Qdrant까지 전체 파이프라인을 실행한다."
         ),
     )
     parser.add_argument(
@@ -90,9 +89,7 @@ async def _main() -> None:
     if args.full_pipeline_after_window:
         process_after_window = "full"
     if process_after_window != "none" and (args.dry_run or args.no_state):
-        raise SystemExit(
-            "window 후처리는 --dry-run/--no-state와 함께 사용할 수 없습니다."
-        )
+        raise SystemExit("window 후처리는 --dry-run/--no-state와 함께 사용할 수 없습니다.")
 
     from src.config.env_loader import load_profile
 
@@ -121,9 +118,7 @@ async def _main() -> None:
         return
 
     cursor_date = (
-        datetime.strptime(args.cursor_date, "%Y-%m-%d").date()
-        if args.cursor_date
-        else None
+        datetime.strptime(args.cursor_date, "%Y-%m-%d").date() if args.cursor_date else None
     )
     source_names = args.source
     configs = resolve_backfill_sources(source_names)

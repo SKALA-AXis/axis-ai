@@ -36,6 +36,17 @@ _INSERT_SQL = text("""
 
 _SELECT_ARTICLE_ID_BY_URL = text("SELECT id FROM raw_articles WHERE url = :url")
 
+_UPDATE_DART_CONTENT_IF_BETTER_SQL = text("""
+    UPDATE raw_articles
+    SET content = :content,
+        content_type = COALESCE(:content_type, content_type),
+        error_message = COALESCE(:error_message, error_message)
+    WHERE id = :id
+      AND source_type = 'dart'
+      AND length(COALESCE(content, '')) < :new_content_length
+      AND :new_content_length >= 1000
+""")
+
 _INSERT_CRAWL_RUN_ARTICLE = text("""
     INSERT INTO crawl_run_articles (
         crawl_run_id, raw_article_id, url, url_hash, discovered_at,
@@ -272,6 +283,12 @@ def save_articles(
                     article_id = existing[0] if existing else None
                     action = "duplicate"
                 if article_id:
+                    _update_dart_content_if_better(
+                        db,
+                        article_id=article_id,
+                        article=article,
+                        sanitized_content=sanitized_content,
+                    )
                     _upsert_source_metadata(
                         db,
                         article_id=article_id,
@@ -299,6 +316,27 @@ def save_articles(
         len(articles) - inserted,
     )
     return inserted
+
+
+def _update_dart_content_if_better(
+    db,
+    *,
+    article_id: int,
+    article: RawArticle,
+    sanitized_content: str,
+) -> None:
+    if article.source_type != "dart":
+        return
+    db.execute(
+        _UPDATE_DART_CONTENT_IF_BETTER_SQL,
+        {
+            "id": article_id,
+            "content": sanitized_content,
+            "content_type": article.content_type,
+            "error_message": article.error_message,
+            "new_content_length": len(sanitized_content),
+        },
+    )
 
 
 def article_exists_by_url(url: str) -> bool:
@@ -1851,3 +1889,330 @@ def _sanitize_jsonish(value: Any) -> Any:
     if isinstance(value, str):
         return _sanitize_text(value)
     return value
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Global Trends — readers / upsert / trend context cache.
+# design: axis-ai/design/30-analysis/global-trends.md §3.2 / §5.2 / §7.
+# ──────────────────────────────────────────────────────────────────────────
+
+GLOBAL_NEWSROOM_SOURCE_NAMES: frozenset[str] = frozenset(
+    {
+        "nvidia_official",
+        "microsoft_official",
+        "google_official",
+        "amazon_official",
+        "meta_official",
+        "apple_newsroom",
+    }
+)
+
+GLOBAL_RESEARCH_SOURCE_NAMES: frozenset[str] = frozenset({"spri", "bcg"})
+
+SK_AX_RAW_SOURCE_NAMES: frozenset[str] = frozenset(
+    {
+        "SK AX Site",
+        "SK AX Newsroom",
+        "dart",
+        "ir_pdf",
+    }
+)
+
+DEFAULT_PEER_COMPANY_IDS: tuple[str, ...] = (
+    "sk_ax",
+    "samsung_sds",
+    "lg_cns",
+    "posco_dx",
+    "hyundai_autoever",
+)
+
+
+def fetch_global_trend_inputs(window_days: int = 30) -> list[dict[str, Any]]:
+    """글로벌 6사 newsroom + SPRi/BCG raw_articles 를 ITTrendInput 호환 dict 로 반환.
+
+    raw_articles.source_type 이 'official' 인 글로벌 6사 row 는 ITTrendAgent 의
+    ``_split_trend_inputs()`` 에서 unsupported_items 로 떨어지므로, 여기서 source_type 을
+    'global_newsroom' / 'trend_report' 로 정규화한다 (design §4.1 옵션 B 채택).
+    """
+    names = list(GLOBAL_NEWSROOM_SOURCE_NAMES | GLOBAL_RESEARCH_SOURCE_NAMES)
+    with SessionLocal() as db:
+        rows = (
+            db.execute(
+                text(
+                    """
+                SELECT id, source_name, source_type, publisher, title, content, url,
+                       published_at, collected_at, metadata, company
+                FROM raw_articles
+                WHERE source_name = ANY(:names)
+                  AND collected_at >= NOW() - make_interval(days => :days)
+                ORDER BY collected_at DESC NULLS LAST
+                """
+                ),
+                {"names": names, "days": window_days},
+            )
+            .mappings()
+            .all()
+        )
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["source_id"] = item["id"]
+        source_name = (item.get("source_name") or "").strip().lower()
+        if source_name in GLOBAL_NEWSROOM_SOURCE_NAMES:
+            item["source_type"] = "global_newsroom"
+        elif source_name in GLOBAL_RESEARCH_SOURCE_NAMES:
+            item["source_type"] = "trend_report"
+            item.setdefault("publisher", source_name)
+        items.append(item)
+    return items
+
+
+def fetch_sk_ax_raw_for_alignment(
+    *,
+    window_days: int,
+    keyword: str | None = None,
+) -> list[dict[str, Any]]:
+    """SK AX 자사 raw 를 peer alignment 용으로 fetch.
+
+    ``card_news.peer_company_id='sk_ax'`` 가 0 건이라 card 가 아닌 raw_articles 에서
+    직접 가져온다 (design §6 Phase 3 분기).
+    """
+    keyword_clause = ""
+    params: dict[str, Any] = {
+        "names": list(SK_AX_RAW_SOURCE_NAMES),
+        "days": window_days,
+    }
+    if keyword:
+        keyword_clause = "AND (title ILIKE :kw OR content ILIKE :kw)"
+        params["kw"] = f"%{keyword}%"
+
+    with SessionLocal() as db:
+        rows = (
+            db.execute(
+                text(
+                    f"""
+                SELECT id, source_name, source_type, title, content, url,
+                       published_at, collected_at, metadata
+                FROM raw_articles
+                WHERE source_name = ANY(:names)
+                  AND collected_at >= NOW() - make_interval(days => :days)
+                  {keyword_clause}
+                ORDER BY COALESCE(published_at, collected_at) DESC NULLS LAST
+                LIMIT 100
+                """
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
+    return [dict(r) for r in rows]
+
+
+def fetch_peer_cards_for_alignment(
+    *,
+    peer_id: str,
+    window_days: int,
+    keyword: str | None = None,
+    keyword_category: str | None = None,
+    importance_threshold: float = 0.5,
+) -> list[dict[str, Any]]:
+    """Peer 4사 (samsung_sds / lg_cns / posco_dx / hyundai_autoever) 의 card_news fetch.
+
+    SK AX 는 card_news 0 건이므로 ``fetch_sk_ax_raw_for_alignment`` 사용.
+    importance_threshold 미만 카드는 naver_news noise 제거 (design §13).
+    """
+    if peer_id == "sk_ax":
+        return fetch_sk_ax_raw_for_alignment(window_days=window_days, keyword=keyword)
+
+    clauses: list[str] = []
+    params: dict[str, Any] = {
+        "peer": peer_id,
+        "days": window_days,
+        "importance": importance_threshold,
+    }
+    if keyword:
+        # global_search_text 는 gin_trgm_ops 인덱스 — ILIKE 빠름.
+        # title + global_search_text + keywords[] (text[]) 3 곳에서 매칭.
+        clauses.append(
+            "(title ILIKE :kw OR global_search_text ILIKE :kw"
+            " OR EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE :kw))"
+        )
+        params["kw"] = f"%{keyword}%"
+    if keyword_category:
+        clauses.append("primary_keyword_category = :category")
+        params["category"] = keyword_category
+
+    filter_sql = (" AND " + " AND ".join(clauses)) if clauses else ""
+
+    with SessionLocal() as db:
+        rows = (
+            db.execute(
+                text(
+                    f"""
+                SELECT id, title, summary_lines, primary_keyword_category,
+                       peer_company_id, importance_score, created_at,
+                       keywords, keyword_categories
+                FROM card_news
+                WHERE peer_company_id = :peer
+                  AND created_at >= NOW() - make_interval(days => :days)
+                  AND COALESCE(importance_score, 0) >= :importance
+                  {filter_sql}
+                ORDER BY created_at DESC NULLS LAST
+                LIMIT 50
+                """
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
+    return [dict(r) for r in rows]
+
+
+_GLOBAL_TREND_UPSERT_SQL = text(
+    """
+    INSERT INTO global_industry_trends (
+        source_analysis_id, trend_date, industry, region, keyword, keyword_category,
+        title, summary, mention_count, impact_score, confidence,
+        related_peer_ids, related_card_ids, source_raw_article_ids,
+        sk_ax_implication, payload
+    ) VALUES (
+        :source_analysis_id, :trend_date, :industry, :region, :keyword, :keyword_category,
+        :title, :summary, :mention_count, :impact_score, :confidence,
+        :related_peer_ids, :related_card_ids, :source_raw_article_ids,
+        :sk_ax_implication, CAST(:payload AS JSONB)
+    )
+    ON CONFLICT (trend_date, industry, region, keyword)
+    DO UPDATE SET
+        title = EXCLUDED.title,
+        summary = EXCLUDED.summary,
+        mention_count = EXCLUDED.mention_count,
+        impact_score = EXCLUDED.impact_score,
+        confidence = EXCLUDED.confidence,
+        related_peer_ids = EXCLUDED.related_peer_ids,
+        related_card_ids = EXCLUDED.related_card_ids,
+        source_raw_article_ids = EXCLUDED.source_raw_article_ids,
+        sk_ax_implication = EXCLUDED.sk_ax_implication,
+        payload = EXCLUDED.payload,
+        updated_at = NOW()
+    """
+)
+
+
+def upsert_global_industry_trends(rows: list[dict[str, Any]]) -> int:
+    """V29 ``uq_global_industry_trends_daily_keyword`` 로 idempotent upsert.
+
+    같은 날 cronjob 이 두 번 돌아도 안전. ``source_analysis_id`` 는 첫 INSERT
+    시점 보존. ``payload`` 는 dict 면 자동 JSON 직렬화.
+    design: global-trends.md §7.
+    """
+    if not rows:
+        return 0
+    serialized: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        payload = item.get("payload")
+        if isinstance(payload, (dict, list)):
+            item["payload"] = json.dumps(payload, ensure_ascii=False, default=str)
+        elif payload is None:
+            item["payload"] = "{}"
+        for key in ("related_peer_ids", "related_card_ids", "source_raw_article_ids"):
+            item[key] = list(item.get(key) or [])
+        serialized.append(item)
+    with SessionLocal() as db:
+        db.execute(_GLOBAL_TREND_UPSERT_SQL, serialized)
+        db.commit()
+    return len(serialized)
+
+
+# trend 는 cronjob 으로 일 1 회만 갱신되므로 60 초 캐시는 정합성 손실 거의 없음.
+_TREND_CACHE_TTL_SEC = 60
+_trend_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+_trend_cache_lock = threading.Lock()
+
+
+def fetch_latest_trend_context(within_days: int = 7) -> dict[str, Any]:
+    """``global_industry_trends`` 의 최근 N 일 row 를 TrendContext shape 로 aggregate.
+
+    AnalysisAgent prompt 에 들어갈 글로벌 배경 정보. trend 가 없으면 빈 dict 반환
+    (``analyzer.py`` 가 already-empty-safe). process-level TTL 60 초 캐시.
+    """
+    import time
+
+    now = time.monotonic()
+    with _trend_cache_lock:
+        cached = _trend_cache.get(within_days)
+        if cached and (now - cached[0]) < _TREND_CACHE_TTL_SEC:
+            return cached[1]
+
+    with SessionLocal() as db:
+        rows = (
+            db.execute(
+                text(
+                    """
+                SELECT keyword, summary, payload, trend_date, source_analysis_id
+                FROM global_industry_trends
+                WHERE trend_date >= CURRENT_DATE - make_interval(days => :days)
+                ORDER BY impact_score DESC NULLS LAST, trend_date DESC
+                LIMIT 10
+                """
+                ),
+                {"days": within_days},
+            )
+            .mappings()
+            .all()
+        )
+
+    result: dict[str, Any]
+    if not rows:
+        result = {}
+    else:
+        signals: list[dict[str, Any]] = []
+        sources: list[dict[str, Any]] = []
+        trend_lines: list[str] = []
+        for row in rows:
+            payload = row["payload"] if isinstance(row["payload"], dict) else {}
+            summary = row["summary"] or ""
+            if summary:
+                trend_lines.append(summary)
+            signals.append(
+                {
+                    "signal": row["keyword"],
+                    "intensity": payload.get("intensity"),
+                    "leading_companies": payload.get("leading_companies", []),
+                    "source_ids": [row["source_analysis_id"]] if row["source_analysis_id"] else [],
+                }
+            )
+            sources.append(
+                {
+                    "source_id": row["source_analysis_id"],
+                    "title": row["keyword"],
+                }
+            )
+        latest_date = rows[0]["trend_date"]
+        result = {
+            "period": f"last_{within_days}d",
+            "trend_summary": " / ".join(trend_lines[:3]),
+            "trend_lines": trend_lines,
+            "signals": signals,
+            "source_groups": ["global_industry_trends"],
+            "sources": sources,
+            "reference_issue_ids": [],
+            "updated_at": latest_date.isoformat()
+            if hasattr(latest_date, "isoformat")
+            else str(latest_date),
+            "validation": {"pass": True},
+            "metadata": {"row_count": len(rows)},
+        }
+
+    with _trend_cache_lock:
+        _trend_cache[within_days] = (now, result)
+    return result
+
+
+def invalidate_trend_context_cache() -> None:
+    """ITTrendAgent 가 cron 으로 새 trend 를 upsert 한 직후 호출하면 즉시 반영."""
+    with _trend_cache_lock:
+        _trend_cache.clear()

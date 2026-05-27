@@ -1,13 +1,13 @@
-# RelevanceAgent — Design Plan
+# RelevanceService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `RelevanceAgent` |
+| **이름** | `RelevanceService` |
 | **Supervisor** | Ingestion |
 | **LangGraph node** | `preprocess_route` (#3) |
-| **상태** | ✅ 구현 — `src/agents/relevance_agent.py` |
+| **상태** | ✅ 구현 — `src/preprocessing/relevance.py` (`RelevanceEvaluator`, `analyze_relevance_article`) |
 | **Trigger** | CredibilityAgent 통과 row 마다 |
 
 ## 2. 책임
@@ -20,7 +20,7 @@
 2. **LLM 분류** (gpt-4o-mini, hit 못한 경우 fallback) — relevant / irrelevant / edge 3-class
 3. **routing 결과 마킹** — `relevance_label`, `relevance_score`, `matched_companies`, `matched_sectors`
 4. **다음 노드 입력 분리**:
-   - news/RSS → DedupAgent (기본 path)
+   - news/RSS → DedupService (기본 path)
    - DART 공시 → official_document_ids
    - IR PDF → parsed_document_ids
    - 산업 보고서 → industry_document_ids
@@ -28,8 +28,8 @@
 
 ## 3. 책임 NOT
 
-- 클러스터링 — DedupAgent
-- 분류 (event/sector) — ClassificationAgent
+- 클러스터링 — DedupService
+- 분류 (event/sector) — ClassificationService
 - 신뢰도 — CredibilityAgent (이전 노드)
 
 ## 4. 입력 스펙
@@ -45,7 +45,7 @@ class RelevanceInput(TypedDict):
 
 ```python
 class RelevanceOutput(TypedDict):
-    relevant_ids: list[int]                  # news 흐름 (DedupAgent 로)
+    relevant_ids: list[int]                  # news 흐름 (DedupService 로)
     official_document_ids: list[int]         # DART
     parsed_document_ids: list[int]           # IR PDF
     industry_document_ids: list[int]         # BCG / McKinsey
@@ -159,7 +159,7 @@ Relevance 는 fallback LLM 만 사용 (키워드 hit 시 LLM skip). 필수 1, 2,
 | **7** | 단순 뉴스 요약 금지 | 분류는 enum 3-class (relevant/edge/irrelevant) | 자유형 분류 X |
 | **14** | 출력 형식 | RelevanceOutput TypedDict + relevance_label enum | 필수 |
 
-→ **6/6 필수 충족** (1 보강 후). Edge case → ClassificationAgent 가 receive 후 정밀 분류.
+→ **6/6 필수 충족** (1 보강 후). Edge case → ClassificationService 가 receive 후 정밀 분류.
 
 ## 7. LLM 모델 + token 예산
 
@@ -191,7 +191,7 @@ Relevance 는 fallback LLM 만 사용 (키워드 hit 시 LLM skip). 필수 1, 2,
 ## 11. Provenance + Confidence
 
 - **Provenance**: `raw_articles.metadata.relevance_llm_model`, `relevance_prompt_version`
-- **Confidence**: `relevance_score` 자체. ClassificationAgent 의 exposure_score 계산에 입력으로 사용
+- **Confidence**: `relevance_score` 자체. ClassificationService 의 exposure_score 계산에 입력으로 사용
 
 ## 12. 테스트 시나리오
 
@@ -223,7 +223,7 @@ openai = ">=1.30"   # gpt-4o-mini
 
 ### 핵심 파일
 
-- `src/agents/relevance_agent.py`
+- `src/preprocessing/relevance.py`
 - 키워드 사전: `src/config/companies.py`, `src/agents/sector_keywords.py`
 
 ### Changelog

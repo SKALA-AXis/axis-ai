@@ -301,6 +301,7 @@ class PreprocessingService:
         industry_document_ids: list[int] = []
         structured_signal_ids: list[int] = []
         skipped_ids: list[int] = []
+        review_ids: list[int] = []
         official_relevant_ids: set[int] = set()
         official_skipped_ids: set[int] = set()
 
@@ -313,6 +314,10 @@ class PreprocessingService:
             passed, skipped = self.relevance_evaluator.filter(relevance_ids)
             relevant_ids.extend(passed)
             skipped_ids.extend(skipped)
+            result_review_ids = getattr(self.relevance_evaluator, "review_ids", [])
+            if result_review_ids:
+                review_ids.extend(result_review_ids)
+                log.info("Gate 2.5 REVIEW 보류 | count=%d", len(result_review_ids))
 
         official_relevance_ids = [
             article_id
@@ -324,6 +329,10 @@ class PreprocessingService:
             official_relevant_ids.update(passed)
             official_skipped_ids.update(skipped)
             skipped_ids.extend(skipped)
+            result_review_ids = getattr(self.relevance_evaluator, "review_ids", [])
+            if result_review_ids:
+                review_ids.extend(result_review_ids)
+                log.info("Gate 2.5 official REVIEW 보류 | count=%d", len(result_review_ids))
 
         for article in articles:
             article_id = int(article["id"])
@@ -474,6 +483,7 @@ class PreprocessingService:
             "industry_document_ids": industry_document_ids,
             "structured_signal_ids": structured_signal_ids,
             "skipped_preprocess_ids": skipped_ids,
+            "human_review_flags": list(dict.fromkeys(review_ids)),
         }
 
     def analyze_documents(self, parsed_document_ids: list[int]) -> dict[str, Any]:
@@ -538,6 +548,7 @@ def _empty_route_result() -> dict[str, list[int]]:
         "industry_document_ids": [],
         "structured_signal_ids": [],
         "skipped_preprocess_ids": [],
+        "human_review_flags": [],
     }
 
 
@@ -627,9 +638,10 @@ def _compact_document_chunks(chunks: Any) -> list[dict[str, Any]]:
             continue
         text = str(chunk.get("text") or "")
         compacted.append(
-            {
-                **chunk,
+            {key: value for key, value in chunk.items() if key != "text"}
+            | {
                 "text": text[:METADATA_CHUNK_TEXT_CHARS],
+                "text_chars": len(text) or chunk.get("text_chars"),
                 "text_is_truncated_for_metadata": len(text) > METADATA_CHUNK_TEXT_CHARS,
             }
         )

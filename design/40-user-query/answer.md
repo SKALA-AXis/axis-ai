@@ -1,10 +1,10 @@
-# AnswerAgent — Design Plan
+# AnswerService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `AnswerAgent` |
+| **이름** | `AnswerService` |
 | **Supervisor** | UserQuery |
 | **상태** | ✅ stub (`/gen-search` handler), P6 활성 |
 | **Trigger** | `POST /gen-search` (Generative Search) |
@@ -24,7 +24,7 @@
 
 ## 3. 책임 NOT
 
-- 검색 — HybridSearchAgent + RerankAgent (이전)
+- 검색 — HybridSearchService + RerankService (이전)
 - 카드 ranking — exposure_score 별도 산식
 
 ## 4. 입력 스펙
@@ -173,7 +173,7 @@ UserQueryState 의 `answer`, `sc_iter`, `confidence`.
 ## 14. 구현 메모 + Changelog
 
 - 핵심 파일: `src/agents/answer_agent.py` (신규 P6, `/gen-search` handler 분리)
-- 현재 router.py 의 `gen_search` handler 가 stub — 본 agent 로 위임
+- 현재 router.py 의 `gen_search` handler 가 stub — 본 service 로 위임
 
 ### Changelog
 

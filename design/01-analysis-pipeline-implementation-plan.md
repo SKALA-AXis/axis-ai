@@ -84,8 +84,8 @@
 | 8 | `ingestion_graph.card_news_node` | `pipeline/ingestion_graph.py` | (전체 322) | via runner | `card_news` WRITE | 🟢 `_GPT_WORKERS=5` 병렬 |
 | 9 | `AnalysisContextBuilder` (W4 신규) | `services/analysis_context_builder.py` | (예상 ~350) | ❌ DB + Qdrant only | timeline / capability / sector_pulse / financial / RAG read | ⚪ 계획 |
 | 10 | `CapabilityEvolutionAgent` (W4 신규) | `agents/context/capability_evolution_agent.py` | (예상 ~250) | ✅ 월1회 | `raw_article_business_signals` read, `peer_companies.peer_plus_payload` write | ⚪ 계획 |
-| 11 | `SectorPulseAggregator` (W4 신규) | `agents/context/sector_pulse_aggregator.py` | (예상 ~50) | ❌ MATERIALIZED VIEW REFRESH | `sector_pulse` MV refresh | ⚪ 계획 |
-| 12 | `EventChainDiscoveryAgent` (W4-6 옵션) | `agents/context/event_chain_discovery_agent.py` | (예상 ~300) | ✅ 매일 | `card_news` read, `evidence_payload['related_card_ids']` write | ⚪ 보류 |
+| 11 | `SectorPulseAggregator` (W4 신규) | `scripts/refresh_sector_pulse.py` | (예상 ~50) | ❌ MATERIALIZED VIEW REFRESH | `sector_pulse` MV refresh | ⚪ 계획 |
+| 12 | `EventChainDiscoveryJob` (W4-6 옵션) | `scripts/event_chain_discovery_job.py` | (예상 ~300) | ✅ 매일 | `card_news` read, `evidence_payload['related_card_ids']` write | ⚪ 보류 |
 | 13 | `EvaluatorAgent` (W5-1 신규) | `agents/evaluator_agent.py` + `validate` 노드 확장 | (예상 ~250) | ❌ rule-based | in-memory (validate 결과) + `card_news.evaluation_payload['rule_based']` write | ⚪ 계획 |
 | 14 | `CardEvaluatorSidecar` (W5-2 신규) | `scripts/evaluate_recent_cards.py` (CronJob, 5분 주기) | (예상 ~350) | ✅ gpt-4o-mini | `card_news` read (미평가 카드), `card_news.evaluation_payload['llm_judge']` write | ⚪ 계획 |
 
@@ -215,7 +215,7 @@
           ↓
    [issue_integrate]              # ① IssueIntegrationAgent (LLM) — main_company 확정
           ↓                       #   (외부 리뷰 R-1 2026-05-21: 흐름 앞으로 이동)
-   [profile_context]              # ② build_profile_context_v2 — main_company 기준 snapshot+enrichment, NO LLM
+   [profile_context]              # ② ProfileContextLoader.load — main_company 기준 snapshot+enrichment, NO LLM
           ↓
    [build_analysis_context]       # ③ AnalysisContextBuilder — NO LLM (DB+Qdrant), main_company 기준 4-Layer
           ↓
@@ -243,7 +243,7 @@
 | 노드 | RetryPolicy | 실패 시 fallback |
 |---|---|---|
 | `issue_integrate` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | 2회 실패 → 빈 IntegratedIssue → `validate` 가 `integrated_issue_valid=false` → human_review |
-| `profile_context` | None (DB only) | `build_profile_context_v2` 실패 → legacy `ProfileAgent.build_context` fallback |
+| `profile_context` | None (DB only) | `ProfileContextLoader.load` 실패 → legacy `ProfileAgent.build_context` fallback |
 | `build_analysis_context` | None (DB+Qdrant only) | layer 별 query try/except → 빈 AnalysisContext, ImplicationAgent v4.0 사용 |
 | `strategic_analyze` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | 2회 실패 → `is_valid_analysis=false` → human_review |
 | `implication` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | LangGraph 2회 실패 후 ImplicationAgent 내부 try/except → heuristic generator |
@@ -425,7 +425,7 @@ class ImplicationProvenance:
 | 2-B capability | `CapabilityEvolutionAgent` | 월 1회 (1일 03:00) | ✅ gpt-4o | **`peer_companies.peer_plus_payload['capability_evolution']`** JSONB |
 | 2-C sector pulse | `SectorPulseAggregator` | 주 1회 (월 02:00) | ❌ | **`sector_pulse` MATERIALIZED VIEW** (신규) |
 | 2-D financial trend | (자동) | metric INSERT 시 | ❌ | **`peer_financial_trend` VIEW** (신규) |
-| 2-E event chain (옵션) | `EventChainDiscoveryAgent` | 매일 02:00 (선택) | ✅ gpt-4o | `card_news.evidence_payload['related_card_ids']` JSONB <br/> 또는 V34 `event_chain_links` (table) |
+| 2-E event chain (옵션) | `EventChainDiscoveryJob` | 매일 02:00 (선택) | ✅ gpt-4o | `card_news.evidence_payload['related_card_ids']` JSONB <br/> 또는 V34 `event_chain_links` (table) |
 | 2-F snapshot history | `axis-cron-profile-refresh` (W2-2) | 주 1회 | ✅ (W2-2) | **`legacy_records`** (`source_table='peer_companies'`) — 신규 테이블 X |
 | Layer 3 인덱스 | Flyway / Qdrant | 정의 시 | ❌ | (DDL) |
 | Layer 4 active context | `AnalysisContextBuilder` | 매 cluster (Supervisor 노드) | ❌ | **메모리 — `AnalysisContext` dataclass** |
@@ -616,7 +616,7 @@ CREATE TABLE IF NOT EXISTS event_chain_links (
     link_type VARCHAR(30) NOT NULL,  -- follow_up | reaction | echo | contradiction
     confidence NUMERIC(3,2) NOT NULL,
     rationale TEXT,
-    discovered_by VARCHAR(40) NOT NULL DEFAULT 'EventChainDiscoveryAgent',
+    discovered_by VARCHAR(40) NOT NULL DEFAULT 'EventChainDiscoveryJob',
     discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_event_chain_links UNIQUE (source_card_id, target_card_id, link_type),
     CONSTRAINT chk_event_chain_links_confidence CHECK (confidence BETWEEN 0 AND 1),
@@ -798,7 +798,7 @@ command: ["psql", "-c", "REFRESH MATERIALIZED VIEW CONCURRENTLY sector_pulse"]
 # axis-infra/k8s/base/cronjob-event-chain.yaml (옵션, 4주 후 결정)
 schedule: "0 2 * * *"       # 매일 02:00 KST
 command: ["python", "scripts/discover_event_chains.py"]
-# EventChainDiscoveryAgent — Qdrant embedding 유사도 + 시간차 ≥ 7일 기반
+# EventChainDiscoveryJob — Qdrant embedding 유사도 + 시간차 ≥ 7일 기반
 # (P3-LOG-3, P3-LOG-4): 단순 keyword overlap X
 # LLM 호출: 일일 candidates 평균 5건 × $0.05 → ~$0.25/일
 ```
@@ -1165,7 +1165,7 @@ W4 (Context Engineering) — W2 완료 후 독립 진행 가능
     W4-3 (CapabilityEvolutionAgent CronJob)
     W4-4 (SectorPulse REFRESH CronJob)
     W4-5 (ImplicationAgent prompt v4.0 → v5.0; AnalysisContext 입력 추가)
-    W4-6 (옵션) EventChainDiscoveryAgent — 4주 운영 측정 후 도입 결정
+    W4-6 (옵션) EventChainDiscoveryJob — 4주 운영 측정 후 도입 결정
 ```
 
 ---
@@ -1850,14 +1850,14 @@ tests/golden/implication_v5/
     no_context_fallback.json     # AnalysisContext 비어있을 때 v4.0 동작 확인
 ```
 
-#### W4-6. (옵션) `EventChainDiscoveryAgent` — 4주 운영 측정 후 결정 ★ P3-4
+#### W4-6. (옵션) `EventChainDiscoveryJob` — 4주 운영 측정 후 결정 ★ P3-4
 
 W4-1 ~ W4-5 운영 4주 후 측정:
 
 | 지표 | 임계값 | → 결정 |
 |---|---|---|
 | `precedent_link` 인용 빈도 | ≥ 30% 카드 | (충분) JSONB 유지 |
-| `precedent_link` 인용 빈도 | < 10% 카드 | (불충분) EventChainDiscoveryAgent + V34 `event_chain_links` 도입 |
+| `precedent_link` 인용 빈도 | < 10% 카드 | (불충분) EventChainDiscoveryJob + V34 `event_chain_links` 도입 |
 
 → MVP 에서는 `card_news.evidence_payload['related_card_ids']` JSONB 에 candidate 만 저장. ImplicationAgent 가 link 종류 판단.
 
@@ -2043,7 +2043,7 @@ axis-infra/k8s/cronjobs/axis-cron-eval-regression.yaml  (신규)
 | W4-3 | CapabilityEvolutionAgent + CronJob (chunked input) | 4-5h | W4-0, W4-1 | AI Eng B |
 | W4-4 | SectorPulse REFRESH CronJob (Phase 1 only) | 1h | W4-1 | AI Eng B |
 | W4-5 | ImplicationAgent prompt v5.0 (AnalysisContext 입력) | 3-4h | W4-2 | AI Lead |
-| W4-6 | (옵션) EventChainDiscoveryAgent — embedding 기반 | 5-6h | W4 운영 4주 측정 후 결정 | (보류) |
+| W4-6 | (옵션) EventChainDiscoveryJob — embedding 기반 | 5-6h | W4 운영 4주 측정 후 결정 | (보류) |
 | **W5-1** | **`validate` 노드 확장 — Rule-based 4 metric (Phase 1) + calibration script** | **5-7h** | **W2-3, W4-5** | **AI Eng A** |
 | **W5-2** | **`axis-cron-card-evaluator` Sidecar — LLM-as-Judge 4 score + cost cap + v2 guard** | **7-9h** | **W4-5, V33 evaluation_payload 컬럼** | **AI Lead** |
 | **W5-3** | **(옵션, Phase 2) Regression Detection CronJob + drift metric 활성화 + cross-check sampling** | **3-4h** | **W5-2 운영 14일 후** | **AI Eng B** |

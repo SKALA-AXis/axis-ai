@@ -169,18 +169,18 @@ raw reasoning_steps 가 더 길어도 압축할 것. 핵심 결정만 trail.
 
 | Agent | 필수 (Mandatory) | 권장 (Recommended) | 3-tier observability |
 |---|---|---|---|
-| **ClassificationAgent** | 1, 2, 3, 4, 6, 7, 14 | 9 | trace_id only |
+| **ClassificationService** | 1, 2, 3, 4, 6, 7, 14 | 9 | trace_id only |
 | **IssueIntegrationAgent** | 1, 2, 4, 6, 7, 11, 12, 14 | 16 | trace_id only |
 | **AnalysisAgent** | 1, 2, 4, 6, 7, 10, 11, 13, 14 | 15, 17 | trace_id only |
 | **CardNewsAgent** | 1, 2, 3, 4, 6, 7, 11, 12, 13, 14 | 15, 17 | trace_id only |
-| **EvidenceAgent** | 1, 4, 11, 12, 14 | — | trace_id only |
+| **EvidenceBuilder** | 1, 4, 11, 12, 14 | — | trace_id only |
 | **InsightCascadeAgent** | 1, 2, 7, 10, 13, 14, 15, 16, 17 + CoT | 5, 8 | **trail + steps + trace_id** |
 | **MixerAnalysisAgent** | 1, 2, 7, 10, 13, 14, 15, 17 + CoT | 5, 8, 16 | **trail + steps + trace_id** |
 | **ITTrendAgent** | 1, 2, 5, 6, 9, 11, 13, 14, 16 + CoT | 10, 17 | **trail + steps + trace_id** |
-| **AnswerAgent** | 1, 4, 7, 11, 12, 14 | 13, 17 | trace_id only |
+| **AnswerService** | 1, 4, 7, 11, 12, 14 | 13, 17 | trace_id only |
 | **ChatOrchestratorAgent** | 1, 14, 17 (deep_dive) | — | trace_id only (streaming) |
 | **WeakSignalAgent** | 1, 2, 5, 6, 9, 11, 14 | 13, 16 | trace_id only |
-| **BriefingGenerationAgent** | 1, 2, 5, 6, 7, 8, 10, 11, 12, 13, 14, 17 + CoT | 15, 16 | **trail (section 별) + steps + trace_id** |
+| **BriefingGenerationService** | 1, 2, 5, 6, 7, 8, 10, 11, 12, 13, 14, 17 + CoT | 15, 16 | **trail (section 별) + steps + trace_id** |
 
 > 사용자 UI default 노출은 trail. steps 는 "더 자세히". trace_id 는 admin only deep link.
 > trace_id only 인 agent 는 사용자에 직접 결과 노출되지 않거나 (ingestion) 결과가 stream 형태 (chat) 이므로 trail 가치 낮음.

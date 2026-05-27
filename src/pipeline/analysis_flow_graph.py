@@ -56,7 +56,7 @@ from src.analysis.models import (
 from src.db.article_store import save_card_news, save_pipeline_log
 from src.services.agent_output_validation import confidence_in_range
 from src.services.analysis_context_builder import AnalysisContextBuilder
-from src.services.profile_context_v2 import build_profile_context_v2
+from src.services.profile_context_loader import ProfileContextLoader
 
 log = logging.getLogger(__name__)
 
@@ -162,6 +162,7 @@ class SupervisorDeps:
         implication_agent: ImplicationAgent | None = None,
         evaluator: EvaluatorAgent | None = None,
         context_builder: AnalysisContextBuilder | None = None,
+        profile_context_loader: ProfileContextLoader | None = None,
         card_news_agent: CardNewsAgent | None = None,
         implication_fallback: ImplicationGenerator | None = None,
     ) -> None:
@@ -173,6 +174,7 @@ class SupervisorDeps:
         )
         self.evaluator = evaluator or EvaluatorAgent()
         self.context_builder = context_builder or AnalysisContextBuilder()
+        self.profile_context_loader = profile_context_loader or ProfileContextLoader()
         self.card_news_agent = card_news_agent or CardNewsAgent()
 
 
@@ -196,7 +198,7 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         sectors = list(bundle.sectors or [])
         companies = _companies_for_context(bundle=bundle, integrated_issue=integrated)
         try:
-            ctx = build_profile_context_v2(
+            ctx = deps.profile_context_loader.load(
                 companies=companies,
                 sectors=sectors,
                 event_type=bundle.event_type,

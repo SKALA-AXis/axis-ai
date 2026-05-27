@@ -1,15 +1,15 @@
-# ParserAgent — Design Plan
+# ParserService — Design Plan
 
 ## 1. 메타
 
 | 항목 | 값 |
 |---|---|
-| **이름** | `ParserAgent` (unified strategy) |
+| **이름** | `ParserService` (unified strategy) |
 | **Supervisor** | Ingestion (sub of `crawl` node) |
-| **상태** | ✅ 구현 — `axis-ai/src/agents/parser_agent.py` + `parser_quality_agent.py` + `dart_parser_agent.py` (현재 3 파일 분리, v2 통합 후보) |
+| **상태** | ✅ 구현 — 단일 Agent 클래스 없음. `src/parsers/parser_router.py` + `dart_parser.py` / `ir_parser.py` / `securities_report_parser.py` / `parser_quality.py` 로 분산 |
 | **Owner** | 심유정 |
 | **Version** | v1 (현재 3 파일 분리) → v2 strategy 통합 권장 (P9 cleanup) |
-| **Trigger** | CrawlerAgent 가 호출 (각 RawArticle 마다) |
+| **Trigger** | CrawlerJob 가 호출 (각 RawArticle 마다) |
 
 ## 2. 책임 (Single Responsibility)
 
@@ -25,11 +25,11 @@
 
 ## 3. 책임 NOT (out of scope)
 
-- 외부 fetch — CrawlerAgent 가 담당
+- 외부 fetch — CrawlerJob 가 담당
 - 신뢰도 평가 — CredibilityAgent (다음 노드)
-- 관련성 판별 — RelevanceAgent (다음 노드)
-- 클러스터링 — DedupAgent
-- LLM 호출 — 본 agent 는 산식 only
+- 관련성 판별 — RelevanceService (다음 노드)
+- 클러스터링 — DedupService
+- LLM 호출 — 본 service 는 산식 only
 
 ## 4. 입력 스펙
 
@@ -66,7 +66,7 @@ class ParserOutput(TypedDict):
 ### 6.1 Strategy 선택 (v2 권장)
 
 ```python
-class ParserAgent:
+class ParserService:
     STRATEGIES = {
         ("text/html", "dart"): DartHtmlStrategy(),         # 표 마커 + jsonb 메타
         ("text/html", "*"): GenericHtmlStrategy(),         # BeautifulSoup 기본
@@ -154,11 +154,11 @@ def _quality_check(self, content: str) -> QualityResult:
 
 ## 10. State 흐름 (LangGraph)
 
-본 agent 는 LangGraph node 가 아니라 **CrawlerAgent 내부에서 호출되는 sub-agent**. 따라서 state 변경 없음 — 단지 raw_articles row 업데이트.
+본 service 는 LangGraph node 가 아니라 **CrawlerJob 내부에서 호출되는 parser layer**. 따라서 state 변경 없음 — 단지 raw_articles row 업데이트.
 
 ```python
-# crawler_agent.py 내부:
-parsed = parser_agent.parse(raw_bytes=..., content_type=..., source_type=..., url=...)
+# CrawlerJob 내부:
+parsed = DocumentParserRouter().parse_article(article)
 article = RawArticle(
     content=parsed.content,
     title=parsed.title,
@@ -209,13 +209,15 @@ feedparser = ">=6.0"  # RSS
 
 ### 핵심 파일 (현재 v1 — 분리)
 
-- `src/agents/parser_agent.py` — 일반 HTML/PDF
-- `src/agents/parser_quality_agent.py` — Gate 1 (품질 평가)
-- `src/agents/dart_parser_agent.py` — DART 표 마커
+- `src/parsers/parser_router.py` — source_type 별 parser routing
+- `src/parsers/parser_quality.py` — Gate 1 (품질 평가)
+- `src/parsers/dart_parser.py` — DART 표 마커
+- `src/parsers/ir_parser.py` — IR PDF/텍스트
+- `src/parsers/securities_report_parser.py` — 증권/산업 리포트
 
 ### v2 통합 권장 (P9 cleanup)
 
-3 파일 → 1 file (`parser_agent.py`) + Strategy 패턴 (`src/agents/parser/strategies/{dart,generic_html,pdf,rss,json}.py`)
+분산 parser → `ParserService` facade + Strategy 패턴 (`src/parsers/strategies/{dart,generic_html,pdf,rss,json}.py`)
 
 ### Changelog
 

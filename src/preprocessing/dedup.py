@@ -28,7 +28,10 @@ from src.db.article_store import (
 log = logging.getLogger(__name__)
 
 DEDUP_THRESHOLD = 0.80
-EMBED_BATCH_SIZE = 32
+# BGE-M3 fp16 + attention O(len²) → 큰 batch 가 OOM 의 주범.
+# 32 → 8 로 낮춰 spike 메모리 4x↓. encode loop 횟수만 늘어남 (CPU 직렬이라 latency
+# 영향 미미). 환경변수 DEDUP_EMBED_BATCH_SIZE 로 override 가능.
+EMBED_BATCH_SIZE = int(os.getenv("DEDUP_EMBED_BATCH_SIZE", "8"))
 _HIGH_CONFIDENCE_SIMILARITY = 0.88
 _EXISTING_CLUSTER_THRESHOLD = float(os.getenv("DEDUP_EXISTING_CLUSTER_THRESHOLD", "0.84"))
 _EXISTING_CLUSTER_LOOKBACK_HOURS = int(
@@ -245,14 +248,22 @@ def _clean_space(value: str) -> str:
 
 
 def _embed_bge(texts: list[str]) -> np.ndarray:
-    from src.rag.embedder import get_embedder
+    from src.rag.embedder import EMBED_MAX_LENGTH, get_embedder
 
     model = get_embedder()
     all_vecs = []
 
     for i in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[i : i + EMBED_BATCH_SIZE]
-        result = model.encode(batch, return_dense=True, return_sparse=False)
+        # max_length 명시로 attention matrix 메모리 spike 차단 (BGE-M3 default 8192).
+        # raw_articles 실측: max_length=2048 통과율 85.5%, 평균 truncate 183 tokens
+        # (article 후반부 noise 위주라 dedup 시그널 영향 미미).
+        result = model.encode(
+            batch,
+            return_dense=True,
+            return_sparse=False,
+            max_length=EMBED_MAX_LENGTH,
+        )
         all_vecs.append(result["dense_vecs"])
 
     vecs = np.vstack(all_vecs)

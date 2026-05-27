@@ -63,7 +63,7 @@ class DailySnapshot(TypedDict):
     snapshot_date: str             # "2026-05-14"
     card_count: int
     top5_card_ids: list[str]       # exposure_score top-5
-    keywords_top10: list[str]      # KeywordExtractionAgent 결과 reuse (enrichment_cache)
+    keywords_top10: list[str]      # KeywordExtractionService 결과 reuse (enrichment_cache)
     event_distribution: dict       # {partnership:2, ma:0, tech:5, ...}
     sector_distribution: dict
     avg_exposure_score: float

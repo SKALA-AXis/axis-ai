@@ -25,7 +25,7 @@
 
 - 내용 사실 확인 (factual check) — 본 agent 는 출처 기반 only
 - 광고/품질 필터 — ParserQualityAgent 가 Gate 1
-- 관련성 (peer 와 관련 있는지) — RelevanceAgent 가 다음 노드
+- 관련성 (peer 와 관련 있는지) — RelevanceService 가 다음 노드
 
 ## 4. 입력 스펙
 
@@ -124,7 +124,7 @@ def credibility_grade(score: float) -> str:
 ## 11. Provenance + Confidence
 
 - **Provenance**: `raw_articles.metadata.credibility_version` (예: "v3.0")
-- **Confidence**: `credibility_score` 자체가 confidence proxy (downstream agent 가 가중치로 사용 — 예: ClassificationAgent 의 `credibility_max`)
+- **Confidence**: `credibility_score` 자체가 confidence proxy (downstream agent 가 가중치로 사용 — 예: ClassificationService 의 `credibility_max`)
 
 ## 12. 테스트 시나리오
 
