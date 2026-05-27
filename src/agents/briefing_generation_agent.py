@@ -15,7 +15,7 @@ import re
 import sys
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -210,11 +210,23 @@ class BriefingGenerationAgent:
     ) -> dict[str, Any]:
         mixer = self._mixer
         if mixer is None:
-            mixer = MixerAnalysisAgent(mock_items=mock_items, prefer_mock=use_mock)
-        return await mixer.analyze(
-            card_ids=selected_card_ids,
-            ratios=ratios,
-            user_context=user_context,
+            mixer = MixerAnalysisAgent()
+        if use_mock:
+            return cast(
+                dict[str, Any],
+                await mixer.analyze_items(
+                    items=mock_items,
+                    ratios=ratios,
+                    user_context=user_context,
+                ),
+            )
+        return cast(
+            dict[str, Any],
+            await mixer.analyze(
+                card_ids=selected_card_ids,
+                ratios=ratios,
+                user_context=user_context,
+            ),
         )
 
 
@@ -716,6 +728,8 @@ def _action_evidence(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _safe_float(value: object, *, default: float) -> float:
+    if not isinstance(value, (str, int, float)):
+        return default
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -1052,10 +1066,7 @@ def _average_confidence(selected_cards: list[dict[str, Any]]) -> float:
             _nested_get(package, "validation", "sc_score"),
             _nested_get(package, "integrated_issue", "confidence"),
         ):
-            try:
-                parsed = float(value)
-            except (TypeError, ValueError):
-                continue
+            parsed = _safe_float(value, default=-1.0)
             if 0 <= parsed <= 1:
                 values.append(parsed)
     if not values:
@@ -1291,11 +1302,8 @@ def _display_core_title(
     briefing_basis: dict[str, Any],
 ) -> str:
     _ = selected_cards
-    core = (
-        briefing_basis.get("core_change")
-        if isinstance(briefing_basis.get("core_change"), dict)
-        else {}
-    )
+    core_value = briefing_basis.get("core_change")
+    core: dict[str, Any] = core_value if isinstance(core_value, dict) else {}
     return _first_text(core.get("finding"), briefing_basis.get("briefing_insight"))
 
 
@@ -1433,11 +1441,8 @@ def _core_change_payload(
     selected_cards: list[dict[str, Any]],
     briefing_basis: dict[str, Any],
 ) -> dict[str, Any]:
-    common = (
-        briefing_basis.get("common_pattern")
-        if isinstance(briefing_basis.get("common_pattern"), dict)
-        else {}
-    )
+    common_value = briefing_basis.get("common_pattern")
+    common: dict[str, Any] = common_value if isinstance(common_value, dict) else {}
     title = _clip_text(_display_core_title(selected_cards, briefing_basis), max_chars=140)
     summary = _brief_sentences(
         _display_core_summary(briefing_basis)
@@ -1458,15 +1463,11 @@ def _core_change_insight_items(
     briefing_basis: dict[str, Any],
 ) -> list[dict[str, Any]]:
     evidence_ids = [card["id"] for card in selected_cards if card.get("id")]
-    market_block = (
-        briefing_basis.get("common_pattern")
-        if isinstance(briefing_basis.get("common_pattern"), dict)
-        else {}
-    )
-    competitor_block = (
-        briefing_basis.get("hidden_conclusion")
-        if isinstance(briefing_basis.get("hidden_conclusion"), dict)
-        else {}
+    market_value = briefing_basis.get("common_pattern")
+    competitor_value = briefing_basis.get("hidden_conclusion")
+    market_block: dict[str, Any] = market_value if isinstance(market_value, dict) else {}
+    competitor_block: dict[str, Any] = (
+        competitor_value if isinstance(competitor_value, dict) else {}
     )
     market_title = _clip_text(
         _first_text(
@@ -1662,7 +1663,8 @@ def _card_summary(card: dict[str, Any]) -> str:
     )
     if package_summary:
         return package_summary
-    lines = card.get("summary_lines") if isinstance(card.get("summary_lines"), list) else []
+    line_value = card.get("summary_lines")
+    lines: list[Any] = line_value if isinstance(line_value, list) else []
     return " ".join(str(line).strip() for line in lines[:2] if str(line).strip())
 
 
@@ -1915,6 +1917,8 @@ def _first_int(value: object) -> int | None:
 def _optional_int(value: object) -> int | None:
     if value is None or str(value).strip() == "":
         return None
+    if not isinstance(value, (str, int, float)):
+        return None
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -1980,7 +1984,7 @@ def _frontend_display_payload(result: dict[str, Any]) -> dict[str, Any]:
         "primary_card_news_id": result.get("primary_card_news_id"),
         "hidden_details_count": len(result.get("hidden_details") or []),
     }
-    return _strip_default_hidden_fields(visible)
+    return cast(dict[str, Any], _strip_default_hidden_fields(visible))
 
 
 def _strip_default_hidden_fields(value: object) -> object:
