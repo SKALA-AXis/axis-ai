@@ -12,6 +12,7 @@ _EXPORT_MODULES = {
     "AnalysisAgent": "src.agents.analysis_agent",
     "AnalysisGraphRunner": "src.agents.analysis_supervisor_agent",
     "AnalysisSupervisorAgent": "src.agents.analysis_supervisor_agent",
+    "BriefingGenerationAgent": "src.agents.briefing_generation_agent",
     "CardNewsAgent": "src.agents.card_news_agent",
     "ChatbotAgent": "src.agents.chatbot_agent",
     "DataAnalysisSupervisorAgent": "src.agents.analysis_supervisor_agent",
