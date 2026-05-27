@@ -466,7 +466,6 @@ def _normalize_mock_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-
 def _append_in_filter(
     where: list[str],
     params: dict[str, Any],
@@ -722,6 +721,7 @@ def _safe_float(value: object, *, default: float) -> float:
     except (TypeError, ValueError):
         return default
 
+
 def _refine_display_copy_with_llm(
     *,
     report: dict[str, Any],
@@ -953,9 +953,7 @@ def _update_text_field(target: dict[str, Any], source: dict[str, Any], key: str)
 
 
 def _merge_core_items(core: dict[str, Any], core_copy: dict[str, Any]) -> None:
-    source_items = [
-        item for item in _json_list(core_copy.get("items")) if isinstance(item, dict)
-    ]
+    source_items = [item for item in _json_list(core_copy.get("items")) if isinstance(item, dict)]
     if not source_items:
         return
     by_type = {
@@ -1160,8 +1158,7 @@ def _build_report(
     confidence = float(briefing_basis.get("confidence") or 0.0)
     report_title = title or f"{period['label']} 브리핑"
     briefing_lead = _brief_sentences(
-        _block_text(briefing_basis.get("lead"), "finding")
-        or _display_core_summary(briefing_basis),
+        _block_text(briefing_basis.get("lead"), "finding") or _display_core_summary(briefing_basis),
         max_sentences=2,
         max_chars=220,
     )
@@ -1378,7 +1375,7 @@ def _display_market_reading(
             "evidence_card_ids": evidence_ids,
         }
         for index, (label, title, description) in enumerate(items, 1)
-    ][: _MAX_MARKET_ITEMS]
+    ][:_MAX_MARKET_ITEMS]
 
 
 def _display_sk_ax_view(
@@ -1399,7 +1396,7 @@ def _display_sk_ax_view(
         }
         for index, action in enumerate(actions, 1)
         if isinstance(action, dict) and str(action.get("action") or "").strip()
-    ][: _MAX_SKAX_ITEMS]
+    ][:_MAX_SKAX_ITEMS]
 
 
 def _display_sk_ax_title(selected_cards: list[dict[str, Any]]) -> str:
@@ -1533,6 +1530,7 @@ def _core_change_insight_items(
             "evidence_card_ids": evidence_ids,
         },
     ]
+
 
 def _competitor_move_summary(selected_cards: list[dict[str, Any]]) -> str:
     phrases: list[str] = []

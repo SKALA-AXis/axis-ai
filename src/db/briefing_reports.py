@@ -110,4 +110,3 @@ def _source_article_ids(card: dict[str, Any]) -> list[int]:
         if parsed not in result:
             result.append(parsed)
     return result
-
