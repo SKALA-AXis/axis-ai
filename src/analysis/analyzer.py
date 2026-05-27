@@ -270,10 +270,15 @@ class StrategicAnalyzer:
 
 
 def _is_valid_integrated_issue(integrated_issue: dict[str, Any]) -> bool:
+    has_subject = bool(
+        integrated_issue.get("main_company")
+        or integrated_issue.get("document_subject")
+        or integrated_issue.get("scope_type") in {"industry", "market", "mixed"}
+    )
     return bool(
         integrated_issue
         and integrated_issue.get("is_valid_summary", True)
-        and integrated_issue.get("main_company")
+        and has_subject
         and (
             integrated_issue.get("integrated_text")
             or integrated_issue.get("fact_summary")
@@ -289,18 +294,27 @@ def _integrated_issue_for_prompt(integrated_issue: dict[str, Any]) -> dict[str, 
         "cluster_id": integrated_issue.get("cluster_id"),
         "bundle_id": integrated_issue.get("bundle_id"),
         "issue_source_type": integrated_issue.get("issue_source_type"),
+        "source_family": integrated_issue.get("source_family"),
+        "scope_type": integrated_issue.get("scope_type"),
+        "document_subject": integrated_issue.get("document_subject"),
         "main_company": integrated_issue.get("main_company", ""),
         "mentioned_peer_companies": integrated_issue.get("mentioned_peer_companies", []),
         "main_issue": integrated_issue.get("main_issue", ""),
         "headline": integrated_issue.get("headline", ""),
         "one_line_summary": integrated_issue.get("one_line_summary", ""),
         "integrated_text": integrated_issue.get("integrated_text", ""),
+        "content_digest": integrated_issue.get("content_digest", {}),
+        "content_digest_storage": integrated_issue.get("content_digest_storage", {}),
+        "source_map": integrated_issue.get("source_map", {}),
+        "issue_frame": integrated_issue.get("issue_frame", {}),
         "fact_summary": integrated_issue.get("fact_summary", []),
         "consolidated_facts": integrated_issue.get("consolidated_facts", []),
         "key_numbers": integrated_issue.get("key_numbers", []),
         "business_signals": integrated_issue.get("business_signals", []),
+        "claim_ledger": integrated_issue.get("claim_ledger", []),
+        "evidence_ledger": integrated_issue.get("evidence_ledger", []),
+        "quality": integrated_issue.get("quality", {}),
         "missing_or_uncertain_points": integrated_issue.get("missing_or_uncertain_points", []),
-        "representative_sources": integrated_issue.get("representative_sources", []),
         "fact_basis": integrated_issue.get("fact_basis", []),
         "confidence": integrated_issue.get("confidence", 0.0),
     }
