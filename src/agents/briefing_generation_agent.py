@@ -783,8 +783,11 @@ def _refine_display_copy_with_llm(
                     "",
                     "작성 규칙:",
                     "- briefing_lead는 최대 2문장입니다.",
-                    "- core_change.title과 summary는 각각 1문장입니다.",
-                    "- core_change.items는 market_signal, competitor_move 두 슬롯만 유지합니다.",
+                    "- key_change_cards는 market_signal, competitor_move 두 슬롯만 유지합니다.",
+                    (
+                        "- 오늘의 핵심 변화 큰 요약 박스용 "
+                        "core_change.title/summary는 생성하지 않습니다."
+                    ),
                     (
                         "- interpretation_flow는 관찰된 변화, 평가축의 이동, "
                         "경쟁 구도 영향, 전략 시사 4단계입니다."
@@ -814,30 +817,28 @@ def _display_copy_schema_hint() -> dict[str, Any]:
     return {
         "key_summary": "string",
         "briefing_lead": "string",
-        "core_change": {
-            "title": "string",
-            "summary": "string",
-            "items": [
-                {
-                    "seq": 1,
-                    "display_label": "시장 신호",
-                    "insight_type": "market_signal",
-                    "title": "string",
-                    "summary": "string",
-                    "so_what": "string",
-                    "evidence_card_ids": ["CN-..."],
-                },
-                {
-                    "seq": 2,
-                    "display_label": "경쟁사 움직임",
-                    "insight_type": "competitor_move",
-                    "title": "string",
-                    "summary": "string",
-                    "so_what": "string",
-                    "evidence_card_ids": ["CN-..."],
-                },
-            ],
-        },
+        "key_change_cards": [
+            {
+                "seq": 1,
+                "display_label": "시장 신호",
+                "insight_type": "market_signal",
+                "title": "string",
+                "summary": "string",
+                "so_what": "string",
+                "why_important": "string",
+                "evidence_card_ids": ["CN-..."],
+            },
+            {
+                "seq": 2,
+                "display_label": "경쟁사 움직임",
+                "insight_type": "competitor_move",
+                "title": "string",
+                "summary": "string",
+                "so_what": "string",
+                "why_important": "string",
+                "evidence_card_ids": ["CN-..."],
+            },
+        ],
         "interpretation_flow": {
             "steps": [
                 {
@@ -941,13 +942,7 @@ def _merge_display_copy(
             updated.get("sk_implication"),
         )
 
-    core_copy = _json_dict(display_copy.get("core_change"))
-    core = _json_dict(updated.get("core_change"))
-    if core and core_copy:
-        _update_text_field(core, core_copy, "title")
-        _update_text_field(core, core_copy, "summary")
-        _merge_core_items(core, core_copy)
-        updated["core_change"] = core
+    _merge_key_change_cards(updated, display_copy)
 
     _merge_flow(updated, display_copy)
     _merge_market_reading(updated, display_copy)
@@ -966,8 +961,25 @@ def _update_text_field(target: dict[str, Any], source: dict[str, Any], key: str)
         target[key] = value
 
 
-def _merge_core_items(core: dict[str, Any], core_copy: dict[str, Any]) -> None:
-    source_items = [item for item in _json_list(core_copy.get("items")) if isinstance(item, dict)]
+def _merge_key_change_cards(updated: dict[str, Any], display_copy: dict[str, Any]) -> None:
+    source_items = [
+        item for item in _json_list(display_copy.get("key_change_cards")) if isinstance(item, dict)
+    ]
+    if not source_items:
+        source_items = [
+            item
+            for item in _json_list(_nested_get(display_copy, "core_change", "items"))
+            if isinstance(item, dict)
+        ]
+    current_items = [
+        item for item in _json_list(updated.get("key_change_cards")) if isinstance(item, dict)
+    ]
+    if not current_items:
+        current_items = [
+            item
+            for item in _json_list(_nested_get(updated, "core_change", "items"))
+            if isinstance(item, dict)
+        ]
     if not source_items:
         return
     by_type = {
@@ -975,7 +987,6 @@ def _merge_core_items(core: dict[str, Any], core_copy: dict[str, Any]) -> None:
         for item in source_items
         if str(item.get("insight_type") or "").strip()
     }
-    current_items = [item for item in _json_list(core.get("items")) if isinstance(item, dict)]
     for index, item in enumerate(current_items):
         source = by_type.get(str(item.get("insight_type")))
         if source is None and index < len(source_items):
@@ -984,7 +995,12 @@ def _merge_core_items(core: dict[str, Any], core_copy: dict[str, Any]) -> None:
             continue
         for key in ("title", "summary", "so_what", "why_important"):
             _update_text_field(item, source, key)
-    core["items"] = current_items
+        if item.get("so_what") and not item.get("why_important"):
+            item["why_important"] = item["so_what"]
+        if item.get("why_important") and not item.get("so_what"):
+            item["so_what"] = item["why_important"]
+    updated["key_change_cards"] = current_items
+    updated["core_change"] = {"items": copy.deepcopy(current_items)}
 
 
 def _merge_flow(updated: dict[str, Any], display_copy: dict[str, Any]) -> None:
@@ -1182,6 +1198,7 @@ def _build_report(
         _display_sk_ax_title(selected_cards),
     )
     sk_ax_implication = _brief_sentence(sk_ax_implication)
+    key_change_cards = _key_change_cards_payload(selected_cards, briefing_basis)
 
     return {
         "id": report_id,
@@ -1202,7 +1219,8 @@ def _build_report(
         "related_card_ids": source_card_ids,
         "primary_card_news_id": source_card_ids[0] if source_card_ids else None,
         "primary_peer_company_id": selected_cards[0].get("peer_id") if selected_cards else None,
-        "core_change": _core_change_payload(period, selected_cards, briefing_basis),
+        "key_change_cards": key_change_cards,
+        "core_change": {"items": copy.deepcopy(key_change_cards)},
         "interpretation_flow": _interpretation_flow_payload(briefing_basis, selected_cards),
         "market_reading": _market_reading_payload(briefing_basis, selected_cards),
         "sk_ax_view": _sk_ax_view_payload(briefing_basis, selected_cards),
@@ -1249,7 +1267,8 @@ def _empty_report(
         "selected_cards": [],
         "related_card_ids": [],
         "primary_card_news_id": None,
-        "core_change": {"label": "CORE CHANGE", "title": "", "summary": "", "items": []},
+        "key_change_cards": [],
+        "core_change": {"items": []},
         "interpretation_flow": {
             "label": "INTERPRETATION FLOW",
             "title": "해석 흐름",
@@ -1436,26 +1455,11 @@ def _join_korean(values: list[str]) -> str:
     return f"{', '.join(cleaned[:-1])}, {cleaned[-1]}"
 
 
-def _core_change_payload(
-    period: dict[str, Any],
+def _key_change_cards_payload(
     selected_cards: list[dict[str, Any]],
     briefing_basis: dict[str, Any],
-) -> dict[str, Any]:
-    common_value = briefing_basis.get("common_pattern")
-    common: dict[str, Any] = common_value if isinstance(common_value, dict) else {}
-    title = _clip_text(_display_core_title(selected_cards, briefing_basis), max_chars=140)
-    summary = _brief_sentences(
-        _display_core_summary(briefing_basis)
-        or _first_text(common.get("rationale"), _briefing_lead(period, title)),
-        max_sentences=2,
-        max_chars=220,
-    )
-    return {
-        "label": "CORE CHANGE",
-        "title": title,
-        "summary": summary,
-        "items": _core_change_insight_items(selected_cards, briefing_basis),
-    }
+) -> list[dict[str, Any]]:
+    return _core_change_insight_items(selected_cards, briefing_basis)
 
 
 def _core_change_insight_items(
@@ -1482,6 +1486,23 @@ def _core_change_insight_items(
         ),
         max_chars=140,
     )
+    market_so_what = _brief_sentences(
+        _first_text(
+            _block_text(briefing_basis.get("hidden_conclusion"), "finding"),
+            market_title,
+        ),
+        max_sentences=2,
+        max_chars=180,
+    )
+    competitor_so_what = _brief_sentences(
+        _first_text(
+            competitor_block.get("rationale"),
+            _block_text(briefing_basis.get("comparison_point"), "finding"),
+            competitor_title,
+        ),
+        max_sentences=2,
+        max_chars=180,
+    )
     return [
         {
             "seq": 1,
@@ -1496,14 +1517,8 @@ def _core_change_insight_items(
                 max_sentences=2,
                 max_chars=180,
             ),
-            "so_what": _brief_sentences(
-                _first_text(
-                    _block_text(briefing_basis.get("hidden_conclusion"), "finding"),
-                    market_title,
-                ),
-                max_sentences=2,
-                max_chars=180,
-            ),
+            "so_what": market_so_what,
+            "why_important": market_so_what,
             "evidence_card_ids": evidence_ids,
         },
         {
@@ -1519,15 +1534,8 @@ def _core_change_insight_items(
                 max_sentences=2,
                 max_chars=180,
             ),
-            "so_what": _brief_sentences(
-                _first_text(
-                    competitor_block.get("rationale"),
-                    _block_text(briefing_basis.get("comparison_point"), "finding"),
-                    competitor_title,
-                ),
-                max_sentences=2,
-                max_chars=180,
-            ),
+            "so_what": competitor_so_what,
+            "why_important": competitor_so_what,
             "evidence_card_ids": evidence_ids,
         },
     ]
@@ -1976,7 +1984,7 @@ def _frontend_display_payload(result: dict[str, Any]) -> dict[str, Any]:
     visible = {
         "title": result.get("title"),
         "briefing_lead": result.get("briefing_lead"),
-        "core_change": result.get("core_change"),
+        "key_change_cards": _key_change_cards_from_result(result),
         "interpretation_flow": result.get("interpretation_flow"),
         "market_reading": result.get("market_reading"),
         "sk_ax_view": result.get("sk_ax_view"),
@@ -1985,6 +1993,13 @@ def _frontend_display_payload(result: dict[str, Any]) -> dict[str, Any]:
         "hidden_details_count": len(result.get("hidden_details") or []),
     }
     return cast(dict[str, Any], _strip_default_hidden_fields(visible))
+
+
+def _key_change_cards_from_result(result: dict[str, Any]) -> list[Any]:
+    items = _json_list(result.get("key_change_cards"))
+    if items:
+        return items
+    return _json_list(_nested_get(result, "core_change", "items"))
 
 
 def _strip_default_hidden_fields(value: object) -> object:
