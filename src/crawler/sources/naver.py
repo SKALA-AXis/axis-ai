@@ -799,6 +799,25 @@ _MARKET_PRICE_RE = re.compile(
     r"(주가|종가|장중|상승\s*마감|하락\s*마감|강세|약세|급등|급락|상한가|하한가|시가총액)"
 )
 _MARKET_METRIC_RE = re.compile(r"(\d+(?:\.\d+)?\s*%|\d{1,3}(?:,\d{3})+\s*원)")
+_LOW_VALUE_NEWS_KEYWORDS = [
+    "뉴스브리핑",
+    "대학 뉴스브리핑",
+    "멘토링",
+    "졸업동문",
+    "초청 멘토링",
+    "박람회 개최",
+    "취업 상담",
+    "사상 최고 경신",
+    "하락종목도",
+    "마감시황",
+    "증시키워드",
+    "기업이슈",
+    "레버리지",
+    "외국인",
+    "기관",
+    "순매수",
+    "순매도",
+]
 _EVENT_LISTING_KEYWORDS = [
     "전시회",
     "박람회",
@@ -859,27 +878,31 @@ def _is_peer_filter_noise(*, title: str, content: str) -> bool:
         return True
 
     text = f"{title} {content}"
-    if _MARKET_PRICE_RE.search(text) and _MARKET_METRIC_RE.search(text):
-        return True
-
     compact_text = normalize(text)
+    title_norm = normalize(title)
+    peer_in_title = any(
+        normalize(alias) in title_norm for aliases in COMPANY_ALIASES.values() for alias in aliases
+    )
+    has_strong_keyword = any(
+        normalize(keyword) in compact_text for keyword in _STRONG_PEER_NEWS_KEYWORDS
+    )
+
+    if any(normalize(keyword) in title_norm for keyword in _LOW_VALUE_NEWS_KEYWORDS):
+        return not (peer_in_title and has_strong_keyword)
+
+    if _MARKET_PRICE_RE.search(text) and _MARKET_METRIC_RE.search(text):
+        return not (peer_in_title and has_strong_keyword)
+
     has_event_keyword = any(
         normalize(keyword) in compact_text for keyword in _EVENT_LISTING_KEYWORDS
     )
     if not has_event_keyword:
         return False
 
-    title_norm = normalize(title)
-    peer_in_title = any(
-        normalize(alias) in title_norm for aliases in COMPANY_ALIASES.values() for alias in aliases
-    )
     event_in_title = any(normalize(keyword) in title_norm for keyword in _EVENT_LISTING_KEYWORDS)
     if event_in_title and not peer_in_title:
         return True
 
-    has_strong_keyword = any(
-        normalize(keyword) in compact_text for keyword in _STRONG_PEER_NEWS_KEYWORDS
-    )
     return not peer_in_title and not has_strong_keyword
 
 

@@ -171,6 +171,10 @@ _SIGNAL_TYPE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("strategy", ("전략", "추진", "고도화", "출시", "제휴", "협력", "mou", "개편")),
     ("efficiency", ("효율", "최적화", "자동화", "비용 절감", "생산성")),
     ("risk", ("리스크", "위험", "하락", "감소", "둔화", "부진", "비용 증가")),
+    (
+        "business_update",
+        ("프로젝트", "서비스", "사업", "고객", "운영", "매출 인식", "전망", "기대"),
+    ),
 )
 _SIGNAL_REQUIRED_CONTEXT = {
     "orders_pipeline": ("수주", "backlog", "계약", "pipeline", "잔고"),
@@ -179,12 +183,19 @@ _SIGNAL_REQUIRED_CONTEXT = {
     "strategy": ("전략", "추진", "고도화", "출시", "제휴", "협력", "mou", "개편"),
     "efficiency": ("효율", "최적화", "자동화", "비용 절감", "생산성"),
     "risk": ("리스크", "위험", "하락", "감소", "둔화", "부진", "비용 증가"),
+    "business_update": ("프로젝트", "서비스", "사업", "고객", "운영", "매출 인식", "전망", "기대"),
 }
 _IR_SIGNAL_EXCLUDE_TERMS = (
     "appendix",
     "주요비상장자회사",
+    "주요비상장사합산",
     "비상장자회사",
     "자회사분기별실적",
+    "rebalancing",
+    "중간배당",
+    "배당금",
+    "sk이노베이션",
+    "sk innovation",
     "forward-looking",
     "본 자료는",
     "무단 복제",
@@ -706,6 +717,8 @@ def _select_ir_metric_candidates(
         if metric_name not in _METRIC_SPECS:
             continue
         candidate_period, period_patch = _candidate_period_for_report(candidate, report_period)
+        if report_period and candidate_period and str(candidate_period) != str(report_period):
+            continue
         metric_scope = str(candidate.get("metric_scope") or "unknown")
         if metric_scope == "portfolio_company" or metric_scope == "unknown":
             continue
@@ -841,6 +854,8 @@ def _business_signals_from_parser_result(
 
         text_value = str(chunk.get("text") or "").strip()
         if len(text_value) < 30:
+            continue
+        if _is_ir_chunk_excluded_for_peer(peer_id, text_value):
             continue
 
         source_chunk_uid = str(chunk.get("chunk_id") or chunk.get("chunk_index") or "")
@@ -1002,13 +1017,47 @@ def _signals_from_chunk(
         signal_types = _detect_signal_types(sentence)
         if not signal_types:
             continue
+        if len(signal_types) > 1 and "business_update" in signal_types:
+            signal_types = [
+                signal_type
+                for signal_type in signal_types
+                if signal_type != "business_update"
+            ]
         business_area = _detect_business_area(sentence) or section_area or "company_total"
 
         for signal_type in signal_types:
-            if not _has_required_signal_context(sentence, signal_type):
+            if signal_type != "business_update" and not _has_required_signal_context(
+                sentence,
+                signal_type,
+            ):
                 continue
             signals.append((sentence_index, sentence[:800], business_area, signal_type))
     return signals
+
+
+def _is_ir_chunk_excluded_for_peer(peer_id: str | None, text_value: str) -> bool:
+    if peer_id != "sk_ax":
+        return False
+
+    lowered = text_value.lower()
+    has_sk_ax_context = any(
+        term in lowered
+        for term in (
+            "sk ax",
+            "sk c&c",
+            "c&c",
+            "씨앤씨",
+            "it서비스",
+            "it 서비스",
+            "enterprise it",
+            "digital transformation",
+            "ai transformation",
+        )
+    )
+    if has_sk_ax_context:
+        return False
+
+    return _is_low_value_signal_sentence(text_value)
 
 
 def _business_area_from_chunk(chunk: dict[str, Any], text_value: str) -> str | None:
