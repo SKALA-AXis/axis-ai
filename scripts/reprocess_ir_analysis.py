@@ -1032,8 +1032,7 @@ def _llm_business_signals_from_parser_result(
         row = {
             "raw_article_id": article_id,
             "signal_uid": (
-                f"ir-llm:{business_area}:{signal_type}:"
-                f"p{signal.get('source_page') or 'x'}:{index}"
+                f"ir-llm:{business_area}:{signal_type}:p{signal.get('source_page') or 'x'}:{index}"
             ),
             "source_type": "ir",
             "source_name": article.get("source_name"),
@@ -1375,9 +1374,7 @@ def _detect_signal_types(text_value: str) -> list[str]:
     )
     top_score = ranked[0][1]
     selected = [
-        signal_type
-        for signal_type, score in ranked
-        if score == top_score or len(ranked) == 1
+        signal_type for signal_type, score in ranked if score == top_score or len(ranked) == 1
     ][:2]
     if (
         "orders_pipeline" in scores
@@ -1548,9 +1545,7 @@ def _sentences(text_value: str) -> list[str]:
         merged.append(buffer)
 
     filtered = [
-        piece
-        for piece in merged
-        if len(piece) >= 24 and not _is_numeric_heavy_signal_text(piece)
+        piece for piece in merged if len(piece) >= 24 and not _is_numeric_heavy_signal_text(piece)
     ]
     return filtered or merged
 
@@ -1579,6 +1574,7 @@ def _page_contexts_from_chunks(chunks: list[Any]) -> dict[Any, str]:
                 sentence
                 for sentence in _sentences(text_value)
                 if _looks_like_narrative_signal_sentence(sentence)
+                and not _is_low_value_signal_sentence(sentence)
             )
         page_contexts[page] = " ".join(sentences)[:2400].strip()
     return page_contexts
@@ -1591,6 +1587,7 @@ def _signal_context_text(sentences: list[str], index: int) -> str:
         sentence
         for sentence in sentences[start:end]
         if _looks_like_narrative_signal_sentence(sentence)
+        and not _is_low_value_signal_sentence(sentence)
     ]
     return " ".join(context_sentences).strip()
 
@@ -1599,6 +1596,8 @@ def _signal_evidence_text(*, sentence: str, context_text: str) -> str:
     if _looks_like_table_like_signal_text(sentence) and len(context_text) > len(sentence):
         return context_text
     if len(sentence) < 48 and len(context_text) <= 800:
+        if _detect_signal_types(sentence):
+            return sentence
         return context_text
     return sentence
 

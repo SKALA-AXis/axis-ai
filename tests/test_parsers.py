@@ -139,8 +139,7 @@ def test_ir_parser_normalizes_krw_bn_table_unit_to_eokwon() -> None:
     revenue_candidates = [
         candidate
         for candidate in parsed["candidates"]
-        if candidate.get("source") == "ir_table_matrix"
-        and candidate.get("type") == "revenue_total"
+        if candidate.get("source") == "ir_table_matrix" and candidate.get("type") == "revenue_total"
     ]
 
     assert revenue_candidates[0]["unit"] == "십억원"
@@ -259,8 +258,7 @@ def test_ir_parser_does_not_apply_amount_unit_to_margin_rows() -> None:
     assert [candidate["value_pct"] for candidate in margin_candidates] == [11.2, 11.1]
     assert all(candidate["unit"] == "%" for candidate in margin_candidates)
     assert all(
-        "단위 근거: (단위: 십억원)" in candidate["evidence_text"]
-        for candidate in margin_candidates
+        "단위 근거: (단위: 십억원)" in candidate["evidence_text"] for candidate in margin_candidates
     )
     assert margin_candidates[0]["business_area"] == "솔루션"
 
@@ -311,8 +309,7 @@ def test_ir_parser_does_not_store_percentage_cells_as_amount_metrics() -> None:
     revenue_candidates = [
         candidate
         for candidate in parsed["candidates"]
-        if candidate.get("source") == "ir_table_matrix"
-        and candidate.get("type") == "revenue_total"
+        if candidate.get("source") == "ir_table_matrix" and candidate.get("type") == "revenue_total"
     ]
 
     assert [candidate["period"] for candidate in revenue_candidates] == [
@@ -876,8 +873,7 @@ def test_ir_parser_infers_quarter_from_quarterly_table_title() -> None:
     candidates = [
         candidate
         for candidate in parsed["candidates"]
-        if candidate.get("source") == "ir_table_matrix"
-        and candidate.get("type") == "revenue_total"
+        if candidate.get("source") == "ir_table_matrix" and candidate.get("type") == "revenue_total"
     ]
 
     assert any(
@@ -928,8 +924,7 @@ def test_ir_parser_does_not_apply_gpm_parent_to_amount_segment_rows() -> None:
     candidates = [
         candidate
         for candidate in parsed["candidates"]
-        if candidate.get("source") == "ir_table_matrix"
-        and candidate.get("period") == "2026Q1"
+        if candidate.get("source") == "ir_table_matrix" and candidate.get("period") == "2026Q1"
     ]
 
     assert any(
@@ -1428,11 +1423,10 @@ def test_ir_rule_based_business_signals_require_directional_evidence() -> None:
         {"period": "2026Q1", "peer_id": "test_peer"},
     )
 
-    assert len(signals) == 2
-    assert {signal["signal_type"] for signal in signals} == {"growth", "investment"}
+    assert len(signals) == 1
+    assert {signal["signal_type"] for signal in signals} == {"growth"}
     assert all(
-        "클라우드 매출은 1분기 주요 실적 지표" not in signal["evidence_text"]
-        for signal in signals
+        "클라우드 매출은 1분기 주요 실적 지표" not in signal["evidence_text"] for signal in signals
     )
     assert all(
         signal["extraction_method"] == "ir_parser.document_chunks.rule_based.v2"

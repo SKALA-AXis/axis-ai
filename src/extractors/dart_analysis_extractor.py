@@ -744,7 +744,7 @@ def _signals_from_chunk(
 
         business_area = _detect_business_area(sentence)
         if not business_area and len(chunk_areas) > 1:
-            business_area = "other"
+            continue
         if not business_area and len(chunk_areas) == 1:
             sole_chunk_area = next(iter(chunk_areas))
             if sole_chunk_area == "cloud" and not _has_explicit_cloud_context(sentence.lower()):
