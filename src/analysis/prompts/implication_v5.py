@@ -17,13 +17,11 @@ SYSTEM_PROMPT_EXTENSION = """\
 - AnalysisContext.event_chain_candidates 에 선행 사건이 있으면
   peer_implication.precedent_link 를 채우고, 다음 4 relation 중 하나를 선택:
   follow_up | reaction | echo | contradiction.
-- AnalysisContext.capability_evolution 에 narrative 가 있으면
-  peer_implication.capability_change 에 해당 narrative 의 핵심을 1 문장 인용.
 - AnalysisContext.sector_pulse_recent 의 intensity_avg 가 직전 4주 대비 +20% 이상이면
   skax_implication.why_important 에 sector momentum 을 반영.
 - evidence_density_per_peer[peer_id].density_label == "sparse" 이면 confidence 0.7 이상 부여 금지.
 - ImplicationProvenance.used_context_layers 에 실제 인용한 layer 이름 (예:
-  "peer_event_timeline_recent", "capability_evolution") 을 명시.
+  "peer_event_timeline_recent", "sector_pulse_recent") 을 명시.
 """
 
 SYSTEM_PROMPT_V5 = SYSTEM_PROMPT + SYSTEM_PROMPT_EXTENSION

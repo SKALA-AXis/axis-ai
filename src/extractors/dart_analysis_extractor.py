@@ -96,7 +96,7 @@ _SECTION_SIGNAL_POLICY: dict[str, dict[str, object]] = {
     },
     "other": {
         "allowed_signal_types": {"risk"},
-        "default_business_area": "company_total",
+        "default_business_area": "other",
     },
     "affiliates": {
         "allowed_signal_types": {"strategy", "risk"},
@@ -174,6 +174,17 @@ _SK_GROUP_UNRELATED_TERMS = (
     "자회사",
     "포트폴리오",
 )
+_SIGNAL_TYPE_PRIORITY = {
+    "risk": 0,
+    "orders_pipeline": 1,
+    "growth": 2,
+    "strategy": 3,
+    "investment": 4,
+    "efficiency": 5,
+    "business_overview": 6,
+    "product_service": 7,
+    "rd": 8,
+}
 
 
 def financial_metrics_from_dart(
@@ -269,7 +280,7 @@ def business_signals_from_dart(
     period_type = parser_result.get("period_type") or article["extra"].get("period_type")
 
     signals: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str]] = set()
     signals.extend(
         _llm_business_signals_from_dart(
             article=article,
@@ -295,7 +306,12 @@ def business_signals_from_dart(
             text_value,
             peer_id=peer_id,
         ):
-            dedupe_key = (business_area, signal_type, evidence_text[:180])
+            business_area = _business_area_from_evidence_override(
+                peer_id=peer_id,
+                business_area=business_area,
+                evidence_text=evidence_text,
+            )
+            dedupe_key = (business_area, evidence_text[:180])
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
@@ -362,13 +378,13 @@ def _llm_business_signals_from_dart(
     period_year: Any,
     period_quarter: Any,
     period_type: Any,
-    seen: set[tuple[str, str, str]],
+    seen: set[tuple[str, str]],
 ) -> list[dict[str, Any]]:
     llm_signals = parser_result.get("llm_business_signals")
     if not isinstance(llm_signals, list):
         return []
 
-    rows: list[dict[str, Any]] = []
+    rows_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for index, signal in enumerate(llm_signals, start=1):
         if not isinstance(signal, dict):
             continue
@@ -379,38 +395,49 @@ def _llm_business_signals_from_dart(
             continue
         if peer_id == "sk_ax" and not _is_sk_ax_relevant_sentence(evidence_text):
             continue
-        dedupe_key = (business_area, signal_type, evidence_text[:180])
+        business_area = _business_area_from_evidence_override(
+            peer_id=peer_id,
+            business_area=business_area,
+            evidence_text=evidence_text,
+        )
+        dedupe_key = (business_area, evidence_text[:180])
         if dedupe_key in seen:
             continue
-        seen.add(dedupe_key)
-        rows.append(
-            {
-                "raw_article_id": article_id,
-                "signal_uid": f"dart-llm:{business_area}:{signal_type}:{index}",
-                "source_type": "dart",
-                "source_name": article.get("source_name"),
-                "peer_id": peer_id,
-                "period": period,
-                "period_year": period_year,
-                "period_quarter": period_quarter,
-                "period_type": period_type,
-                "business_area": business_area,
-                "signal_type": signal_type,
-                "sentiment": signal.get("sentiment") or _sentiment(evidence_text),
-                "summary": signal.get("summary") or _summary(evidence_text),
-                "evidence_text": evidence_text,
-                "source_page": None,
-                "source_chunk_uid": None,
-                "confidence": signal.get("confidence") or 0.78,
-                "extraction_method": "dart_llm.analysis",
-                "payload": {
-                    "title": article.get("title"),
-                    "url": article.get("url"),
-                    "rcept_no": parser_result.get("rcept_no") or article["extra"].get("rcept_no"),
-                    "llm_signal": signal,
-                },
-            }
-        )
+        row = {
+            "raw_article_id": article_id,
+            "signal_uid": f"dart-llm:{business_area}:{signal_type}:{index}",
+            "source_type": "dart",
+            "source_name": article.get("source_name"),
+            "peer_id": peer_id,
+            "period": period,
+            "period_year": period_year,
+            "period_quarter": period_quarter,
+            "period_type": period_type,
+            "business_area": business_area,
+            "signal_type": signal_type,
+            "sentiment": signal.get("sentiment") or _sentiment(evidence_text),
+            "summary": signal.get("summary") or _summary(evidence_text),
+            "evidence_text": evidence_text,
+            "source_page": None,
+            "source_chunk_uid": None,
+            "confidence": signal.get("confidence") or 0.78,
+            "extraction_method": "dart_llm.analysis",
+            "payload": {
+                "title": article.get("title"),
+                "url": article.get("url"),
+                "rcept_no": parser_result.get("rcept_no") or article["extra"].get("rcept_no"),
+                "llm_signal": signal,
+            },
+        }
+        existing = rows_by_key.get(dedupe_key)
+        if existing and _signal_type_priority(existing["signal_type"]) <= _signal_type_priority(
+            signal_type
+        ):
+            continue
+        rows_by_key[dedupe_key] = row
+    rows = list(rows_by_key.values())
+    for row in rows:
+        seen.add((row["business_area"], row["evidence_text"][:180]))
     return rows
 
 
@@ -716,9 +743,14 @@ def _signals_from_chunk(
             continue
 
         business_area = _detect_business_area(sentence)
-        if not business_area:
-            if len(chunk_areas) == 1:
-                business_area = next(iter(chunk_areas))
+        if not business_area and len(chunk_areas) > 1:
+            business_area = "other"
+        if not business_area and len(chunk_areas) == 1:
+            sole_chunk_area = next(iter(chunk_areas))
+            if sole_chunk_area == "cloud" and not _has_explicit_cloud_context(sentence.lower()):
+                business_area = "other"
+            else:
+                business_area = sole_chunk_area
         if not business_area and peer_id == "sk_ax" and _is_sk_ax_relevant_sentence(sentence):
             business_area = "sk_ax"
         if not business_area and not chunk_areas:
@@ -726,8 +758,8 @@ def _signals_from_chunk(
         if not business_area:
             continue
 
-        for signal_type in sentence_signal_types:
-            signals.append((index, sentence[:1000], business_area, signal_type))
+        primary_signal_type = _primary_signal_type(sentence_signal_types)
+        signals.append((index, sentence[:1000], business_area, primary_signal_type))
 
     return signals
 
@@ -755,6 +787,44 @@ def _detect_business_area(text_value: str) -> str | None:
     return None
 
 
+def _business_area_from_evidence_override(
+    *,
+    peer_id: str | None,
+    business_area: str,
+    evidence_text: str,
+) -> str:
+    if business_area != "cloud":
+        return business_area
+
+    lowered = evidence_text.lower()
+    explicit_areas = _detect_business_areas(evidence_text)
+    explicit_non_cloud_areas = [area for area in explicit_areas if area != "cloud"]
+    if explicit_non_cloud_areas and not _has_explicit_cloud_context(lowered):
+        if len(explicit_non_cloud_areas) == 1:
+            return explicit_non_cloud_areas[0]
+        return "other"
+
+    if peer_id == "sk_ax":
+        if _has_enterprise_it_context(lowered) and not _has_explicit_cloud_context(lowered):
+            return "enterprise_it"
+        if not _has_explicit_cloud_context(lowered):
+            return "other"
+
+    if not _has_explicit_cloud_context(lowered):
+        return "other"
+
+    return business_area
+
+
+def _primary_signal_type(signal_types: list[str]) -> str:
+    ranked = sorted(signal_types, key=_signal_type_priority)
+    return ranked[0]
+
+
+def _signal_type_priority(signal_type: str) -> int:
+    return _SIGNAL_TYPE_PRIORITY.get(signal_type, 99)
+
+
 def _detect_business_areas(text_value: str) -> set[str]:
     lowered = text_value.lower()
     areas: set[str] = set()
@@ -762,6 +832,40 @@ def _detect_business_areas(text_value: str) -> set[str]:
         if any(_contains_term(lowered, term) for term in terms):
             areas.add(business_area)
     return areas
+
+
+def _has_explicit_cloud_context(lowered_text: str) -> bool:
+    return any(
+        _contains_term(lowered_text, term)
+        for term in (
+            "cloud",
+            "클라우드",
+            "msp",
+            "csp",
+            "aws",
+            "azure",
+            "gcp",
+            "데이터센터",
+            "data center",
+            "gpu",
+        )
+    )
+
+
+def _has_enterprise_it_context(lowered_text: str) -> bool:
+    return any(
+        _contains_term(lowered_text, term)
+        for term in (
+            "enterprise",
+            "erp",
+            "ito",
+            "si",
+            "it서비스",
+            "it 서비스",
+            "it service",
+            "it services",
+        )
+    )
 
 
 def _detect_signal_types(text_value: str) -> list[str]:

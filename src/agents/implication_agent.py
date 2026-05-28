@@ -395,7 +395,6 @@ def _shrink_profile(profile: Any) -> dict[str, Any]:
         "recent_keywords",
         "recent_signals",
         "recent_financial",
-        "recent_capability_change",
         "narrative",
     )
     return {key: profile[key] for key in keys if key in profile}
@@ -609,8 +608,6 @@ def _detect_used_layers(analysis_context: AnalysisContext | None) -> list[str]:
     layers: list[str] = []
     if analysis_context.peer_event_timeline_recent:
         layers.append("peer_event_timeline_recent")
-    if analysis_context.capability_evolution:
-        layers.append("capability_evolution")
     if analysis_context.sector_pulse_recent:
         layers.append("sector_pulse_recent")
     if analysis_context.financial_trend:

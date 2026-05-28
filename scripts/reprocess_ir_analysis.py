@@ -165,7 +165,7 @@ _SECTION_AREA_MAP = {
     "shareholder": "company_total",
 }
 _SIGNAL_TYPE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("orders_pipeline", ("수주", "backlog", "계약", "pipeline", "잔고")),
+    ("orders_pipeline", ("수주", "backlog", "계약", "잔고")),
     ("investment", ("투자", "capex", "설비", "데이터센터", "gpu", "구축")),
     ("growth", ("성장", "확대", "증가", "개선", "상승", "호조", "profitability")),
     ("strategy", ("전략", "추진", "고도화", "출시", "제휴", "협력", "mou", "개편")),
@@ -177,13 +177,22 @@ _SIGNAL_TYPE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 _SIGNAL_REQUIRED_CONTEXT = {
-    "orders_pipeline": ("수주", "backlog", "계약", "pipeline", "잔고"),
+    "orders_pipeline": ("수주", "backlog", "계약", "잔고"),
     "investment": ("투자", "capex", "설비", "데이터센터", "gpu", "구축"),
     "growth": ("성장", "확대", "증가", "개선", "상승", "호조"),
     "strategy": ("전략", "추진", "고도화", "출시", "제휴", "협력", "mou", "개편"),
     "efficiency": ("효율", "최적화", "자동화", "비용 절감", "생산성"),
     "risk": ("리스크", "위험", "하락", "감소", "둔화", "부진", "비용 증가"),
     "business_update": ("프로젝트", "서비스", "사업", "고객", "운영", "매출 인식", "전망", "기대"),
+}
+_SIGNAL_TYPE_PRIORITY = {
+    "risk": 0,
+    "orders_pipeline": 1,
+    "growth": 2,
+    "strategy": 3,
+    "investment": 4,
+    "efficiency": 5,
+    "business_update": 6,
 }
 _IR_SIGNAL_EXCLUDE_TERMS = (
     "appendix",
@@ -200,6 +209,27 @@ _IR_SIGNAL_EXCLUDE_TERMS = (
     "본 자료는",
     "무단 복제",
 )
+_SK_AFFILIATE_EXCLUDE_TERMS = (
+    "sk이노베이션",
+    "sk innovation",
+    "sk텔레콤",
+    "sk telecom",
+    "skt",
+    "에이닷",
+    "sk하이닉스",
+    "sk hynix",
+    "sk스퀘어",
+    "sk square",
+    "sk바이오팜",
+    "sk biopharmaceuticals",
+    "sk e&s",
+    "sk온",
+    "sk on",
+    "sk에코플랜트",
+    "sk ecoplant",
+    "sk팜테코",
+    "pharmteco",
+)
 _NEGATIVE_TERMS = ("하락", "감소", "둔화", "부진", "리스크", "위험", "비용 증가")
 _POSITIVE_TERMS = ("성장", "확대", "증가", "개선", "강화", "고도화", "수주", "계약")
 
@@ -207,6 +237,14 @@ _POSITIVE_TERMS = ("성장", "확대", "증가", "개선", "강화", "고도화"
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="IR parser 결과 및 financial metrics 재생성")
     parser.add_argument("--limit", type=int, default=0, help="처리할 IR 문서 수 제한")
+    parser.add_argument(
+        "--article-id",
+        dest="article_ids",
+        action="append",
+        type=int,
+        default=[],
+        help="특정 raw_article_id만 선택 처리. 여러 번 지정 가능",
+    )
     parser.add_argument(
         "--reparse",
         action="store_true",
@@ -256,7 +294,7 @@ def main() -> None:
     if not args.reparse and not args.upsert_metrics and not args.upsert_signals:
         raise SystemExit("--reparse, --upsert-metrics, --upsert-signals 중 하나 이상을 지정하세요.")
 
-    articles = _load_ir_articles(limit=args.limit)
+    articles = _load_ir_articles(limit=args.limit, article_ids=args.article_ids)
     log.info("IR 문서 로드 완료 | count=%d", len(articles))
 
     all_metrics: list[dict[str, Any]] = []
@@ -327,11 +365,24 @@ def main() -> None:
         log.info("business signals upsert 완료 | count=%d", count)
 
 
-def _load_ir_articles(*, limit: int = 0) -> list[dict[str, Any]]:
+def _load_ir_articles(
+    *,
+    limit: int = 0,
+    article_ids: list[int] | None = None,
+) -> list[dict[str, Any]]:
     limit_sql = "LIMIT :limit" if limit > 0 else ""
-    params = {"limit": limit} if limit > 0 else {}
+    article_ids = [article_id for article_id in article_ids or [] if article_id > 0]
+    article_filter_sql = "AND ra.id = ANY(:article_ids)" if article_ids else ""
+    params: dict[str, Any] = {}
+    if limit > 0:
+        params["limit"] = limit
+    if article_ids:
+        params["article_ids"] = article_ids
     with SessionLocal() as db:
-        rows = db.execute(text(_ir_article_select_sql(limit_sql)), params).fetchall()
+        rows = db.execute(
+            text(_ir_article_select_sql(limit_sql, article_filter_sql)),
+            params,
+        ).fetchall()
 
     articles = []
     for row in rows:
@@ -342,7 +393,7 @@ def _load_ir_articles(*, limit: int = 0) -> list[dict[str, Any]]:
     return articles
 
 
-def _ir_article_select_sql(limit_sql: str) -> str:
+def _ir_article_select_sql(limit_sql: str, article_filter_sql: str) -> str:
     """Return an IR article query for either legacy or unified metadata schemas."""
     with SessionLocal() as db:
         has_unified = _table_exists(db, "raw_article_metadata_unified")
@@ -388,6 +439,7 @@ def _ir_article_select_sql(limit_sql: str) -> str:
                 FROM raw_articles ra
                 {metadata_join}
                 WHERE ra.source_type = 'ir'
+                  {article_filter_sql}
                 ORDER BY ra.published_at DESC NULLS LAST, ra.id DESC
                 {limit_sql}
             """
@@ -831,7 +883,7 @@ def _business_signals_from_parser_result(
     period_type = parser_result.get("period_type") or article["extra"].get("period_type")
 
     signals: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str]] = set()
     signals.extend(
         _llm_business_signals_from_parser_result(
             article=article,
@@ -847,6 +899,7 @@ def _business_signals_from_parser_result(
     )
     if not chunks:
         return signals
+    page_contexts = _page_contexts_from_chunks(chunks)
 
     for chunk in chunks:
         if not isinstance(chunk, dict):
@@ -855,6 +908,13 @@ def _business_signals_from_parser_result(
         text_value = str(chunk.get("text") or "").strip()
         if len(text_value) < 30:
             continue
+        page_context = page_contexts.get(chunk.get("page")) or text_value
+        if not _is_ir_chunk_target_for_peer(
+            peer_id=peer_id,
+            text_value=text_value,
+            page_context=page_context,
+        ):
+            continue
         if _is_ir_chunk_excluded_for_peer(peer_id, text_value):
             continue
 
@@ -862,13 +922,20 @@ def _business_signals_from_parser_result(
         for sentence_index, evidence_text, business_area, signal_type in _signals_from_chunk(
             chunk,
             text_value,
+            peer_id=peer_id,
+            page_context=page_context,
         ):
             _metric_scope, business_area = _normalize_self_business_area(
                 peer_id=peer_id,
                 metric_scope="segment",
                 business_area=business_area,
             )
-            dedupe_key = (business_area, signal_type, evidence_text[:160])
+            business_area = _business_area_from_evidence_override(
+                peer_id=peer_id,
+                business_area=business_area,
+                evidence_text=evidence_text,
+            )
+            dedupe_key = (business_area, evidence_text[:160])
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
@@ -934,13 +1001,13 @@ def _llm_business_signals_from_parser_result(
     period_year: Any,
     period_quarter: Any,
     period_type: Any,
-    seen: set[tuple[str, str, str]],
+    seen: set[tuple[str, str]],
 ) -> list[dict[str, Any]]:
     llm_signals = parser_result.get("llm_business_signals")
     if not isinstance(llm_signals, list):
         return []
 
-    rows: list[dict[str, Any]] = []
+    rows_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for index, signal in enumerate(llm_signals, start=1):
         if not isinstance(signal, dict):
             continue
@@ -954,40 +1021,51 @@ def _llm_business_signals_from_parser_result(
         evidence_text = str(signal.get("evidence_text") or "")
         if not signal_type or not evidence_text:
             continue
-        dedupe_key = (business_area, signal_type, evidence_text[:160])
+        business_area = _business_area_from_evidence_override(
+            peer_id=peer_id,
+            business_area=business_area,
+            evidence_text=evidence_text,
+        )
+        dedupe_key = (business_area, evidence_text[:160])
         if dedupe_key in seen:
             continue
-        seen.add(dedupe_key)
-        rows.append(
-            {
-                "raw_article_id": article_id,
-                "signal_uid": (
-                    f"ir-llm:{business_area}:{signal_type}:"
-                    f"p{signal.get('source_page') or 'x'}:{index}"
-                ),
-                "source_type": "ir",
-                "source_name": article.get("source_name"),
-                "peer_id": peer_id,
-                "period": period,
-                "period_year": period_year,
-                "period_quarter": period_quarter,
-                "period_type": period_type,
-                "business_area": business_area,
-                "signal_type": signal_type,
-                "sentiment": signal.get("sentiment") or _sentiment_from_text(evidence_text),
-                "summary": signal.get("summary") or _summary_from_evidence(evidence_text),
-                "evidence_text": evidence_text,
-                "source_page": signal.get("source_page"),
-                "source_chunk_uid": None,
-                "confidence": signal.get("confidence") or 0.78,
-                "extraction_method": "ir_llm.analysis",
-                "payload": {
-                    "title": article.get("title"),
-                    "url": article.get("url"),
-                    "llm_signal": signal,
-                },
-            }
-        )
+        row = {
+            "raw_article_id": article_id,
+            "signal_uid": (
+                f"ir-llm:{business_area}:{signal_type}:"
+                f"p{signal.get('source_page') or 'x'}:{index}"
+            ),
+            "source_type": "ir",
+            "source_name": article.get("source_name"),
+            "peer_id": peer_id,
+            "period": period,
+            "period_year": period_year,
+            "period_quarter": period_quarter,
+            "period_type": period_type,
+            "business_area": business_area,
+            "signal_type": signal_type,
+            "sentiment": signal.get("sentiment") or _sentiment_from_text(evidence_text),
+            "summary": signal.get("summary") or _summary_from_evidence(evidence_text),
+            "evidence_text": evidence_text,
+            "source_page": signal.get("source_page"),
+            "source_chunk_uid": None,
+            "confidence": signal.get("confidence") or 0.78,
+            "extraction_method": "ir_llm.analysis",
+            "payload": {
+                "title": article.get("title"),
+                "url": article.get("url"),
+                "llm_signal": signal,
+            },
+        }
+        existing = rows_by_key.get(dedupe_key)
+        if existing and _signal_type_priority(existing["signal_type"]) <= _signal_type_priority(
+            signal_type
+        ):
+            continue
+        rows_by_key[dedupe_key] = row
+    rows = list(rows_by_key.values())
+    for row in rows:
+        seen.add((row["business_area"], row["evidence_text"][:160]))
     return rows
 
 
@@ -1007,31 +1085,49 @@ def _document_chunks(
 def _signals_from_chunk(
     chunk: dict[str, Any],
     text_value: str,
+    *,
+    peer_id: str | None,
+    page_context: str,
 ) -> list[tuple[int, str, str, str]]:
     section_area = _business_area_from_section(chunk)
     signals: list[tuple[int, str, str, str]] = []
-    for sentence_index, sentence in enumerate(_sentences(text_value), start=1):
+    sentences = _sentences(text_value)
+    for sentence_index, sentence in enumerate(sentences, start=1):
         if len(sentence) < 30 or _is_low_value_signal_sentence(sentence):
             continue
+        if _is_ir_sentence_excluded_for_peer(peer_id, sentence, page_context=page_context):
+            continue
+        if not _looks_like_narrative_signal_sentence(sentence):
+            continue
 
+        context_text = _signal_context_text(sentences, sentence_index - 1)
+        if _is_ir_sentence_excluded_for_peer(peer_id, context_text, page_context=page_context):
+            continue
         signal_types = _detect_signal_types(sentence)
         if not signal_types:
+            signal_types = _detect_signal_types(context_text)
+        if not signal_types:
             continue
-        if len(signal_types) > 1 and "business_update" in signal_types:
-            signal_types = [
-                signal_type
-                for signal_type in signal_types
-                if signal_type != "business_update"
-            ]
-        business_area = _detect_business_area(sentence) or section_area or "company_total"
+        business_area = _resolve_business_area(
+            peer_id=peer_id,
+            sentence=sentence,
+            context_text=context_text,
+            page_context=page_context,
+            section_area=section_area,
+            chunk_text=text_value,
+        )
+        evidence_text = _signal_evidence_text(sentence=sentence, context_text=context_text)
 
-        for signal_type in signal_types:
-            if signal_type != "business_update" and not _has_required_signal_context(
-                sentence,
-                signal_type,
-            ):
-                continue
-            signals.append((sentence_index, sentence[:800], business_area, signal_type))
+        eligible_signal_types = [
+            signal_type
+            for signal_type in signal_types
+            if signal_type == "business_update"
+            or _has_required_signal_context(context_text, signal_type)
+        ]
+        if not eligible_signal_types:
+            continue
+        primary_signal_type = _primary_signal_type(eligible_signal_types)
+        signals.append((sentence_index, evidence_text[:800], business_area, primary_signal_type))
     return signals
 
 
@@ -1040,24 +1136,46 @@ def _is_ir_chunk_excluded_for_peer(peer_id: str | None, text_value: str) -> bool
         return False
 
     lowered = text_value.lower()
-    has_sk_ax_context = any(
-        term in lowered
-        for term in (
-            "sk ax",
-            "sk c&c",
-            "c&c",
-            "씨앤씨",
-            "it서비스",
-            "it 서비스",
-            "enterprise it",
-            "digital transformation",
-            "ai transformation",
-        )
-    )
+    has_sk_ax_context = _has_sk_ax_context(lowered)
     if has_sk_ax_context:
         return False
 
     return _is_low_value_signal_sentence(text_value)
+
+
+def _is_ir_chunk_target_for_peer(
+    peer_id: str | None,
+    text_value: str,
+    *,
+    page_context: str,
+) -> bool:
+    if peer_id != "sk_ax":
+        return True
+
+    text_lowered = text_value.lower()
+    page_lowered = page_context.lower()
+    if _has_strong_sk_ax_context(text_lowered) or _has_strong_sk_ax_context(page_lowered):
+        return True
+
+    return False
+
+
+def _is_ir_sentence_excluded_for_peer(
+    peer_id: str | None,
+    text_value: str,
+    *,
+    page_context: str,
+) -> bool:
+    if peer_id != "sk_ax":
+        return False
+
+    lowered = text_value.lower()
+    if _has_sk_ax_context(lowered):
+        return False
+    if _has_sk_ax_context(page_context.lower()):
+        return False
+
+    return any(term in lowered for term in _SK_AFFILIATE_EXCLUDE_TERMS)
 
 
 def _business_area_from_chunk(chunk: dict[str, Any], text_value: str) -> str | None:
@@ -1077,12 +1195,146 @@ def _business_area_from_section(chunk: dict[str, Any]) -> str | None:
     return None
 
 
+def _resolve_business_area(
+    *,
+    peer_id: str | None,
+    sentence: str,
+    context_text: str,
+    page_context: str,
+    section_area: str | None,
+    chunk_text: str,
+) -> str:
+    page_preferred_area = _page_preferred_business_area(peer_id=peer_id, page_context=page_context)
+    if page_preferred_area:
+        if page_preferred_area == "Enterprise IT":
+            return "company_total"
+
+    return (
+        _detect_business_area(sentence)
+        or _detect_business_area(context_text)
+        or _section_area_fallback_for_sentence(
+            section_area=section_area,
+            sentence=sentence,
+            chunk_text=chunk_text,
+        )
+        or "company_total"
+    )
+
+
+def _page_preferred_business_area(
+    *,
+    peer_id: str | None,
+    page_context: str,
+) -> str | None:
+    lowered = page_context.lower()
+    if peer_id == "sk_ax":
+        if any(
+            term in lowered
+            for term in (
+                "it서비스부문(sk ax)",
+                "it서비스부문",
+                "it서비스ebitda",
+                "its 사업",
+                "it 예산",
+                "enterprise it",
+            )
+        ):
+            return "Enterprise IT"
+    return None
+
+
+def _section_area_fallback_for_sentence(
+    *,
+    section_area: str | None,
+    sentence: str,
+    chunk_text: str,
+) -> str | None:
+    if not section_area:
+        return None
+    if section_area != "cloud":
+        return section_area
+
+    sentence_lowered = sentence.lower()
+    chunk_lowered = chunk_text.lower()
+    if _has_explicit_cloud_context(sentence_lowered):
+        return "cloud"
+
+    # `section_key=cloud`만으로는 부족하다. 청크 전체에 클라우드 문맥이 없으면
+    # 반도체/Hi-tech/IT서비스 문장까지 cloud로 흘러가는 오분류를 막는다.
+    if _has_explicit_cloud_context(chunk_lowered):
+        return "cloud"
+
+    return "other"
+
+
 def _detect_business_area(text_value: str) -> str | None:
     lowered = text_value.lower()
     for business_area, terms in _BUSINESS_AREA_RULES:
         if any(term.lower() in lowered for term in terms):
             return business_area
     return None
+
+
+def _detect_business_areas(text_value: str) -> set[str]:
+    lowered = text_value.lower()
+    return {
+        business_area
+        for business_area, terms in _BUSINESS_AREA_RULES
+        if any(term.lower() in lowered for term in terms)
+    }
+
+
+def _has_explicit_cloud_context(lowered_text: str) -> bool:
+    return any(
+        term in lowered_text
+        for term in (
+            "cloud",
+            "클라우드",
+            "msp",
+            "csp",
+            "aws",
+            "azure",
+            "gcp",
+            "데이터센터",
+            "data center",
+            "gpu",
+        )
+    )
+
+
+def _has_sk_ax_context(lowered_text: str) -> bool:
+    return any(
+        term in lowered_text
+        for term in (
+            "sk ax",
+            "sk c&c",
+            "c&c",
+            "씨앤씨",
+            "it서비스",
+            "it 서비스",
+            "enterprise it",
+            "digital transformation",
+            "ai transformation",
+        )
+    )
+
+
+def _has_strong_sk_ax_context(lowered_text: str) -> bool:
+    return any(
+        term in lowered_text
+        for term in (
+            "sk ax",
+            "sk c&c",
+            "it서비스부문(sk ax)",
+            "it서비스부문",
+            "it서비스ebitda",
+            "it서비스",
+            "it 서비스",
+            "its 사업",
+            "ai transformation",
+            "dt 기반",
+        )
+    )
 
 
 def _signal_type_from_text(text_value: str) -> str | None:
@@ -1092,16 +1344,119 @@ def _signal_type_from_text(text_value: str) -> str | None:
 
 def _detect_signal_types(text_value: str) -> list[str]:
     lowered = text_value.lower()
-    return [
+    scores: dict[str, int] = {}
+    for signal_type, terms in _SIGNAL_TYPE_RULES:
+        score = sum(1 for term in terms if term.lower() in lowered)
+        if score > 0:
+            scores[signal_type] = score
+
+    if not scores:
+        return []
+
+    if "business_update" in scores and len(scores) > 1:
+        scores.pop("business_update", None)
+    if "strategy" in scores and "efficiency" in scores:
+        scores.pop("efficiency", None)
+
+    positive_score = sum(1 for term in _POSITIVE_TERMS if term in lowered)
+    negative_score = sum(1 for term in _NEGATIVE_TERMS if term in lowered)
+    if positive_score and negative_score:
+        if positive_score >= negative_score:
+            scores.pop("risk", None)
+        if negative_score >= positive_score:
+            scores.pop("growth", None)
+
+    if not scores:
+        return []
+
+    ranked = sorted(
+        scores.items(),
+        key=lambda item: (-item[1], _signal_type_priority(item[0])),
+    )
+    top_score = ranked[0][1]
+    selected = [
         signal_type
-        for signal_type, terms in _SIGNAL_TYPE_RULES
-        if any(term.lower() in lowered for term in terms)
-    ]
+        for signal_type, score in ranked
+        if score == top_score or len(ranked) == 1
+    ][:2]
+    if (
+        "orders_pipeline" in scores
+        and any(term in lowered for term in ("수주", "계약", "backlog", "잔고"))
+        and "orders_pipeline" not in selected
+    ):
+        selected.append("orders_pipeline")
+    if (
+        "strategy" in scores
+        and any(term in lowered for term in ("개편", "전환", "추진", "고도화", "전략"))
+        and "strategy" not in selected
+    ):
+        selected.append("strategy")
+    selected = selected[:2]
+    return selected
+
+
+def _primary_signal_type(signal_types: list[str]) -> str:
+    ranked = sorted(signal_types, key=_signal_type_priority)
+    return ranked[0]
+
+
+def _signal_type_priority(signal_type: str) -> int:
+    return _SIGNAL_TYPE_PRIORITY.get(signal_type, 99)
 
 
 def _is_low_value_signal_sentence(text_value: str) -> bool:
     lowered = text_value.lower()
     return any(term.lower() in lowered for term in _IR_SIGNAL_EXCLUDE_TERMS)
+
+
+def _looks_like_narrative_signal_sentence(text_value: str) -> bool:
+    value = re.sub(r"\s+", " ", str(text_value or "")).strip()
+    if not value:
+        return False
+    if _looks_like_table_like_signal_text(value):
+        return False
+
+    hangul_tokens = re.findall(r"[가-힣A-Za-z]{2,}", value)
+    if len(hangul_tokens) < 3:
+        return False
+
+    if re.search(r"[.!?。]\s*$", value):
+        return True
+
+    return bool(
+        re.search(
+            r"(습니다|했다|한다|된다|있다|없다|보인다|전망이다|예상된다|이어지고 있다|"
+            r"개선됐다|감소했다|증가했다|확대됐다|축소됐다|"
+            r"증가|감소|개선|확대|축소|지속|견조|호조|둔화|부진|약세|강화|고도화|"
+            r"진행중|진행 중|전환|유지|확보|상승|하락|집중|축소)",
+            value,
+        )
+    )
+
+
+def _looks_like_table_like_signal_text(text_value: str) -> bool:
+    value = re.sub(r"\s+", " ", str(text_value or "")).strip()
+    if not value:
+        return False
+
+    lowered = value.lower()
+    numeric_tokens = re.findall(r"[△]?\d[\d,./]*(?:%|억원|조원|bn|mn)?", value)
+    digit_count = sum(char.isdigit() for char in value)
+
+    if value.startswith("[단위") or value.startswith("(단위"):
+        return True
+    if "ebitda margin" in lowered or "op margin" in lowered:
+        return True
+    if len(numeric_tokens) >= 4 or digit_count >= 14:
+        return True
+    table_metric_pattern = (
+        r"(매출|영업이익|ebitda|이익률)\s+[△]?\d[\d,./]*(?:%|억원|조원|bn|mn)?"
+        r"(?:\s+[△]?\d[\d,./]*(?:%|억원|조원|bn|mn)?){1,}"
+    )
+    if re.search(table_metric_pattern, value, re.IGNORECASE):
+        return True
+
+    return False
 
 
 def _has_required_signal_context(text_value: str, signal_type: str) -> bool:
@@ -1156,31 +1511,134 @@ def _matched_terms(terms: tuple[str, ...], text_value: str) -> list[str]:
 
 
 def _sentences(text_value: str) -> list[str]:
-    value = re.sub(r"\s+", " ", text_value).strip()
-    if not value:
-        return []
+    lines = [line.strip(" -•\t") for line in str(text_value or "").splitlines() if line.strip()]
+    if not lines:
+        value = re.sub(r"\s+", " ", text_value).strip()
+        return [value] if value else []
 
-    pieces = re.split(r"(?<=[.!?。])\s+", value)
-    sentences = [piece.strip(" -•\t") for piece in pieces if len(piece.strip()) >= 30]
-    if sentences:
-        return sentences
-    return [value]
+    pieces: list[str] = []
+    for line in lines:
+        split_line = re.split(r"(?<=[.!?。])\s+|(?<=다\.)\s+", line)
+        split_line = [piece.strip(" -•\t") for piece in split_line if piece.strip()]
+        if not split_line:
+            continue
+        pieces.extend(split_line)
+
+    merged: list[str] = []
+    buffer = ""
+    for piece in pieces:
+        normalized = re.sub(r"\s+", " ", piece).strip()
+        if not normalized:
+            continue
+        if not buffer:
+            buffer = normalized
+            continue
+        if (
+            len(buffer) < 48
+            and len(normalized) < 72
+            and not re.search(r"[.!?。]\s*$", buffer)
+            and not _looks_like_table_like_signal_text(normalized)
+        ):
+            buffer = f"{buffer} {normalized}".strip()
+            continue
+        merged.append(buffer)
+        buffer = normalized
+
+    if buffer:
+        merged.append(buffer)
+
+    filtered = [
+        piece
+        for piece in merged
+        if len(piece) >= 24 and not _is_numeric_heavy_signal_text(piece)
+    ]
+    return filtered or merged
+
+
+def _page_contexts_from_chunks(chunks: list[Any]) -> dict[Any, str]:
+    page_texts: dict[Any, list[str]] = {}
+    seen_by_page: dict[Any, set[str]] = {}
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        page = chunk.get("page")
+        text_value = str(chunk.get("text") or "").strip()
+        if not text_value:
+            continue
+        seen = seen_by_page.setdefault(page, set())
+        if text_value in seen:
+            continue
+        seen.add(text_value)
+        page_texts.setdefault(page, []).append(text_value)
+
+    page_contexts: dict[Any, str] = {}
+    for page, texts in page_texts.items():
+        sentences: list[str] = []
+        for text_value in texts:
+            sentences.extend(
+                sentence
+                for sentence in _sentences(text_value)
+                if _looks_like_narrative_signal_sentence(sentence)
+            )
+        page_contexts[page] = " ".join(sentences)[:2400].strip()
+    return page_contexts
+
+
+def _signal_context_text(sentences: list[str], index: int) -> str:
+    start = max(0, index - 1)
+    end = min(len(sentences), index + 2)
+    context_sentences = [
+        sentence
+        for sentence in sentences[start:end]
+        if _looks_like_narrative_signal_sentence(sentence)
+    ]
+    return " ".join(context_sentences).strip()
+
+
+def _signal_evidence_text(*, sentence: str, context_text: str) -> str:
+    if _looks_like_table_like_signal_text(sentence) and len(context_text) > len(sentence):
+        return context_text
+    if len(sentence) < 48 and len(context_text) <= 800:
+        return context_text
+    return sentence
 
 
 def _sentiment_from_text(text_value: str) -> str:
     lowered = text_value.lower()
-    if any(term in lowered for term in _NEGATIVE_TERMS):
+    negative_hits = sum(1 for term in _NEGATIVE_TERMS if term in lowered)
+    positive_hits = sum(1 for term in _POSITIVE_TERMS if term in lowered)
+    if negative_hits and positive_hits:
+        return "neutral"
+    if negative_hits:
         return "negative"
-    if any(term in lowered for term in _POSITIVE_TERMS):
+    if positive_hits:
         return "positive"
     return "neutral"
 
 
 def _summary_from_evidence(evidence_text: str) -> str:
     value = re.sub(r"\s+", " ", evidence_text).strip()
+    if _is_numeric_heavy_signal_text(value):
+        cleaned = _clean_numeric_heavy_summary(value)
+        if len(cleaned) >= 24:
+            value = cleaned
     if len(value) <= 160:
         return value
     return f"{value[:157]}..."
+
+
+def _is_numeric_heavy_signal_text(value: str) -> bool:
+    numeric_tokens = re.findall(r"[△]?\d[\d,./]*(?:%|억원|조원|bn|mn)?", value)
+    digit_count = sum(char.isdigit() for char in value)
+    return len(numeric_tokens) >= 5 or digit_count >= 18
+
+
+def _clean_numeric_heavy_summary(value: str) -> str:
+    cleaned = re.sub(r"\[[^\]]*단위[^\]]*\]", " ", value)
+    cleaned = re.sub(r"\([^)]*단위[^)]*\)", " ", cleaned)
+    cleaned = re.sub(r"[△]?\d[\d,./]*(?:%|억원|조원|bn|mn)?", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;:-")
+    return cleaned
 
 
 def _signal_confidence(
@@ -1237,6 +1695,47 @@ def _normalize_self_business_area(
         return "company_total", "company_total"
 
     return metric_scope, business_area
+
+
+def _business_area_from_evidence_override(
+    *,
+    peer_id: str | None,
+    business_area: Any,
+    evidence_text: str,
+) -> Any:
+    if peer_id != "sk_ax":
+        return business_area
+
+    lowered = evidence_text.lower()
+    has_it_service_context = any(
+        term in lowered
+        for term in (
+            "it서비스",
+            "it 서비스",
+            "it service",
+            "it services",
+            "enterprise it",
+        )
+    )
+    has_explicit_cloud_context = _has_explicit_cloud_context(lowered)
+    if has_it_service_context and not has_explicit_cloud_context:
+        return "company_total"
+
+    if str(business_area) != "cloud":
+        return business_area
+
+    explicit_areas = _detect_business_areas(evidence_text)
+    explicit_non_cloud_areas = [area for area in explicit_areas if area != "cloud"]
+    if explicit_non_cloud_areas and not _has_explicit_cloud_context(lowered):
+        if len(explicit_non_cloud_areas) == 1:
+            area = explicit_non_cloud_areas[0]
+            return _canonical_business_area(area)
+        return "other"
+
+    if not has_explicit_cloud_context:
+        return "other"
+
+    return business_area
 
 
 def _canonical_business_area(value: str) -> str:

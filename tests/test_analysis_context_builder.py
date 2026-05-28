@@ -10,7 +10,6 @@ from unittest.mock import patch
 from src.analysis.models import (
     AnalysisContext,
     AnalysisInputBundle,
-    CapabilityWindow,
     FinancialSeries,
     FinancialSeriesPoint,
     PrecedentCandidate,
@@ -56,15 +55,6 @@ def _heavy_context() -> AnalysisContext:
         )
         for i in range(30)
     ]
-    ctx.capability_evolution = {
-        "p1": CapabilityWindow(
-            period="2025Q3-2026Q1",
-            business_area="Cloud",
-            narrative="B" * 800,
-            delta_intensity=0.8,
-            confidence=0.7,
-        )
-    }
     ctx.sector_pulse_recent = [
         SectorPulseRow(
             sector="ax",
@@ -120,13 +110,6 @@ def test_compression_reduces_token_count():
     assert len(compressed.event_chain_candidates) <= 3
 
 
-def test_compression_truncates_capability_narrative():
-    ctx = _heavy_context()
-    compressed = _compress_to_budget(ctx, budget=500)  # 매우 빡빡한 budget
-    narrative = list(compressed.capability_evolution.values())[0].narrative
-    assert len(narrative) <= 151  # 150 + ellipsis
-
-
 def test_builder_returns_empty_context_when_db_unavailable():
     """SessionLocal 가 실패하더라도 fallback 으로 빈 context 반환."""
     builder = AnalysisContextBuilder()
@@ -147,6 +130,7 @@ def test_builder_returns_empty_context_when_db_unavailable():
 
 def test_available_layer_count_consistent_with_provenance():
     ctx = _heavy_context()
-    # compression 전엔 layer 5+ — peer_event_timeline_recent / capability_evolution /
-    # sector_pulse_recent / financial_trend / event_chain_candidates / similar_cards_rag.
-    assert ctx.available_layer_count() == 6
+    # compression 전엔 5 layers —
+    # peer_event_timeline_recent / sector_pulse_recent /
+    # financial_trend / event_chain_candidates / similar_cards_rag.
+    assert ctx.available_layer_count() == 5

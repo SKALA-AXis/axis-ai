@@ -9,7 +9,6 @@ from __future__ import annotations
 from src.agents.evaluator_agent import EvaluatorAgent
 from src.analysis.models import (
     AnalysisContext,
-    CapabilityWindow,
     SectorPulseRow,
     TimelineEntry,
 )
@@ -54,8 +53,7 @@ def _basic_implication(
             "generator": "ImplicationAgent",
             "prompt_version": "implication-v5.0",
             "model": "gpt-4o",
-            "used_context_layers": used_layers
-            or ["peer_event_timeline_recent", "capability_evolution"],
+            "used_context_layers": used_layers or ["peer_event_timeline_recent"],
         },
     }
 
@@ -76,16 +74,6 @@ def _basic_context(layer_count: int) -> AnalysisContext:
             )
         ]
     if layer_count >= 2:
-        ctx.capability_evolution = {
-            "samsung_sds": CapabilityWindow(
-                period="2025Q4-2026Q1",
-                business_area="Cloud",
-                narrative="MSP 매출 +15%.",
-                delta_intensity=0.6,
-                confidence=0.7,
-            )
-        }
-    if layer_count >= 3:
         ctx.sector_pulse_recent = [
             SectorPulseRow(
                 sector="ax",
@@ -100,7 +88,7 @@ def _basic_context(layer_count: int) -> AnalysisContext:
 
 
 def test_context_hit_ratio_uses_available_layer_count():
-    impl = _basic_implication(used_layers=["peer_event_timeline_recent", "capability_evolution"])
+    impl = _basic_implication(used_layers=["peer_event_timeline_recent", "sector_pulse_recent"])
     ctx = _basic_context(layer_count=2)  # available = 2
     metrics = EvaluatorAgent().evaluate(implication=impl, analysis_context=ctx)
     assert metrics.context_hit_ratio == 1.0

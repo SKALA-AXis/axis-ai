@@ -1,3 +1,7 @@
+from scripts.reprocess_securities_report_analysis import (
+    _metric_dedupe_key,
+    _signal_dedupe_key,
+)
 from src.extractors.dart_analysis_extractor import (
     business_signals_from_dart,
     financial_metrics_from_dart,
@@ -446,6 +450,31 @@ def test_securities_report_extracts_valuation_and_financial_metrics() -> None:
     assert by_name["operating_margin"]["value_numeric"] == 2.3
 
 
+def test_securities_report_does_not_store_per_pbr_roe_metrics() -> None:
+    article = {
+        "id": 177,
+        "company": ["hyundai_autoever"],
+        "title": "[증권사] 현대오토에버 Review",
+        "content": "PER 18.5배 PBR 2.0배 ROE 4.7% EPS 5,731원",
+        "url": "https://example.com/report.pdf",
+        "source_name": "naver_research",
+        "extra": {},
+    }
+    parser_result = {
+        "peer_id": "hyundai_autoever",
+        "period": "2024Q1",
+        "report_firm": "테스트증권",
+    }
+
+    metrics = financial_metrics_from_securities_report(article, parser_result)
+    metric_names = {metric["metric_name"] for metric in metrics}
+
+    assert "eps" in metric_names
+    assert "per" not in metric_names
+    assert "pbr" not in metric_names
+    assert "roe" not in metric_names
+
+
 def test_securities_report_extracts_business_forecast_signals() -> None:
     article = {
         "id": 78,
@@ -476,4 +505,83 @@ def test_securities_report_extracts_business_forecast_signals() -> None:
     signals = business_signals_from_securities_report(article, parser_result)
 
     assert {signal["business_area"] for signal in signals} == {"cloud"}
-    assert {"forecast", "investment", "growth"} <= {signal["signal_type"] for signal in signals}
+    assert {signal["signal_type"] for signal in signals} == {"growth"}
+
+
+def test_securities_report_skips_table_like_signal_rows_and_keeps_one_signal() -> None:
+    article = {
+        "id": 79,
+        "company": ["hyundai_autoever"],
+        "title": "[증권사] 현대오토에버 Review",
+        "content": "",
+        "url": "https://example.com/report.pdf",
+        "source_name": "naver_research",
+        "extra": {},
+    }
+    parser_result = {
+        "peer_id": "hyundai_autoever",
+        "period": "2024Q1",
+        "report_firm": "테스트증권",
+        "document_chunks": [
+            {
+                "chunk_id": "forecast:1",
+                "section_key": "forecast",
+                "section_title": "Forecast",
+                "text": (
+                    "[표1] 현대오토에버의 분기 및 연간 실적 추이 및 전망 (단위: 십억원, %, %YoY) "
+                    "1Q24 2Q24 3Q24 4Q24 1Q25 2Q25P 3Q25E 4Q25E 2024 2025E 2026E "
+                    "AI 데이터센터 투자 확대와 클라우드 수요 증가로 2026년 성장 모멘텀이 "
+                    "강화될 전망이다."
+                ),
+            }
+        ],
+    }
+
+    signals = business_signals_from_securities_report(article, parser_result)
+
+    assert len(signals) == 1
+    assert signals[0]["signal_type"] == "growth"
+    assert (
+        signals[0]["evidence_text"]
+        == "AI 데이터센터 투자 확대와 클라우드 수요 증가로 2026년 성장 모멘텀이 강화될 전망이다."
+    )
+
+
+def test_securities_report_metric_dedupe_key_ignores_small_numeric_formatting_diff() -> None:
+    row1 = {
+        "peer_id": "hyundai_autoever",
+        "period": "2024Q1",
+        "metric_name": "target_price",
+        "business_area": None,
+        "value_numeric": 150500,
+        "unit": "원",
+    }
+    row2 = {
+        "peer_id": "hyundai_autoever",
+        "period": "2024Q1",
+        "metric_name": "target_price",
+        "business_area": None,
+        "value_numeric": 150500.0,
+        "unit": "원",
+    }
+
+    assert _metric_dedupe_key(row1) == _metric_dedupe_key(row2)
+
+
+def test_securities_report_signal_dedupe_key_normalizes_whitespace() -> None:
+    row1 = {
+        "peer_id": "hyundai_autoever",
+        "period": "2024Q1",
+        "business_area": "company_total",
+        "signal_type": "growth",
+        "evidence_text": "동사 1H25 매출은 1.9조원으로 전년 동기 대비 13.7% 성장.",
+    }
+    row2 = {
+        "peer_id": "hyundai_autoever",
+        "period": "2024Q1",
+        "business_area": "company_total",
+        "signal_type": "growth",
+        "evidence_text": "동사 1H25   매출은 1.9조원으로 전년 동기 대비 13.7% 성장. ",
+    }
+
+    assert _signal_dedupe_key(row1) == _signal_dedupe_key(row2)

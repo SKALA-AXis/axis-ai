@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -107,6 +108,7 @@ def main() -> None:
                 source_type="securities_report",
             )
             log.info("기존 securities_report financial metrics 삭제 완료 | count=%d", deleted_count)
+        all_metrics = _dedupe_securities_report_metrics(all_metrics)
         count = upsert_raw_article_financial_metrics(all_metrics)
         log.info("securities_report financial metrics upsert 완료 | count=%d", count)
 
@@ -117,6 +119,7 @@ def main() -> None:
                 source_type="securities_report",
             )
             log.info("기존 securities_report business signals 삭제 완료 | count=%d", deleted_count)
+        all_signals = _dedupe_securities_report_signals(all_signals)
         count = upsert_raw_article_business_signals(all_signals)
         log.info("securities_report business signals upsert 완료 | count=%d", count)
 
@@ -124,6 +127,34 @@ def main() -> None:
 def _load_articles(*, limit: int = 0) -> list[dict[str, Any]]:
     limit_sql = "LIMIT :limit" if limit > 0 else ""
     params = {"limit": limit} if limit > 0 else {}
+    with SessionLocal() as db:
+        has_unified = _table_exists(db, "raw_article_metadata_unified")
+        has_source_metadata = _table_exists(db, "raw_article_source_metadata")
+        has_legacy_securities = _table_exists(db, "raw_article_metadata_securities_report")
+
+    if has_unified:
+        metadata_join = """
+                LEFT JOIN raw_article_metadata_unified md
+                  ON md.raw_article_id = ra.id
+            """
+        metadata_expr = "COALESCE(md.metadata, md.source_metadata, '{}'::jsonb)"
+    elif has_source_metadata:
+        metadata_join = """
+                LEFT JOIN raw_article_source_metadata md
+                  ON md.raw_article_id = ra.id
+                 AND md.source_type = 'securities_report'
+            """
+        metadata_expr = "COALESCE(md.source_metadata, '{}'::jsonb)"
+    elif has_legacy_securities:
+        metadata_join = """
+                LEFT JOIN raw_article_metadata_securities_report md
+                  ON md.raw_article_id = ra.id
+            """
+        metadata_expr = "COALESCE(md.source_metadata, '{}'::jsonb)"
+    else:
+        metadata_join = ""
+        metadata_expr = "'{}'::jsonb"
+
     with SessionLocal() as db:
         rows = db.execute(
             text(f"""
@@ -138,10 +169,9 @@ def _load_articles(*, limit: int = 0) -> list[dict[str, Any]]:
                     ra.content_type,
                     ra.published_at,
                     ra.collected_at,
-                    COALESCE(md.source_metadata, '{{}}'::jsonb) AS metadata
+                    {metadata_expr} AS metadata
                 FROM raw_articles ra
-                LEFT JOIN raw_article_metadata_securities_report md
-                  ON md.raw_article_id = ra.id
+                {metadata_join}
                 WHERE ra.source_type = 'securities_report'
                 ORDER BY ra.published_at DESC NULLS LAST, ra.id DESC
                 {limit_sql}
@@ -156,6 +186,122 @@ def _load_articles(*, limit: int = 0) -> list[dict[str, Any]]:
         articles.append(article)
 
     return articles
+
+
+def _table_exists(db: Any, table_name: str) -> bool:
+    return bool(
+        db.execute(
+            text("SELECT to_regclass(:table_name)"),
+            {"table_name": f"public.{table_name}"},
+        ).scalar_one_or_none()
+    )
+
+
+def _dedupe_securities_report_metrics(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return rows
+
+    peer_ids = sorted({str(row.get("peer_id") or "") for row in rows if row.get("peer_id")})
+    existing_keys = _load_existing_metric_keys(peer_ids)
+    deduped: list[dict[str, Any]] = []
+    seen = set(existing_keys)
+    skipped = 0
+    for row in rows:
+        key = _metric_dedupe_key(row)
+        if key in seen:
+            skipped += 1
+            continue
+        seen.add(key)
+        deduped.append(row)
+
+    if skipped:
+        log.info("securities_report metrics 중복 스킵 | skipped=%d kept=%d", skipped, len(deduped))
+    return deduped
+
+
+def _dedupe_securities_report_signals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return rows
+
+    peer_ids = sorted({str(row.get("peer_id") or "") for row in rows if row.get("peer_id")})
+    existing_keys = _load_existing_signal_keys(peer_ids)
+    deduped: list[dict[str, Any]] = []
+    seen = set(existing_keys)
+    skipped = 0
+    for row in rows:
+        key = _signal_dedupe_key(row)
+        if key in seen:
+            skipped += 1
+            continue
+        seen.add(key)
+        deduped.append(row)
+
+    if skipped:
+        log.info("securities_report signals 중복 스킵 | skipped=%d kept=%d", skipped, len(deduped))
+    return deduped
+
+
+def _load_existing_metric_keys(peer_ids: list[str]) -> set[tuple[Any, ...]]:
+    if not peer_ids:
+        return set()
+    with SessionLocal() as db:
+        rows = db.execute(
+            text("""
+                SELECT peer_id, period, metric_name, business_area, value_numeric, unit
+                FROM raw_article_financial_metrics
+                WHERE source_type = 'securities_report'
+                  AND peer_id = ANY(:peer_ids)
+            """),
+            {"peer_ids": peer_ids},
+        ).fetchall()
+    return {_metric_dedupe_key(dict(row._mapping)) for row in rows}
+
+
+def _load_existing_signal_keys(peer_ids: list[str]) -> set[tuple[Any, ...]]:
+    if not peer_ids:
+        return set()
+    with SessionLocal() as db:
+        rows = db.execute(
+            text("""
+                SELECT peer_id, period, business_area, signal_type, evidence_text
+                FROM raw_article_business_signals
+                WHERE source_type = 'securities_report'
+                  AND peer_id = ANY(:peer_ids)
+            """),
+            {"peer_ids": peer_ids},
+        ).fetchall()
+    return {_signal_dedupe_key(dict(row._mapping)) for row in rows}
+
+
+def _metric_dedupe_key(row: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        row.get("peer_id"),
+        row.get("period"),
+        row.get("metric_name"),
+        row.get("business_area"),
+        _normalize_numeric_key(row.get("value_numeric")),
+        row.get("unit"),
+    )
+
+
+def _signal_dedupe_key(row: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        row.get("peer_id"),
+        row.get("period"),
+        row.get("business_area"),
+        row.get("signal_type"),
+        _normalize_text_key(row.get("evidence_text")),
+    )
+
+
+def _normalize_text_key(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().lower()
+
+
+def _normalize_numeric_key(value: Any) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), 6)
 
 
 def _reparse_article(article: dict[str, Any]) -> dict[str, Any]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from html import unescape
 from urllib.parse import parse_qs, urljoin, urlparse
@@ -192,6 +193,9 @@ def extract_image_urls(html: str, base_url: str) -> list[str]:
     urls: list[str] = []
     seen_keys: set[str] = set()
 
+    for raw_url in iter_metadata_image_url_candidates(soup):
+        add_image_url(urls, raw_url, base_url, seen_keys)
+
     for tag in search_root.find_all(["img", "source"]):
         if not is_article_image_candidate(tag, search_root):
             continue
@@ -200,6 +204,70 @@ def extract_image_urls(html: str, base_url: str) -> list[str]:
             add_image_url(urls, raw_url, base_url, seen_keys)
 
     return urls[:10]
+
+
+def iter_metadata_image_url_candidates(soup: BeautifulSoup) -> list[str]:
+    urls: list[str] = []
+
+    meta_selectors = (
+        'meta[property="og:image"]',
+        'meta[property="og:image:url"]',
+        'meta[property="og:image:secure_url"]',
+        'meta[name="twitter:image"]',
+        'meta[name="twitter:image:src"]',
+        'meta[itemprop="image"]',
+        'link[rel="image_src"]',
+    )
+    for tag in soup.select(",".join(meta_selectors)):
+        raw_url = tag.get("content") or tag.get("href")
+        if raw_url:
+            urls.append(str(raw_url))
+
+    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        text = script.string or script.get_text(strip=True)
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        urls.extend(iter_json_ld_image_values(payload))
+
+    return urls
+
+
+def iter_json_ld_image_values(value) -> list[str]:
+    urls: list[str] = []
+
+    if isinstance(value, dict):
+        image = value.get("image") or value.get("thumbnailUrl")
+        urls.extend(_json_ld_image_to_list(image))
+        for item in value.values():
+            if isinstance(item, (dict, list)):
+                urls.extend(iter_json_ld_image_values(item))
+    elif isinstance(value, list):
+        for item in value:
+            urls.extend(iter_json_ld_image_values(item))
+
+    return urls
+
+
+def _json_ld_image_to_list(value) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        candidates = []
+        for key in ("url", "contentUrl", "@id"):
+            raw_url = value.get(key)
+            if isinstance(raw_url, str):
+                candidates.append(raw_url)
+        return candidates
+    if isinstance(value, list):
+        urls: list[str] = []
+        for item in value:
+            urls.extend(_json_ld_image_to_list(item))
+        return urls
+    return []
 
 
 def find_body_node(soup: BeautifulSoup):
