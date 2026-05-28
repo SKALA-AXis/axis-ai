@@ -190,7 +190,7 @@ class BriefingGenerationAgent:
             provenance_base=provenance_base,
         )
         if refine_display_copy:
-            report = _refine_display_copy_with_llm(
+            report = _refine_key_change_cards_with_llm(
                 report=report,
                 selected_cards=selected_cards,
                 llm=self._llm,
@@ -736,16 +736,16 @@ def _safe_float(value: object, *, default: float) -> float:
         return default
 
 
-def _refine_display_copy_with_llm(
+def _refine_key_change_cards_with_llm(
     *,
     report: dict[str, Any],
     selected_cards: list[dict[str, Any]],
     llm: Any | None,
 ) -> dict[str, Any]:
-    """analysis_package 기반 payload의 화면 표시문만 LLM으로 정제한다.
+    """analysis_package 기반 key_change_cards 표시문만 LLM으로 정제한다.
 
-    다른 에이전트와 분리하기 위해 이 단계는 card_id별 analysis_package만 입력으로 사용하고,
-    evidence/provenance/hidden_details 같은 추적 필드는 코드가 그대로 보존한다.
+    briefing_lead / interpretation_flow / market_reading / sk_ax_view는 건드리지 않고,
+    오늘의 핵심 변화 카드의 title / summary / so_what 문장만 정리한다.
     """
 
     if llm is None and not os.getenv("OPENAI_API_KEY"):
@@ -758,10 +758,10 @@ def _refine_display_copy_with_llm(
             "system",
             "\n".join(
                 [
-                    "당신은 SK AX 전략 브리핑 화면의 문장 편집자입니다.",
+                    "당신은 SK AX 전략 브리핑 화면의 핵심 변화 카드 문장 편집자입니다.",
                     "입력된 card_news.evidence_payload.analysis_package만 근거로 사용합니다.",
                     "card_news.summary_lines를 판단 근거로 쓰지 않습니다.",
-                    "원문 기사 재요약이 아니라 기간 내 변화, 시장 해석, SK AX 관점으로 씁니다.",
+                    "원문 기사 재요약이 아니라 시장 신호와 경쟁사 움직임 카드 문장만 정제합니다.",
                     (
                         "문장은 짧게 쓰고, 화면 기본 노출 문장은 모두 "
                         "'~합니다' 또는 '~있습니다' 문체로 맞춥니다."
@@ -776,23 +776,21 @@ def _refine_display_copy_with_llm(
             "human",
             "\n".join(
                 [
-                    "아래 입력을 브리핑 화면용 표시문으로 정제해주세요.",
+                    "아래 입력에서 key_change_cards 표시문만 정제해주세요.",
                     "",
                     "출력 JSON 스키마:",
                     json.dumps(_display_copy_schema_hint(), ensure_ascii=False, indent=2),
                     "",
                     "작성 규칙:",
-                    "- briefing_lead는 최대 2문장입니다.",
                     "- key_change_cards는 market_signal, competitor_move 두 슬롯만 유지합니다.",
                     (
                         "- 오늘의 핵심 변화 큰 요약 박스용 "
                         "core_change.title/summary는 생성하지 않습니다."
                     ),
                     (
-                        "- interpretation_flow는 관찰된 변화, 평가축의 이동, "
-                        "경쟁 구도 영향, 전략 시사 4단계입니다."
+                        "- briefing_lead, interpretation_flow, market_reading, "
+                        "sk_ax_view는 출력하지 않습니다."
                     ),
-                    "- market_reading과 sk_ax_view는 각각 최대 3개입니다.",
                     "- 근거/원문/confidence/debug 정보는 본문에 풀어 쓰지 않습니다.",
                     "",
                     "입력:",
@@ -815,8 +813,6 @@ def _refine_display_copy_with_llm(
 
 def _display_copy_schema_hint() -> dict[str, Any]:
     return {
-        "key_summary": "string",
-        "briefing_lead": "string",
         "key_change_cards": [
             {
                 "seq": 1,
@@ -839,34 +835,6 @@ def _display_copy_schema_hint() -> dict[str, Any]:
                 "evidence_card_ids": ["CN-..."],
             },
         ],
-        "interpretation_flow": {
-            "steps": [
-                {
-                    "seq": 1,
-                    "label": "관찰된 변화",
-                    "one_liner": "string",
-                    "evidence_card_ids": ["CN-..."],
-                }
-            ]
-        },
-        "market_reading": [
-            {
-                "seq": 1,
-                "label": "시장 변화",
-                "title": "string",
-                "description": "string",
-                "evidence_card_ids": ["CN-..."],
-            }
-        ],
-        "sk_ax_view": [
-            {
-                "seq": 1,
-                "use_case": "string",
-                "title": "string",
-                "description": "string",
-                "evidence_card_ids": ["CN-..."],
-            }
-        ],
     }
 
 
@@ -883,7 +851,7 @@ def _display_copy_context(
             "period_label": report.get("period_label"),
         },
         "source_card_ids": report.get("related_card_ids") or [],
-        "current_display_payload": _frontend_display_payload(report),
+        "current_key_change_cards": _key_change_cards_from_result(report),
         "analysis_packages": [
             {
                 "card_id": card.get("id"),
@@ -934,19 +902,7 @@ def _merge_display_copy(
     display_copy: dict[str, Any],
 ) -> dict[str, Any]:
     updated = copy.deepcopy(report)
-    _update_text_field(updated, display_copy, "key_summary")
-    _update_text_field(updated, display_copy, "briefing_lead")
-    if updated.get("key_summary"):
-        updated["sk_implication"] = _first_text(
-            _nested_get(display_copy, "sk_implication"),
-            updated.get("sk_implication"),
-        )
-
     _merge_key_change_cards(updated, display_copy)
-
-    _merge_flow(updated, display_copy)
-    _merge_market_reading(updated, display_copy)
-    _merge_sk_ax_view(updated, display_copy)
 
     provenance = _json_dict(updated.get("provenance"))
     provenance["display_copy_prompt_version"] = _DISPLAY_COPY_PROMPT_VERSION
