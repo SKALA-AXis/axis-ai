@@ -357,20 +357,6 @@ class TimelineEntry:
 
 
 @dataclass(slots=True)
-class CapabilityWindow:
-    period: str
-    business_area: str
-    narrative: str
-    delta_intensity: float
-    confidence: float
-    evidence_signal_ids: list[str] = field(default_factory=list)
-    generated_at: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
 class SectorPulseRow:
     sector: str
     week_start: str
@@ -453,7 +439,6 @@ class EvidenceDensity:
 class ContextProvenance:
     used_layers: list[str] = field(default_factory=list)
     timeline_card_ids: list[str] = field(default_factory=list)
-    capability_evidence_ids: list[str] = field(default_factory=list)
     financial_article_ids: list[int] = field(default_factory=list)
     precedent_card_ids: list[str] = field(default_factory=list)
     retrieved_card_ids: list[str] = field(default_factory=list)
@@ -468,7 +453,6 @@ class AnalysisContext:
     """4-Layer Context Model 의 Layer 4 active context. token budget ≤ 4,000."""
 
     peer_event_timeline_recent: list[TimelineEntry] = field(default_factory=list)
-    capability_evolution: dict[str, CapabilityWindow] = field(default_factory=dict)
     sector_pulse_recent: list[SectorPulseRow] = field(default_factory=list)
     financial_trend: dict[str, FinancialSeries] = field(default_factory=dict)
     event_chain_candidates: list[PrecedentCandidate] = field(default_factory=list)
@@ -481,8 +465,6 @@ class AnalysisContext:
         """비어있지 않은 layer 의 개수. context_hit_ratio 분모 (P5-LOG-2)."""
         count = 0
         if self.peer_event_timeline_recent:
-            count += 1
-        if self.capability_evolution:
             count += 1
         if self.sector_pulse_recent:
             count += 1
@@ -500,7 +482,6 @@ class AnalysisContext:
     def to_dict(self) -> dict[str, Any]:
         return {
             "peer_event_timeline_recent": [e.to_dict() for e in self.peer_event_timeline_recent],
-            "capability_evolution": {k: v.to_dict() for k, v in self.capability_evolution.items()},
             "sector_pulse_recent": [e.to_dict() for e in self.sector_pulse_recent],
             "financial_trend": {k: v.to_dict() for k, v in self.financial_trend.items()},
             "event_chain_candidates": [e.to_dict() for e in self.event_chain_candidates],
@@ -818,7 +799,6 @@ __all__ = [
     "AnalysisInputMetadata",
     "AnalysisPackage",
     "AnalysisResult",
-    "CapabilityWindow",
     "CardNews",
     "ClassificationPayload",
     "ContextProvenance",

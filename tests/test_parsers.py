@@ -139,8 +139,7 @@ def test_ir_parser_normalizes_krw_bn_table_unit_to_eokwon() -> None:
     revenue_candidates = [
         candidate
         for candidate in parsed["candidates"]
-        if candidate.get("source") == "ir_table_matrix"
-        and candidate.get("type") == "revenue_total"
+        if candidate.get("source") == "ir_table_matrix" and candidate.get("type") == "revenue_total"
     ]
 
     assert revenue_candidates[0]["unit"] == "십억원"
@@ -259,8 +258,7 @@ def test_ir_parser_does_not_apply_amount_unit_to_margin_rows() -> None:
     assert [candidate["value_pct"] for candidate in margin_candidates] == [11.2, 11.1]
     assert all(candidate["unit"] == "%" for candidate in margin_candidates)
     assert all(
-        "단위 근거: (단위: 십억원)" in candidate["evidence_text"]
-        for candidate in margin_candidates
+        "단위 근거: (단위: 십억원)" in candidate["evidence_text"] for candidate in margin_candidates
     )
     assert margin_candidates[0]["business_area"] == "솔루션"
 
@@ -311,8 +309,7 @@ def test_ir_parser_does_not_store_percentage_cells_as_amount_metrics() -> None:
     revenue_candidates = [
         candidate
         for candidate in parsed["candidates"]
-        if candidate.get("source") == "ir_table_matrix"
-        and candidate.get("type") == "revenue_total"
+        if candidate.get("source") == "ir_table_matrix" and candidate.get("type") == "revenue_total"
     ]
 
     assert [candidate["period"] for candidate in revenue_candidates] == [
@@ -876,8 +873,7 @@ def test_ir_parser_infers_quarter_from_quarterly_table_title() -> None:
     candidates = [
         candidate
         for candidate in parsed["candidates"]
-        if candidate.get("source") == "ir_table_matrix"
-        and candidate.get("type") == "revenue_total"
+        if candidate.get("source") == "ir_table_matrix" and candidate.get("type") == "revenue_total"
     ]
 
     assert any(
@@ -928,8 +924,7 @@ def test_ir_parser_does_not_apply_gpm_parent_to_amount_segment_rows() -> None:
     candidates = [
         candidate
         for candidate in parsed["candidates"]
-        if candidate.get("source") == "ir_table_matrix"
-        and candidate.get("period") == "2026Q1"
+        if candidate.get("source") == "ir_table_matrix" and candidate.get("period") == "2026Q1"
     ]
 
     assert any(
@@ -1428,11 +1423,10 @@ def test_ir_rule_based_business_signals_require_directional_evidence() -> None:
         {"period": "2026Q1", "peer_id": "test_peer"},
     )
 
-    assert len(signals) == 2
-    assert {signal["signal_type"] for signal in signals} == {"growth", "investment"}
+    assert len(signals) == 1
+    assert {signal["signal_type"] for signal in signals} == {"growth"}
     assert all(
-        "클라우드 매출은 1분기 주요 실적 지표" not in signal["evidence_text"]
-        for signal in signals
+        "클라우드 매출은 1분기 주요 실적 지표" not in signal["evidence_text"] for signal in signals
     )
     assert all(
         signal["extraction_method"] == "ir_parser.document_chunks.rule_based.v2"
@@ -1520,6 +1514,350 @@ def test_ir_rule_based_business_signals_include_sk_ax_highlight_sentences() -> N
     assert "마진 개선" in evidence
     assert "AI Transformation" in evidence
     assert {"orders_pipeline", "growth", "strategy"} <= signal_types
+
+
+def test_ir_business_signals_do_not_inherit_cloud_section_for_sk_ax_it_service() -> None:
+    article = {
+        "id": 204,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c1",
+                "chunk_index": 1,
+                "page": 4,
+                "section_key": "cloud",
+                "text": (
+                    "IT서비스 EBITDA Highlights 감가상각비와 영업이익이 감소했습니다. "
+                    "신규 AI DX 프로젝트 수주 견조한 가운데 기저효과로 매출이 감소했습니다."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert signals
+    business_areas = {signal["business_area"] for signal in signals}
+    assert "cloud" not in business_areas
+    assert "company_total" in business_areas
+
+
+def test_ir_business_signals_skip_semiconductor_chunk_without_sk_ax_context() -> None:
+    article = {
+        "id": 205,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c2",
+                "chunk_index": 2,
+                "page": 5,
+                "section_key": "cloud",
+                "text": (
+                    "FY25, 반도체 Fab 등 주요 프로젝트 착공으로 전년 대비 매출 성장했습니다. "
+                    "프로젝트 공정률 상승 기반으로 수주 확대가 이어지고 있습니다."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert signals == []
+
+
+def test_ir_business_signal_summary_strips_numeric_table_blob() -> None:
+    article = {
+        "id": 206,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c3",
+                "chunk_index": 3,
+                "page": 6,
+                "section_key": "business",
+                "text": (
+                    "1Q26 경영실적현황: IT서비스부문(SK AX) "
+                    "신규 AI DX 사업수주 확대 및 마진 개선이 지속되고 있습니다. "
+                    "매출 530 586 영업이익 31 29 EBITDA 63 68 영업이익률 4.9% 7.6% 9.4%."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert signals
+    summary = signals[0]["summary"]
+    assert "530" not in summary
+    assert "586" not in summary
+    assert "신규 AI DX 사업수주 확대" in summary
+
+
+def test_ir_business_signals_ignore_table_like_rows_and_keep_narrative_sentences() -> None:
+    article = {
+        "id": 207,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c4",
+                "chunk_index": 4,
+                "page": 7,
+                "section_key": "business",
+                "text": (
+                    "신규 AI DX 프로젝트 수주 확대와 마진 개선이 지속되고 있습니다.\n"
+                    "매출 530 586 영업이익 31 29 EBITDA 63 68 영업이익률 4.9% 7.6% 9.4%\n"
+                    "AI Transformation 기반의 고부가 사업모델 개편을 추진하고 있습니다."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert signals
+    evidence = " ".join(signal["evidence_text"] for signal in signals)
+    assert "매출 530 586" not in evidence
+    assert "영업이익률 4.9%" not in evidence
+    assert "수주 확대" in evidence
+    assert "사업모델 개편" in evidence
+
+
+def test_ir_business_signals_keep_page_when_sk_ax_context_exists_with_affiliate_mentions() -> None:
+    article = {
+        "id": 208,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c5",
+                "chunk_index": 5,
+                "page": 8,
+                "section_key": "business",
+                "text": (
+                    "SK에코플랜트는 반도체 Fab 프로젝트 착공으로 매출이 성장했습니다. "
+                    "SK AX는 AI Transformation 수요 확대로 IT서비스 수주가 증가했습니다."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert signals
+    evidence = " ".join(signal["evidence_text"] for signal in signals)
+    assert "SK AX" in evidence
+    assert any(signal["business_area"] == "company_total" for signal in signals)
+
+
+def test_ir_business_signals_skip_non_sk_ax_affiliate_chunks() -> None:
+    article = {
+        "id": 209,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c6",
+                "chunk_index": 6,
+                "page": 5,
+                "section_key": "business",
+                "text": (
+                    "SK에코플랜트 EBITDA Highlights Hi-tech 및 Asset Lifecycle 실적호조로 "
+                    "전사매출 증가(YoY +99.3%)"
+                ),
+            },
+            {
+                "chunk_id": "c7",
+                "chunk_index": 7,
+                "page": 9,
+                "section_key": "business",
+                "text": (
+                    "1Q26 경영실적현황: IT서비스부문(SK AX) "
+                    "신규 AI DX 프로젝트 수주 견조한 가운데 기저 효과로 매출 감소했습니다. "
+                    "AI Transformation 기반의 고부가 비즈니스 모델로 개편 진행 중입니다."
+                ),
+            },
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert signals
+    pages = {signal["source_page"] for signal in signals}
+    evidence = " ".join(signal["evidence_text"] for signal in signals)
+    assert pages == {9}
+    assert "SK에코플랜트" not in evidence
+    assert "IT서비스부문(SK AX)" in evidence
+    assert all(signal["business_area"] == "company_total" for signal in signals)
+
+
+def test_ir_business_signals_keep_one_representative_signal_per_evidence() -> None:
+    article = {
+        "id": 210,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c8",
+                "chunk_index": 8,
+                "page": 9,
+                "section_key": "business",
+                "text": (
+                    "1Q26 경영실적현황: IT서비스부문(SK AX) "
+                    "신규 AI DX 사업 수주 확대와 마진 개선이 지속되고 있습니다."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    expected_evidence = (
+        "1Q26 경영실적현황: IT서비스부문(SK AX) "
+        "신규 AI DX 사업 수주 확대와 마진 개선이 지속되고 있습니다."
+    )
+    assert len(signals) == 1
+    assert signals[0]["signal_type"] == "orders_pipeline"
+    assert signals[0]["evidence_text"] == expected_evidence
+
+
+def test_ir_llm_business_signals_keep_summary_but_dedupe_same_evidence() -> None:
+    article = {
+        "id": 211,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "llm_business_signals": [
+            {
+                "business_area": "company_total",
+                "signal_type": "investment",
+                "sentiment": "negative",
+                "summary": "데이터센터 매각 영향이 있었다.",
+                "evidence_text": (
+                    "해외 프로젝트 종료 및 판교 데이터센터 매각 영향으로 Top-line 축소"
+                ),
+                "source_page": 9,
+            },
+            {
+                "business_area": "company_total",
+                "signal_type": "risk",
+                "sentiment": "negative",
+                "summary": "해외 프로젝트 종료와 데이터센터 매각으로 매출이 감소했다.",
+                "evidence_text": (
+                    "해외 프로젝트 종료 및 판교 데이터센터 매각 영향으로 Top-line 축소"
+                ),
+                "source_page": 9,
+            },
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert len(signals) == 1
+    assert signals[0]["signal_type"] == "risk"
+    assert signals[0]["summary"] == "해외 프로젝트 종료와 데이터센터 매각으로 매출이 감소했다."
+    assert (
+        signals[0]["evidence_text"]
+        == "해외 프로젝트 종료 및 판교 데이터센터 매각 영향으로 Top-line 축소"
+    )
 
 
 def test_ir_metrics_keep_one_representative_candidate_for_report_period() -> None:

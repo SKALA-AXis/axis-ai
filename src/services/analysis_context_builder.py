@@ -19,7 +19,6 @@ from src.agents.context._data_quality_checks import (
 from src.analysis.models import (
     AnalysisContext,
     AnalysisInputBundle,
-    CapabilityWindow,
     ContextProvenance,
     EvidenceDensity,
     FinancialSeries,
@@ -86,18 +85,7 @@ class AnalysisContextBuilder:
         if timeline:
             provenance.used_layers.append("peer_event_timeline_recent")
 
-        # Layer 2-B capability ---------------------------------------------
-        capability = self._query_capability_evolution(peers=peers)
-        ctx.capability_evolution = capability
-        if capability:
-            provenance.used_layers.append("capability_evolution")
-        provenance.capability_evidence_ids = [
-            evidence_id
-            for window in capability.values()
-            for evidence_id in window.evidence_signal_ids
-        ]
-
-        # Layer 2-C sector pulse -------------------------------------------
+        # Layer 2-B sector pulse -------------------------------------------
         sector_pulse = self._query_sector_pulse(sectors=sectors, weeks=_SECTOR_PULSE_WEEKS_DEFAULT)
         ctx.sector_pulse_recent = sector_pulse
         if sector_pulse:
@@ -200,61 +188,6 @@ class AnalysisContextBuilder:
             log.debug("query_timeline fallback | error=%s", exc)
             return []
         return out
-
-    def _query_capability_evolution(self, *, peers: list[str]) -> dict[str, CapabilityWindow]:
-        if not peers:
-            return {}
-        result: dict[str, CapabilityWindow] = {}
-        try:
-            with SessionLocal() as db:
-                for peer_id in peers:
-                    row = db.execute(
-                        text(
-                            """
-                            SELECT id,
-                                   COALESCE(
-                                       peer_plus_payload->'capability_evolution',
-                                       '{}'::jsonb
-                                   ) AS payload
-                              FROM peer_companies
-                             WHERE id = :peer_id
-                            """
-                        ),
-                        {"peer_id": peer_id},
-                    ).fetchone()
-                    if row is None:
-                        continue
-                    payload = row._mapping.get("payload") or {}
-                    if not isinstance(payload, dict):
-                        continue
-                    windows = payload.get("windows") or []
-                    if not isinstance(windows, list) or not windows:
-                        continue
-                    latest = sorted(
-                        (w for w in windows if isinstance(w, dict)),
-                        key=lambda w: str(w.get("generated_at") or w.get("period") or ""),
-                        reverse=True,
-                    )
-                    if not latest:
-                        continue
-                    window_payload = latest[0]
-                    result[peer_id] = CapabilityWindow(
-                        period=str(window_payload.get("period") or ""),
-                        business_area=str(window_payload.get("business_area") or ""),
-                        narrative=str(window_payload.get("narrative") or "").strip(),
-                        delta_intensity=_safe_float(window_payload.get("delta_intensity"), 0.0),
-                        confidence=_safe_float(window_payload.get("confidence"), 0.0),
-                        evidence_signal_ids=[
-                            str(item)
-                            for item in (window_payload.get("evidence_signal_ids") or [])
-                            if str(item).strip()
-                        ],
-                        generated_at=str(window_payload.get("generated_at") or ""),
-                    )
-        except Exception as exc:  # noqa: BLE001
-            log.debug("query_capability_evolution fallback | error=%s", exc)
-            return {}
-        return result
 
     def _query_sector_pulse(self, *, sectors: list[str], weeks: int) -> list[SectorPulseRow]:
         if not sectors:
@@ -556,7 +489,7 @@ def _compress_to_budget(ctx: AnalysisContext, *, budget: int) -> AnalysisContext
     3) sector_pulse → 2주로 축소
     4) event_chain_candidates → 3건으로 축소
     5) timeline → peer 당 3건으로 축소
-    6) capability narrative → peer 당 150자 truncate
+    6) no-op
     """
     actions = [
         lambda c: _shrink_rag(c, max_items=2),
@@ -564,7 +497,6 @@ def _compress_to_budget(ctx: AnalysisContext, *, budget: int) -> AnalysisContext
         lambda c: _shrink_sector_pulse(c, max_weeks=2),
         lambda c: _shrink_event_chain(c, max_items=3),
         lambda c: _shrink_timeline_per_peer(c, max_per_peer=3),
-        lambda c: _truncate_capability_narratives(c, max_chars=150),
     ]
     for action in actions:
         if _estimate_token_count(ctx) <= budget:
@@ -602,13 +534,6 @@ def _shrink_timeline_per_peer(ctx: AnalysisContext, *, max_per_peer: int) -> Ana
     for peer_id, entries in per_peer.items():
         compressed.extend(entries[:max_per_peer])
     ctx.peer_event_timeline_recent = compressed
-    return ctx
-
-
-def _truncate_capability_narratives(ctx: AnalysisContext, *, max_chars: int) -> AnalysisContext:
-    for window in ctx.capability_evolution.values():
-        if window.narrative and len(window.narrative) > max_chars:
-            window.narrative = window.narrative[:max_chars].rstrip() + "…"
     return ctx
 
 
