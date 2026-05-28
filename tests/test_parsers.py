@@ -350,6 +350,247 @@ def test_ir_parser_does_not_store_percentage_cells_as_amount_metrics() -> None:
     assert revenue_yoy["unit"] == "%"
 
 
+def test_ir_parser_maps_hierarchical_year_quarter_headers() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="테스트사 2025년 4분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 2, 10),
+        peer_id="test_peer",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2025, "quarter": 4},
+            "pdf_page_blocks": [
+                {
+                    "page": 3,
+                    "blocks": [
+                        {"text": "손익현황 (단위: 억원)"},
+                        {"text": "구분 2024년 2025년"},
+                        {"text": "4분기 연간 3분기 4분기 QoQ YoY 연간 YoY"},
+                        {"text": "매출액 11,596 37,136 10,543 13,227 25.5% 14.1% 42,521 14.5%"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    revenue_candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("base_metric_type") == "revenue_total"
+    ]
+
+    assert [
+        (
+            candidate["type"],
+            candidate["period"],
+            candidate.get("value_krwbn") or candidate.get("value_pct"),
+        )
+        for candidate in revenue_candidates
+    ] == [
+        ("revenue_total", "2024Q4", 11596),
+        ("revenue_total", "2024", 37136),
+        ("revenue_total", "2025Q3", 10543),
+        ("revenue_total", "2025Q4", 13227),
+        ("revenue_total_qoq", "2025Q4", 25.5),
+        ("revenue_total_yoy", "2025Q4", 14.1),
+        ("revenue_total", "2025", 42521),
+        ("revenue_total_yoy", "2025", 14.5),
+    ]
+    qoq = revenue_candidates[4]
+    assert qoq["comparison_base_period"] == "2025Q3"
+    assert qoq["comparison_base_value"] == 10543
+    yoy = revenue_candidates[5]
+    assert yoy["comparison_base_period"] == "2024Q4"
+    assert yoy["comparison_base_value"] == 11596
+
+
+def test_ir_parser_maps_split_year_quarter_pair_headers() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="테스트사 2026년 1분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="test_peer",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 4,
+                    "blocks": [
+                        {"text": "부문별 손익현황 (단위: 억원)"},
+                        {"text": "구분 2025년 2026년"},
+                        {"text": "1분기 1분기 YoY"},
+                        {"text": "매 출 액 8,330 9,357 12.3%"},
+                        {"text": "SI 2,996 3,568 19.1%"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    revenue_candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("base_metric_type") == "revenue_total"
+    ]
+
+    assert [
+        (
+            candidate["type"],
+            candidate["period"],
+            candidate.get("value_krwbn") or candidate.get("value_pct"),
+            candidate["business_area"],
+        )
+        for candidate in revenue_candidates
+    ] == [
+        ("revenue_total", "2025Q1", 8330, "company_total"),
+        ("revenue_total", "2026Q1", 9357, "company_total"),
+        ("revenue_total_yoy", "2026Q1", 12.3, "company_total"),
+        ("revenue_total", "2025Q1", 2996, "SI"),
+        ("revenue_total", "2026Q1", 3568, "SI"),
+        ("revenue_total_yoy", "2026Q1", 19.1, "SI"),
+    ]
+    yoy = revenue_candidates[2]
+    assert yoy["comparison_base_period"] == "2025Q1"
+    assert yoy["comparison_base_value"] == 8330
+
+
+def test_ir_parser_reconstructs_table_lines_from_pdf_block_positions() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="테스트사 2026년 1분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="test_peer",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 4,
+                    "blocks": [
+                        {"bbox": [20, 20, 180, 35], "text": "부문별 손익현황 (단위: 억원)"},
+                        {"bbox": [20, 60, 80, 80], "text": "구분"},
+                        {"bbox": [120, 60, 180, 80], "text": "2025년"},
+                        {"bbox": [220, 60, 280, 80], "text": "2026년"},
+                        {"bbox": [120, 90, 180, 110], "text": "1분기"},
+                        {"bbox": [220, 90, 280, 110], "text": "1분기"},
+                        {"bbox": [320, 90, 360, 110], "text": "YoY"},
+                        {"bbox": [20, 130, 80, 150], "text": "매 출 액"},
+                        {"bbox": [120, 130, 180, 150], "text": "8,330"},
+                        {"bbox": [220, 130, 280, 150], "text": "9,357"},
+                        {"bbox": [320, 130, 360, 150], "text": "12.3%"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    revenue_candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("base_metric_type") == "revenue_total"
+    ]
+
+    assert [
+        (
+            candidate["type"],
+            candidate["period"],
+            candidate.get("value_krwbn") or candidate.get("value_pct"),
+        )
+        for candidate in revenue_candidates
+    ] == [
+        ("revenue_total", "2025Q1", 8330),
+        ("revenue_total", "2026Q1", 9357),
+        ("revenue_total_yoy", "2026Q1", 12.3),
+    ]
+
+
+def test_ir_reprocess_stores_only_report_period_from_table_candidates() -> None:
+    article = {
+        "id": 205,
+        "company": ["test_peer"],
+        "title": "테스트사 2025년 4분기 IR",
+        "url": "https://example.com/ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2025Q4", "period_year": 2025, "period_quarter": 4},
+    }
+    parser_result = {
+        "period": "2025Q4",
+        "period_year": 2025,
+        "period_quarter": 4,
+        "candidates": [
+            {
+                "type": "revenue_total",
+                "value_krwbn": 37136,
+                "metric_scope": "company_total",
+                "business_area": "company_total",
+                "period": "2024",
+                "period_type": "year",
+                "source": "ir_table_matrix",
+                "confidence": 0.88,
+            },
+            {
+                "type": "revenue_total",
+                "value_krwbn": 13227,
+                "metric_scope": "company_total",
+                "business_area": "company_total",
+                "period": "2025Q4",
+                "period_type": "quarter",
+                "source": "ir_table_matrix",
+                "confidence": 0.88,
+            },
+            {
+                "type": "revenue_total_yoy",
+                "value_pct": 14.5,
+                "metric_scope": "company_total",
+                "business_area": "company_total",
+                "period": "2025",
+                "period_type": "year",
+                "source": "ir_table_matrix",
+                "confidence": 0.88,
+            },
+            {
+                "type": "revenue_total_yoy",
+                "value_pct": 14.1,
+                "metric_scope": "company_total",
+                "business_area": "company_total",
+                "period": "2025Q4",
+                "period_type": "quarter",
+                "source": "ir_table_matrix",
+                "confidence": 0.88,
+            },
+        ],
+    }
+
+    metrics = _metrics_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2025Q4", "peer_id": "test_peer"},
+    )
+
+    assert [
+        (metric["metric_name"], metric["period"], metric["value_numeric"]) for metric in metrics
+    ] == [
+        ("revenue_total", "2025Q4", 13227),
+        ("revenue_total_yoy", "2025Q4", 14.1),
+    ]
+
+
 def test_ir_parser_uses_table_page_context_for_generic_metric_rows() -> None:
     article = RawArticle(
         url="https://example.com/ir.pdf",
@@ -604,7 +845,120 @@ def test_ir_parser_keeps_table_flow_in_metric_evidence() -> None:
     assert "26년 1분기 7,378" in enterprise_it["evidence_text"]
 
 
-def test_ir_reprocess_uses_table_candidate_periods() -> None:
+def test_ir_parser_infers_quarter_from_quarterly_table_title() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="현대오토에버 2026년 1분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="hyundai_autoever",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 4,
+                    "blocks": [
+                        {"text": "분기별손익계산서(연결재무제표기준)"},
+                        {"text": "(단위: 억원)"},
+                        {"text": "구분 2025년 2026년"},
+                        {"text": "매출액 8,330 10,421"},
+                        {"text": "SI 2,996 3,878"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("type") == "revenue_total"
+    ]
+
+    assert any(
+        candidate.get("period") == "2026Q1"
+        and candidate.get("business_area") == "company_total"
+        and candidate.get("value_krwbn") == 10421
+        for candidate in candidates
+    )
+    assert any(
+        candidate.get("period") == "2025Q1"
+        and candidate.get("business_area") == "SI"
+        and candidate.get("value_krwbn") == 2996
+        for candidate in candidates
+    )
+
+
+def test_ir_parser_does_not_apply_gpm_parent_to_amount_segment_rows() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="현대오토에버 2026년 1분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="hyundai_autoever",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 10,
+                    "blocks": [
+                        {"text": "부문별손익현황_26년1분기(연결재무제표기준)"},
+                        {"text": "(단위: 억원)"},
+                        {"text": "구분 23년 24년 25년 25년1분기 26년1분기"},
+                        {"text": "매출액 30,650 37,136 42,521 8,330 9,357"},
+                        {"text": "Enterprise IT 24,255 29,093 34,244 6,408 7,378"},
+                        {"text": "GPM 8.6% 8.8% 9.9% 6.7% 7.3%"},
+                        {"text": "차량SW 6,395 8,044 8,277 1,922 1,979"},
+                        {"text": "GPM 20.3% 17.3% 12.7% 14.1% 9.7%"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("period") == "2026Q1"
+    ]
+
+    assert any(
+        candidate.get("type") == "gross_margin"
+        and candidate.get("business_area") == "Enterprise IT"
+        and candidate.get("value_pct") == 7.3
+        for candidate in candidates
+    )
+    assert any(
+        candidate.get("type") == "revenue_total"
+        and candidate.get("business_area") == "차량SW"
+        and candidate.get("value_krwbn") == 1979
+        for candidate in candidates
+    )
+    assert any(
+        candidate.get("type") == "gross_margin"
+        and candidate.get("business_area") == "차량SW"
+        and candidate.get("value_pct") == 9.7
+        for candidate in candidates
+    )
+    assert not any(
+        candidate.get("type") == "gross_margin"
+        and candidate.get("business_area") == "차량SW"
+        and candidate.get("value_krwbn") == 1979
+        for candidate in candidates
+    )
+
+
+def test_ir_reprocess_skips_non_report_period_table_candidates() -> None:
     article = {
         "id": 101,
         "company": ["test_peer"],
@@ -646,13 +1000,7 @@ def test_ir_reprocess_uses_table_candidate_periods() -> None:
         {"period": "2026Q1", "peer_id": "test_peer"},
     )
 
-    assert metrics[0]["period"] == "2024"
-    assert metrics[0]["period_year"] == 2024
-    assert metrics[0]["period_quarter"] is None
-    assert metrics[0]["period_type"] == "year"
-    assert metrics[0]["business_area"] == "company_total"
-    assert metrics[0]["source_table_uid"] == "ir-p4-t1"
-    assert metrics[0]["extraction_method"] == "ir_parser.table_matrix"
+    assert metrics == []
 
 
 def test_ir_reprocess_maps_llm_metrics_and_signals_separately() -> None:

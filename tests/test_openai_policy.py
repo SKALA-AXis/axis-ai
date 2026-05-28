@@ -42,9 +42,17 @@ def test_openai_calls_disabled_without_api_key(monkeypatch):
     assert openai_disabled_reason() == "OPENAI_API_KEY is not configured"
 
 
-def test_relevance_llm_enabled_by_api_key_for_track_a_callers(monkeypatch):
+def test_relevance_llm_disabled_by_default_even_with_api_key(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.delenv("ENABLE_RELEVANCE_LLM", raising=False)
+
+    assert relevance_llm_enabled() is False
+
+
+@pytest.mark.parametrize("flag", ["1", "true", "yes", "on"])
+def test_relevance_llm_enabled_only_when_flag_is_enabled(monkeypatch, flag):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("ENABLE_RELEVANCE_LLM", flag)
 
     assert relevance_llm_enabled() is True
 

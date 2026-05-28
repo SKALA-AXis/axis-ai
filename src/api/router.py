@@ -26,6 +26,7 @@ from src.schemas import (
 
 log = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
+SCHEDULED_PREPROCESS_LIMIT = 5000
 
 
 @asynccontextmanager
@@ -213,7 +214,7 @@ async def _run_collection_track(
 
         preprocessing_service = PreprocessingService(
             relevance_evaluator=RelevanceEvaluator(enable_llm=(track == "a")),
-            classifier=ClusterClassifier(enable_llm=False),
+            classifier=ClusterClassifier(enable_llm=(track == "a")),
         )
         crawl_run_ids = processor.last_crawl_run_ids
         if crawl_run_ids:
@@ -223,6 +224,7 @@ async def _run_collection_track(
                     trigger_type=trigger_type,
                     collected_since=None,
                     crawl_run_id=crawl_run_id,
+                    limit=SCHEDULED_PREPROCESS_LIMIT,
                 )
                 for crawl_run_id in crawl_run_ids
             ]
@@ -233,6 +235,7 @@ async def _run_collection_track(
                     trigger_type=trigger_type,
                     collected_since=started_at,
                     crawl_run_id=None,
+                    limit=SCHEDULED_PREPROCESS_LIMIT,
                 )
             ]
         log.info(
