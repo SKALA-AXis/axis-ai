@@ -46,7 +46,7 @@
 | 8 | **CapabilityEvolutionAgent** (신규) | `agents/context/capability_evolution_agent.py` | 월1회 CronJob | ✅ |
 | 9 | **SectorPulseAggregator** (신규) | `scripts/refresh_sector_pulse.py` | 주1회 CronJob | ❌ |
 | 10 | **EventChainDiscoveryJob** (옵션) | `scripts/event_chain_discovery_job.py` | 매일 CronJob | ✅ |
-| 11 | **ProfileSnapshotAgent** (신규) | `scripts/refresh_peer_profile_snapshots.py` | 주1회 CronJob | ✅ |
+| 11 | **ProfileSnapshotAgent** (신규) | `scripts/refresh_peer_profile_snapshots.py` | 분기 1회 CronJob | ✅ |
 | 12 | **EvaluatorAgent** (W5-1 신규, rule-based 5 metric) | `agents/evaluator_agent.py` + `validate` 노드 확장 | Analysis Pipeline 노드 (in-graph) | ❌ |
 | 13 | **CardEvaluatorSidecar** (W5-2 신규, LLM-as-Judge 4 score) | `scripts/evaluate_recent_cards.py` | 5분 주기 CronJob (sidecar) | ✅ gpt-4o-mini |
 
@@ -117,7 +117,7 @@
 
 | Component | 주기 | Input | Output |
 |---|---|---|---|
-| **ProfileSnapshotAgent** | 주1회 (월 03:00) | **READ**: `raw_articles` (sk_ax_site / official / DART) + `raw_article_business_signals` | **WRITE**: `peer_companies.profile_snapshot` JSONB 컬럼 (+ version / generated_at) |
+| **ProfileSnapshotAgent** | 분기 1회 (1/4/7/10월 1일 03:00) | **READ**: `raw_articles` (sk_ax_site / official / DART) + `raw_article_business_signals` | **WRITE**: `peer_companies.profile_snapshot` JSONB 컬럼 (+ version / generated_at) |
 | **CapabilityEvolutionAgent** ⭐신규 | 월1회 (1일 03:00) | **READ**: `raw_article_business_signals` 4분기 top-5/group | **WRITE**: `peer_companies.peer_plus_payload['capability_evolution']` JSONB |
 | **SectorPulseAggregator** ⭐신규 | 주1회 (월 02:00) | **READ**: `card_news` (180일) | **WRITE**: `sector_pulse` MATERIALIZED VIEW REFRESH |
 | **EventChainDiscoveryJob** (옵션) | 매일 (02:00) | **READ**: `card_news` 14일 + Qdrant 임베딩 | **WRITE**: `card_news.evidence_payload['related_card_ids']` JSONB |

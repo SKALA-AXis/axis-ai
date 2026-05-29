@@ -243,7 +243,7 @@ ProfileAgent 는 단순 context provider 가 아니라 **DART / IR / 공식 news
 만드는 합성 책임자** 다.
 
 두 단계로 운영 (W2-2 2-tier):
-* **Tier A (snapshot 생성)** — 주1회 CronJob `axis-cron-profile-refresh` 가 회사별
+* **Tier A (snapshot 생성)** — 분기 1회 CronJob `axis-cron-profile-refresh` 가 회사별
   방향성 / 주요 사업 / 전략 변화 / 역량 평가 narrative 를 합성하여 `peer_companies.
   profile_snapshot` JSONB (별도 컬럼) 에 저장.
 * **Tier B (runtime loader)** — Analysis Pipeline ② 노드 (`profile_context`) 가

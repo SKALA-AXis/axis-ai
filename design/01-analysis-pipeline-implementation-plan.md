@@ -260,12 +260,12 @@
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
-│ Tier A — Static Profile Snapshot (주 1회 LLM 합성)            │
-│ • CronJob: axis-cron-profile-refresh (월요일 03:00 KST)       │
+│ Tier A — Static Profile Snapshot (분기 1회 LLM 합성)          │
+│ • CronJob: axis-cron-profile-refresh (분기 첫날 03:00 KST)    │
 │ • 입력: DART + IR + 공식 newsroom + 최근 6개월 뉴스           │
 │ • 출력: peer_companies.profile_snapshot JSONB (V33 Flyway)    │
-│ • TTL: 7일 + manual refresh CLI                              │
-│ • LLM: gpt-4o, 회사당 ~$0.15 (5 회사 × 주 1회 = $0.75/주)     │
+│ • TTL: 분기 단위 + manual refresh CLI                        │
+│ • LLM: gpt-4o, 회사당 ~$0.15 (5 회사 × 분기 1회 = $0.75/분기) │
 └──────────────────────────────────────────────────────────────┘
                           ↓
 ┌──────────────────────────────────────────────────────────────┐
@@ -426,7 +426,7 @@ class ImplicationProvenance:
 | 2-C sector pulse | `SectorPulseAggregator` | 주 1회 (월 02:00) | ❌ | **`sector_pulse` MATERIALIZED VIEW** (신규) |
 | 2-D financial trend | (자동) | metric INSERT 시 | ❌ | **`peer_financial_trend` VIEW** (신규) |
 | 2-E event chain (옵션) | `EventChainDiscoveryJob` | 매일 02:00 (선택) | ✅ gpt-4o | `card_news.evidence_payload['related_card_ids']` JSONB <br/> 또는 V34 `event_chain_links` (table) |
-| 2-F snapshot history | `axis-cron-profile-refresh` (W2-2) | 주 1회 | ✅ (W2-2) | **`legacy_records`** (`source_table='peer_companies'`) — 신규 테이블 X |
+| 2-F snapshot history | `axis-cron-profile-refresh` (W2-2) | 분기 1회 | ✅ (W2-2) | **`legacy_records`** (`source_table='peer_companies'`) — 신규 테이블 X |
 | Layer 3 인덱스 | Flyway / Qdrant | 정의 시 | ❌ | (DDL) |
 | Layer 4 active context | `AnalysisContextBuilder` | 매 cluster (Supervisor 노드) | ❌ | **메모리 — `AnalysisContext` dataclass** |
 
@@ -2071,7 +2071,7 @@ Critical path: W1-1 → W2-1 → W2-3 → W4-0 → W4-2 → W4-5 → **W5-1** �
 | Cluster 당 LLM 호출 (Stage 1) | 4 | 5 (+implication) | 5 (retry 평균 1.05회) | 5 | 5 (context는 LLM X) | 5 (validate 확장 LLM X) | 5 |
 | Cluster 당 비용 (GPT-4o) | $0.078 | $0.100 | $0.105 | $0.105 | $0.115 (prompt 길이 ↑) | $0.115 | $0.115 |
 | 일일 Stage 1 (15 clusters) | $1.17 | $1.50 | $1.58 | $1.58 | $1.73 | $1.73 | $1.73 |
-| Profile snapshot CronJob (주1회) | — | — | $0.11/일 | $0.11/일 | $0.11/일 | $0.11/일 | $0.11/일 |
+| Profile snapshot CronJob (분기1회) | — | — | ~$0.008/일 | ~$0.008/일 | ~$0.008/일 | ~$0.008/일 | ~$0.008/일 |
 | CapabilityEvolution (월1회) | — | — | — | — | $0.025/일 | $0.025/일 | $0.025/일 |
 | SectorPulse REFRESH | — | — | — | — | $0 | $0 | $0 |
 | **CardEvaluatorSidecar (W5-2)** | — | — | — | — | — | **$1.50/일** (30 카드 × $0.05, gpt-4o-mini) | $1.50/일 |

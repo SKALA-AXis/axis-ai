@@ -1221,6 +1221,122 @@ def test_ir_parser_extracts_additional_financial_metric_candidates() -> None:
     assert candidates_by_type["backlog"]["value_krwbn"] == 12000
 
 
+def test_ir_parser_extracts_posco_dx_orders_yoy_and_chart_margin() -> None:
+    article = RawArticle(
+        url="https://example.com/posco-dx-ir.pdf",
+        title="2026년 1분기 경영실적",
+        content=(
+            "[PAGE 3]\n"
+            "’26.1Q 경영실적 종합\n"
+            "’26년 1Q 연결수주 2,671억원(YoY +31.0%), "
+            "매출 2,415억원(YoY △18.6%) 기록\n"
+            "영업이익률\n"
+            "1Q25 2Q25 3Q25 4Q25 1Q26"
+        ),
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="posco_dx",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "pdf_page_blocks": [
+                {
+                    "page": 3,
+                    "blocks": [
+                        {
+                            "text": (
+                                "’26년 1Q 연결수주 2,671억원(YoY +31.0%), "
+                                "매출 2,415억원(YoY △18.6%) 기록"
+                            ),
+                            "bbox": [60, 90, 610, 130],
+                        },
+                        {"text": "영업이익률", "bbox": [20, 190, 65, 202]},
+                        {"text": "1.5%", "bbox": [400, 204, 428, 216]},
+                        {"text": "△0.5%", "bbox": [320, 213, 360, 225]},
+                        {"text": "1Q25 2Q25 3Q25 4Q25", "bbox": [80, 502, 350, 516]},
+                        {"text": "1Q26", "bbox": [396, 502, 426, 516]},
+                    ],
+                }
+            ]
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates_by_type = {candidate["type"]: candidate for candidate in parsed["candidates"]}
+
+    assert parsed["period"] == "2026Q1"
+    assert candidates_by_type["orders"]["value_krwbn"] == 2671
+    assert candidates_by_type["orders_yoy"]["value_pct"] == 31.0
+    assert candidates_by_type["revenue_total_yoy"]["value_pct"] == -18.6
+    assert candidates_by_type["operating_margin"]["value_pct"] == 1.5
+
+
+def test_ir_parser_prefers_pdf_period_over_wrong_listing_date() -> None:
+    article = RawArticle(
+        url="https://example.com/posco-dx-ir.pdf",
+        title="2026년 1분기 경영실적",
+        content="[PAGE 1]\n2025.2Q\n경영실적\n매출 2,729억원",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 5, 1),
+        peer_id="posco_dx",
+        source_type="ir",
+        content_type="pdf",
+        extra={"date_info": {"year": 2026, "quarter": 1}},
+    )
+
+    parsed = IRParser().parse_article(article)
+
+    assert parsed["period"] == "2025Q2"
+
+
+def test_ir_parser_repairs_scrambled_posco_dx_hierarchical_header() -> None:
+    article = RawArticle(
+        url="https://example.com/posco-dx-ir.pdf",
+        title="2025년 2분기 IR",
+        content=(
+            "[PAGE 3]\n"
+            "2. 경영실적 종합\n"
+            "’25년2분기매출2,729억원(YoY △22.7%), "
+            "영업이익171억원(YoY △29.8%, OPM 6.3%) 기록\n"
+            "구분 (단위: 억원)\n"
+            "2024 2025 YoY QoQ 2Q 연간 1Q 2Q 1H\n"
+            "수 주 2,328 11,347 2,038 1,736 3,774 △25.4% △14.8%\n"
+            "매 출 3,530 14,733 2,968 2,729 5,696 △22.7% △8.1%\n"
+            "영업이익 243 1,090 229 171 399 △29.8% △25.3%\n"
+            "영업이익률 6.9% 7.4% 7.7% 6.3% 7.0% △0.6%p △1.4%p"
+        ),
+        source_name="ir_pdf",
+        published_at=datetime(2025, 8, 1),
+        peer_id="posco_dx",
+        source_type="ir",
+        content_type="pdf",
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates = parsed["candidates"]
+
+    orders = [
+        candidate
+        for candidate in candidates
+        if candidate["type"] == "orders" and candidate.get("period") == "2025Q2"
+    ]
+    orders_yoy = [
+        candidate
+        for candidate in candidates
+        if candidate["type"] == "orders_yoy" and candidate.get("period") == "2025Q2"
+    ]
+    revenue = [
+        candidate
+        for candidate in candidates
+        if candidate["type"] == "revenue_total" and candidate.get("period") == "2025Q2"
+    ]
+
+    assert parsed["period"] == "2025Q2"
+    assert orders[0]["value_krwbn"] == 1736
+    assert orders_yoy[0]["value_pct"] == -25.4
+    assert revenue[0]["value_krwbn"] == 2729
+
+
 def test_ir_parser_marks_business_segment_metrics() -> None:
     article = RawArticle(
         url="https://example.com/ir.pdf",
