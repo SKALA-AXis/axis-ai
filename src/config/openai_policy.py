@@ -19,9 +19,7 @@ def openai_calls_enabled() -> bool:
 
 def relevance_llm_enabled() -> bool:
     flag = os.getenv("ENABLE_RELEVANCE_LLM")
-    if flag is not None:
-        return _flag_enabled(flag) and _api_key_configured()
-    return _api_key_configured()
+    return _flag_enabled(flag) and _api_key_configured()
 
 
 def openai_disabled_reason() -> str:

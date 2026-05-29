@@ -35,6 +35,7 @@ from src.config.relevance_policy import (
     FAST_PASS_ACTION_KEYWORDS,
     FAST_PASS_SOURCE_TYPES,
     LISTING_CONTEXT_KEYWORDS,
+    LOW_VALUE_NEWS_KEYWORDS,
     MARKET_LISTING_KEYWORDS,
     MARKET_METRIC_PATTERN,
     MARKET_PRICE_PATTERN,
@@ -799,6 +800,15 @@ def _noise_reject_result(
         matched_companies=matched_companies,
         matched_sectors=matched_sectors,
     )
+    if _is_low_value_news_noise(title=title, content=content) and not has_peer_strategy_signal:
+        return _result(
+            label="irrelevant",
+            score=0.20,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason="뉴스브리핑·교육/멘토링·일반 시황성 기사로 피어사 전략 동향 신호가 약해 제외",
+        )
+
     has_market_listing_noise = _is_market_listing_noise(title=title, content=content)
     is_company_market_signal = _is_company_market_signal(
         title=title,
@@ -1194,6 +1204,24 @@ def _is_market_listing_noise(*, title: str, content: str) -> bool:
 
     listing_count = sum(1 for keyword in listing_keywords if keyword in compact_text)
     return listing_count >= 2
+
+
+def _is_low_value_news_noise(*, title: str, content: str) -> bool:
+    title_compact = _compact(title)
+    compact_text = _compact(f"{title} {content}")
+    low_value_keywords = [_compact(keyword) for keyword in LOW_VALUE_NEWS_KEYWORDS]
+    if any(keyword and keyword in title_compact for keyword in low_value_keywords):
+        return True
+
+    market_keyword_count = sum(
+        1
+        for keyword in (_compact(item) for item in MARKET_LISTING_KEYWORDS)
+        if keyword and keyword in compact_text
+    )
+    if market_keyword_count >= 3:
+        return True
+
+    return False
 
 
 def _is_non_korean_news_title(*, title: str, source_type: str | None) -> bool:

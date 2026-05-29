@@ -1,3 +1,7 @@
+from scripts.reprocess_securities_report_analysis import (
+    _metric_dedupe_key,
+    _signal_dedupe_key,
+)
 from src.extractors.dart_analysis_extractor import (
     business_signals_from_dart,
     financial_metrics_from_dart,
@@ -446,6 +450,31 @@ def test_securities_report_extracts_valuation_and_financial_metrics() -> None:
     assert by_name["operating_margin"]["value_numeric"] == 2.3
 
 
+def test_securities_report_does_not_store_per_pbr_roe_metrics() -> None:
+    article = {
+        "id": 177,
+        "company": ["hyundai_autoever"],
+        "title": "[증권사] 현대오토에버 Review",
+        "content": "PER 18.5배 PBR 2.0배 ROE 4.7% EPS 5,731원",
+        "url": "https://example.com/report.pdf",
+        "source_name": "naver_research",
+        "extra": {},
+    }
+    parser_result = {
+        "peer_id": "hyundai_autoever",
+        "period": "2024Q1",
+        "report_firm": "테스트증권",
+    }
+
+    metrics = financial_metrics_from_securities_report(article, parser_result)
+    metric_names = {metric["metric_name"] for metric in metrics}
+
+    assert "eps" in metric_names
+    assert "per" not in metric_names
+    assert "pbr" not in metric_names
+    assert "roe" not in metric_names
+
+
 def test_securities_report_extracts_business_forecast_signals() -> None:
     article = {
         "id": 78,
@@ -476,4 +505,155 @@ def test_securities_report_extracts_business_forecast_signals() -> None:
     signals = business_signals_from_securities_report(article, parser_result)
 
     assert {signal["business_area"] for signal in signals} == {"cloud"}
-    assert {"forecast", "investment", "growth"} <= {signal["signal_type"] for signal in signals}
+    assert {signal["signal_type"] for signal in signals} == {"growth"}
+
+
+def test_securities_report_skips_table_like_signal_rows_and_keeps_one_signal() -> None:
+    article = {
+        "id": 79,
+        "company": ["hyundai_autoever"],
+        "title": "[증권사] 현대오토에버 Review",
+        "content": "",
+        "url": "https://example.com/report.pdf",
+        "source_name": "naver_research",
+        "extra": {},
+    }
+    parser_result = {
+        "peer_id": "hyundai_autoever",
+        "period": "2024Q1",
+        "report_firm": "테스트증권",
+        "document_chunks": [
+            {
+                "chunk_id": "forecast:1",
+                "section_key": "forecast",
+                "section_title": "Forecast",
+                "text": (
+                    "[표1] 현대오토에버의 분기 및 연간 실적 추이 및 전망 (단위: 십억원, %, %YoY) "
+                    "1Q24 2Q24 3Q24 4Q24 1Q25 2Q25P 3Q25E 4Q25E 2024 2025E 2026E "
+                    "AI 데이터센터 투자 확대와 클라우드 수요 증가로 2026년 성장 모멘텀이 "
+                    "강화될 전망이다."
+                ),
+            }
+        ],
+    }
+
+    signals = business_signals_from_securities_report(article, parser_result)
+
+    assert len(signals) == 1
+    assert signals[0]["signal_type"] == "growth"
+    assert (
+        signals[0]["evidence_text"]
+        == "AI 데이터센터 투자 확대와 클라우드 수요 증가로 2026년 성장 모멘텀이 강화될 전망이다."
+    )
+
+
+def test_securities_report_sk_ax_keeps_only_it_service_context() -> None:
+    article = {
+        "id": 179,
+        "company": ["sk_ax"],
+        "title": "[증권사] SK Review",
+        "content": (
+            "자회사 지분가치 상승 등으로 현재 SK NAV는 78.2조원으로 추정된다. "
+            "비상장자회사 SK에코플랜트의 더블다운 가치도 개선될 전망이다. "
+            "SK C&C IT서비스 부문은 AX와 클라우드 전환 수요 확대로 매출 성장이 예상된다. "
+            "이에 플랫폼 리벨런싱 성과가 가시화되면서 영업이익 개선에 기여할 전망이다."
+        ),
+        "url": "https://example.com/sk-report.pdf",
+        "source_name": "naver_research",
+        "extra": {},
+    }
+    parser_result = {
+        "peer_id": "sk_ax",
+        "period": "2026E",
+        "report_firm": "테스트증권",
+        "document_chunks": [
+            {
+                "chunk_id": "forecast:1",
+                "section_key": "forecast",
+                "section_title": "Forecast",
+                "text": article["content"],
+            }
+        ],
+    }
+
+    signals = business_signals_from_securities_report(article, parser_result)
+
+    assert signals
+    evidence = " ".join(signal["evidence_text"] for signal in signals)
+    assert "SK C&C IT서비스 부문" in evidence
+    assert "영업이익 개선에 기여" in evidence
+    assert "SK NAV" not in evidence
+    assert "SK에코플랜트" not in evidence
+
+
+def test_securities_report_sk_ax_does_not_store_holding_company_valuation_metrics() -> None:
+    article = {
+        "id": 180,
+        "company": ["sk_ax"],
+        "title": "[증권사] SK Review",
+        "content": (
+            "목표주가 220,000원 현재주가 169,800원 "
+            "SK NAV는 78.2조원으로 추정된다. "
+            "SK C&C IT서비스 부문 매출 7,692억원으로 추정된다."
+        ),
+        "url": "https://example.com/sk-report.pdf",
+        "source_name": "naver_research",
+        "extra": {},
+    }
+    parser_result = {
+        "peer_id": "sk_ax",
+        "period": "2026E",
+        "report_firm": "테스트증권",
+        "target_price_krw": 220000,
+        "current_price_krw": 169800,
+    }
+
+    metrics = financial_metrics_from_securities_report(article, parser_result)
+    metric_names = {metric["metric_name"] for metric in metrics}
+    evidence = " ".join(metric["evidence_text"] for metric in metrics)
+
+    assert "target_price" not in metric_names
+    assert "current_price" not in metric_names
+    assert "upside_pct" not in metric_names
+    assert "SK NAV" not in evidence
+    assert metric_names == {"revenue_total"}
+
+
+def test_securities_report_metric_dedupe_key_ignores_small_numeric_formatting_diff() -> None:
+    row1 = {
+        "peer_id": "hyundai_autoever",
+        "period": "2024Q1",
+        "metric_name": "target_price",
+        "business_area": None,
+        "value_numeric": 150500,
+        "unit": "원",
+    }
+    row2 = {
+        "peer_id": "hyundai_autoever",
+        "period": "2024Q1",
+        "metric_name": "target_price",
+        "business_area": None,
+        "value_numeric": 150500.0,
+        "unit": "원",
+    }
+
+    assert _metric_dedupe_key(row1) == _metric_dedupe_key(row2)
+
+
+def test_securities_report_signal_dedupe_key_normalizes_whitespace() -> None:
+    row1 = {
+        "peer_id": "hyundai_autoever",
+        "period": "2024Q1",
+        "business_area": "company_total",
+        "signal_type": "growth",
+        "evidence_text": "동사 1H25 매출은 1.9조원으로 전년 동기 대비 13.7% 성장.",
+    }
+    row2 = {
+        "peer_id": "hyundai_autoever",
+        "period": "2024Q1",
+        "business_area": "company_total",
+        "signal_type": "growth",
+        "evidence_text": "동사 1H25   매출은 1.9조원으로 전년 동기 대비 13.7% 성장. ",
+    }
+
+    assert _signal_dedupe_key(row1) == _signal_dedupe_key(row2)

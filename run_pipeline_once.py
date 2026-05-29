@@ -69,7 +69,9 @@ from src.config.companies import COMPANY_IDS, company_name_ko  # noqa: E402
 from src.config.global_companies import GLOBAL_COMPANY_IDS, global_company_name_ko  # noqa: E402
 from src.config.sectors import sector_name_ko  # noqa: E402
 from src.pipeline.analysis_delivery import run_analysis_delivery  # noqa: E402
+from src.preprocessing.classification import ClusterClassifier  # noqa: E402
 from src.preprocessing.preprocessing import PreprocessingService  # noqa: E402
+from src.preprocessing.relevance import RelevanceEvaluator  # noqa: E402
 
 _BAND_MARK = {"high": "■■■", "medium": "■■ ", "low": "■  "}
 
@@ -104,7 +106,10 @@ def main() -> None:
     mode = "전처리 전용" if _args.preprocess_only else "파이프라인"
     log.info("%s 시작 | company=%s labels=%s", mode, company, company_labels)
 
-    result = PreprocessingService().run(
+    result = PreprocessingService(
+        relevance_evaluator=RelevanceEvaluator(enable_llm=True),
+        classifier=ClusterClassifier(enable_llm=True),
+    ).run(
         company=company,
         source_types=_args.source_type,
         trigger_type="manual",

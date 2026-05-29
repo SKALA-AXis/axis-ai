@@ -16,9 +16,6 @@ _FINANCIAL_METRIC_LABELS = {
     "operating_margin": "영업이익률",
     "net_income": "순이익",
     "eps": "EPS",
-    "per": "PER",
-    "pbr": "PBR",
-    "roe": "ROE",
 }
 _BUSINESS_AREA_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("cloud", ("cloud", "클라우드", "msp", "csp", "데이터센터", "gpu")),
@@ -42,8 +39,29 @@ _SIGNAL_TYPE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("strategy", ("전략", "추진", "강화", "고도화", "제휴", "협력")),
     ("efficiency", ("효율", "최적화", "자동화", "비용 절감", "생산성")),
 )
+_SIGNAL_TYPE_PRIORITY = {
+    "risk": 0,
+    "orders_pipeline": 1,
+    "growth": 2,
+    "strategy": 3,
+    "forecast": 4,
+    "investment": 5,
+    "valuation": 6,
+    "service_launch": 7,
+    "efficiency": 8,
+}
 _NEGATIVE_TERMS = ("리스크", "우려", "하회", "둔화", "부진", "감소", "하락", "비용")
 _POSITIVE_TERMS = ("성장", "확대", "증가", "개선", "회복", "강화", "상승", "수주")
+_SIGNAL_EXCLUDE_TERMS = (
+    "리서치센터",
+    "자료:",
+    "자료 :",
+    "목표주가 변동내역",
+    "투자의견 및 목표주가 변동내역",
+    "target per",
+    "target pbr",
+    "forecasts and valuations",
+)
 _MONEY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("revenue_total", re.compile(r"(?:매출액|매출)\s*([0-9][0-9,\.]*)\s*(조원|억원|십억원)")),
     ("operating_profit", re.compile(r"영업이익\s*([0-9][0-9,\.]*)\s*(조원|억원|십억원)")),
@@ -51,10 +69,62 @@ _MONEY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 _RATIO_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("operating_margin", re.compile(r"(?:영업이익률|OPM)\s*([+-]?[0-9][0-9,\.]*)\s*%")),
-    ("roe", re.compile(r"ROE\s*([+-]?[0-9][0-9,\.]*)\s*%")),
-    ("per", re.compile(r"PER\s*([0-9][0-9,\.]*)\s*(?:배)?", re.I)),
-    ("pbr", re.compile(r"PBR\s*([0-9][0-9,\.]*)\s*(?:배)?", re.I)),
     ("eps", re.compile(r"EPS\s*([0-9][0-9,]*)\s*원?", re.I)),
+)
+_SK_AX_INCLUDE_TERMS = (
+    "sk ax",
+    "sk에이엑스",
+    "sk c&c",
+    "sk㈜ c&c",
+    "sk주식회사 c&c",
+    "에스케이씨앤씨",
+    "c&c",
+    "it서비스",
+    "it 서비스",
+    "ai transformation",
+    "ax",
+    "agentic",
+    "에이전틱",
+    "클라우드",
+    "msp",
+    "csp",
+)
+_SK_AX_ENTITY_TERMS = (
+    "sk ax",
+    "sk에이엑스",
+    "sk c&c",
+    "sk㈜ c&c",
+    "sk주식회사 c&c",
+    "에스케이씨앤씨",
+    "c&c",
+)
+_SK_GROUP_EXCLUDE_TERMS = (
+    "sk하이닉스",
+    "sk hynix",
+    "하이닉스",
+    "sk텔레콤",
+    "skt",
+    "sk스퀘어",
+    "sk이노베이션",
+    "sk온",
+    "sk엔무브",
+    "sk e&s",
+    "sk바이오팜",
+    "sk실트론",
+    "sk네트웍스",
+    "skc",
+)
+_SK_HOLDING_VALUATION_TERMS = (
+    "nav",
+    "순자산가치",
+    "자회사",
+    "상장 계열사",
+    "비상장자회사",
+    "지분가치",
+    "배당수익",
+    "목표주가",
+    "상승여력",
+    "할인율",
 )
 
 
@@ -70,6 +140,10 @@ def financial_metrics_from_securities_report(
 
     target_price = parser_result.get("target_price_krw")
     current_price = parser_result.get("current_price_krw")
+    if peer_id == "sk_ax":
+        target_price = None
+        current_price = None
+
     if isinstance(target_price, int | float):
         metrics.append(
             _metric_row(
@@ -154,16 +228,18 @@ def business_signals_from_securities_report(
     peer_id = _peer_id(article, parser_result)
     period = parser_result.get("period") or article["extra"].get("period")
     signals: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str]] = set()
 
     for chunk in chunks:
         if not isinstance(chunk, dict):
             continue
         text_value = str(chunk.get("text") or "").strip()
+        if peer_id == "sk_ax":
+            text_value = _sk_ax_relevant_context(text_value)
         if len(text_value) < 30:
             continue
         for sentence_index, sentence, business_area, signal_type in _signals_from_text(text_value):
-            dedupe_key = (business_area, signal_type, sentence[:180])
+            dedupe_key = (business_area, sentence[:180])
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
@@ -216,6 +292,8 @@ def _financial_metrics_from_text(
     period: Any,
 ) -> list[dict[str, Any]]:
     text_value = str(article.get("content") or "")[:12000]
+    if peer_id == "sk_ax":
+        text_value = _sk_ax_relevant_context(text_value)
     metrics: list[dict[str, Any]] = []
     seen: set[str] = set()
     for metric_name, pattern in _MONEY_PATTERNS:
@@ -339,13 +417,73 @@ def _metric_row(
 def _signals_from_text(text_value: str) -> list[tuple[int, str, str, str]]:
     signals: list[tuple[int, str, str, str]] = []
     for index, sentence in enumerate(_sentences(text_value), start=1):
+        if _is_low_value_signal_sentence(sentence):
+            continue
+        if not _looks_like_narrative_signal_sentence(sentence):
+            continue
         signal_types = _detect_signal_types(sentence)
         if not signal_types:
             continue
         business_area = _detect_business_area(sentence) or "company_total"
-        for signal_type in signal_types:
-            signals.append((index, sentence[:1000], business_area, signal_type))
+        primary_signal_type = _primary_signal_type(signal_types)
+        signals.append((index, sentence[:1000], business_area, primary_signal_type))
     return signals
+
+
+def _sk_ax_relevant_context(text_value: str) -> str:
+    """SK Inc. 리포트에서 SK AX/C&C/IT서비스 문맥만 evidence 후보로 남긴다."""
+
+    sentences = _sentences(text_value)
+    if not sentences:
+        return ""
+
+    selected: list[str] = []
+    for index, sentence in enumerate(sentences):
+        if not _is_sk_ax_relevant_sentence(sentence):
+            continue
+
+        context = [sentence]
+        next_sentence = sentences[index + 1] if index + 1 < len(sentences) else ""
+        if _is_sk_ax_followup_sentence(next_sentence):
+            context.append(next_sentence)
+        merged = " ".join(context)
+        if merged not in selected:
+            selected.append(merged)
+
+    return "\n".join(selected)
+
+
+def _is_sk_ax_relevant_sentence(sentence: str) -> bool:
+    lowered = sentence.lower()
+    if _is_sk_group_or_holding_noise(lowered):
+        return False
+    return any(term in lowered for term in _SK_AX_INCLUDE_TERMS)
+
+
+def _is_sk_ax_followup_sentence(sentence: str) -> bool:
+    if not sentence:
+        return False
+    lowered = sentence.lower()
+    if _is_sk_group_or_holding_noise(lowered):
+        return False
+    if any(term in lowered for term in _SK_AX_INCLUDE_TERMS):
+        return True
+    return bool(
+        re.search(
+            r"(성장|확대|증가|개선|전망|예상|추정|기여|수익성|매출|영업이익|수주|계약|"
+            r"플랫폼|서비스|솔루션|자동화|효율)",
+            sentence,
+        )
+    )
+
+
+def _is_sk_group_or_holding_noise(lowered_sentence: str) -> bool:
+    has_sk_ax_entity = any(term in lowered_sentence for term in _SK_AX_ENTITY_TERMS)
+    if has_sk_ax_entity:
+        return False
+    if any(term in lowered_sentence for term in _SK_GROUP_EXCLUDE_TERMS):
+        return True
+    return any(term in lowered_sentence for term in _SK_HOLDING_VALUATION_TERMS)
 
 
 def _detect_business_area(text_value: str) -> str | None:
@@ -365,6 +503,15 @@ def _detect_signal_types(text_value: str) -> list[str]:
     ]
 
 
+def _primary_signal_type(signal_types: list[str]) -> str:
+    ranked = sorted(signal_types, key=_signal_type_priority)
+    return ranked[0]
+
+
+def _signal_type_priority(signal_type: str) -> int:
+    return _SIGNAL_TYPE_PRIORITY.get(signal_type, 99)
+
+
 def _contains_term(lowered_text: str, term: str) -> bool:
     lowered_term = term.lower()
     if lowered_term in {"ai", "ax"}:
@@ -373,10 +520,63 @@ def _contains_term(lowered_text: str, term: str) -> bool:
 
 
 def _sentences(text_value: str) -> list[str]:
-    value = re.sub(r"\s+", " ", text_value).strip()
-    pieces = re.split(r"(?<=[.!?。])\s+|(?<=[다요음함임됨])\s+", value)
+    value = text_value.replace("\r\n", "\n")
+    value = re.sub(r"[ \t]+", " ", value).strip()
+    value = re.sub(
+        r"((?:\b(?:1q|2q|3q|4q)\d{2}[pe]?\b\s*){3,}(?:\b20\d{2}e?\b\s*){1,})(?=[가-힣A-Za-z])",
+        r"\1\n",
+        value,
+        flags=re.I,
+    )
+    pieces = re.split(r"\n+|(?<=[.!?。])\s+", value)
     sentences = [piece.strip(" -•\t") for piece in pieces if len(piece.strip()) >= 30]
     return sentences or ([value] if value else [])
+
+
+def _is_low_value_signal_sentence(text_value: str) -> bool:
+    lowered = text_value.lower()
+    return any(term in lowered for term in _SIGNAL_EXCLUDE_TERMS)
+
+
+def _looks_like_narrative_signal_sentence(text_value: str) -> bool:
+    value = re.sub(r"\s+", " ", str(text_value or "")).strip()
+    if not value:
+        return False
+    if _looks_like_table_like_signal_text(value):
+        return False
+
+    tokens = re.findall(r"[가-힣A-Za-z]{2,}", value)
+    if len(tokens) < 3:
+        return False
+
+    return bool(
+        re.search(
+            r"(전망|예상|추정|우려|둔화|부진|감소|하락|성장|확대|증가|개선|회복|강화|수주|"
+            r"추진|고도화|협력|상용화|출시|기여|기록|반영|만회|상승여력)",
+            value,
+        )
+    )
+
+
+def _looks_like_table_like_signal_text(text_value: str) -> bool:
+    lowered = text_value.lower()
+    compact = re.sub(r"\s+", " ", text_value).strip()
+    if compact.startswith("[표") and ("단위:" in compact or "변동내역" in compact):
+        return True
+    if "1q24 2q24" in lowered or "2024 2025 2026e" in lowered:
+        return True
+    if re.search(r"\b(?:1q|2q|3q|4q)\d{2}\b(?:\s+\b(?:1q|2q|3q|4q)\d{2}\b){2,}", lowered):
+        return True
+    if re.search(r"\b20\d{2}e?\b(?:\s+\b20\d{2}e?\b){2,}", lowered):
+        return True
+    if re.search(r"\b(?:per|pbr|roe|eps)\b\s+[0-9][0-9.\s,%배원]{8,}", lowered):
+        return True
+
+    number_like_tokens = re.findall(r"[0-9][0-9,./%]*", compact)
+    word_tokens = re.findall(r"[가-힣A-Za-z]{2,}", compact)
+    if len(number_like_tokens) >= 6 and len(word_tokens) <= 8:
+        return True
+    return False
 
 
 def _sentiment(text_value: str) -> str:

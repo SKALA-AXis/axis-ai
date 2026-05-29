@@ -79,7 +79,6 @@ def main(cluster_id: int) -> None:
     if ctx:
         print(f"available_layer_count = {ctx.available_layer_count()}")
         print(f"timeline entries      = {len(ctx.peer_event_timeline_recent)}")
-        print(f"capability windows    = {len(ctx.capability_evolution)}")
         print(f"sector_pulse rows     = {len(ctx.sector_pulse_recent)}")
         print(f"financial trends      = {len(ctx.financial_trend)}")
         print(f"event_chain cands     = {len(ctx.event_chain_candidates)}")

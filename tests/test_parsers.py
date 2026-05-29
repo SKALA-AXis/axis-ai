@@ -139,8 +139,7 @@ def test_ir_parser_normalizes_krw_bn_table_unit_to_eokwon() -> None:
     revenue_candidates = [
         candidate
         for candidate in parsed["candidates"]
-        if candidate.get("source") == "ir_table_matrix"
-        and candidate.get("type") == "revenue_total"
+        if candidate.get("source") == "ir_table_matrix" and candidate.get("type") == "revenue_total"
     ]
 
     assert revenue_candidates[0]["unit"] == "십억원"
@@ -259,8 +258,7 @@ def test_ir_parser_does_not_apply_amount_unit_to_margin_rows() -> None:
     assert [candidate["value_pct"] for candidate in margin_candidates] == [11.2, 11.1]
     assert all(candidate["unit"] == "%" for candidate in margin_candidates)
     assert all(
-        "단위 근거: (단위: 십억원)" in candidate["evidence_text"]
-        for candidate in margin_candidates
+        "단위 근거: (단위: 십억원)" in candidate["evidence_text"] for candidate in margin_candidates
     )
     assert margin_candidates[0]["business_area"] == "솔루션"
 
@@ -311,8 +309,7 @@ def test_ir_parser_does_not_store_percentage_cells_as_amount_metrics() -> None:
     revenue_candidates = [
         candidate
         for candidate in parsed["candidates"]
-        if candidate.get("source") == "ir_table_matrix"
-        and candidate.get("type") == "revenue_total"
+        if candidate.get("source") == "ir_table_matrix" and candidate.get("type") == "revenue_total"
     ]
 
     assert [candidate["period"] for candidate in revenue_candidates] == [
@@ -348,6 +345,247 @@ def test_ir_parser_does_not_store_percentage_cells_as_amount_metrics() -> None:
     assert revenue_yoy["period"] == "2026Q1"
     assert revenue_yoy["value_pct"] == 0.6
     assert revenue_yoy["unit"] == "%"
+
+
+def test_ir_parser_maps_hierarchical_year_quarter_headers() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="테스트사 2025년 4분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 2, 10),
+        peer_id="test_peer",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2025, "quarter": 4},
+            "pdf_page_blocks": [
+                {
+                    "page": 3,
+                    "blocks": [
+                        {"text": "손익현황 (단위: 억원)"},
+                        {"text": "구분 2024년 2025년"},
+                        {"text": "4분기 연간 3분기 4분기 QoQ YoY 연간 YoY"},
+                        {"text": "매출액 11,596 37,136 10,543 13,227 25.5% 14.1% 42,521 14.5%"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    revenue_candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("base_metric_type") == "revenue_total"
+    ]
+
+    assert [
+        (
+            candidate["type"],
+            candidate["period"],
+            candidate.get("value_krwbn") or candidate.get("value_pct"),
+        )
+        for candidate in revenue_candidates
+    ] == [
+        ("revenue_total", "2024Q4", 11596),
+        ("revenue_total", "2024", 37136),
+        ("revenue_total", "2025Q3", 10543),
+        ("revenue_total", "2025Q4", 13227),
+        ("revenue_total_qoq", "2025Q4", 25.5),
+        ("revenue_total_yoy", "2025Q4", 14.1),
+        ("revenue_total", "2025", 42521),
+        ("revenue_total_yoy", "2025", 14.5),
+    ]
+    qoq = revenue_candidates[4]
+    assert qoq["comparison_base_period"] == "2025Q3"
+    assert qoq["comparison_base_value"] == 10543
+    yoy = revenue_candidates[5]
+    assert yoy["comparison_base_period"] == "2024Q4"
+    assert yoy["comparison_base_value"] == 11596
+
+
+def test_ir_parser_maps_split_year_quarter_pair_headers() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="테스트사 2026년 1분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="test_peer",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 4,
+                    "blocks": [
+                        {"text": "부문별 손익현황 (단위: 억원)"},
+                        {"text": "구분 2025년 2026년"},
+                        {"text": "1분기 1분기 YoY"},
+                        {"text": "매 출 액 8,330 9,357 12.3%"},
+                        {"text": "SI 2,996 3,568 19.1%"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    revenue_candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("base_metric_type") == "revenue_total"
+    ]
+
+    assert [
+        (
+            candidate["type"],
+            candidate["period"],
+            candidate.get("value_krwbn") or candidate.get("value_pct"),
+            candidate["business_area"],
+        )
+        for candidate in revenue_candidates
+    ] == [
+        ("revenue_total", "2025Q1", 8330, "company_total"),
+        ("revenue_total", "2026Q1", 9357, "company_total"),
+        ("revenue_total_yoy", "2026Q1", 12.3, "company_total"),
+        ("revenue_total", "2025Q1", 2996, "SI"),
+        ("revenue_total", "2026Q1", 3568, "SI"),
+        ("revenue_total_yoy", "2026Q1", 19.1, "SI"),
+    ]
+    yoy = revenue_candidates[2]
+    assert yoy["comparison_base_period"] == "2025Q1"
+    assert yoy["comparison_base_value"] == 8330
+
+
+def test_ir_parser_reconstructs_table_lines_from_pdf_block_positions() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="테스트사 2026년 1분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="test_peer",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 4,
+                    "blocks": [
+                        {"bbox": [20, 20, 180, 35], "text": "부문별 손익현황 (단위: 억원)"},
+                        {"bbox": [20, 60, 80, 80], "text": "구분"},
+                        {"bbox": [120, 60, 180, 80], "text": "2025년"},
+                        {"bbox": [220, 60, 280, 80], "text": "2026년"},
+                        {"bbox": [120, 90, 180, 110], "text": "1분기"},
+                        {"bbox": [220, 90, 280, 110], "text": "1분기"},
+                        {"bbox": [320, 90, 360, 110], "text": "YoY"},
+                        {"bbox": [20, 130, 80, 150], "text": "매 출 액"},
+                        {"bbox": [120, 130, 180, 150], "text": "8,330"},
+                        {"bbox": [220, 130, 280, 150], "text": "9,357"},
+                        {"bbox": [320, 130, 360, 150], "text": "12.3%"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    revenue_candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("base_metric_type") == "revenue_total"
+    ]
+
+    assert [
+        (
+            candidate["type"],
+            candidate["period"],
+            candidate.get("value_krwbn") or candidate.get("value_pct"),
+        )
+        for candidate in revenue_candidates
+    ] == [
+        ("revenue_total", "2025Q1", 8330),
+        ("revenue_total", "2026Q1", 9357),
+        ("revenue_total_yoy", "2026Q1", 12.3),
+    ]
+
+
+def test_ir_reprocess_stores_only_report_period_from_table_candidates() -> None:
+    article = {
+        "id": 205,
+        "company": ["test_peer"],
+        "title": "테스트사 2025년 4분기 IR",
+        "url": "https://example.com/ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2025Q4", "period_year": 2025, "period_quarter": 4},
+    }
+    parser_result = {
+        "period": "2025Q4",
+        "period_year": 2025,
+        "period_quarter": 4,
+        "candidates": [
+            {
+                "type": "revenue_total",
+                "value_krwbn": 37136,
+                "metric_scope": "company_total",
+                "business_area": "company_total",
+                "period": "2024",
+                "period_type": "year",
+                "source": "ir_table_matrix",
+                "confidence": 0.88,
+            },
+            {
+                "type": "revenue_total",
+                "value_krwbn": 13227,
+                "metric_scope": "company_total",
+                "business_area": "company_total",
+                "period": "2025Q4",
+                "period_type": "quarter",
+                "source": "ir_table_matrix",
+                "confidence": 0.88,
+            },
+            {
+                "type": "revenue_total_yoy",
+                "value_pct": 14.5,
+                "metric_scope": "company_total",
+                "business_area": "company_total",
+                "period": "2025",
+                "period_type": "year",
+                "source": "ir_table_matrix",
+                "confidence": 0.88,
+            },
+            {
+                "type": "revenue_total_yoy",
+                "value_pct": 14.1,
+                "metric_scope": "company_total",
+                "business_area": "company_total",
+                "period": "2025Q4",
+                "period_type": "quarter",
+                "source": "ir_table_matrix",
+                "confidence": 0.88,
+            },
+        ],
+    }
+
+    metrics = _metrics_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2025Q4", "peer_id": "test_peer"},
+    )
+
+    assert [
+        (metric["metric_name"], metric["period"], metric["value_numeric"]) for metric in metrics
+    ] == [
+        ("revenue_total", "2025Q4", 13227),
+        ("revenue_total_yoy", "2025Q4", 14.1),
+    ]
 
 
 def test_ir_parser_uses_table_page_context_for_generic_metric_rows() -> None:
@@ -604,7 +842,118 @@ def test_ir_parser_keeps_table_flow_in_metric_evidence() -> None:
     assert "26년 1분기 7,378" in enterprise_it["evidence_text"]
 
 
-def test_ir_reprocess_uses_table_candidate_periods() -> None:
+def test_ir_parser_infers_quarter_from_quarterly_table_title() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="현대오토에버 2026년 1분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="hyundai_autoever",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 4,
+                    "blocks": [
+                        {"text": "분기별손익계산서(연결재무제표기준)"},
+                        {"text": "(단위: 억원)"},
+                        {"text": "구분 2025년 2026년"},
+                        {"text": "매출액 8,330 10,421"},
+                        {"text": "SI 2,996 3,878"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix" and candidate.get("type") == "revenue_total"
+    ]
+
+    assert any(
+        candidate.get("period") == "2026Q1"
+        and candidate.get("business_area") == "company_total"
+        and candidate.get("value_krwbn") == 10421
+        for candidate in candidates
+    )
+    assert any(
+        candidate.get("period") == "2025Q1"
+        and candidate.get("business_area") == "SI"
+        and candidate.get("value_krwbn") == 2996
+        for candidate in candidates
+    )
+
+
+def test_ir_parser_does_not_apply_gpm_parent_to_amount_segment_rows() -> None:
+    article = RawArticle(
+        url="https://example.com/ir.pdf",
+        title="현대오토에버 2026년 1분기 IR Presentation",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="hyundai_autoever",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 10,
+                    "blocks": [
+                        {"text": "부문별손익현황_26년1분기(연결재무제표기준)"},
+                        {"text": "(단위: 억원)"},
+                        {"text": "구분 23년 24년 25년 25년1분기 26년1분기"},
+                        {"text": "매출액 30,650 37,136 42,521 8,330 9,357"},
+                        {"text": "Enterprise IT 24,255 29,093 34,244 6,408 7,378"},
+                        {"text": "GPM 8.6% 8.8% 9.9% 6.7% 7.3%"},
+                        {"text": "차량SW 6,395 8,044 8,277 1,922 1,979"},
+                        {"text": "GPM 20.3% 17.3% 12.7% 14.1% 9.7%"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix" and candidate.get("period") == "2026Q1"
+    ]
+
+    assert any(
+        candidate.get("type") == "gross_margin"
+        and candidate.get("business_area") == "Enterprise IT"
+        and candidate.get("value_pct") == 7.3
+        for candidate in candidates
+    )
+    assert any(
+        candidate.get("type") == "revenue_total"
+        and candidate.get("business_area") == "차량SW"
+        and candidate.get("value_krwbn") == 1979
+        for candidate in candidates
+    )
+    assert any(
+        candidate.get("type") == "gross_margin"
+        and candidate.get("business_area") == "차량SW"
+        and candidate.get("value_pct") == 9.7
+        for candidate in candidates
+    )
+    assert not any(
+        candidate.get("type") == "gross_margin"
+        and candidate.get("business_area") == "차량SW"
+        and candidate.get("value_krwbn") == 1979
+        for candidate in candidates
+    )
+
+
+def test_ir_reprocess_skips_non_report_period_table_candidates() -> None:
     article = {
         "id": 101,
         "company": ["test_peer"],
@@ -646,13 +995,7 @@ def test_ir_reprocess_uses_table_candidate_periods() -> None:
         {"period": "2026Q1", "peer_id": "test_peer"},
     )
 
-    assert metrics[0]["period"] == "2024"
-    assert metrics[0]["period_year"] == 2024
-    assert metrics[0]["period_quarter"] is None
-    assert metrics[0]["period_type"] == "year"
-    assert metrics[0]["business_area"] == "company_total"
-    assert metrics[0]["source_table_uid"] == "ir-p4-t1"
-    assert metrics[0]["extraction_method"] == "ir_parser.table_matrix"
+    assert metrics == []
 
 
 def test_ir_reprocess_maps_llm_metrics_and_signals_separately() -> None:
@@ -878,6 +1221,122 @@ def test_ir_parser_extracts_additional_financial_metric_candidates() -> None:
     assert candidates_by_type["backlog"]["value_krwbn"] == 12000
 
 
+def test_ir_parser_extracts_posco_dx_orders_yoy_and_chart_margin() -> None:
+    article = RawArticle(
+        url="https://example.com/posco-dx-ir.pdf",
+        title="2026년 1분기 경영실적",
+        content=(
+            "[PAGE 3]\n"
+            "’26.1Q 경영실적 종합\n"
+            "’26년 1Q 연결수주 2,671억원(YoY +31.0%), "
+            "매출 2,415억원(YoY △18.6%) 기록\n"
+            "영업이익률\n"
+            "1Q25 2Q25 3Q25 4Q25 1Q26"
+        ),
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="posco_dx",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "pdf_page_blocks": [
+                {
+                    "page": 3,
+                    "blocks": [
+                        {
+                            "text": (
+                                "’26년 1Q 연결수주 2,671억원(YoY +31.0%), "
+                                "매출 2,415억원(YoY △18.6%) 기록"
+                            ),
+                            "bbox": [60, 90, 610, 130],
+                        },
+                        {"text": "영업이익률", "bbox": [20, 190, 65, 202]},
+                        {"text": "1.5%", "bbox": [400, 204, 428, 216]},
+                        {"text": "△0.5%", "bbox": [320, 213, 360, 225]},
+                        {"text": "1Q25 2Q25 3Q25 4Q25", "bbox": [80, 502, 350, 516]},
+                        {"text": "1Q26", "bbox": [396, 502, 426, 516]},
+                    ],
+                }
+            ]
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates_by_type = {candidate["type"]: candidate for candidate in parsed["candidates"]}
+
+    assert parsed["period"] == "2026Q1"
+    assert candidates_by_type["orders"]["value_krwbn"] == 2671
+    assert candidates_by_type["orders_yoy"]["value_pct"] == 31.0
+    assert candidates_by_type["revenue_total_yoy"]["value_pct"] == -18.6
+    assert candidates_by_type["operating_margin"]["value_pct"] == 1.5
+
+
+def test_ir_parser_prefers_pdf_period_over_wrong_listing_date() -> None:
+    article = RawArticle(
+        url="https://example.com/posco-dx-ir.pdf",
+        title="2026년 1분기 경영실적",
+        content="[PAGE 1]\n2025.2Q\n경영실적\n매출 2,729억원",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 5, 1),
+        peer_id="posco_dx",
+        source_type="ir",
+        content_type="pdf",
+        extra={"date_info": {"year": 2026, "quarter": 1}},
+    )
+
+    parsed = IRParser().parse_article(article)
+
+    assert parsed["period"] == "2025Q2"
+
+
+def test_ir_parser_repairs_scrambled_posco_dx_hierarchical_header() -> None:
+    article = RawArticle(
+        url="https://example.com/posco-dx-ir.pdf",
+        title="2025년 2분기 IR",
+        content=(
+            "[PAGE 3]\n"
+            "2. 경영실적 종합\n"
+            "’25년2분기매출2,729억원(YoY △22.7%), "
+            "영업이익171억원(YoY △29.8%, OPM 6.3%) 기록\n"
+            "구분 (단위: 억원)\n"
+            "2024 2025 YoY QoQ 2Q 연간 1Q 2Q 1H\n"
+            "수 주 2,328 11,347 2,038 1,736 3,774 △25.4% △14.8%\n"
+            "매 출 3,530 14,733 2,968 2,729 5,696 △22.7% △8.1%\n"
+            "영업이익 243 1,090 229 171 399 △29.8% △25.3%\n"
+            "영업이익률 6.9% 7.4% 7.7% 6.3% 7.0% △0.6%p △1.4%p"
+        ),
+        source_name="ir_pdf",
+        published_at=datetime(2025, 8, 1),
+        peer_id="posco_dx",
+        source_type="ir",
+        content_type="pdf",
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates = parsed["candidates"]
+
+    orders = [
+        candidate
+        for candidate in candidates
+        if candidate["type"] == "orders" and candidate.get("period") == "2025Q2"
+    ]
+    orders_yoy = [
+        candidate
+        for candidate in candidates
+        if candidate["type"] == "orders_yoy" and candidate.get("period") == "2025Q2"
+    ]
+    revenue = [
+        candidate
+        for candidate in candidates
+        if candidate["type"] == "revenue_total" and candidate.get("period") == "2025Q2"
+    ]
+
+    assert parsed["period"] == "2025Q2"
+    assert orders[0]["value_krwbn"] == 1736
+    assert orders_yoy[0]["value_pct"] == -25.4
+    assert revenue[0]["value_krwbn"] == 2729
+
+
 def test_ir_parser_marks_business_segment_metrics() -> None:
     article = RawArticle(
         url="https://example.com/ir.pdf",
@@ -1080,11 +1539,10 @@ def test_ir_rule_based_business_signals_require_directional_evidence() -> None:
         {"period": "2026Q1", "peer_id": "test_peer"},
     )
 
-    assert len(signals) == 2
-    assert {signal["signal_type"] for signal in signals} == {"growth", "investment"}
+    assert len(signals) == 1
+    assert {signal["signal_type"] for signal in signals} == {"growth"}
     assert all(
-        "클라우드 매출은 1분기 주요 실적 지표" not in signal["evidence_text"]
-        for signal in signals
+        "클라우드 매출은 1분기 주요 실적 지표" not in signal["evidence_text"] for signal in signals
     )
     assert all(
         signal["extraction_method"] == "ir_parser.document_chunks.rule_based.v2"
@@ -1172,6 +1630,350 @@ def test_ir_rule_based_business_signals_include_sk_ax_highlight_sentences() -> N
     assert "마진 개선" in evidence
     assert "AI Transformation" in evidence
     assert {"orders_pipeline", "growth", "strategy"} <= signal_types
+
+
+def test_ir_business_signals_do_not_inherit_cloud_section_for_sk_ax_it_service() -> None:
+    article = {
+        "id": 204,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c1",
+                "chunk_index": 1,
+                "page": 4,
+                "section_key": "cloud",
+                "text": (
+                    "IT서비스 EBITDA Highlights 감가상각비와 영업이익이 감소했습니다. "
+                    "신규 AI DX 프로젝트 수주 견조한 가운데 기저효과로 매출이 감소했습니다."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert signals
+    business_areas = {signal["business_area"] for signal in signals}
+    assert "cloud" not in business_areas
+    assert "company_total" in business_areas
+
+
+def test_ir_business_signals_skip_semiconductor_chunk_without_sk_ax_context() -> None:
+    article = {
+        "id": 205,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c2",
+                "chunk_index": 2,
+                "page": 5,
+                "section_key": "cloud",
+                "text": (
+                    "FY25, 반도체 Fab 등 주요 프로젝트 착공으로 전년 대비 매출 성장했습니다. "
+                    "프로젝트 공정률 상승 기반으로 수주 확대가 이어지고 있습니다."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert signals == []
+
+
+def test_ir_business_signal_summary_strips_numeric_table_blob() -> None:
+    article = {
+        "id": 206,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c3",
+                "chunk_index": 3,
+                "page": 6,
+                "section_key": "business",
+                "text": (
+                    "1Q26 경영실적현황: IT서비스부문(SK AX) "
+                    "신규 AI DX 사업수주 확대 및 마진 개선이 지속되고 있습니다. "
+                    "매출 530 586 영업이익 31 29 EBITDA 63 68 영업이익률 4.9% 7.6% 9.4%."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert signals
+    summary = signals[0]["summary"]
+    assert "530" not in summary
+    assert "586" not in summary
+    assert "신규 AI DX 사업수주 확대" in summary
+
+
+def test_ir_business_signals_ignore_table_like_rows_and_keep_narrative_sentences() -> None:
+    article = {
+        "id": 207,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c4",
+                "chunk_index": 4,
+                "page": 7,
+                "section_key": "business",
+                "text": (
+                    "신규 AI DX 프로젝트 수주 확대와 마진 개선이 지속되고 있습니다.\n"
+                    "매출 530 586 영업이익 31 29 EBITDA 63 68 영업이익률 4.9% 7.6% 9.4%\n"
+                    "AI Transformation 기반의 고부가 사업모델 개편을 추진하고 있습니다."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert signals
+    evidence = " ".join(signal["evidence_text"] for signal in signals)
+    assert "매출 530 586" not in evidence
+    assert "영업이익률 4.9%" not in evidence
+    assert "수주 확대" in evidence
+    assert "사업모델 개편" in evidence
+
+
+def test_ir_business_signals_keep_page_when_sk_ax_context_exists_with_affiliate_mentions() -> None:
+    article = {
+        "id": 208,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c5",
+                "chunk_index": 5,
+                "page": 8,
+                "section_key": "business",
+                "text": (
+                    "SK에코플랜트는 반도체 Fab 프로젝트 착공으로 매출이 성장했습니다. "
+                    "SK AX는 AI Transformation 수요 확대로 IT서비스 수주가 증가했습니다."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert signals
+    evidence = " ".join(signal["evidence_text"] for signal in signals)
+    assert "SK AX" in evidence
+    assert any(signal["business_area"] == "company_total" for signal in signals)
+
+
+def test_ir_business_signals_skip_non_sk_ax_affiliate_chunks() -> None:
+    article = {
+        "id": 209,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c6",
+                "chunk_index": 6,
+                "page": 5,
+                "section_key": "business",
+                "text": (
+                    "SK에코플랜트 EBITDA Highlights Hi-tech 및 Asset Lifecycle 실적호조로 "
+                    "전사매출 증가(YoY +99.3%)"
+                ),
+            },
+            {
+                "chunk_id": "c7",
+                "chunk_index": 7,
+                "page": 9,
+                "section_key": "business",
+                "text": (
+                    "1Q26 경영실적현황: IT서비스부문(SK AX) "
+                    "신규 AI DX 프로젝트 수주 견조한 가운데 기저 효과로 매출 감소했습니다. "
+                    "AI Transformation 기반의 고부가 비즈니스 모델로 개편 진행 중입니다."
+                ),
+            },
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert signals
+    pages = {signal["source_page"] for signal in signals}
+    evidence = " ".join(signal["evidence_text"] for signal in signals)
+    assert pages == {9}
+    assert "SK에코플랜트" not in evidence
+    assert "IT서비스부문(SK AX)" in evidence
+    assert all(signal["business_area"] == "company_total" for signal in signals)
+
+
+def test_ir_business_signals_keep_one_representative_signal_per_evidence() -> None:
+    article = {
+        "id": 210,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "document_chunks": [
+            {
+                "chunk_id": "c8",
+                "chunk_index": 8,
+                "page": 9,
+                "section_key": "business",
+                "text": (
+                    "1Q26 경영실적현황: IT서비스부문(SK AX) "
+                    "신규 AI DX 사업 수주 확대와 마진 개선이 지속되고 있습니다."
+                ),
+            }
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    expected_evidence = (
+        "1Q26 경영실적현황: IT서비스부문(SK AX) "
+        "신규 AI DX 사업 수주 확대와 마진 개선이 지속되고 있습니다."
+    )
+    assert len(signals) == 1
+    assert signals[0]["signal_type"] == "orders_pipeline"
+    assert signals[0]["evidence_text"] == expected_evidence
+
+
+def test_ir_llm_business_signals_keep_summary_but_dedupe_same_evidence() -> None:
+    article = {
+        "id": 211,
+        "company": ["sk_ax"],
+        "title": "SK AX IR",
+        "url": "https://example.com/sk-ir.pdf",
+        "source_name": "ir_pdf",
+        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
+    }
+    parser_result = {
+        "period": "2026Q1",
+        "period_year": 2026,
+        "period_quarter": 1,
+        "llm_business_signals": [
+            {
+                "business_area": "company_total",
+                "signal_type": "investment",
+                "sentiment": "negative",
+                "summary": "데이터센터 매각 영향이 있었다.",
+                "evidence_text": (
+                    "해외 프로젝트 종료 및 판교 데이터센터 매각 영향으로 Top-line 축소"
+                ),
+                "source_page": 9,
+            },
+            {
+                "business_area": "company_total",
+                "signal_type": "risk",
+                "sentiment": "negative",
+                "summary": "해외 프로젝트 종료와 데이터센터 매각으로 매출이 감소했다.",
+                "evidence_text": (
+                    "해외 프로젝트 종료 및 판교 데이터센터 매각 영향으로 Top-line 축소"
+                ),
+                "source_page": 9,
+            },
+        ],
+    }
+
+    signals = _business_signals_from_parser_result(
+        article,
+        parser_result,
+        {"period": "2026Q1", "peer_id": "sk_ax"},
+    )
+
+    assert len(signals) == 1
+    assert signals[0]["signal_type"] == "risk"
+    assert signals[0]["summary"] == "해외 프로젝트 종료와 데이터센터 매각으로 매출이 감소했다."
+    assert (
+        signals[0]["evidence_text"]
+        == "해외 프로젝트 종료 및 판교 데이터센터 매각 영향으로 Top-line 축소"
+    )
 
 
 def test_ir_metrics_keep_one_representative_candidate_for_report_period() -> None:

@@ -47,6 +47,18 @@ _UPDATE_DART_CONTENT_IF_BETTER_SQL = text("""
       AND :new_content_length >= 1000
 """)
 
+_UPDATE_IR_CONTENT_IF_BETTER_SQL = text("""
+    UPDATE raw_articles
+    SET content = :content,
+        content_type = COALESCE(:content_type, content_type),
+        error_message = COALESCE(:error_message, error_message),
+        collected_at = COALESCE(:collected_at, collected_at)
+    WHERE id = :id
+      AND source_type = 'ir'
+      AND length(COALESCE(content, '')) < :new_content_length
+      AND :new_content_length >= 1000
+""")
+
 _INSERT_CRAWL_RUN_ARTICLE = text("""
     INSERT INTO crawl_run_articles (
         crawl_run_id, raw_article_id, url, url_hash, discovered_at,
@@ -289,6 +301,12 @@ def save_articles(
                         article=article,
                         sanitized_content=sanitized_content,
                     )
+                    _update_ir_content_if_better(
+                        db,
+                        article_id=article_id,
+                        article=article,
+                        sanitized_content=sanitized_content,
+                    )
                     _upsert_source_metadata(
                         db,
                         article_id=article_id,
@@ -334,6 +352,28 @@ def _update_dart_content_if_better(
             "content": sanitized_content,
             "content_type": article.content_type,
             "error_message": article.error_message,
+            "new_content_length": len(sanitized_content),
+        },
+    )
+
+
+def _update_ir_content_if_better(
+    db,
+    *,
+    article_id: int,
+    article: RawArticle,
+    sanitized_content: str,
+) -> None:
+    if article.source_type != "ir":
+        return
+    db.execute(
+        _UPDATE_IR_CONTENT_IF_BETTER_SQL,
+        {
+            "id": article_id,
+            "content": sanitized_content,
+            "content_type": article.content_type,
+            "error_message": article.error_message,
+            "collected_at": article.collected_at,
             "new_content_length": len(sanitized_content),
         },
     )
@@ -1107,7 +1147,7 @@ _INSERT_CARD_NEWS_V2 = text("""
         event_type, importance, importance_score,
         implication, sources, validation_pass, validation_sc_score,
         peer_company_id, primary_keyword_category, source_raw_article_ids,
-        keyword_categories, evidence_payload,
+        keyword_categories, evidence_payload, source_articles,
         card_schema_version, evaluation_payload
     ) VALUES (
         :id, :company, :cluster_id, :title, :summary_lines,
@@ -1118,6 +1158,7 @@ _INSERT_CARD_NEWS_V2 = text("""
         CAST(:source_raw_article_ids AS bigint[]),
         CAST(:keyword_categories AS jsonb),
         CAST(:evidence_payload AS jsonb),
+        CAST(:source_articles AS jsonb),
         :card_schema_version,
         CAST(:evaluation_payload AS jsonb)
     )
@@ -1134,11 +1175,29 @@ _INSERT_CARD_NEWS_V2 = text("""
         ),
         keyword_categories = COALESCE(EXCLUDED.keyword_categories, card_news.keyword_categories),
         evidence_payload = COALESCE(EXCLUDED.evidence_payload, card_news.evidence_payload),
+        source_articles = COALESCE(EXCLUDED.source_articles, card_news.source_articles),
         card_schema_version = EXCLUDED.card_schema_version,
         evaluation_payload =
             COALESCE(card_news.evaluation_payload, '{}'::jsonb)
             || COALESCE(EXCLUDED.evaluation_payload, '{}'::jsonb)
     RETURNING id
+""")
+
+_INSERT_CARD_NEWS_ARTICLE = text("""
+    INSERT INTO card_news_articles (
+        card_news_id,
+        raw_article_id,
+        article_order,
+        relation_source
+    ) VALUES (
+        :card_news_id,
+        :raw_article_id,
+        :article_order,
+        :relation_source
+    )
+    ON CONFLICT (card_news_id, raw_article_id) DO UPDATE SET
+        article_order = EXCLUDED.article_order,
+        relation_source = EXCLUDED.relation_source
 """)
 
 # pre-V33 환경 fallback (v2 컬럼 미존재 시). 신규 컬럼 6개 빼고 INSERT.
@@ -1174,7 +1233,7 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
     try:
         params = _card_news_insert_params(card)
         try:
-            return _execute_v2_insert(card_id=card["id"], params=params)
+            card_id = _execute_v2_insert(card_id=card["id"], params=params)
         except Exception as exc:  # noqa: BLE001
             if not _is_undefined_column_error(exc):
                 raise
@@ -1182,7 +1241,14 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
                 "card_news v2 INSERT 실패 (v33 미적용) → v1 fallback 사용 | id=%s",
                 card.get("id"),
             )
-            return _execute_v1_fallback(card_id=card["id"], params=params)
+            card_id = _execute_v1_fallback(card_id=card["id"], params=params)
+        if card_id:
+            _sync_card_news_articles(
+                card_id=card_id,
+                source_raw_article_ids=params["source_raw_article_ids"],
+                relation_source="source_raw_article_ids",
+            )
+        return card_id
     except Exception as e:
         log.error("카드 뉴스 저장 실패 | id=%s error=%s", card.get("id"), e)
     return None
@@ -1236,6 +1302,8 @@ def _is_undefined_column_error(exc: Exception) -> bool:
 def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
     implication_payload = _merge_implication_payload(card)
     source_ids = _normalize_int_list(card.get("source_raw_article_ids"))
+    if not source_ids:
+        source_ids = _source_ids_from_sources(card.get("sources"))
     evidence_payload = _build_evidence_payload(card)
     evaluation_payload = card.get("evaluation_payload") or {}
     if not isinstance(evaluation_payload, dict):
@@ -1243,6 +1311,7 @@ def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
     keyword_categories = card.get("keyword_categories") or {}
     if not isinstance(keyword_categories, dict):
         keyword_categories = {}
+    source_articles = _source_articles_payload(card, source_ids)
     return {
         "id": card["id"],
         "company": card.get("company") or card.get("peer_id"),
@@ -1261,9 +1330,102 @@ def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
         "source_raw_article_ids": source_ids,
         "keyword_categories": json.dumps(keyword_categories, ensure_ascii=False),
         "evidence_payload": json.dumps(evidence_payload, ensure_ascii=False),
+        "source_articles": json.dumps(source_articles, ensure_ascii=False),
         "card_schema_version": str(card.get("card_schema_version") or "v2"),
         "evaluation_payload": json.dumps(evaluation_payload, ensure_ascii=False),
     }
+
+
+def _sync_card_news_articles(
+    *,
+    card_id: str,
+    source_raw_article_ids: list[int],
+    relation_source: str,
+) -> None:
+    """Keep normalized card -> raw article links in step with card_news."""
+    ids = _normalize_int_list(source_raw_article_ids)
+    if not ids:
+        return
+    try:
+        with SessionLocal() as db:
+            db.execute(
+                text("""
+                    DELETE FROM card_news_articles
+                    WHERE card_news_id = :card_news_id
+                      AND NOT (raw_article_id = ANY(CAST(:source_raw_article_ids AS bigint[])))
+                """),
+                {
+                    "card_news_id": card_id,
+                    "source_raw_article_ids": ids,
+                },
+            )
+            db.execute(
+                _INSERT_CARD_NEWS_ARTICLE,
+                [
+                    {
+                        "card_news_id": card_id,
+                        "raw_article_id": raw_id,
+                        "article_order": index,
+                        "relation_source": relation_source,
+                    }
+                    for index, raw_id in enumerate(ids, start=1)
+                ],
+            )
+            db.commit()
+    except Exception as e:  # noqa: BLE001
+        log.warning(
+            "card_news_articles 동기화 실패 | card_id=%s article_ids=%s error=%s",
+            card_id,
+            ids,
+            e,
+        )
+
+
+def _source_ids_from_sources(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    ids: list[int] = []
+    for source in value:
+        if not isinstance(source, dict):
+            continue
+        ids.extend(
+            _normalize_int_list(
+                source.get("raw_article_id") or source.get("article_id") or source.get("id")
+            )
+        )
+    return _normalize_int_list(ids)
+
+
+def _source_articles_payload(card: dict[str, Any], source_ids: list[int]) -> list[dict[str, Any]]:
+    source_articles = card.get("source_articles")
+    if isinstance(source_articles, list) and source_articles:
+        return [item for item in source_articles if isinstance(item, dict)]
+
+    payload: list[dict[str, Any]] = []
+    sources = card.get("sources")
+    if isinstance(sources, list):
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            raw_id = _normalize_int_list(
+                source.get("raw_article_id") or source.get("article_id") or source.get("id")
+            )
+            if not raw_id:
+                continue
+            payload.append(
+                {
+                    "id": raw_id[0],
+                    "title": source.get("title") or "",
+                    "url": source.get("url") or "",
+                    "source_name": source.get("source_name") or source.get("publisher") or "",
+                    "publisher": source.get("publisher") or "",
+                    "published_at": source.get("published_at"),
+                    "collected_at": source.get("collected_at"),
+                }
+            )
+    if payload:
+        return payload
+    return [{"id": raw_id} for raw_id in source_ids]
 
 
 def _resolve_peer_company_id(card: dict[str, Any]) -> Optional[str]:
@@ -1381,6 +1543,7 @@ def merge_card_news_sources_for_cluster(
                     SELECT id, sources, source_raw_article_ids, source_articles, importance_score
                     FROM card_news
                     WHERE cluster_id = :cluster_id
+                      AND status <> 'DELETED'
                     ORDER BY created_at DESC
                     LIMIT 1
                 """),
@@ -1433,6 +1596,11 @@ def merge_card_news_sources_for_cluster(
                 },
             )
             db.commit()
+            _sync_card_news_articles(
+                card_id=str(current["id"]),
+                source_raw_article_ids=merged_ids,
+                relation_source="source_raw_article_ids",
+            )
             log.info(
                 "기존 카드 출처 병합 완료 | card_id=%s cluster_id=%s added=%d",
                 current["id"],
@@ -2056,6 +2224,7 @@ def fetch_peer_cards_for_alignment(
                        keywords, keyword_categories
                 FROM card_news
                 WHERE peer_company_id = :peer
+                  AND status = 'ACTIVE'
                   AND created_at >= NOW() - make_interval(days => :days)
                   AND COALESCE(importance_score, 0) >= :importance
                   {filter_sql}

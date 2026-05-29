@@ -268,6 +268,7 @@ def _fetch_period_cards(
         "limit": fetch_limit,
     }
     where = [
+        "cn.status = 'ACTIVE'",
         "COALESCE(ra.published_at, cn.created_at) >= :start_at",
         "COALESCE(ra.published_at, cn.created_at) < :end_at",
     ]

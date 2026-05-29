@@ -27,6 +27,11 @@ log = logging.getLogger(__name__)
 
 DEFAULT_LOOKBACK_DAYS = 365
 PDF_MAX_TEXT_CHARS = int(os.getenv("IR_PDF_MAX_TEXT_CHARS", "200000"))
+PDF_OCR_ENABLED = os.getenv("IR_PDF_ENABLE_OCR", "1").lower() not in {"0", "false", "no"}
+PDF_OCR_MIN_TEXT_CHARS = int(os.getenv("IR_PDF_OCR_MIN_TEXT_CHARS", "80"))
+PDF_OCR_LANGUAGE = os.getenv("IR_PDF_OCR_LANGUAGE", "kor+eng")
+PDF_OCR_DPI = int(os.getenv("IR_PDF_OCR_DPI", "200"))
+IR_FORCE_REFRESH = os.getenv("IR_FORCE_REFRESH", "0").lower() in {"1", "true", "yes"}
 
 
 class IRCrawler(BaseCrawler):
@@ -225,7 +230,7 @@ class IRCrawler(BaseCrawler):
                 )
                 continue
 
-            if article_exists_by_url(pdf_url):
+            if not IR_FORCE_REFRESH and article_exists_by_url(pdf_url):
                 log.info(
                     "IR 기존 URL 스킵 | peer_id=%s title=%s url=%s",
                     self.peer_id,
@@ -1244,6 +1249,22 @@ def _extract_pdf_payload(pdf_bytes: bytes) -> dict:
                 page_text = _clean_pdf_text(page_text)
                 page_blocks = _extract_pdf_page_blocks(page)
                 page_images = len(page.get_images(full=True))
+                ocr_used = False
+
+                if _needs_ocr_page(page_text, page_images):
+                    ocr_text = _extract_pdf_page_ocr_text(page)
+                    if len(ocr_text) > len(page_text):
+                        page_text = ocr_text
+                        page_blocks = [
+                            {
+                                "bbox": [],
+                                "text": line,
+                                "source": "ocr",
+                            }
+                            for line in page_text.splitlines()
+                            if line.strip()
+                        ]
+                        ocr_used = True
 
                 image_count += page_images
 
@@ -1255,6 +1276,7 @@ def _extract_pdf_payload(pdf_bytes: bytes) -> dict:
                         "page": page_index,
                         "text_chars": len(page_text),
                         "image_count": page_images,
+                        "ocr_used": ocr_used,
                         "blocks": page_blocks,
                     }
                 )
@@ -1271,7 +1293,7 @@ def _extract_pdf_payload(pdf_bytes: bytes) -> dict:
                 "image_count": image_count,
                 "contains_images": image_count > 0,
                 "pages": pages_payload,
-                "pdf_parse_strategy": "text_and_blocks",
+                "pdf_parse_strategy": "text_blocks_with_optional_ocr",
                 "table_parse_strategy": "pdf_text_blocks",
                 "chart_parse_strategy": "not_parsed",
             }
@@ -1302,6 +1324,28 @@ def _clean_pdf_text(text: str) -> str:
     text = re.sub(r"([가-힣])(?=\d)", r"\1 ", text)
     text = re.sub(r"(\d)(?=[가-힣])", r"\1 ", text)
     return text.strip()
+
+
+def _needs_ocr_page(page_text: str, image_count: int) -> bool:
+    if not PDF_OCR_ENABLED or image_count <= 0:
+        return False
+
+    alpha_numeric_count = len(re.findall(r"[0-9A-Za-z가-힣]", page_text or ""))
+    return alpha_numeric_count < PDF_OCR_MIN_TEXT_CHARS
+
+
+def _extract_pdf_page_ocr_text(page) -> str:
+    try:
+        textpage = page.get_textpage_ocr(
+            flags=0,
+            language=PDF_OCR_LANGUAGE,
+            dpi=PDF_OCR_DPI,
+            full=False,
+        )
+        return _clean_pdf_text(page.get_text("text", sort=True, textpage=textpage))
+    except Exception as exc:
+        log.debug("IR PDF OCR fallback 실패 | page=%s error=%s", getattr(page, "number", "?"), exc)
+        return ""
 
 
 def _extract_pdf_page_blocks(page) -> list[dict]:

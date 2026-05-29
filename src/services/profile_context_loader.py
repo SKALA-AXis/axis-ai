@@ -1,6 +1,6 @@
 """ProfileContextLoader — cluster-time profile context enrichment.
 
-Tier A (`peer_companies.profile_snapshot` JSONB, 주1회 CronJob) 가 build 한 정적
+Tier A (`peer_companies.profile_snapshot` JSONB, 분기 1회 CronJob) 가 build 한 정적
 snapshot 위에, cluster-time 에 LLM 호출 없이 DB query 만으로 recent signals 와
 financial summary 를 덧붙여 ImplicationAgent 가 받을 ProfileContext 를 만든다.
 
@@ -58,7 +58,6 @@ class ProfileContextLoader:
                 peer_id=peer_id, days=lookback_days, limit=3
             )
             profile["recent_financial"] = _load_latest_financial_metrics(peer_id=peer_id)
-            profile["recent_capability_change"] = _summarize_capability_change(profile)
             if event_type:
                 profile["event_type_focus"] = event_type
             peer_profiles[peer_id] = profile
@@ -228,28 +227,6 @@ def _load_latest_financial_metrics(*, peer_id: str) -> list[dict[str, Any]]:
         if len(out) >= len(canonical_keys):
             break
     return out
-
-
-def _summarize_capability_change(profile: dict[str, Any]) -> str | None:
-    """capability_evolution JSONB 의 가장 최근 window narrative 반환."""
-    capability = profile.get("capability_evolution") or {}
-    if not isinstance(capability, dict):
-        return None
-    windows = capability.get("windows") or []
-    if not isinstance(windows, list) or not windows:
-        return None
-    # 가장 최근 generated_at 우선.
-    sorted_windows = sorted(
-        (w for w in windows if isinstance(w, dict)),
-        key=lambda w: str(w.get("generated_at") or w.get("period") or ""),
-        reverse=True,
-    )
-    if not sorted_windows:
-        return None
-    narrative = sorted_windows[0].get("narrative")
-    if isinstance(narrative, str) and narrative.strip():
-        return narrative.strip()
-    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
