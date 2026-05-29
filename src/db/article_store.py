@@ -1543,6 +1543,7 @@ def merge_card_news_sources_for_cluster(
                     SELECT id, sources, source_raw_article_ids, source_articles, importance_score
                     FROM card_news
                     WHERE cluster_id = :cluster_id
+                      AND status <> 'DELETED'
                     ORDER BY created_at DESC
                     LIMIT 1
                 """),
@@ -2223,6 +2224,7 @@ def fetch_peer_cards_for_alignment(
                        keywords, keyword_categories
                 FROM card_news
                 WHERE peer_company_id = :peer
+                  AND status = 'ACTIVE'
                   AND created_at >= NOW() - make_interval(days => :days)
                   AND COALESCE(importance_score, 0) >= :importance
                   {filter_sql}
