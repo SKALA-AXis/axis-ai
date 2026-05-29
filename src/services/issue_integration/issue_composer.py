@@ -484,9 +484,8 @@ def _issue_brief(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _analysis_ready_inputs(payload: dict[str, Any]) -> dict[str, Any]:
-    content = (
-        payload.get("content_digest") if isinstance(payload.get("content_digest"), dict) else {}
-    )
+    content_value = payload.get("content_digest")
+    content: dict[str, Any] = content_value if isinstance(content_value, dict) else {}
     sections = [
         {
             "section": section.get("section"),
@@ -649,15 +648,13 @@ def _public_quality(value: Any) -> dict[str, Any]:
 def _core_question(payload: dict[str, Any]) -> str:
     company = _first_non_empty(payload.get("main_company"), "해당 자료")
     event_type = _first_non_empty(payload.get("cluster_event_type"), payload.get("event_type"))
+    event_label = event_type or "이슈"
     topic = _first_non_empty(
         payload.get("headline"), payload.get("main_issue"), payload.get("one_line_summary")
     )
     if topic:
-        return (
-            f"{company}의 {event_type or '이슈'}에서 "
-            f"'{topic}'이 보여주는 사업/시장 의미는 무엇인가?"
-        )
-    return f"{company}의 {event_type or '이슈'}가 보여주는 사업/시장 의미는 무엇인가?"
+        return f"{company}의 {event_label}에서 '{topic}'이 보여주는 사업/시장 의미는 무엇인가?"
+    return f"{company}의 {event_label}가 보여주는 사업/시장 의미는 무엇인가?"
 
 
 def _key_developments(payload: dict[str, Any]) -> list[str]:
@@ -667,9 +664,8 @@ def _key_developments(payload: dict[str, Any]) -> list[str]:
             str(item.get("fact") or "") for item in _as_dict_list(payload.get("consolidated_facts"))
         ]
     if not values:
-        content = (
-            payload.get("content_digest") if isinstance(payload.get("content_digest"), dict) else {}
-        )
+        content_value = payload.get("content_digest")
+        content: dict[str, Any] = content_value if isinstance(content_value, dict) else {}
         values = [
             str(point.get("point") or point.get("fact") or "")
             for point in _as_dict_list(content.get("key_points"))
@@ -679,9 +675,8 @@ def _key_developments(payload: dict[str, Any]) -> list[str]:
 
 def _materiality_signals(payload: dict[str, Any]) -> list[dict[str, Any]]:
     signals: list[dict[str, Any]] = []
-    content = (
-        payload.get("content_digest") if isinstance(payload.get("content_digest"), dict) else {}
-    )
+    content_value = payload.get("content_digest")
+    content: dict[str, Any] = content_value if isinstance(content_value, dict) else {}
     for section in _as_dict_list(content.get("sections")):
         signals.append(
             {

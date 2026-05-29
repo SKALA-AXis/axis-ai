@@ -255,11 +255,8 @@ class ImplicationAgent:
 
 def _has_minimum_inputs(integrated_issue: dict[str, Any], analysis: dict[str, Any]) -> bool:
     brief = _issue_brief(integrated_issue)
-    evidence = (
-        integrated_issue.get("evidence")
-        if isinstance(integrated_issue.get("evidence"), dict)
-        else {}
-    )
+    evidence_value = integrated_issue.get("evidence")
+    evidence: dict[str, Any] = evidence_value if isinstance(evidence_value, dict) else {}
     if not brief.get("is_valid", integrated_issue.get("is_valid_summary", True)):
         return False
     if not analysis.get("is_valid_analysis", True):

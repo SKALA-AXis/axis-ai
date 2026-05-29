@@ -273,11 +273,8 @@ class StrategicAnalyzer:
 
 def _is_valid_integrated_issue(integrated_issue: dict[str, Any]) -> bool:
     brief = _issue_brief(integrated_issue)
-    evidence = (
-        integrated_issue.get("evidence")
-        if isinstance(integrated_issue.get("evidence"), dict)
-        else {}
-    )
+    evidence_value = integrated_issue.get("evidence")
+    evidence: dict[str, Any] = evidence_value if isinstance(evidence_value, dict) else {}
     has_subject = bool(
         brief.get("main_company")
         or brief.get("headline")
@@ -716,7 +713,8 @@ def _normalize_int_list(value: Any) -> list[int]:
 
 def _issue_source_ids(integrated_issue: dict[str, Any]) -> list[int]:
     brief = _issue_brief(integrated_issue)
-    scope = brief.get("analysis_scope") if isinstance(brief.get("analysis_scope"), dict) else {}
+    scope_value = brief.get("analysis_scope")
+    scope: dict[str, Any] = scope_value if isinstance(scope_value, dict) else {}
     ids = _normalize_int_list(
         scope.get("analyzed_source_ids") or scope.get("analyzed_raw_article_ids")
     )

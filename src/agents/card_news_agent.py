@@ -589,9 +589,14 @@ def _default_sources(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _summary_compat(summary: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(summary, dict) or "issue_brief" not in summary:
         return summary
-    brief = summary.get("issue_brief") if isinstance(summary.get("issue_brief"), dict) else {}
-    metadata = summary.get("metadata") if isinstance(summary.get("metadata"), dict) else {}
-    evidence = summary.get("evidence") if isinstance(summary.get("evidence"), dict) else {}
+    brief_value = summary.get("issue_brief")
+    brief: dict[str, Any] = brief_value if isinstance(brief_value, dict) else {}
+    metadata_value = summary.get("metadata")
+    metadata: dict[str, Any] = metadata_value if isinstance(metadata_value, dict) else {}
+    evidence_value = summary.get("evidence")
+    evidence: dict[str, Any] = evidence_value if isinstance(evidence_value, dict) else {}
+    scope_value = brief.get("analysis_scope")
+    analysis_scope: dict[str, Any] = scope_value if isinstance(scope_value, dict) else {}
     evidence_text_by_ref = {
         str(item.get("id")): str(item.get("text") or "")
         for item in evidence.get("references", []) or []
@@ -616,8 +621,8 @@ def _summary_compat(summary: dict[str, Any]) -> dict[str, Any]:
     compat.setdefault("fact_extraction_failed", metadata.get("fact_extraction_failed", False))
     compat.setdefault(
         "source_article_ids",
-        (brief.get("analysis_scope") or {}).get("analyzed_source_ids")
-        or (brief.get("analysis_scope") or {}).get("analyzed_raw_article_ids", []),
+        analysis_scope.get("analyzed_source_ids")
+        or analysis_scope.get("analyzed_raw_article_ids", []),
     )
     compat.setdefault("fact_summary", [fact.get("fact") for fact in facts if fact.get("fact")][:3])
     compat.setdefault(
