@@ -36,7 +36,7 @@ BriefingType = Literal["daily", "weekly", "monthly"]
 
 KST = ZoneInfo("Asia/Seoul")
 _PROMPT_VERSION = "briefing-generation-v0.3-period-briefing"
-_DISPLAY_COPY_PROMPT_VERSION = "briefing-display-copy-v0.23-patterned-llm-judgement"
+_DISPLAY_COPY_PROMPT_VERSION = "briefing-display-copy-v0.24-patterned-llm-guarded"
 _LLM_MODEL = os.getenv("BRIEFING_LLM_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o"
 _DEFAULT_LIMIT = 20
 _SECTOR_FILTER_FETCH_MULTIPLIER = 5
@@ -830,6 +830,13 @@ def _refine_display_copy_with_llm(
             revised = _parse_json_object(getattr(revision_response, "content", revision_response))
             if revised:
                 parsed = revised
+        remaining_issues = _display_copy_quality_issues(parsed, selected_cards)
+        if remaining_issues:
+            log.info(
+                "Briefing display copy refinement rejected | issues=%s",
+                remaining_issues,
+            )
+            return report
     return _merge_display_copy(report, parsed)
 
 
@@ -837,10 +844,7 @@ def _display_copy_system_prompt() -> str:
     return "\n".join(
         [
             "# Persona Handoff",
-            (
-                "당신은 SK AX 임원 브리핑 화면의 수석 에디터이자 "
-                "근거 검수자입니다."
-            ),
+            ("당신은 SK AX 임원 브리핑 화면의 수석 에디터이자 근거 검수자입니다."),
             (
                 "당신의 책임은 card_news.evidence_payload.analysis_package에 있는 "
                 "통합/분석/시사점/분류/검증 결과만 사용해 화면용 문장을 정제하는 것입니다."
@@ -880,8 +884,8 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             "",
             "# Input Reference Rules",
             (
-            "- analysis_packages에 있는 integrated_issue, analysis, implication을 "
-            "Input Flip 레퍼런스로 사용해 화면 문장으로 변환합니다."
+                "- analysis_packages에 있는 integrated_issue, analysis, implication을 "
+                "Input Flip 레퍼런스로 사용해 화면 문장으로 변환합니다."
             ),
             (
                 "- card_signal_index는 카드별 핵심 신호 체크리스트입니다. "
@@ -917,32 +921,28 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
                 "- interpretation_flow는 관찰된 변화, 평가축의 이동, 경쟁 구도 영향, "
                 "전략 시사 4단계 순서를 유지합니다."
             ),
-            (
-                "- 각 interpretation_flow step은 seq/label/items만 포함합니다."
-            ),
-            (
-                "- step 자체에는 title/description을 쓰지 않습니다. 실제 문장은 "
-                "items 안에만 씁니다."
-            ),
-            (
-                "- 각 step.items는 최소 1개, 최대 3개만 작성합니다."
-            ),
+            ("- 각 interpretation_flow step은 seq/label/items만 포함합니다."),
+            ("- step 자체에는 title/description을 쓰지 않습니다. 실제 문장은 items 안에만 씁니다."),
+            ("- 각 step.items는 최소 1개, 최대 3개만 작성합니다."),
             (
                 "- items는 근거가 충분한 것만 선택합니다. 3개를 채우기 위해 "
                 "약한 항목을 만들지 않습니다."
             ),
-            (
-                "- title은 해당 섹션에서 사용자가 먼저 볼 핵심 결론 한 줄입니다."
-            ),
+            ("- title은 해당 섹션에서 사용자가 먼저 볼 핵심 결론 한 줄입니다."),
             "- title도 자연스러운 문장으로 쓰고, 가능한 한 '~합니다' 또는 '~있습니다'로 끝냅니다.",
             (
                 "- description은 반드시 '근거 -> 그 근거가 title을 지지하는 이유 -> "
                 "읽어야 할 의미' 순서가 드러나야 합니다."
             ),
             (
-                "- 카드가 2개 이상이면 한 회사나 한 카드의 설명으로 전체 결론을 "
-                "대체하지 않습니다."
+                "- description은 title을 다시 말하지 말고, title이 왜 그렇게 "
+                "도출됐는지 실제 근거와 판단 연결고리를 설명합니다."
             ),
+            (
+                "- why_important는 '중요합니다'로 끝나는 평가가 아니라 고객 평가, "
+                "제안 메시지, 모니터링 기준 중 무엇을 바꿔야 하는지까지 말합니다."
+            ),
+            ("- 카드가 2개 이상이면 한 회사나 한 카드의 설명으로 전체 결론을 대체하지 않습니다."),
             (
                 "- '경쟁사들', '수요 변화', '운영 성과', '리스크 감소' 같은 넓은 표현을 "
                 "쓰면 같은 항목의 description에서 실제 회사/이슈 근거를 설명합니다."
@@ -966,9 +966,7 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
                 "- 단, 문맥형 표현 때문에 근거가 불명확해지면 회사명과 이슈를 다시 "
                 "명확히 씁니다. 정확성이 반복 회피보다 우선입니다."
             ),
-            (
-                "- 모든 기본 노출 문장은 '~합니다' 또는 '~있습니다' 문체로 끝냅니다."
-            ),
+            ("- 모든 기본 노출 문장은 '~합니다' 또는 '~있습니다' 문체로 끝냅니다."),
             "",
             "# Internal Selection-Inference Procedure",
             "- 내부적으로만 아래 절차를 수행하고, 절차 내용은 JSON에 쓰지 마세요.",
@@ -1003,6 +1001,17 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
                 "- description을 '움직임은', '사례들은', '이러한 변화는'처럼 "
                 "모호한 주어로 시작하지 않습니다."
             ),
+            (
+                "- '중요성이 커지고 있습니다', '중요한 역할을 합니다', "
+                "'중요성을 부각시키고 있습니다', '강조하고 있습니다', "
+                "'핵심 요소로 자리잡고 있습니다'처럼 이유 없는 중요도 표현을 "
+                "결론으로 쓰지 않습니다."
+            ),
+            (
+                "- '경쟁력을 강화하고 있습니다', '입지를 다지고 있습니다', "
+                "'성장을 도모하고 있습니다'처럼 성과를 단정하는 표현은 "
+                "근거에 같은 의미가 있을 때만 씁니다."
+            ),
             "- 근거가 1개뿐인 항목을 전체 시장 결론처럼 과장하지 않습니다.",
             "- competitor_move의 title을 특정 회사 하나의 움직임으로 쓰지 않습니다.",
             "- why_important를 특정 회사의 이익이나 성장 전망만으로 좁히지 않습니다.",
@@ -1020,10 +1029,7 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
                 "- 관찰된 변화: integrated_issue, business_signals, key_numbers, "
                 "analysis.impact_reason에서 실제로 확인된 신호를 씁니다."
             ),
-            (
-                "- 평가축의 이동: 확인된 신호 때문에 고객 평가 기준이 어떻게 "
-                "바뀌는지 씁니다."
-            ),
+            ("- 평가축의 이동: 확인된 신호 때문에 고객 평가 기준이 어떻게 바뀌는지 씁니다."),
             (
                 "- 경쟁 구도 영향: peer_implication, analysis_summary, market_signal을 "
                 "사용해 경쟁 메시지나 경쟁 방식 변화를 씁니다."
@@ -1049,10 +1055,7 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             "",
             "# Few-Shot Style Guide",
             "Bad title: 경쟁사들은 수요 변화에 맞춰 움직이고 있습니다.",
-            (
-                "Good title: 경쟁사들은 기술 신호를 운영 패키지와 성장 논리로 "
-                "묶고 있습니다."
-            ),
+            ("Good title: 경쟁사들은 기술 신호를 운영 패키지와 성장 논리로 묶고 있습니다."),
             "Bad description: LG CNS 관련 프라이빗 모델 구축 수요가 확인됩니다.",
             (
                 "Good description: 프라이빗 모델 구축 수요는 고객이 AI 기능 자체보다 "
@@ -1065,6 +1068,12 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
                 "나오면서 고객 평가 기준은 기능 보유 여부보다 데이터 통제와 운영 가능성으로 "
                 "이동합니다."
             ),
+            "Bad why_important: 데이터 관리와 운영 SW 인프라가 핵심 요소로 자리잡고 있습니다.",
+            (
+                "Good why_important: 고객이 기술 보유 여부보다 도입 후 운영 책임과 "
+                "성과 검증 근거를 보게 되므로, 제안에서는 실행 범위와 검증 기준을 "
+                "먼저 제시해야 합니다."
+            ),
             "Bad description: 현대오토에버의 로봇 운영 소프트웨어 인프라가 확인됩니다.",
             (
                 "Good description: 이 운영 기반 신호는 로봇 도입 자체보다 현장 데이터 관리, "
@@ -1076,10 +1085,7 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
                 "Good rewritten description: 이 신호는 로봇 도입 자체보다 현장 데이터 관리와 "
                 "운영 SW 연동 역량이 제조 AX 판단 기준으로 올라오고 있음을 보여줍니다."
             ),
-            (
-                "Bad step pattern: 모든 단계 description을 'A와 B가 확인됩니다'로 "
-                "시작합니다."
-            ),
+            ("Bad step pattern: 모든 단계 description을 'A와 B가 확인됩니다'로 시작합니다."),
             (
                 "Good step pattern: 관찰 단계는 확인된 신호, 평가축 단계는 고객 기준 변화, "
                 "경쟁 구도 단계는 메시지 재구성, 전략 시사 단계는 SK AX 실행 방향으로 "
@@ -1139,10 +1145,7 @@ def _display_copy_revision_prompt(
             "- Output Schema는 1차 프롬프트와 동일하게 유지합니다.",
             "- market_reading, sk_ax_view, core_change, summary, so_what은 만들지 않습니다.",
             "- 회사명은 근거를 명확히 해야 할 때만 씁니다.",
-            (
-                "- 이미 한 번 설명한 회사+신호 조합은 다음 항목에서 "
-                "문맥형 표현으로 바꿉니다."
-            ),
+            ("- 이미 한 번 설명한 회사+신호 조합은 다음 항목에서 문맥형 표현으로 바꿉니다."),
             (
                 "- key_change_cards는 회사별 카드가 아닙니다. market_signal은 "
                 "여러 카드의 공통 시장 변화, competitor_move는 경쟁 방식 변화를 씁니다."
@@ -1165,6 +1168,11 @@ def _display_copy_revision_prompt(
             (
                 "- '두각', '시장 입지 강화', '경쟁 우위 확보'처럼 강한 평가 표현은 "
                 "근거에 같은 의미가 있을 때만 씁니다."
+            ),
+            (
+                "- '중요성이 커지고 있습니다', '강조하고 있습니다', "
+                "'경쟁력을 강화하고 있습니다' 같은 표현으로 끝내지 말고 "
+                "근거가 고객 평가/제안/경쟁 방식에 어떤 변화를 만드는지 쓰세요."
             ),
             "- 근거 범위를 넘어 산업 범위를 넓히지 않습니다.",
             "- 근거에 없는 수치, 사건, 인과관계는 추가하지 않습니다.",
@@ -1207,7 +1215,47 @@ def _display_copy_quality_issues(
             "의미의 근거가 없으면 '확인됩니다', '부각되고 있습니다', "
             "'중요성이 커지고 있습니다'처럼 낮춰 쓰세요."
         )
-    for name in _dedupe_keep_order(_company_label(card) for card in selected_cards):
+    weak_patterns = (
+        "중요성이 커지고",
+        "중요성을 부각",
+        "중요한 역할",
+        "핵심 요소로 자리",
+        "강조하고 있습니다",
+        "경쟁력을 강화",
+        "성장을 도모",
+        "전략적 포지셔닝",
+    )
+    weak_hits = [text for text in texts if any(pattern in text for pattern in weak_patterns)]
+    if weak_hits:
+        issues.append(
+            "화면 문장에 이유 없는 중요도/성과 표현이 포함되어 있습니다. "
+            "'중요성이 커지고 있습니다', '강조하고 있습니다', '경쟁력을 강화하고 있습니다' "
+            "같은 표현은 실제 근거와 고객 평가 변화, 제안 변화, 경쟁 방식 변화로 "
+            "구체화하세요."
+        )
+    for item in _display_copy_visible_items(draft):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "")
+        description = str(item.get("description") or "")
+        why = str(item.get("why_important") or "")
+        if description and title and _is_too_similar(description, [title], threshold=0.64):
+            issues.append(
+                "description이 title을 반복합니다. description은 실제 근거와 "
+                "그 근거가 title을 지지하는 이유를 설명해야 합니다."
+            )
+            break
+        if why and (
+            _is_too_similar(why, [title, description], threshold=0.62)
+            or any(pattern in why for pattern in weak_patterns)
+        ):
+            issues.append(
+                "why_important가 title/description을 반복하거나 추상적으로 끝납니다. "
+                "고객 평가, 제안 우선순위, 후속 모니터링 중 무엇이 바뀌는지 "
+                "구체적으로 쓰세요."
+            )
+            break
+    for name in _dedupe_keep_order([_company_label(card) for card in selected_cards]):
         if not name:
             continue
         count = sum(text.count(name) for text in texts)
@@ -1378,7 +1426,7 @@ def _display_copy_schema_hint() -> dict[str, Any]:
                         }
                     ],
                     "evidence_card_ids": ["CN-..."],
-                }
+                },
             ]
         },
     }
@@ -1567,9 +1615,7 @@ def _merge_key_change_cards(updated: dict[str, Any], display_copy: dict[str, Any
         if str(item.get("insight_type")) == "competitor_move":
             title = str(item.get("title") or "")
             if _mentions_any_source_company(title, updated):
-                item["title"] = (
-                    "경쟁사들은 기술 신호를 운영 패키지와 성장 논리로 묶고 있습니다."
-                )
+                item["title"] = "경쟁사들은 기술 신호를 운영 패키지와 성장 논리로 묶고 있습니다."
         if not item.get("description"):
             _update_text_field(item, source, "summary")
             if item.get("summary"):
@@ -1608,9 +1654,7 @@ def _merge_flow(updated: dict[str, Any], display_copy: dict[str, Any]) -> None:
                     fill_remaining=False,
                 )
                 if merged_items:
-                    step["items"] = _sanitize_flow_step_items(
-                        {**step, "items": merged_items[:3]}
-                    )
+                    step["items"] = _sanitize_flow_step_items({**step, "items": merged_items[:3]})
                 else:
                     step.pop("items", None)
             else:
@@ -1901,9 +1945,7 @@ def _company_detail_phrases_from_result(
 def _business_signal_phrase(package: dict[str, Any]) -> str:
     integrated = _json_dict(package.get("integrated_issue"))
     signals = [
-        item
-        for item in _json_list(integrated.get("business_signals"))
-        if isinstance(item, dict)
+        item for item in _json_list(integrated.get("business_signals")) if isinstance(item, dict)
     ]
     first_signal = signals[0] if signals else {}
     return _brief_noun_phrase(
@@ -1919,14 +1961,10 @@ def _business_signal_phrase(package: dict[str, Any]) -> str:
 def _key_number_context_phrase(package: dict[str, Any], signal: str = "") -> str:
     integrated = _json_dict(package.get("integrated_issue"))
     key_numbers = [
-        item
-        for item in _json_list(integrated.get("key_numbers"))
-        if isinstance(item, dict)
+        item for item in _json_list(integrated.get("key_numbers")) if isinstance(item, dict)
     ]
     preferred = [
-        item
-        for item in key_numbers
-        if _shares_keyword(signal, _first_text(item.get("context")))
+        item for item in key_numbers if _shares_keyword(signal, _first_text(item.get("context")))
     ]
     values: list[str] = []
     for item in preferred[:3]:
@@ -2005,8 +2043,7 @@ def _recommended_action_sentences_from_result(result: dict[str, Any]) -> list[st
     for package in _analysis_packages_from_result(result):
         skax = _json_dict(_nested_get(package, "implication", "skax_implication"))
         actions.extend(
-            str(action).strip()
-            for action in _json_list(skax.get("recommended_actions"))
+            str(action).strip() for action in _json_list(skax.get("recommended_actions"))
         )
     return _dedupe_keep_order(
         [_brief_sentence(action, max_chars=100) for action in actions if action]
@@ -2592,8 +2629,7 @@ def _core_change_insight_items(
         _so_what_candidates(entries, briefing_basis),
         avoid=[market_title, market_summary],
         fallback=(
-            "이 변화는 고객 제안과 경쟁사 대응에서 "
-            "확인해야 할 평가 기준을 바꿀 수 있습니다."
+            "이 변화는 고객 제안과 경쟁사 대응에서 확인해야 할 평가 기준을 바꿀 수 있습니다."
         ),
         max_chars=180,
     )
@@ -3342,13 +3378,12 @@ def _frontend_display_payload(result: dict[str, Any]) -> dict[str, Any]:
         interpretation_flow = _public_interpretation_flow_from_result(result, repair=False)
     else:
         briefing_lead = _grounded_front_briefing_lead(result) or result.get("briefing_lead")
-        key_change_cards = (
-            _grounded_front_key_change_cards(result) or _public_key_change_cards_from_result(result)
-        )
-        interpretation_flow = (
-            _grounded_front_interpretation_flow(result)
-            or _public_interpretation_flow_from_result(result)
-        )
+        key_change_cards = _grounded_front_key_change_cards(
+            result
+        ) or _public_key_change_cards_from_result(result)
+        interpretation_flow = _grounded_front_interpretation_flow(
+            result
+        ) or _public_interpretation_flow_from_result(result)
     visible = {
         "title": result.get("title"),
         "briefing_lead": briefing_lead,
@@ -3679,8 +3714,7 @@ def _grounded_front_briefing_lead(result: dict[str, Any]) -> str:
     has_private_ai_signal = _has_token_entry(entries, _PRIVATE_AI_TOKENS)
     if not (has_robot_signal or has_private_ai_signal):
         return (
-            f"오늘 수집된 경쟁사 신호에서는 {_front_primary_signal_summary(entries)} "
-            f"{clauses}"
+            f"오늘 수집된 경쟁사 신호에서는 {_front_primary_signal_summary(entries)} {clauses}"
         ).strip()
     return (
         "오늘 수집된 경쟁사 신호는 AX 평가 기준이 기술 도입 자체보다 "
@@ -3882,9 +3916,7 @@ def _front_market_overview_description(
     clauses = _dedupe_keep_order(
         [
             _front_signal_clause(robot_entry, tokens=_ROBOT_OPS_TOKENS) if robot_entry else "",
-            _front_signal_clause(private_entry, tokens=_PRIVATE_AI_TOKENS)
-            if private_entry
-            else "",
+            _front_signal_clause(private_entry, tokens=_PRIVATE_AI_TOKENS) if private_entry else "",
         ]
     )
     if len(clauses) >= 2:
@@ -3924,9 +3956,7 @@ def _front_market_change_description(
     clauses = _dedupe_keep_order(
         [
             _front_signal_clause(robot_entry, tokens=_ROBOT_OPS_TOKENS) if robot_entry else "",
-            _front_signal_clause(private_entry, tokens=_PRIVATE_AI_TOKENS)
-            if private_entry
-            else "",
+            _front_signal_clause(private_entry, tokens=_PRIVATE_AI_TOKENS) if private_entry else "",
         ]
     )
     if clauses:
@@ -3986,11 +4016,7 @@ def _front_generic_market_description(entry: dict[str, Any]) -> str:
         if company and signal
         else impact
     )
-    second = (
-        f"{impact} "
-        if impact and impact not in first
-        else ""
-    )
+    second = f"{impact} " if impact and impact not in first else ""
     return (
         f"{first} {second}"
         "이 근거는 해당 기간 시장 해석에서 고객 수요, 경쟁 방식, "
@@ -4110,11 +4136,7 @@ def _front_action_description(entry: dict[str, Any]) -> str:
         max_sentences=1,
         max_chars=130,
     )
-    basis = (
-        f"{company}의 {signal} 신호가 근거입니다."
-        if company and signal
-        else ""
-    )
+    basis = f"{company}의 {signal} 신호가 근거입니다." if company and signal else ""
     return _join_display_sentences(
         basis,
         reason,
@@ -4329,9 +4351,7 @@ def _public_interpretation_flow_from_result(
 ) -> dict[str, Any]:
     flow = _json_dict(result.get("interpretation_flow"))
     steps = [
-        _compact_flow_step(step)
-        for step in _json_list(flow.get("steps"))
-        if isinstance(step, dict)
+        _compact_flow_step(step) for step in _json_list(flow.get("steps")) if isinstance(step, dict)
     ]
     return {
         "label": flow.get("label"),
@@ -4400,8 +4420,7 @@ def _repair_interpretation_flow_steps(
             ]
         if items:
             current["items"] = [
-                _compact_visible_item(item, ("seq", "title", "description"))
-                for item in items[:3]
+                _compact_visible_item(item, ("seq", "title", "description")) for item in items[:3]
             ]
         repaired.append(current)
     return repaired
@@ -4438,9 +4457,7 @@ def _repair_market_reading_items(
 def _grounded_market_description(title: str, result: dict[str, Any], *, seq: int) -> str:
     all_basis = _detailed_basis_sentence_from_result(result)
     basis = (
-        all_basis
-        if seq == 1
-        else _detailed_basis_sentence_from_result(result, focus_text=title)
+        all_basis if seq == 1 else _detailed_basis_sentence_from_result(result, focus_text=title)
     )
     normalized = str(title or "")
     company_signals = _company_signal_map_from_result(result)
@@ -4522,9 +4539,7 @@ def _grounded_market_description(title: str, result: dict[str, Any], *, seq: int
 def _market_description_is_card_listing(value: str) -> bool:
     text = str(value or "")
     company_names = [
-        name
-        for name in ("현대오토에버", "LG CNS", "삼성SDS", "포스코DX")
-        if name in text
+        name for name in ("현대오토에버", "LG CNS", "삼성SDS", "포스코DX") if name in text
     ]
     listing_markers = ("각각", "통해 시장", "사례는", "주도하고 있습니다")
     return len(company_names) >= 2 and any(marker in text for marker in listing_markers)
@@ -4598,9 +4613,7 @@ def _grounded_interpretation_description(
             ),
         )
     if "전략" in label:
-        strategy_basis = _join_korean(
-            [text for text in (robot_signal, private_ai_signal) if text]
-        )
+        strategy_basis = _join_korean([text for text in (robot_signal, private_ai_signal) if text])
         return _join_display_sentences(
             (
                 f"{strategy_basis}{_subject_particle(strategy_basis)} 전략 시사의 근거가 됩니다."
