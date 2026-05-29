@@ -442,7 +442,7 @@ docs/axis_ai_schema.dbml
 Flyway 마이그레이션:
 
 ```text
-axis-backend/src/main/resources/db/migration/V39__add_integrated_issue_storage.sql
+axis-backend/src/main/resources/db/migration/V40__add_integrated_issue_storage.sql
 ```
 
 저장 구조는 아래 원칙을 따른다.

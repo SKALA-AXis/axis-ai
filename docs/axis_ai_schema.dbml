@@ -13,7 +13,7 @@ Project axis_ai {
     - src/agents/classification_agent.py
     - src/rag/vector_index.py
     - docs/issue-integration-output-contract.md
-    - axis-backend/src/main/resources/db/migration/V39__add_integrated_issue_storage.sql
+    - axis-backend/src/main/resources/db/migration/V40__add_integrated_issue_storage.sql
   '''
 }
 
