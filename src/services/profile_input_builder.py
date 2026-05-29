@@ -567,8 +567,7 @@ def _official_claim(title: str, content: str) -> str:
         return "로봇 학습·운영 플랫폼과 물류 로봇 사례를 통해 RX 실행 역량을 확대하고 있다."
     if "한국전력" in text_value or "차세대 ISP" in text_value:
         return (
-            "공공·에너지 고객의 차세대 ISP 사업을 통해 "
-            "엔터프라이즈 IT 수행 역량을 보강하고 있다."
+            "공공·에너지 고객의 차세대 ISP 사업을 통해 엔터프라이즈 IT 수행 역량을 보강하고 있다."
         )
     if "Factova" in text_value or "팩토바" in text_value:
         return "Factova 기반 스마트팩토리 솔루션을 앞세워 제조 AX 실행 사례를 확대하고 있다."

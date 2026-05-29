@@ -269,8 +269,7 @@ def _profile_claim(item: dict[str, Any]) -> str:
     if area == "클라우드&AI":
         if "AgenticWorks" in raw:
             return (
-                "AgenticWorks 기반 AI 플랫폼 사업 확장과 "
-                "글로벌 빅테크 파트너십 강화가 확인됩니다."
+                "AgenticWorks 기반 AI 플랫폼 사업 확장과 글로벌 빅테크 파트너십 강화가 확인됩니다."
             )
         if "AX, RX, VX" in raw:
             return (
@@ -289,8 +288,7 @@ def _profile_claim(item: dict[str, Any]) -> str:
             )
         if "AI 인프라" in raw or "데이터센터" in raw:
             return (
-                "AI 인프라, 유지보수, 데이터센터 사업이 "
-                "클라우드&AI 기반 역량을 보강하고 있습니다."
+                "AI 인프라, 유지보수, 데이터센터 사업이 클라우드&AI 기반 역량을 보강하고 있습니다."
             )
         if "AI Native Software Engineering" in raw:
             return (
@@ -310,8 +308,7 @@ def _profile_claim(item: dict[str, Any]) -> str:
     if area == "Digital Business Service":
         if "금융" in raw or "ITO" in raw:
             return (
-                "금융 고객 기반과 ITO 수주를 중심으로 "
-                "Digital Business Service 성장이 확인됩니다."
+                "금융 고객 기반과 ITO 수주를 중심으로 Digital Business Service 성장이 확인됩니다."
             )
         return "SI/SM 기반 디지털 서비스 역량을 유지하며 AI 융합 프로젝트로 확장하고 있습니다."
 
