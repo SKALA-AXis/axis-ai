@@ -58,6 +58,18 @@ _SOURCE_TYPES: Final[tuple[str, ...]] = (
     *_RECENT_SIGNAL_SOURCE_TYPES,
     *_BASELINE_SOURCE_TYPES,
 )
+_MVP_PROFILE_SOURCE_TYPES: Final[tuple[str, ...]] = ("dart", "ir", "official")
+_PROFILE_FINANCIAL_METRIC_ALLOWLIST: Final[tuple[str, ...]] = (
+    "revenue_total",
+    "operating_profit",
+    "operating_margin",
+    "net_income",
+)
+_PROFILE_SEGMENT_REVENUE_AREAS: Final[tuple[str, ...]] = (
+    "클라우드&AI",
+    "스마트엔지니어링",
+    "Digital Business Service",
+)
 _DEFAULT_RECENCY_FOCUS_DAYS = 180
 _MIN_RECENCY_FOCUS_DAYS = 90
 _MAX_RECENCY_FOCUS_DAYS = 730
@@ -1420,15 +1432,14 @@ def load_company_profile_documents(
     )
 
     with SessionLocal() as db:
-        dart_rows = _fetch_rows_by_source(db=db, source_type="dart", company_json=company_json)
-        ir_rows = _fetch_rows_by_source(db=db, source_type="ir", company_json=company_json)
-        official_rows = _fetch_rows_by_source(
-            db=db, source_type="official", company_json=company_json
+        dart_rows = _fetch_rows_by_source(
+            db=db, source_type="dart", company_json=company_json, limit=1
         )
-        securities_rows = _fetch_rows_by_source(
-            db=db,
-            source_type="securities_report",
-            company_json=company_json,
+        ir_rows = _fetch_rows_by_source(
+            db=db, source_type="ir", company_json=company_json, limit=1
+        )
+        official_rows = _fetch_rows_by_source(
+            db=db, source_type="official", company_json=company_json, limit=1
         )
         business_signal_rows = _fetch_business_signal_rows(
             db=db,
@@ -1436,16 +1447,9 @@ def load_company_profile_documents(
             lookback_days=lookback_days or _DEFAULT_RECENCY_FOCUS_DAYS,
         )
         financial_metric_rows = _fetch_financial_metric_rows(db=db, company_id=company_id)
-        representative_news_rows = _fetch_representative_news_rows(db=db, company_json=company_json)
-        news_cluster_articles = _fetch_news_cluster_articles(
-            db=db,
-            company_json=company_json,
-            cluster_ids=[
-                row._mapping.get("cluster_id")
-                for row in representative_news_rows
-                if row._mapping.get("cluster_id") is not None
-            ],
-        )
+        securities_rows: list[Any] = []
+        representative_news_rows: list[Any] = []
+        news_cluster_articles: dict[str, list[dict[str, Any]]] = {}
 
         historical_documents = [
             _row_to_document(row._mapping, company_config, role_hint="historical_baseline")
@@ -1458,7 +1462,7 @@ def load_company_profile_documents(
             company_id,
             all_data_start,
             db=db,
-            source_types=_RECENT_SIGNAL_SOURCE_TYPES,
+            source_types=_MVP_PROFILE_SOURCE_TYPES,
         )
         historical_raw_matched = collect_source_counts(
             company_id,
@@ -1469,17 +1473,11 @@ def load_company_profile_documents(
         for source_type in _BASELINE_SOURCE_TYPES:
             raw_matched[source_type] = historical_raw_matched.get(source_type, 0)
         source_counts["raw_matched"].update(raw_matched)
-        source_counts["news_pipeline"].update(
-            collect_news_pipeline_counts(company_id, all_data_start, db=db)
-        )
-        source_counts["by_processing_status"].update(
-            collect_processing_status_counts(company_id, all_data_start, db=db)
-        )
         recent_signal_period = collect_source_period(
             company_id,
             all_data_start,
             db=db,
-            source_types=_RECENT_SIGNAL_SOURCE_TYPES,
+            source_types=("official",),
         )
         recency_focus = _derive_recency_focus(
             requested_days=lookback_days,
@@ -1573,7 +1571,13 @@ def load_company_profile_documents(
     return source_units, source_counts, notes, basis_period
 
 
-def _fetch_rows_by_source(*, db: Any, source_type: str, company_json: str) -> list[Any]:
+def _fetch_rows_by_source(
+    *,
+    db: Any,
+    source_type: str,
+    company_json: str,
+    limit: int | None = None,
+) -> list[Any]:
     return db.execute(
         text("""
             SELECT id, source_type, source_name, publisher, title, content, url,
@@ -1587,8 +1591,9 @@ def _fetch_rows_by_source(*, db: Any, source_type: str, company_json: str) -> li
               COALESCE(published_at, collected_at) DESC NULLS LAST,
               collected_at DESC NULLS LAST,
               id DESC
+            LIMIT COALESCE(:limit, 1000000)
         """),
-        {"source_type": source_type, "company_json": company_json},
+        {"source_type": source_type, "company_json": company_json, "limit": limit},
     ).fetchall()
 
 
@@ -1651,17 +1656,31 @@ def _fetch_business_signal_rows(
     db: Any,
     company_id: str,
     lookback_days: int,
-    limit: int = 80,
+    limit: int = 20,
 ) -> list[Any]:
     aliases = expand_peer_aliases(company_id)
     return db.execute(
         text("""
-            SELECT id, peer_id, business_area, signal_type, sentiment, summary,
+            WITH latest_period AS (
+                SELECT period_year, period_quarter
+                  FROM raw_article_business_signals
+                 WHERE peer_id = ANY(:aliases)
+                   AND source_type = 'ir'
+                   AND period_year IS NOT NULL
+                   AND period_quarter IS NOT NULL
+                 ORDER BY period_year DESC, period_quarter DESC
+                 LIMIT 1
+            )
+            SELECT id, source_type, source_name, peer_id,
+                   business_area, signal_type, sentiment, summary,
                    evidence_text, confidence, period_year, period_quarter,
                    raw_article_id, created_at
               FROM raw_article_business_signals
+              JOIN latest_period USING (period_year, period_quarter)
              WHERE peer_id = ANY(:aliases)
-               AND created_at >= NOW() - (:days || ' days')::interval
+               AND source_type = 'ir'
+               AND COALESCE(confidence, 0) >= 0.7
+               AND COALESCE(summary, '') <> ''
              ORDER BY confidence DESC NULLS LAST,
                       period_year DESC NULLS LAST,
                       period_quarter DESC NULLS LAST,
@@ -1676,24 +1695,57 @@ def _fetch_financial_metric_rows(
     *,
     db: Any,
     company_id: str,
-    limit: int = 48,
+    limit: int = 24,
 ) -> list[Any]:
     aliases = expand_peer_aliases(company_id)
     return db.execute(
         text("""
-            SELECT id, peer_id, metric_name, metric_label, business_area,
+            WITH latest_period AS (
+                SELECT period_year, period_quarter
+                  FROM raw_article_financial_metrics
+                 WHERE peer_id = ANY(:aliases)
+                   AND source_type = 'ir'
+                   AND period_year IS NOT NULL
+                   AND period_quarter IS NOT NULL
+                 ORDER BY period_year DESC, period_quarter DESC
+                 LIMIT 1
+            )
+            SELECT id, source_type, source_name, peer_id,
+                   metric_name, metric_label, metric_scope, business_area,
                    value_numeric, value_krwbn, unit, currency, period_year,
                    period_quarter, period, confidence, raw_article_id, created_at
               FROM raw_article_financial_metrics
+              JOIN latest_period USING (period_year, period_quarter)
              WHERE peer_id = ANY(:aliases)
-               AND period_year IS NOT NULL
-             ORDER BY period_year DESC NULLS LAST,
-                      period_quarter DESC NULLS LAST,
+               AND source_type = 'ir'
+               AND (
+                    (
+                        metric_scope = 'company_total'
+                        AND metric_name = ANY(:metric_allowlist)
+                    )
+                    OR (
+                        metric_scope = 'segment'
+                        AND metric_name = 'revenue_total'
+                        AND business_area = ANY(:segment_areas)
+                    )
+               )
+             ORDER BY CASE metric_scope
+                        WHEN 'company_total' THEN 1
+                        WHEN 'segment' THEN 2
+                        ELSE 3
+                      END,
+                      metric_name,
+                      business_area NULLS FIRST,
                       confidence DESC NULLS LAST,
                       created_at DESC NULLS LAST
              LIMIT :limit
         """),
-        {"aliases": aliases, "limit": int(limit)},
+        {
+            "aliases": aliases,
+            "metric_allowlist": list(_PROFILE_FINANCIAL_METRIC_ALLOWLIST),
+            "segment_areas": list(_PROFILE_SEGMENT_REVENUE_AREAS),
+            "limit": int(limit),
+        },
     ).fetchall()
 
 
@@ -3879,19 +3931,16 @@ def _cap_profile_confidence(
     current = str(quality.get("confidence") or "").lower()
     if current != "high":
         return
-    news = source_counts.get("news_pipeline", {}) if isinstance(source_counts, dict) else {}
-    unclustered = int(news.get("unclustered_news_articles") or 0)
-    representative = int(news.get("representative_news_clusters") or 0)
     raw_matched = source_counts.get("raw_matched", {}) if isinstance(source_counts, dict) else {}
     official_basis = int(raw_matched.get("official") or 0)
     dart_ir_basis = int(raw_matched.get("dart") or 0) + int(raw_matched.get("ir") or 0)
     has_limitations = bool(retrieval_notes)
-    if unclustered > 0 or representative < 5 or has_limitations or official_basis < 2:
+    if has_limitations or official_basis < 1 or dart_ir_basis < 1:
         quality["confidence"] = "medium"
         reason = str(quality.get("reason") or "")
         quality["reason"] = (
-            f"{reason} 단, 뉴스 미클러스터 {unclustered}건, 대표 뉴스 {representative}건, "
-            f"DART/IR 후보 {dart_ir_basis}건, 공식자료 후보 {official_basis}건 및 "
+            f"{reason} 단, MVP 프로필 입력 기준 DART/IR 후보 {dart_ir_basis}건, "
+            f"공식자료 후보 {official_basis}건 및 "
             "data_limitations를 고려해 최종 신뢰도를 medium으로 보정함."
         ).strip()
 
@@ -3939,20 +3988,13 @@ def _normalize_sector_mapping_status(value: Any) -> str:
 
 def _limitations_from_counts(source_counts: dict[str, Any], *, company_id: str) -> list[str]:
     notes: list[str] = []
-    news = source_counts.get("news_pipeline", {}) if isinstance(source_counts, dict) else {}
-    raw_news = int(news.get("raw_news_articles") or 0)
-    representative = int(news.get("representative_news_clusters") or 0)
-    unclustered = int(news.get("unclustered_news_articles") or 0)
-    if representative < 5:
-        notes.append("뉴스 대표 클러스터 수가 적어 최근 활동 신호가 제한적임")
-    if raw_news > 0 and representative == 0:
-        notes.append(
-            "raw 뉴스는 있으나 대표 클러스터가 없어 ArticleDeduplicator/전처리 파이프라인 미실행 가능성"
-        )
-    if unclustered > 0:
-        notes.append("cluster_id가 없는 뉴스가 많아 프로필 입력에서 제외됨")
-
     raw_matched = source_counts.get("raw_matched", {}) if isinstance(source_counts, dict) else {}
+    if not raw_matched.get("dart"):
+        notes.append("DART 사업 내용 근거가 없어 공식 사업 정의가 제한적임")
+    if not raw_matched.get("ir"):
+        notes.append("IR 근거가 없어 최신 실적/전략 근거가 제한적임")
+    if not raw_matched.get("official"):
+        notes.append("공식 뉴스룸 근거가 없어 실행 사례 근거가 제한적임")
     if company_id == "sk_ax" and not (raw_matched.get("dart") or raw_matched.get("ir")):
         notes.append("SK AX 단독 DART/IR 근거가 제한적임")
     return notes

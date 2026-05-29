@@ -35,7 +35,7 @@ routing 가치가 낮고, deterministic pipeline 이 운영 예측·debugging·�
                             ↓ (cluster / document / period trigger)
 
 [Layer B-0 — Context Memory CronJob (정적·시계열 맥락 갱신)]
-  axis-cron-profile-refresh        (주1회, gpt-4o)   → peer_companies.profile_snapshot
+  axis-cron-profile-refresh        (분기1회, gpt-4o) → peer_companies.profile_snapshot
   axis-cron-capability-evolution   (월1회, gpt-4o)   → peer_plus_payload['capability_evolution']
   axis-cron-sector-pulse           (주1회, psql)     → sector_pulse MV REFRESH
 
@@ -206,7 +206,7 @@ ProfileAgent 는 단순 context provider 가 아니라 **원천 데이터 (DART 
 
 | 단계 | 시점 | 책임 | 출력 |
 |---|---|---|---|
-| **Tier A (snapshot 생성)** | 주1회 CronJob (`axis-cron-profile-refresh`) | RDB 의 6개월치 뉴스 + DART + IR + 공식 newsroom 을 회사별로 종합 → LLM (gpt-4o, `profile-v5` prompt) 으로 **회사 방향성 / 주요 사업 / 전략 변화 / 역량 평가** narrative 합성 | `peer_companies.profile_snapshot` JSONB (별도 컬럼) |
+| **Tier A (snapshot 생성)** | 분기 1회 CronJob (`axis-cron-profile-refresh`) | RDB 의 6개월치 뉴스 + DART + IR + 공식 newsroom 을 회사별로 종합 → LLM (gpt-4o, `profile-v5` prompt) 으로 **회사 방향성 / 주요 사업 / 전략 변화 / 역량 평가** narrative 합성 | `peer_companies.profile_snapshot` JSONB (별도 컬럼) |
 | **Tier B (runtime loader, ProfileContextLoader)** | cluster-time (Analysis Flow ② 노드) | Tier A snapshot 을 그대로 load + 최근 30일 business_signals top-3 + 최근 분기 financial_metrics 보강 (DB query only, LLM X) | `ProfileContext` 메모리 dataclass |
 
 ### 출력의 두 관점 (Peer 와 SK AX 분리)

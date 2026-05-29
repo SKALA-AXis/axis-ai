@@ -1,6 +1,6 @@
-"""W2-2 CronJob entrypoint — peer 별 profile_snapshot 주 1회 갱신.
+"""W2-2 CronJob entrypoint — peer 별 profile_snapshot 분기 1회 갱신.
 
-매주 월요일 03:00 KST 에 `axis-cron-profile-refresh` 가 실행. 4 peer + SK AX 의
+분기 첫날 03:00 KST 에 `axis-cron-profile-refresh` 가 실행. 4 peer + SK AX 의
 회사 프로필을 `ProfileAgent.build_profile` 로 합성하여
 `peer_companies.profile_snapshot` JSONB 에 저장한다.
 

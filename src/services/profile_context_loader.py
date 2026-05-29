@@ -1,6 +1,6 @@
 """ProfileContextLoader — cluster-time profile context enrichment.
 
-Tier A (`peer_companies.profile_snapshot` JSONB, 주1회 CronJob) 가 build 한 정적
+Tier A (`peer_companies.profile_snapshot` JSONB, 분기 1회 CronJob) 가 build 한 정적
 snapshot 위에, cluster-time 에 LLM 호출 없이 DB query 만으로 recent signals 와
 financial summary 를 덧붙여 ImplicationAgent 가 받을 ProfileContext 를 만든다.
 

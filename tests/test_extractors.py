@@ -547,6 +547,78 @@ def test_securities_report_skips_table_like_signal_rows_and_keeps_one_signal() -
     )
 
 
+def test_securities_report_sk_ax_keeps_only_it_service_context() -> None:
+    article = {
+        "id": 179,
+        "company": ["sk_ax"],
+        "title": "[증권사] SK Review",
+        "content": (
+            "자회사 지분가치 상승 등으로 현재 SK NAV는 78.2조원으로 추정된다. "
+            "비상장자회사 SK에코플랜트의 더블다운 가치도 개선될 전망이다. "
+            "SK C&C IT서비스 부문은 AX와 클라우드 전환 수요 확대로 매출 성장이 예상된다. "
+            "이에 플랫폼 리벨런싱 성과가 가시화되면서 영업이익 개선에 기여할 전망이다."
+        ),
+        "url": "https://example.com/sk-report.pdf",
+        "source_name": "naver_research",
+        "extra": {},
+    }
+    parser_result = {
+        "peer_id": "sk_ax",
+        "period": "2026E",
+        "report_firm": "테스트증권",
+        "document_chunks": [
+            {
+                "chunk_id": "forecast:1",
+                "section_key": "forecast",
+                "section_title": "Forecast",
+                "text": article["content"],
+            }
+        ],
+    }
+
+    signals = business_signals_from_securities_report(article, parser_result)
+
+    assert signals
+    evidence = " ".join(signal["evidence_text"] for signal in signals)
+    assert "SK C&C IT서비스 부문" in evidence
+    assert "영업이익 개선에 기여" in evidence
+    assert "SK NAV" not in evidence
+    assert "SK에코플랜트" not in evidence
+
+
+def test_securities_report_sk_ax_does_not_store_holding_company_valuation_metrics() -> None:
+    article = {
+        "id": 180,
+        "company": ["sk_ax"],
+        "title": "[증권사] SK Review",
+        "content": (
+            "목표주가 220,000원 현재주가 169,800원 "
+            "SK NAV는 78.2조원으로 추정된다. "
+            "SK C&C IT서비스 부문 매출 7,692억원으로 추정된다."
+        ),
+        "url": "https://example.com/sk-report.pdf",
+        "source_name": "naver_research",
+        "extra": {},
+    }
+    parser_result = {
+        "peer_id": "sk_ax",
+        "period": "2026E",
+        "report_firm": "테스트증권",
+        "target_price_krw": 220000,
+        "current_price_krw": 169800,
+    }
+
+    metrics = financial_metrics_from_securities_report(article, parser_result)
+    metric_names = {metric["metric_name"] for metric in metrics}
+    evidence = " ".join(metric["evidence_text"] for metric in metrics)
+
+    assert "target_price" not in metric_names
+    assert "current_price" not in metric_names
+    assert "upside_pct" not in metric_names
+    assert "SK NAV" not in evidence
+    assert metric_names == {"revenue_total"}
+
+
 def test_securities_report_metric_dedupe_key_ignores_small_numeric_formatting_diff() -> None:
     row1 = {
         "peer_id": "hyundai_autoever",
