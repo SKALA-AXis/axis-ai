@@ -653,7 +653,10 @@ def _core_question(payload: dict[str, Any]) -> str:
         payload.get("headline"), payload.get("main_issue"), payload.get("one_line_summary")
     )
     if topic:
-        return f"{company}의 {event_type or '이슈'}에서 '{topic}'이 보여주는 사업/시장 의미는 무엇인가?"
+        return (
+            f"{company}의 {event_type or '이슈'}에서 "
+            f"'{topic}'이 보여주는 사업/시장 의미는 무엇인가?"
+        )
     return f"{company}의 {event_type or '이슈'}가 보여주는 사업/시장 의미는 무엇인가?"
 
 
