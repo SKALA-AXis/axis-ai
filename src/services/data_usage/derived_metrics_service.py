@@ -20,4 +20,3 @@ class DerivedMetricsService:
 
 
 __all__ = ["DerivedMetricsService"]
-

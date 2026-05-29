@@ -24,4 +24,3 @@ class CrawlerJob(CrawlerService):
 
 
 __all__ = ["CrawlerJob", "CrawlerService"]
-

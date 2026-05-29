@@ -139,11 +139,7 @@ def _integrated_digest(
     )[: policy.integrated_body_extract_limit]
     summary = _compose_summary(
         [
-            *[
-                str(digest.get("title") or "")
-                for digest in basis
-                if digest.get("title")
-            ],
+            *[str(digest.get("title") or "") for digest in basis if digest.get("title")],
             *[point["point"] for point in key_points],
         ],
         limit=policy.integrated_content_digest_chars,
@@ -467,6 +463,7 @@ def _build_sections(
         reverse=True,
     )[: policy.content_section_limit]
 
+
 def _section_detailed_explanation(
     *,
     section: str,
@@ -644,15 +641,12 @@ def _keywords_for_texts(
     limit: int,
 ) -> list[str]:
     corpus = " ".join(texts)
-    policy_keywords = [
-        term for term in policy.materiality_terms if term.lower() in corpus.lower()
-    ]
+    policy_keywords = [term for term in policy.materiality_terms if term.lower() in corpus.lower()]
     token_counts: dict[str, int] = {}
     for token in _tokens(corpus):
         token_counts[token] = token_counts.get(token, 0) + corpus.lower().count(token)
     frequent_tokens = [
-        token
-        for token, _ in sorted(token_counts.items(), key=lambda item: (-item[1], item[0]))
+        token for token, _ in sorted(token_counts.items(), key=lambda item: (-item[1], item[0]))
     ]
     return _dedupe_strings([*policy_keywords, *frequent_tokens])[:limit]
 
@@ -699,11 +693,7 @@ def _title_overlap(title_tokens: set[str], text: str) -> float:
 
 
 def _tokens(value: str) -> set[str]:
-    return {
-        token.lower()
-        for token in re.findall(r"[A-Za-z0-9가-힣]{2,}", value)
-        if token.strip()
-    }
+    return {token.lower() for token in re.findall(r"[A-Za-z0-9가-힣]{2,}", value) if token.strip()}
 
 
 def _source_id(source: dict[str, Any]) -> int:

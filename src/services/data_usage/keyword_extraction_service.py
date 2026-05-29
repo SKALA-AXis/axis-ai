@@ -20,4 +20,3 @@ class KeywordExtractionService:
 
 
 __all__ = ["KeywordExtractionService"]
-

@@ -21,4 +21,3 @@ class SummaryAgent:
 
 
 __all__ = ["SummaryAgent"]
-

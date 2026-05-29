@@ -20,4 +20,3 @@ class RelevanceService:
 
 
 __all__ = ["RelevanceService"]
-

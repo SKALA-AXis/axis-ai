@@ -114,9 +114,7 @@ def _components(fact: dict[str, Any], *, policy: IntegrationPolicy) -> dict[str,
         derived_from,
         policy.provenance_quality.get("unknown", 0.5),
     )
-    materiality_density = float(
-        sum(1 for term in policy.materiality_terms if term.lower() in text)
-    )
+    materiality_density = float(sum(1 for term in policy.materiality_terms if term.lower() in text))
     numeric_density = float(len(fact.get("numbers_and_dates") or []))
     section_specificity = 0.0
     if fact.get("section_key"):

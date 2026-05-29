@@ -80,54 +80,56 @@ class IntegratedIssueComposer:
             source_map=source_map,
             policy=self.policy,
         )
-        return _public_issue_payload({
-            "schema_version": "integrated_issue_v2",
-            "cluster_id": _safe_int(input_bundle.cluster_id),
-            "representative_id": _representative_id(input_bundle),
-            "source_article_ids": source_article_ids,
-            "raw_article_ids": raw_article_ids,
-            "cluster_article_ids": source_article_ids,
-            "analyzed_article_ids": source_article_ids,
-            "summary_scope": "integrated_issue",
-            "is_valid_summary": is_valid,
-            "main_company": main_company,
-            "mentioned_peer_companies": list(input_bundle.companies),
-            "mentioned_sectors": list(input_bundle.sectors),
-            "sectors": list(input_bundle.sectors),
-            "cluster_event_type": input_bundle.event_type or "general_update",
-            "event_type": input_bundle.event_type or "general_update",
-            "headline": document_subject,
-            "one_line_summary": fact_summary[0] if fact_summary else document_subject,
-            "main_event": document_subject,
-            "main_issue": document_subject,
-            "document_subject": document_subject,
-            "source_family": source_profile.source_family,
-            "scope_type": source_profile.scope_type,
-            "source_profile": source_profile.to_dict(),
-            "content_digest": content_payload["content_digest"],
-            "content_digest_storage": content_payload["content_digest_storage"],
-            "sources": source_map.get("sources", []),
-            "source_map": source_map,
-            "issue_frame": issue_frame,
-            "integrated_text": integrated_text,
-            "fact_summary": fact_summary,
-            "consolidated_facts": _consolidated_facts(selected_facts),
-            "key_numbers": _key_numbers(selected_facts),
-            "business_signals": _business_signals(selected_facts),
-            "claim_ledger": claim_ledger,
-            "evidence_ledger": evidence_ledger,
-            "fact_basis": build_fact_basis(selected_facts),
-            "missing_or_uncertain_points": missing_or_uncertain_points(
-                selected_facts,
-                policy=self.policy,
-            ),
-            "source_count": len(input_bundle.sources),
-            "source_coverage": _source_coverage(input_bundle, selected_facts),
-            "quality": quality,
-            "confidence": quality["confidence"] if is_valid else 0.0,
-            "reason": reason,
-            "integrated_at": datetime.now(UTC).isoformat(),
-        })
+        return _public_issue_payload(
+            {
+                "schema_version": "integrated_issue_v2",
+                "cluster_id": _safe_int(input_bundle.cluster_id),
+                "representative_id": _representative_id(input_bundle),
+                "source_article_ids": source_article_ids,
+                "raw_article_ids": raw_article_ids,
+                "cluster_article_ids": source_article_ids,
+                "analyzed_article_ids": source_article_ids,
+                "summary_scope": "integrated_issue",
+                "is_valid_summary": is_valid,
+                "main_company": main_company,
+                "mentioned_peer_companies": list(input_bundle.companies),
+                "mentioned_sectors": list(input_bundle.sectors),
+                "sectors": list(input_bundle.sectors),
+                "cluster_event_type": input_bundle.event_type or "general_update",
+                "event_type": input_bundle.event_type or "general_update",
+                "headline": document_subject,
+                "one_line_summary": fact_summary[0] if fact_summary else document_subject,
+                "main_event": document_subject,
+                "main_issue": document_subject,
+                "document_subject": document_subject,
+                "source_family": source_profile.source_family,
+                "scope_type": source_profile.scope_type,
+                "source_profile": source_profile.to_dict(),
+                "content_digest": content_payload["content_digest"],
+                "content_digest_storage": content_payload["content_digest_storage"],
+                "sources": source_map.get("sources", []),
+                "source_map": source_map,
+                "issue_frame": issue_frame,
+                "integrated_text": integrated_text,
+                "fact_summary": fact_summary,
+                "consolidated_facts": _consolidated_facts(selected_facts),
+                "key_numbers": _key_numbers(selected_facts),
+                "business_signals": _business_signals(selected_facts),
+                "claim_ledger": claim_ledger,
+                "evidence_ledger": evidence_ledger,
+                "fact_basis": build_fact_basis(selected_facts),
+                "missing_or_uncertain_points": missing_or_uncertain_points(
+                    selected_facts,
+                    policy=self.policy,
+                ),
+                "source_count": len(input_bundle.sources),
+                "source_coverage": _source_coverage(input_bundle, selected_facts),
+                "quality": quality,
+                "confidence": quality["confidence"] if is_valid else 0.0,
+                "reason": reason,
+                "integrated_at": datetime.now(UTC).isoformat(),
+            }
+        )
 
     def enrich_existing_summary(
         self,
@@ -182,40 +184,45 @@ class IntegratedIssueComposer:
             source_map=source_map,
             policy=self.policy,
         )
-        return _public_issue_payload({
-            **summary,
-            "schema_version": "integrated_issue_v2",
-            "issue_component": "IssueIntegrationAgent",
-            "integration_component": "IssueIntegrationAgent",
-            "integration_input": "analysis_input_bundle",
-            "bundle_id": input_bundle.bundle_id,
-            "issue_source_type": input_bundle.source_type,
-            "source_family": source_profile.source_family,
-            "scope_type": source_profile.scope_type,
-            "source_profile": source_profile.to_dict(),
-            "content_digest": content_digest,
-            "content_digest_storage": summary.get("content_digest_storage")
-            or content_payload["content_digest_storage"],
-            "sources": summary.get("sources") or source_map.get("sources", []),
-            "source_map": source_map,
-            "issue_frame": issue_frame,
-            "source_article_ids": summary.get("source_article_ids")
-            or _item_ids(input_bundle.items),
-            "raw_article_ids": summary.get("raw_article_ids") or _raw_item_ids(input_bundle.items),
-            "main_issue": str(main_issue),
-            "integrated_text": str(integrated_text),
-            "document_subject": _first_non_empty(summary.get("document_subject"), main_issue),
-            "consolidated_facts": consolidated,
-            "business_signals": summary.get("business_signals", _business_signals(selected_facts)),
-            "key_numbers": summary.get("key_numbers", _key_numbers(selected_facts)),
-            "claim_ledger": summary.get("claim_ledger") or claim_ledger,
-            "evidence_ledger": summary.get("evidence_ledger") or evidence_ledger,
-            "fact_basis": fact_basis,
-            "missing_or_uncertain_points": summary.get("missing_or_uncertain_points")
-            or missing_or_uncertain_points(selected_facts, policy=self.policy),
-            "quality": {**quality, **(summary.get("quality") or {})},
-            "input_bundle_ref": _input_bundle_ref(input_bundle),
-        })
+        return _public_issue_payload(
+            {
+                **summary,
+                "schema_version": "integrated_issue_v2",
+                "issue_component": "IssueIntegrationAgent",
+                "integration_component": "IssueIntegrationAgent",
+                "integration_input": "analysis_input_bundle",
+                "bundle_id": input_bundle.bundle_id,
+                "issue_source_type": input_bundle.source_type,
+                "source_family": source_profile.source_family,
+                "scope_type": source_profile.scope_type,
+                "source_profile": source_profile.to_dict(),
+                "content_digest": content_digest,
+                "content_digest_storage": summary.get("content_digest_storage")
+                or content_payload["content_digest_storage"],
+                "sources": summary.get("sources") or source_map.get("sources", []),
+                "source_map": source_map,
+                "issue_frame": issue_frame,
+                "source_article_ids": summary.get("source_article_ids")
+                or _item_ids(input_bundle.items),
+                "raw_article_ids": summary.get("raw_article_ids")
+                or _raw_item_ids(input_bundle.items),
+                "main_issue": str(main_issue),
+                "integrated_text": str(integrated_text),
+                "document_subject": _first_non_empty(summary.get("document_subject"), main_issue),
+                "consolidated_facts": consolidated,
+                "business_signals": summary.get(
+                    "business_signals", _business_signals(selected_facts)
+                ),
+                "key_numbers": summary.get("key_numbers", _key_numbers(selected_facts)),
+                "claim_ledger": summary.get("claim_ledger") or claim_ledger,
+                "evidence_ledger": summary.get("evidence_ledger") or evidence_ledger,
+                "fact_basis": fact_basis,
+                "missing_or_uncertain_points": summary.get("missing_or_uncertain_points")
+                or missing_or_uncertain_points(selected_facts, policy=self.policy),
+                "quality": {**quality, **(summary.get("quality") or {})},
+                "input_bundle_ref": _input_bundle_ref(input_bundle),
+            }
+        )
 
 
 def _build_fact_summary(
@@ -403,9 +410,7 @@ def _business_signals(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "sentiment": fact.get("sentiment"),
                 "summary": fact.get("fact"),
                 "evidence_text": fact.get("evidence_text"),
-                "confidence": fact.get("confidence")
-                or fact.get("integration_rank_score")
-                or 0.0,
+                "confidence": fact.get("confidence") or fact.get("integration_rank_score") or 0.0,
                 "fact_id": fact.get("fact_id"),
             }
         )
@@ -479,7 +484,9 @@ def _issue_brief(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _analysis_ready_inputs(payload: dict[str, Any]) -> dict[str, Any]:
-    content = payload.get("content_digest") if isinstance(payload.get("content_digest"), dict) else {}
+    content = (
+        payload.get("content_digest") if isinstance(payload.get("content_digest"), dict) else {}
+    )
     sections = [
         {
             "section": section.get("section"),
@@ -529,20 +536,14 @@ def _public_evidence_facts(
     text_refs: "_EvidenceTextRegistry",
 ) -> list[dict[str, Any]]:
     extracted = payload.get("extracted_facts") or []
-    facts = [
-        _public_extracted_fact(fact, text_refs=text_refs)
-        for fact in _as_dict_list(extracted)
-    ]
+    facts = [_public_extracted_fact(fact, text_refs=text_refs) for fact in _as_dict_list(extracted)]
     facts = [fact for fact in facts if fact.get("fact")]
     if facts:
         return facts
     basis = payload.get("fact_basis") or payload.get("consolidated_facts") or []
     return [
         fact
-        for fact in (
-            _public_basis_fact(item, text_refs=text_refs)
-            for item in _as_dict_list(basis)
-        )
+        for fact in (_public_basis_fact(item, text_refs=text_refs) for item in _as_dict_list(basis))
         if fact.get("fact")
     ]
 
@@ -648,7 +649,9 @@ def _public_quality(value: Any) -> dict[str, Any]:
 def _core_question(payload: dict[str, Any]) -> str:
     company = _first_non_empty(payload.get("main_company"), "해당 자료")
     event_type = _first_non_empty(payload.get("cluster_event_type"), payload.get("event_type"))
-    topic = _first_non_empty(payload.get("headline"), payload.get("main_issue"), payload.get("one_line_summary"))
+    topic = _first_non_empty(
+        payload.get("headline"), payload.get("main_issue"), payload.get("one_line_summary")
+    )
     if topic:
         return f"{company}의 {event_type or '이슈'}에서 '{topic}'이 보여주는 사업/시장 의미는 무엇인가?"
     return f"{company}의 {event_type or '이슈'}가 보여주는 사업/시장 의미는 무엇인가?"
@@ -658,11 +661,12 @@ def _key_developments(payload: dict[str, Any]) -> list[str]:
     values = _normalize_string_list(payload.get("fact_summary"))
     if not values:
         values = [
-            str(item.get("fact") or "")
-            for item in _as_dict_list(payload.get("consolidated_facts"))
+            str(item.get("fact") or "") for item in _as_dict_list(payload.get("consolidated_facts"))
         ]
     if not values:
-        content = payload.get("content_digest") if isinstance(payload.get("content_digest"), dict) else {}
+        content = (
+            payload.get("content_digest") if isinstance(payload.get("content_digest"), dict) else {}
+        )
         values = [
             str(point.get("point") or point.get("fact") or "")
             for point in _as_dict_list(content.get("key_points"))
@@ -672,7 +676,9 @@ def _key_developments(payload: dict[str, Any]) -> list[str]:
 
 def _materiality_signals(payload: dict[str, Any]) -> list[dict[str, Any]]:
     signals: list[dict[str, Any]] = []
-    content = payload.get("content_digest") if isinstance(payload.get("content_digest"), dict) else {}
+    content = (
+        payload.get("content_digest") if isinstance(payload.get("content_digest"), dict) else {}
+    )
     for section in _as_dict_list(content.get("sections")):
         signals.append(
             {
@@ -747,15 +753,18 @@ def _strip_internal_refs(
 
 
 def _uncertainty_points(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    points = [
-        point for point in _as_dict_list(payload.get("missing_or_uncertain_points"))
-    ]
+    points = [point for point in _as_dict_list(payload.get("missing_or_uncertain_points"))]
     for fact in _as_dict_list(payload.get("extracted_facts")):
-        if fact.get("fact_type") == "uncertain_fact" or fact.get("summary_role") == "uncertainty_detail":
+        if (
+            fact.get("fact_type") == "uncertain_fact"
+            or fact.get("summary_role") == "uncertainty_detail"
+        ):
             points.append(
                 {
                     "fact_id": fact.get("fact_id"),
-                    "point": _first_non_empty(fact.get("normalized_fact"), fact.get("evidence_text")),
+                    "point": _first_non_empty(
+                        fact.get("normalized_fact"), fact.get("evidence_text")
+                    ),
                 }
             )
     return points[:6]
@@ -764,9 +773,18 @@ def _uncertainty_points(payload: dict[str, Any]) -> list[dict[str, Any]]:
 def _evidence_section(fact: dict[str, Any]) -> str:
     role = str(fact.get("summary_role") or "")
     fact_type = str(fact.get("fact_type") or "")
-    if role in {"main_event", "product_definition", "service_function", "application_case", "numeric_effect"}:
+    if role in {
+        "main_event",
+        "product_definition",
+        "service_function",
+        "application_case",
+        "numeric_effect",
+    }:
         return role
-    if fact_type in {"risk_fact", "uncertain_fact"} or role in {"risk_detail", "uncertainty_detail"}:
+    if fact_type in {"risk_fact", "uncertain_fact"} or role in {
+        "risk_detail",
+        "uncertainty_detail",
+    }:
         return "risk_or_uncertainty"
     if fact_type:
         return fact_type
@@ -788,9 +806,7 @@ def _evidence_section_title(section: str) -> str:
 
 def _clean_entities(value: Any) -> list[str]:
     return _dedupe_strings(
-        entity
-        for entity in _normalize_string_list(value)
-        if _valid_entity(entity)
+        entity for entity in _normalize_string_list(value) if _valid_entity(entity)
     )[:8]
 
 
@@ -799,8 +815,26 @@ def _valid_entity(value: str) -> bool:
     if len(text) < 2:
         return False
     stopwords = {
-        "며", "고", "및", "등", "은", "는", "이", "가", "을", "를", "의", "에", "에서",
-        "으로", "로", "까지", "부터", "했다", "말했다", "통해",
+        "며",
+        "고",
+        "및",
+        "등",
+        "은",
+        "는",
+        "이",
+        "가",
+        "을",
+        "를",
+        "의",
+        "에",
+        "에서",
+        "으로",
+        "로",
+        "까지",
+        "부터",
+        "했다",
+        "말했다",
+        "통해",
     }
     if text in stopwords:
         return False
@@ -930,9 +964,7 @@ def _raw_article_ids_from_fact(fact: dict[str, Any]) -> list[int]:
         values = raw
     else:
         values = [
-            fact.get("raw_article_id")
-            or fact.get("article_id")
-            or _first_source_article_id(fact)
+            fact.get("raw_article_id") or fact.get("article_id") or _first_source_article_id(fact)
         ]
     ids: list[int] = []
     for value in values:

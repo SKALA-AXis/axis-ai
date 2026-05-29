@@ -24,4 +24,3 @@ class AnswerService(AnswerGenerator):
 
 
 __all__ = ["AnswerGenerator", "AnswerService"]
-

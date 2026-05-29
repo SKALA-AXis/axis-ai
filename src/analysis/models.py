@@ -320,9 +320,7 @@ class AnalysisResult:
         return cls(
             is_valid_analysis=bool(data.get("is_valid_analysis", False)),
             analysis_scope=str(data.get("analysis_scope") or "peer_and_industry"),
-            analysis_mode=str(
-                data.get("analysis_mode") or "multi_source_document_intelligence"
-            ),
+            analysis_mode=str(data.get("analysis_mode") or "multi_source_document_intelligence"),
             prompt_version=str(data.get("prompt_version") or ""),
             source_profile=source_profile,
             content_analysis=content_analysis,

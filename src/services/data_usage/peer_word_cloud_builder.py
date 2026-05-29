@@ -20,4 +20,3 @@ class PeerWordCloudBuilder:
 
 
 __all__ = ["PeerWordCloudBuilder"]
-

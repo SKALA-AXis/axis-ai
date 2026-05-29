@@ -23,9 +23,7 @@ def build_quality_report(
     row_status = _source_row_status(input_bundle.sources or [], policy=policy)
     source_ids = {
         source_id
-        for source_id in (
-            _source_id(source) for source in (input_bundle.sources or [])
-        )
+        for source_id in (_source_id(source) for source in (input_bundle.sources or []))
         if source_id > 0
     }
     fact_source_ids = {

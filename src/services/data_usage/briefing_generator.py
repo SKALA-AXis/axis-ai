@@ -24,4 +24,3 @@ class BriefingGenerationService(BriefingGenerator):
 
 
 __all__ = ["BriefingGenerationService", "BriefingGenerator"]
-

@@ -695,12 +695,10 @@ def _cluster_metadata(
             ]
         ),
         "has_structured_metrics": any(
-            isinstance(item, dict) and bool(item.get("financial_metrics"))
-            for item in bundle.items
+            isinstance(item, dict) and bool(item.get("financial_metrics")) for item in bundle.items
         ),
         "has_business_signals": any(
-            isinstance(item, dict) and bool(item.get("business_signals"))
-            for item in bundle.items
+            isinstance(item, dict) and bool(item.get("business_signals")) for item in bundle.items
         ),
         "parser_warning_count": sum(
             len(item.get("parser_warnings") or [])

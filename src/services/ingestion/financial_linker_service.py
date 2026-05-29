@@ -20,4 +20,3 @@ class FinancialLinkerService:
 
 
 __all__ = ["FinancialLinkerService"]
-

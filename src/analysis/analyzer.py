@@ -273,7 +273,11 @@ class StrategicAnalyzer:
 
 def _is_valid_integrated_issue(integrated_issue: dict[str, Any]) -> bool:
     brief = _issue_brief(integrated_issue)
-    evidence = integrated_issue.get("evidence") if isinstance(integrated_issue.get("evidence"), dict) else {}
+    evidence = (
+        integrated_issue.get("evidence")
+        if isinstance(integrated_issue.get("evidence"), dict)
+        else {}
+    )
     has_subject = bool(
         brief.get("main_company")
         or brief.get("headline")
@@ -374,11 +378,9 @@ def _normalize_analysis_result(data: dict[str, Any]) -> dict[str, Any]:
     detailed_findings = _normalize_detailed_findings(data.get("detailed_findings"))[:6]
     strategic_meaning = _normalize_string_list(data.get("strategic_meaning"))[:3]
     if not strategic_meaning:
-        strategic_meaning = [
-            item["finding"]
-            for item in detailed_findings
-            if item.get("finding")
-        ][:3]
+        strategic_meaning = [item["finding"] for item in detailed_findings if item.get("finding")][
+            :3
+        ]
 
     content_analysis = _normalize_content_analysis(data.get("content_analysis"))
     analysis_summary = str(data.get("analysis_summary") or "").strip()
@@ -480,15 +482,13 @@ def _source_analysis_profile(
         },
         "filing": {
             "analysis_lens": (
-                "공시 항목, 수치, 사업 세그먼트 변화, 확정/예정 표현과 리스크를 "
-                "분리한다."
+                "공시 항목, 수치, 사업 세그먼트 변화, 확정/예정 표현과 리스크를 분리한다."
             ),
             "materiality_focus": ["financial", "operation", "risk"],
         },
         "ir": {
             "analysis_lens": (
-                "경영진 메시지, 실적 동인, 가이던스, 사업 우선순위와 반복 "
-                "강조점을 본다."
+                "경영진 메시지, 실적 동인, 가이던스, 사업 우선순위와 반복 강조점을 본다."
             ),
             "materiality_focus": ["strategy", "financial", "operation"],
         },
@@ -502,8 +502,7 @@ def _source_analysis_profile(
         },
         "mixed": {
             "analysis_lens": (
-                "서로 다른 출처의 주장과 수치를 claim ledger로 나눠 중복과 "
-                "차이를 비교한다."
+                "서로 다른 출처의 주장과 수치를 claim ledger로 나눠 중복과 차이를 비교한다."
             ),
             "materiality_focus": ["strategy", "market", "risk"],
         },
@@ -718,7 +717,9 @@ def _normalize_int_list(value: Any) -> list[int]:
 def _issue_source_ids(integrated_issue: dict[str, Any]) -> list[int]:
     brief = _issue_brief(integrated_issue)
     scope = brief.get("analysis_scope") if isinstance(brief.get("analysis_scope"), dict) else {}
-    ids = _normalize_int_list(scope.get("analyzed_source_ids") or scope.get("analyzed_raw_article_ids"))
+    ids = _normalize_int_list(
+        scope.get("analyzed_source_ids") or scope.get("analyzed_raw_article_ids")
+    )
     if ids:
         return ids
     ids = _normalize_int_list(integrated_issue.get("source_article_ids"))
@@ -749,7 +750,8 @@ def _issue_brief(integrated_issue: dict[str, Any]) -> dict[str, Any]:
         or "",
         "main_company": integrated_issue.get("main_company", ""),
         "mentioned_peer_companies": integrated_issue.get("mentioned_peer_companies", []),
-        "event_type": integrated_issue.get("cluster_event_type") or integrated_issue.get("event_type"),
+        "event_type": integrated_issue.get("cluster_event_type")
+        or integrated_issue.get("event_type"),
         "sectors": integrated_issue.get("sectors", []),
         "source_family": integrated_issue.get("source_family"),
         "scope_type": integrated_issue.get("scope_type"),

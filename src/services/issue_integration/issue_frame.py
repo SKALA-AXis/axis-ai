@@ -74,11 +74,7 @@ def build_issue_frame(
     has_source_rows = bool(source_map.get("sources"))
     allow_content_mining = bool(eligible_raw_ids) or not has_source_rows
     content_text_by_article = (
-        {
-            raw_id: text
-            for raw_id, text in text_by_article.items()
-            if raw_id in eligible_raw_ids
-        }
+        {raw_id: text for raw_id, text in text_by_article.items() if raw_id in eligible_raw_ids}
         if eligible_raw_ids
         else (text_by_article if allow_content_mining else {})
     )
@@ -212,7 +208,7 @@ def _company_candidates(
                     evidence_text="input_bundle.companies",
                     source_fields=["input_bundle.companies"],
                 )
-    )
+            )
     for source in input_bundle.sources or []:
         raw_id = _source_id(source)
         source_companies = [
@@ -233,7 +229,7 @@ def _company_candidates(
                         evidence_text=str(value),
                         source_fields=["sources.companies", "sources.matched_companies"],
                     )
-    )
+                )
     for item in input_bundle.items or []:
         raw_id = _raw_id(item)
         item_companies = [
@@ -325,7 +321,7 @@ def _sector_candidates(
                     evidence_text=str(sector_id),
                     source_fields=["sources.matched_sectors"],
                 )
-    )
+            )
     for item in input_bundle.items or []:
         raw_id = _raw_id(item)
         item_sectors = [
@@ -1308,8 +1304,7 @@ def _source_indexes(
     source_index_by_raw_id: dict[int, int],
 ) -> list[int]:
     return _dedupe_ints(
-        source_index_by_raw_id.get(_safe_int(raw_id), 0)
-        for raw_id in raw_article_ids
+        source_index_by_raw_id.get(_safe_int(raw_id), 0) for raw_id in raw_article_ids
     )
 
 

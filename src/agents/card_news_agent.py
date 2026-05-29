@@ -648,9 +648,7 @@ def _summary_compat(summary: dict[str, Any]) -> dict[str, Any]:
 def _load_source_articles(summary: dict[str, Any]) -> list[dict[str, Any]]:
     article_ids = [
         article_id
-        for article_id in (
-            _optional_int(raw_id) for raw_id in _summary_source_ids(summary)
-        )
+        for article_id in (_optional_int(raw_id) for raw_id in _summary_source_ids(summary))
         if article_id is not None
     ]
     return get_articles_by_ids(article_ids) if article_ids else []

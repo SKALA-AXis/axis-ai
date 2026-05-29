@@ -20,4 +20,3 @@ class ClassificationService:
 
 
 __all__ = ["ClassificationService"]
-

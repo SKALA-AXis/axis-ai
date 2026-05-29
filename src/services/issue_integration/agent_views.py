@@ -147,7 +147,9 @@ def mixer_agent_issue_input(
         "view": "mixer_agent",
         "gate": _gate(integrated_issue, frame),
         "subject": _subject(integrated_issue, frame),
-        "main_issue": brief.get("headline") or integrated_issue.get("main_issue") or integrated_issue.get("headline"),
+        "main_issue": brief.get("headline")
+        or integrated_issue.get("main_issue")
+        or integrated_issue.get("headline"),
         "content_summary": content.get("summary", ""),
         "event": _event(frame),
         "topics": _topics(frame, policy=policy),
@@ -163,10 +165,7 @@ def _gate(integrated_issue: dict[str, Any], frame: dict[str, Any]) -> dict[str, 
     is_valid = bool(brief.get("is_valid", integrated_issue.get("is_valid_summary", True)))
     return {
         "is_valid_summary": is_valid,
-        "can_analyze": bool(
-            is_valid
-            and not _has_blocking_quality_flag(quality)
-        ),
+        "can_analyze": bool(is_valid and not _has_blocking_quality_flag(quality)),
         "reason": brief.get("reason", integrated_issue.get("reason", "")),
         "confidence": brief.get("confidence", integrated_issue.get("confidence", 0.0)),
         "quality": quality,
@@ -180,7 +179,9 @@ def _identity(integrated_issue: dict[str, Any]) -> dict[str, Any]:
     return {
         "cluster_id": metadata.get("cluster_id", integrated_issue.get("cluster_id")),
         "bundle_id": metadata.get("bundle_id", integrated_issue.get("bundle_id")),
-        "representative_id": metadata.get("representative_id", integrated_issue.get("representative_id")),
+        "representative_id": metadata.get(
+            "representative_id", integrated_issue.get("representative_id")
+        ),
         "source_family": brief.get("source_family", integrated_issue.get("source_family")),
         "scope_type": brief.get("scope_type", integrated_issue.get("scope_type")),
         "analyzed_article_ids": scope.get("analyzed_source_ids")

@@ -21,4 +21,3 @@ class SkaxResponseAgent:
 
 
 __all__ = ["SkaxResponseAgent"]
-

@@ -20,4 +20,3 @@ class ParserService:
 
 
 __all__ = ["ParserService"]
-

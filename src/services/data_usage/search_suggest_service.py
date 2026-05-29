@@ -20,4 +20,3 @@ class SearchSuggestService:
 
 
 __all__ = ["SearchSuggestService"]
-

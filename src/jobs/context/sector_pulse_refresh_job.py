@@ -24,4 +24,3 @@ class SectorPulseAggregator(SectorPulseRefreshJob):
 
 
 __all__ = ["SectorPulseAggregator", "SectorPulseRefreshJob"]
-

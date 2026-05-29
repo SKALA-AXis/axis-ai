@@ -20,4 +20,3 @@ class HybridSearchService:
 
 
 __all__ = ["HybridSearchService"]
-

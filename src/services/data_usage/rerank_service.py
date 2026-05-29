@@ -20,4 +20,3 @@ class RerankService:
 
 
 __all__ = ["RerankService"]
-

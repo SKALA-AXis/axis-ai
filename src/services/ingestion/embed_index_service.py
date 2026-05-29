@@ -20,4 +20,3 @@ class EmbedIndexService:
 
 
 __all__ = ["EmbedIndexService"]
-

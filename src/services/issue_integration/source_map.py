@@ -66,22 +66,16 @@ def build_source_map(
         raw_id for _, raw_id, _, eligible in source_entries if raw_id > 0 and eligible
     ]
     basis_raw_article_ids = (
-        content_digest.get("basis_raw_article_ids")
-        or eligible_raw_article_ids
-        or raw_article_ids
+        content_digest.get("basis_raw_article_ids") or eligible_raw_article_ids or raw_article_ids
     )
     return {
         "map_version": "source_map_v1",
         "sources": sources,
         "raw_article_id_to_source_index": {
-            str(raw_id): index
-            for index, raw_id, _, _ in source_entries
-            if raw_id > 0
+            str(raw_id): index for index, raw_id, _, _ in source_entries if raw_id > 0
         },
         "source_index_to_raw_article_id": {
-            str(index): raw_id
-            for index, raw_id, _, _ in source_entries
-            if raw_id > 0
+            str(index): raw_id for index, raw_id, _, _ in source_entries if raw_id > 0
         },
         "raw_article_ids": raw_article_ids,
         "basis_raw_article_ids": basis_raw_article_ids,

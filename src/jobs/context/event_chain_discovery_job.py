@@ -25,4 +25,3 @@ class EventChainDiscoveryService(EventChainDiscoveryJob):
 
 
 __all__ = ["EventChainDiscoveryJob", "EventChainDiscoveryService"]
-

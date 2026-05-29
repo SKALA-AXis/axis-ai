@@ -25,11 +25,7 @@ def extract_facts_from_articles(
         article_id = _raw_article_id(article)
         title = str(article.get("title") or "").strip()
         if title:
-            fact_id = (
-                f"raw_article:{article_id}:title"
-                if article_id
-                else f"title:{len(facts) + 1}"
-            )
+            fact_id = f"raw_article:{article_id}:title" if article_id else f"title:{len(facts) + 1}"
             facts.append(
                 _fact(
                     fact_id=fact_id,

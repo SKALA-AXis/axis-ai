@@ -242,9 +242,7 @@ def _eligible_news_bundle(input_bundle: AnalysisInputBundle) -> AnalysisInputBun
         for source in input_bundle.sources or []
     }
     eligible_items = [
-        item
-        for item in input_bundle.items
-        if _source_eligible(source_by_id.get(_item_id(item)))
+        item for item in input_bundle.items if _source_eligible(source_by_id.get(_item_id(item)))
     ]
     if len(eligible_items) == len(input_bundle.items):
         return input_bundle
@@ -260,8 +258,7 @@ def _eligible_news_bundle(input_bundle: AnalysisInputBundle) -> AnalysisInputBun
         evidence_snippets=[
             snippet
             for snippet in input_bundle.evidence_snippets
-            if _safe_int(snippet.get("raw_article_id") or snippet.get("article_id"))
-            in eligible_ids
+            if _safe_int(snippet.get("raw_article_id") or snippet.get("article_id")) in eligible_ids
         ],
         sources=[
             source
@@ -273,9 +270,7 @@ def _eligible_news_bundle(input_bundle: AnalysisInputBundle) -> AnalysisInputBun
 
 def _representative_news_analysis_bundle(input_bundle: AnalysisInputBundle) -> AnalysisInputBundle:
     representative_id = _representative_article_id(input_bundle)
-    selected_items = [
-        item for item in input_bundle.items if _item_id(item) == representative_id
-    ]
+    selected_items = [item for item in input_bundle.items if _item_id(item) == representative_id]
     if not selected_items and input_bundle.items:
         selected_items = [input_bundle.items[0]]
         representative_id = _item_id(selected_items[0])
@@ -291,12 +286,9 @@ def _representative_news_analysis_bundle(input_bundle: AnalysisInputBundle) -> A
         evidence_snippets=[
             snippet
             for snippet in input_bundle.evidence_snippets
-            if _safe_int(snippet.get("raw_article_id") or snippet.get("article_id"))
-            in selected_ids
+            if _safe_int(snippet.get("raw_article_id") or snippet.get("article_id")) in selected_ids
         ],
-        sources=[
-            source for source in input_bundle.sources if _source_id(source) in selected_ids
-        ],
+        sources=[source for source in input_bundle.sources if _source_id(source) in selected_ids],
         metadata={
             **input_bundle.metadata,
             "representative_id": representative_id,

@@ -101,9 +101,7 @@ def _raw_article_ids(fact: dict[str, Any]) -> list[int]:
         values = raw
     else:
         values = [
-            fact.get("raw_article_id")
-            or fact.get("article_id")
-            or _first_source_article_id(fact)
+            fact.get("raw_article_id") or fact.get("article_id") or _first_source_article_id(fact)
         ]
     out: list[int] = []
     for value in values:
