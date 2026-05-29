@@ -329,7 +329,7 @@ def _strip_amount_noise(value: str) -> str:
 
 
 def _one_liner(company_name: str, business_areas: list[dict[str, Any]]) -> str:
-    names = [area.get("name") for area in business_areas if area.get("name")]
+    names = [str(area.get("name")) for area in business_areas if area.get("name")]
     if not names:
         return f"{company_name}의 피어사 프로필 스냅샷입니다."
     areas = ", ".join(names[:3])

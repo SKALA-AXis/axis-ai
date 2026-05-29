@@ -1435,9 +1435,7 @@ def load_company_profile_documents(
         dart_rows = _fetch_rows_by_source(
             db=db, source_type="dart", company_json=company_json, limit=1
         )
-        ir_rows = _fetch_rows_by_source(
-            db=db, source_type="ir", company_json=company_json, limit=1
-        )
+        ir_rows = _fetch_rows_by_source(db=db, source_type="ir", company_json=company_json, limit=1)
         official_rows = _fetch_rows_by_source(
             db=db, source_type="official", company_json=company_json, limit=1
         )

@@ -564,9 +564,7 @@ def _inline_comparison_candidates(
     candidates: list[dict[str, Any]] = []
     for comparison_type in ("yoy", "qoq"):
         label_pattern = (
-            "YoY|전년\\s*(?:동기\\s*)?대비"
-            if comparison_type == "yoy"
-            else "QoQ|전분기\\s*대비"
+            "YoY|전년\\s*(?:동기\\s*)?대비" if comparison_type == "yoy" else "QoQ|전분기\\s*대비"
         )
         match = re.search(
             rf"(?:{label_pattern})\s*([+\-△▲]?)\s*([\d,]+(?:\.\d+)?)\s*%",
@@ -1211,9 +1209,7 @@ def _extract_financial_table_candidates(
                         candidate_value_kind = "percentage"
                         candidate_unit = "%"
                         period_column = (
-                            _comparison_target_column(column)
-                            or primary_period_column
-                            or column
+                            _comparison_target_column(column) or primary_period_column or column
                         )
                     comparison_base = (
                         _comparison_base_cell(
@@ -1344,8 +1340,7 @@ def _extract_chart_block_candidates(
         metric_labels = [
             block
             for block in blocks
-            if "영업이익률" in str(block.get("text") or "")
-            and _block_center(block) is not None
+            if "영업이익률" in str(block.get("text") or "") and _block_center(block) is not None
         ]
         if not metric_labels:
             continue
@@ -1609,9 +1604,7 @@ def _ocr_scrambled_hierarchical_columns(
 
     labels = [re.sub(r"\s+", "", match.group(0)).lower() for match in sub_matches]
     comparison_labels = [label for label in labels if _IR_TABLE_COMPARISON_PATTERN.fullmatch(label)]
-    period_labels = [
-        label for label in labels if not _IR_TABLE_COMPARISON_PATTERN.fullmatch(label)
-    ]
+    period_labels = [label for label in labels if not _IR_TABLE_COMPARISON_PATTERN.fullmatch(label)]
     if len(comparison_labels) < 1 or len(period_labels) < 3:
         return []
     first_comparison_index = next(
@@ -1667,13 +1660,13 @@ def _ocr_scrambled_hierarchical_columns(
 
     for label in comparison_labels:
         comparison_type = _comparison_column_type(label)
-        column: dict[str, Any] = {
+        comparison_column: dict[str, Any] = {
             "label": label.upper(),
             "comparison_type": comparison_type,
             "parent_year": second_year,
         }
         if last_second_year_period:
-            column.update(
+            comparison_column.update(
                 {
                     "comparison_target_label": last_second_year_period.get("label"),
                     "comparison_target_period": last_second_year_period.get("period"),
@@ -1684,7 +1677,7 @@ def _ocr_scrambled_hierarchical_columns(
                     "comparison_target_period_type": last_second_year_period.get("period_type"),
                 }
             )
-        columns.append(column)
+        columns.append(comparison_column)
 
     return columns
 
@@ -2214,8 +2207,7 @@ def _row_has_misaligned_leading_comparison_columns(
     if leading_comparison_count == 0:
         return False
     if any(
-        not column.get("comparison_target_period")
-        for column in columns[:leading_comparison_count]
+        not column.get("comparison_target_period") for column in columns[:leading_comparison_count]
     ):
         return True
     leading_values = row_values[:leading_comparison_count]

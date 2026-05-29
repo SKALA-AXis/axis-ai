@@ -125,6 +125,8 @@ def _dedupe(items: list[dict[str, Any]], *, key_fields: tuple[str, ...]) -> list
 
 def _confidence_sort(item: dict[str, Any]) -> float:
     value = item.get("confidence")
+    if value is None:
+        return 0.0
     try:
         return float(value)
     except (TypeError, ValueError):

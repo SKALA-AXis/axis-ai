@@ -440,7 +440,8 @@ def _signal_source_ref(row: Any) -> dict[str, Any]:
 def _build_source_index(evidence_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_key: dict[tuple[str, int | None], dict[str, Any]] = {}
     for item in evidence_items:
-        ref = item.get("source_ref") if isinstance(item.get("source_ref"), dict) else {}
+        raw_ref = item.get("source_ref")
+        ref: dict[str, Any] = raw_ref if isinstance(raw_ref, dict) else {}
         key = (str(ref.get("table") or ""), _safe_int(ref.get("id")))
         if not key[0]:
             continue
