@@ -19,6 +19,8 @@ from typing import Any
 
 from langchain_openai import ChatOpenAI
 
+from src.services.issue_integration.agent_views import analysis_agent_issue_input
+
 log = logging.getLogger(__name__)
 
 _LLM_MODEL = "gpt-4o"
@@ -223,7 +225,7 @@ class StrategicAnalyzer:
         except Exception as exc:
             log.error(
                 "자료 의미 분석 실패 | cluster=%s source_type=%s error=%s",
-                integrated_issue.get("cluster_id"),
+                _issue_metadata(integrated_issue).get("cluster_id"),
                 cluster_metadata.get("source_type"),
                 exc,
             )
@@ -235,16 +237,16 @@ class StrategicAnalyzer:
             )
 
         analysis = {
-            "cluster_id": integrated_issue.get("cluster_id"),
-            "representative_id": integrated_issue.get("representative_id"),
-            "main_company": integrated_issue.get("main_company", ""),
-            "source_article_ids": integrated_issue.get("source_article_ids", []),
+            "cluster_id": _issue_metadata(integrated_issue).get("cluster_id"),
+            "representative_id": _issue_metadata(integrated_issue).get("representative_id"),
+            "main_company": _issue_brief(integrated_issue).get("main_company", ""),
+            "source_article_ids": _issue_source_ids(integrated_issue),
             "analysis_scope": "peer_and_industry",
             "analysis_mode": "multi_source_document_intelligence",
             "prompt_version": _PROMPT_VERSION,
             "model": _LLM_MODEL,
             "basis": {
-                "issue_scope": integrated_issue.get("summary_scope", ""),
+                "issue_scope": _issue_metadata(integrated_issue).get("summary_scope", ""),
                 "event_type": classification.get("event_type", ""),
                 "sector": classification.get("sector", ""),
                 "exposure_band": classification.get("exposure_band", ""),
@@ -270,54 +272,28 @@ class StrategicAnalyzer:
 
 
 def _is_valid_integrated_issue(integrated_issue: dict[str, Any]) -> bool:
+    brief = _issue_brief(integrated_issue)
+    evidence = integrated_issue.get("evidence") if isinstance(integrated_issue.get("evidence"), dict) else {}
     has_subject = bool(
-        integrated_issue.get("main_company")
-        or integrated_issue.get("document_subject")
-        or integrated_issue.get("scope_type") in {"industry", "market", "mixed"}
+        brief.get("main_company")
+        or brief.get("headline")
+        or brief.get("scope_type") in {"industry", "market", "mixed"}
     )
     return bool(
         integrated_issue
-        and integrated_issue.get("is_valid_summary", True)
+        and brief.get("is_valid", integrated_issue.get("is_valid_summary", True))
         and has_subject
         and (
-            integrated_issue.get("integrated_text")
-            or integrated_issue.get("fact_summary")
-            or integrated_issue.get("consolidated_facts")
-            or integrated_issue.get("business_signals")
-            or integrated_issue.get("key_numbers")
+            brief.get("one_line_summary")
+            or integrated_issue.get("analysis_ready_inputs")
+            or evidence.get("by_section")
+            or integrated_issue.get("content_digest")
         )
     )
 
 
 def _integrated_issue_for_prompt(integrated_issue: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "cluster_id": integrated_issue.get("cluster_id"),
-        "bundle_id": integrated_issue.get("bundle_id"),
-        "issue_source_type": integrated_issue.get("issue_source_type"),
-        "source_family": integrated_issue.get("source_family"),
-        "scope_type": integrated_issue.get("scope_type"),
-        "document_subject": integrated_issue.get("document_subject"),
-        "main_company": integrated_issue.get("main_company", ""),
-        "mentioned_peer_companies": integrated_issue.get("mentioned_peer_companies", []),
-        "main_issue": integrated_issue.get("main_issue", ""),
-        "headline": integrated_issue.get("headline", ""),
-        "one_line_summary": integrated_issue.get("one_line_summary", ""),
-        "integrated_text": integrated_issue.get("integrated_text", ""),
-        "content_digest": integrated_issue.get("content_digest", {}),
-        "content_digest_storage": integrated_issue.get("content_digest_storage", {}),
-        "source_map": integrated_issue.get("source_map", {}),
-        "issue_frame": integrated_issue.get("issue_frame", {}),
-        "fact_summary": integrated_issue.get("fact_summary", []),
-        "consolidated_facts": integrated_issue.get("consolidated_facts", []),
-        "key_numbers": integrated_issue.get("key_numbers", []),
-        "business_signals": integrated_issue.get("business_signals", []),
-        "claim_ledger": integrated_issue.get("claim_ledger", []),
-        "evidence_ledger": integrated_issue.get("evidence_ledger", []),
-        "quality": integrated_issue.get("quality", {}),
-        "missing_or_uncertain_points": integrated_issue.get("missing_or_uncertain_points", []),
-        "fact_basis": integrated_issue.get("fact_basis", []),
-        "confidence": integrated_issue.get("confidence", 0.0),
-    }
+    return analysis_agent_issue_input(integrated_issue)
 
 
 def _classification_for_prompt(classification: dict[str, Any]) -> dict[str, Any]:
@@ -449,16 +425,16 @@ def _empty_analysis(
     reason: str,
 ) -> dict[str, Any]:
     return {
-        "cluster_id": integrated_issue.get("cluster_id"),
-        "representative_id": integrated_issue.get("representative_id"),
-        "main_company": integrated_issue.get("main_company", ""),
-        "source_article_ids": integrated_issue.get("source_article_ids", []),
+        "cluster_id": _issue_metadata(integrated_issue).get("cluster_id"),
+        "representative_id": _issue_metadata(integrated_issue).get("representative_id"),
+        "main_company": _issue_brief(integrated_issue).get("main_company", ""),
+        "source_article_ids": _issue_source_ids(integrated_issue),
         "analysis_scope": "peer_and_industry",
         "analysis_mode": "multi_source_document_intelligence",
         "prompt_version": _PROMPT_VERSION,
         "model": _LLM_MODEL,
         "basis": {
-            "issue_scope": integrated_issue.get("summary_scope", ""),
+            "issue_scope": _issue_metadata(integrated_issue).get("summary_scope", ""),
             "event_type": classification.get("event_type", ""),
             "sector": classification.get("sector", ""),
             "exposure_band": classification.get("exposure_band", ""),
@@ -737,6 +713,67 @@ def _normalize_int_list(value: Any) -> list[int]:
         if number not in out:
             out.append(number)
     return out
+
+
+def _issue_source_ids(integrated_issue: dict[str, Any]) -> list[int]:
+    brief = _issue_brief(integrated_issue)
+    scope = brief.get("analysis_scope") if isinstance(brief.get("analysis_scope"), dict) else {}
+    ids = _normalize_int_list(scope.get("analyzed_source_ids") or scope.get("analyzed_raw_article_ids"))
+    if ids:
+        return ids
+    ids = _normalize_int_list(integrated_issue.get("source_article_ids"))
+    if ids:
+        return ids
+    ids = _normalize_int_list(integrated_issue.get("analyzed_article_ids"))
+    if ids:
+        return ids
+    return _normalize_int_list(
+        [
+            source.get("id")
+            for source in integrated_issue.get("sources", []) or []
+            if isinstance(source, dict)
+        ]
+    )
+
+
+def _issue_brief(integrated_issue: dict[str, Any]) -> dict[str, Any]:
+    value = integrated_issue.get("issue_brief")
+    if isinstance(value, dict):
+        return value
+    return {
+        "is_valid": integrated_issue.get("is_valid_summary", True),
+        "headline": integrated_issue.get("headline") or integrated_issue.get("main_issue") or "",
+        "one_line_summary": integrated_issue.get("one_line_summary")
+        or integrated_issue.get("integrated_text")
+        or integrated_issue.get("fact_summary")
+        or "",
+        "main_company": integrated_issue.get("main_company", ""),
+        "mentioned_peer_companies": integrated_issue.get("mentioned_peer_companies", []),
+        "event_type": integrated_issue.get("cluster_event_type") or integrated_issue.get("event_type"),
+        "sectors": integrated_issue.get("sectors", []),
+        "source_family": integrated_issue.get("source_family"),
+        "scope_type": integrated_issue.get("scope_type"),
+        "analysis_scope": {
+            "analyzed_source_ids": _normalize_int_list(
+                integrated_issue.get("source_article_ids")
+                or integrated_issue.get("analyzed_article_ids")
+            ),
+        },
+        "confidence": integrated_issue.get("confidence", 0.0),
+        "reason": integrated_issue.get("reason", ""),
+    }
+
+
+def _issue_metadata(integrated_issue: dict[str, Any]) -> dict[str, Any]:
+    value = integrated_issue.get("metadata")
+    if isinstance(value, dict):
+        return value
+    return {
+        "cluster_id": integrated_issue.get("cluster_id"),
+        "representative_id": integrated_issue.get("representative_id"),
+        "bundle_id": integrated_issue.get("bundle_id"),
+        "summary_scope": integrated_issue.get("summary_scope"),
+    }
 
 
 def _normalize_choice(value: Any, allowed: set[str], default: str) -> str:

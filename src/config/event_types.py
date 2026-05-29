@@ -10,6 +10,7 @@ EVENT_TYPES: Final[list[str]] = [
     "personnel",
     "tech_release",
     "regulation",
+    "legal",
     "contract",
     "financial",
     "expansion",
@@ -22,10 +23,11 @@ EVENT_TYPE_TIE_BREAK_PRIORITY: Final[dict[str, int]] = {
     "financial": 2,
     "partnership": 3,
     "regulation": 4,
-    "expansion": 5,
-    "personnel": 6,
-    "tech_release": 7,
-    "company": 8,
+    "legal": 5,
+    "expansion": 6,
+    "personnel": 7,
+    "tech_release": 8,
+    "company": 9,
 }
 
 EVENT_TYPE_KEYWORDS: Final[dict[str, list[str]]] = {
@@ -88,6 +90,18 @@ EVENT_TYPE_KEYWORDS: Final[dict[str, list[str]]] = {
         "표준 인증",
         "컴플라이언스",
     ],
+    "legal": [
+        "소송",
+        "판결",
+        "상고",
+        "파기환송",
+        "대법원",
+        "법원",
+        "재판부",
+        "위자료",
+        "재산분할",
+        "불법원인급여",
+    ],
     "contract": [
         "수주",
         "계약",
@@ -129,6 +143,35 @@ EVENT_TYPE_KEYWORDS: Final[dict[str, list[str]]] = {
         "그룹 내",
         "CEO 메시지",
         "주주총회",
+    ],
+}
+
+# Some event keywords are semantically weak unless a nearby domain context exists.
+# For example, "적용" appears in legal and accounting sentences as well as technology
+# release sentences, so the frame builder only accepts it for tech_release when a
+# technology/product context term is present in the same candidate text.
+EVENT_KEYWORDS_REQUIRING_CONTEXT: Final[dict[str, list[str]]] = {
+    "tech_release": ["적용", "공개", "현장 점검"],
+}
+
+EVENT_TYPE_CONTEXT_KEYWORDS: Final[dict[str, list[str]]] = {
+    "tech_release": [
+        "AI",
+        "AX",
+        "클라우드",
+        "솔루션",
+        "서비스",
+        "플랫폼",
+        "시스템",
+        "소프트웨어",
+        "데이터",
+        "디지털",
+        "자동화",
+        "MSP",
+        "SaaS",
+        "보안",
+        "모델",
+        "생성형",
     ],
 }
 

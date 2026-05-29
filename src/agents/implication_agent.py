@@ -44,6 +44,7 @@ from src.analysis.prompts.implication_v5 import (
     SYSTEM_PROMPT_V5,
     USER_PROMPT_TEMPLATE_V5,
 )
+from src.services.issue_integration.agent_views import implication_agent_issue_input
 
 log = logging.getLogger(__name__)
 
@@ -253,12 +254,17 @@ class ImplicationAgent:
 
 
 def _has_minimum_inputs(integrated_issue: dict[str, Any], analysis: dict[str, Any]) -> bool:
-    if not integrated_issue.get("is_valid_summary", True):
+    brief = _issue_brief(integrated_issue)
+    evidence = integrated_issue.get("evidence") if isinstance(integrated_issue.get("evidence"), dict) else {}
+    if not brief.get("is_valid", integrated_issue.get("is_valid_summary", True)):
         return False
     if not analysis.get("is_valid_analysis", True):
         return False
     return bool(
-        integrated_issue.get("integrated_text")
+        brief.get("one_line_summary")
+        or integrated_issue.get("analysis_ready_inputs")
+        or evidence.get("by_section")
+        or integrated_issue.get("integrated_text")
         or integrated_issue.get("consolidated_facts")
         or integrated_issue.get("fact_summary")
     )
@@ -341,17 +347,7 @@ def _bundle_summary_for_prompt(bundle: dict[str, Any]) -> dict[str, Any]:
 
 
 def _integrated_issue_for_prompt(integrated_issue: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "main_company": integrated_issue.get("main_company", ""),
-        "main_issue": integrated_issue.get("main_issue", ""),
-        "integrated_text": integrated_issue.get("integrated_text", ""),
-        "consolidated_facts": (integrated_issue.get("consolidated_facts") or [])[:10],
-        "key_numbers": integrated_issue.get("key_numbers", []),
-        "business_signals": (integrated_issue.get("business_signals") or [])[:5],
-        "fact_basis": (integrated_issue.get("fact_basis") or [])[:10],
-        "missing_or_uncertain_points": integrated_issue.get("missing_or_uncertain_points", []),
-        "confidence": integrated_issue.get("confidence", 0.0),
-    }
+    return implication_agent_issue_input(integrated_issue)
 
 
 def _analysis_for_prompt(analysis: dict[str, Any]) -> dict[str, Any]:
@@ -528,7 +524,11 @@ def _parse_precedent_link(value: Any) -> PrecedentLink | None:
 
 
 def _primary_company_id(integrated_issue: dict[str, Any], profile: dict[str, Any]) -> str:
-    company = str(integrated_issue.get("main_company") or "").strip()
+    company = str(
+        _issue_brief(integrated_issue).get("main_company")
+        or integrated_issue.get("main_company")
+        or ""
+    ).strip()
     if company:
         return company
     peer_profiles = profile.get("peer_profiles") or {}
@@ -537,6 +537,11 @@ def _primary_company_id(integrated_issue: dict[str, Any], profile: dict[str, Any
             if key:
                 return str(key)
     return ""
+
+
+def _issue_brief(integrated_issue: dict[str, Any]) -> dict[str, Any]:
+    value = integrated_issue.get("issue_brief")
+    return value if isinstance(value, dict) else {}
 
 
 def _primary_company_name(profile: dict[str, Any]) -> str:

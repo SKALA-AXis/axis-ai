@@ -18,7 +18,14 @@ from src.services.issue_integration.policy import DEFAULT_POLICY, IntegrationPol
 _NUMBER_PATTERN = re.compile(
     r"\d+(?:[.,]\d+)*\s*(?:%|원|조|억|만|천만|백만|달러|USD|KRW|usd|krw|건|명|개|분기|년|월|일)?"
 )
-_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?。！？])\s+|(?<=[다요음임함됨됨\.])\s+")
+_SENTENCE_SPLIT_PATTERN = re.compile(
+    r"(?<=[.!?。！？])\s+|(?<=[.!?。！？])(?=[가-힣A-Za-z0-9\"'“‘])"
+)
+_SOURCE_ATTRIBUTION_PATTERN = re.compile(
+    r"\s*출처\s*:\s*[^()\n]*(?:\([^)\n]*\))?\s*$",
+    re.IGNORECASE,
+)
+_NEWS_BYLINE_PREFIX_PATTERN = re.compile(r"^\[[^\]]{2,50}(?:기자|=)[^\]]*\]\s*")
 
 
 def build_content_payload(
@@ -48,7 +55,7 @@ def build_content_payload(
             extract["source_index"] = source_index
     content_digest = _integrated_digest(source_digests_internal, policy=policy)
     return {
-        "content_digest": content_digest,
+        "content_digest": _public_content_digest(content_digest),
         "content_digest_storage": build_content_digest_storage(content_digest),
     }
 
@@ -63,13 +70,16 @@ def _source_digest(
     source = source_by_id.get(raw_article_id, {})
     units = _content_units(item)
     ranked_units = _rank_units(units, title=str(item.get("title") or ""), policy=policy)
-    body_extracts = [
-        _body_extract_payload(unit, raw_article_id=raw_article_id)
-        for unit in ranked_units[: policy.source_body_extract_limit]
-    ]
     key_points = [
-        _key_point_payload(unit, raw_article_id=raw_article_id)
-        for unit in ranked_units[: policy.source_content_key_point_limit]
+        _key_point_payload(unit, raw_article_id=raw_article_id, position=index)
+        for index, unit in enumerate(
+            ranked_units[: policy.source_content_key_point_limit],
+            start=1,
+        )
+    ]
+    body_extracts = [
+        _body_extract_payload(unit, raw_article_id=raw_article_id, position=index)
+        for index, unit in enumerate(ranked_units[: policy.source_body_extract_limit], start=1)
     ]
     title = str(item.get("title") or "").strip()
     summary = _compose_summary(
@@ -83,12 +93,15 @@ def _source_digest(
         "id": raw_article_id,
         "title": title,
         "source": source_name,
+        "source_name": source_name,
         "summary": summary,
         "key_points": [point["point"] for point in key_points],
         "body_extracts": _public_body_extracts(body_extracts),
         "url": item.get("url"),
         "published_at": item.get("published_at"),
         "publisher": publisher,
+        "relevance_label": source.get("relevance_label") or item.get("relevance_label"),
+        "relevance_score": source.get("relevance_score", item.get("relevance_score")),
         "_is_analysis_eligible": bool(source.get("is_analysis_eligible", True)),
         "_has_content": bool(full_text.strip() or title),
         "_content_length_chars": len(full_text),
@@ -125,11 +138,17 @@ def _integrated_digest(
         ]
     )[: policy.integrated_body_extract_limit]
     summary = _compose_summary(
-        [point["point"] for point in key_points],
+        [
+            *[
+                str(digest.get("title") or "")
+                for digest in basis
+                if digest.get("title")
+            ],
+            *[point["point"] for point in key_points],
+        ],
         limit=policy.integrated_content_digest_chars,
     )
     sections = _build_sections(key_points, body_extracts, policy=policy)
-    sources = [_public_source_digest(digest) for digest in source_digests]
     return {
         "summary": summary,
         "detailed_explanation": _integrated_detailed_explanation(
@@ -140,7 +159,6 @@ def _integrated_digest(
         "key_points": key_points,
         "body_extracts": _public_body_extracts(body_extracts),
         "sections": sections,
-        "sources": sources,
         "basis_scope": "analysis_eligible_sources" if eligible else "all_sources_for_review",
         "raw_article_ids": [digest["id"] for digest in source_digests],
         "basis_raw_article_ids": [digest["id"] for digest in basis],
@@ -149,23 +167,6 @@ def _integrated_digest(
         "section_count": len(sections),
         "has_content": bool(summary or key_points),
         "compression_method": "extractive_semantic_rank_v1",
-    }
-
-
-def _public_source_digest(digest: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "source_index": digest.get("_source_index"),
-        "id": digest.get("id"),
-        "title": digest.get("title"),
-        "source": digest.get("source"),
-        "summary": digest.get("summary"),
-        "key_points": digest.get("key_points", []),
-        "body_extracts": _public_body_extracts(digest.get("_body_extract_payloads", []))
-        if digest.get("_body_extract_payloads")
-        else digest.get("body_extracts", []),
-        "url": digest.get("url"),
-        "published_at": digest.get("published_at"),
-        "publisher": digest.get("publisher"),
     }
 
 
@@ -183,7 +184,6 @@ def build_content_digest_storage(content_digest: dict[str, Any]) -> dict[str, An
         "content_raw_article_ids": content_digest.get("raw_article_ids", []),
         "content_basis_raw_article_ids": content_digest.get("basis_raw_article_ids", []),
         "content_eligible_raw_article_ids": content_digest.get("eligible_raw_article_ids", []),
-        "content_sources": content_digest.get("sources", []),
         "content_sections": content_digest.get("sections", []),
         "content_body_extracts": content_digest.get("body_extracts", []),
         "content_key_points": content_digest.get("key_points", []),
@@ -207,7 +207,7 @@ def _content_units(item: dict[str, Any]) -> list[dict[str, Any]]:
     parser_units = _parser_units(item)
     if parser_units:
         units.extend(parser_units)
-    content = " ".join(str(item.get("content") or "").split())
+    content = _clean_source_text(str(item.get("content") or ""))
     for position, sentence in enumerate(_split_sentences(content), start=len(units)):
         units.append(
             {
@@ -299,10 +299,16 @@ def _rank_units(
     )
 
 
-def _key_point_payload(unit: dict[str, Any], *, raw_article_id: int) -> dict[str, Any]:
+def _key_point_payload(
+    unit: dict[str, Any],
+    *,
+    raw_article_id: int,
+    position: int,
+) -> dict[str, Any]:
     text = str(unit.get("text") or "").strip()
     section = _section_for_unit(unit)
     return {
+        "id": _content_ref_id("kp", raw_article_id, position),
         "point": text,
         "raw_article_ids": [raw_article_id] if raw_article_id > 0 else [],
         "section": section,
@@ -311,10 +317,16 @@ def _key_point_payload(unit: dict[str, Any], *, raw_article_id: int) -> dict[str
     }
 
 
-def _body_extract_payload(unit: dict[str, Any], *, raw_article_id: int) -> dict[str, Any]:
+def _body_extract_payload(
+    unit: dict[str, Any],
+    *,
+    raw_article_id: int,
+    position: int,
+) -> dict[str, Any]:
     text = str(unit.get("text") or "").strip()
     section = _section_for_unit(unit)
     return {
+        "id": _content_ref_id("extract", raw_article_id, position),
         "text": text,
         "raw_article_id": raw_article_id,
         "raw_article_ids": [raw_article_id] if raw_article_id > 0 else [],
@@ -329,9 +341,8 @@ def _body_extract_payload(unit: dict[str, Any], *, raw_article_id: int) -> dict[
 def _public_body_extracts(extracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
+            "id": extract.get("id"),
             "text": extract.get("text"),
-            "raw_article_id": extract.get("raw_article_id"),
-            "source_index": extract.get("source_index"),
             "section": extract.get("section"),
             "section_title": extract.get("section_title"),
             "content_role": extract.get("content_role"),
@@ -339,6 +350,34 @@ def _public_body_extracts(extracts: list[dict[str, Any]]) -> list[dict[str, Any]
         }
         for extract in extracts
     ]
+
+
+def _public_content_digest(content_digest: dict[str, Any]) -> dict[str, Any]:
+    public = {
+        key: value
+        for key, value in content_digest.items()
+        if key not in {"raw_article_ids", "basis_raw_article_ids", "eligible_raw_article_ids"}
+    }
+    public["key_points"] = [
+        {
+            key: value
+            for key, value in point.items()
+            if key not in {"source_index", "raw_article_ids"}
+        }
+        for point in _as_dict_list(content_digest.get("key_points"))
+    ]
+    public["body_extracts"] = _public_body_extracts(
+        _as_dict_list(content_digest.get("body_extracts"))
+    )
+    public["sections"] = [
+        {
+            key: value
+            for key, value in section.items()
+            if key not in {"key_point_ids", "body_extract_ids", "source_indexes", "raw_article_ids"}
+        }
+        for section in _as_dict_list(content_digest.get("sections"))
+    ]
+    return public
 
 
 def _build_sections(
@@ -359,10 +398,12 @@ def _build_sections(
     sections: list[dict[str, Any]] = []
     for section, points in grouped.items():
         extracts = extracts_by_section.get(section, [])
-        texts = [
-            *[str(extract.get("text") or "") for extract in extracts],
-            *[str(point.get("point") or "") for point in points],
-        ]
+        texts = _dedupe_strings(
+            [
+                *[str(point.get("point") or "") for point in points],
+                *[str(extract.get("text") or "") for extract in extracts],
+            ]
+        )
         raw_article_ids = _dedupe_ints(
             [
                 *[
@@ -394,8 +435,14 @@ def _build_sections(
                     policy=policy,
                     limit=policy.content_section_keyword_limit,
                 ),
-                "key_points": points,
-                "body_extracts": _public_body_extracts(extracts),
+                "key_point_ids": _dedupe_strings(point.get("id") for point in points),
+                "body_extract_ids": _dedupe_strings(extract.get("id") for extract in extracts),
+                "source_indexes": _dedupe_ints(
+                    [
+                        *[point.get("source_index") for point in points],
+                        *[extract.get("source_index") for extract in extracts],
+                    ]
+                ),
                 "numbers_and_dates": _dedupe_strings(
                     [
                         *[
@@ -416,7 +463,7 @@ def _build_sections(
         )
     return sorted(
         sections,
-        key=lambda item: (len(item.get("key_points", [])), str(item.get("section") or "")),
+        key=lambda item: (len(item.get("key_point_ids", [])), str(item.get("section") or "")),
         reverse=True,
     )[: policy.content_section_limit]
 
@@ -428,10 +475,12 @@ def _section_detailed_explanation(
     limit: int,
 ) -> str:
     title = _section_title(section)
-    texts = [
-        *[str(extract.get("text") or "") for extract in extracts],
-        *[str(point.get("point") or "") for point in points],
-    ]
+    texts = _dedupe_strings(
+        [
+            *[str(point.get("point") or "") for point in points],
+            *[str(extract.get("text") or "") for extract in extracts],
+        ]
+    )
     explanation = _compose_summary(texts, limit=limit, keep_more=True)
     if not explanation:
         return ""
@@ -516,6 +565,20 @@ def _split_sentences(content: str) -> list[str]:
         return []
     sentences = [part.strip() for part in _SENTENCE_SPLIT_PATTERN.split(content) if part.strip()]
     return sentences or [content]
+
+
+def _clean_source_text(content: str) -> str:
+    text = " ".join(str(content or "").split())
+    if not text:
+        return ""
+    text = _NEWS_BYLINE_PREFIX_PATTERN.sub("", text)
+    text = _SOURCE_ATTRIBUTION_PATTERN.sub("", text)
+    return text.strip()
+
+
+def _content_ref_id(prefix: str, raw_article_id: int, position: int) -> str:
+    article_part = str(raw_article_id) if raw_article_id > 0 else "unknown"
+    return f"{prefix}:{article_part}:{position}"
 
 
 def _dedupe_units(units: list[dict[str, Any]]) -> list[dict[str, Any]]:

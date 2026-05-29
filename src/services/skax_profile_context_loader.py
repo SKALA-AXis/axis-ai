@@ -901,7 +901,13 @@ def _summary_for_prompt(summary: dict[str, Any]) -> dict[str, Any]:
         "one_line_summary": summary.get("one_line_summary", ""),
         "fact_summary": summary.get("fact_summary", []),
         "main_event": summary.get("main_event", ""),
-        "source_article_ids": summary.get("source_article_ids", []),
+        "source_article_ids": summary.get("source_article_ids")
+        or summary.get("analyzed_article_ids")
+        or [
+            source.get("id")
+            for source in summary.get("sources", []) or []
+            if isinstance(source, dict) and source.get("id") is not None
+        ],
         "confidence": summary.get("confidence", 0.0),
     }
 

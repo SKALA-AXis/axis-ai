@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -79,7 +80,7 @@ class IntegratedIssueComposer:
             source_map=source_map,
             policy=self.policy,
         )
-        return {
+        return _public_issue_payload({
             "schema_version": "integrated_issue_v2",
             "cluster_id": _safe_int(input_bundle.cluster_id),
             "representative_id": _representative_id(input_bundle),
@@ -105,6 +106,7 @@ class IntegratedIssueComposer:
             "source_profile": source_profile.to_dict(),
             "content_digest": content_payload["content_digest"],
             "content_digest_storage": content_payload["content_digest_storage"],
+            "sources": source_map.get("sources", []),
             "source_map": source_map,
             "issue_frame": issue_frame,
             "integrated_text": integrated_text,
@@ -125,7 +127,7 @@ class IntegratedIssueComposer:
             "confidence": quality["confidence"] if is_valid else 0.0,
             "reason": reason,
             "integrated_at": datetime.now(UTC).isoformat(),
-        }
+        })
 
     def enrich_existing_summary(
         self,
@@ -180,7 +182,7 @@ class IntegratedIssueComposer:
             source_map=source_map,
             policy=self.policy,
         )
-        return {
+        return _public_issue_payload({
             **summary,
             "schema_version": "integrated_issue_v2",
             "issue_component": "IssueIntegrationAgent",
@@ -194,6 +196,7 @@ class IntegratedIssueComposer:
             "content_digest": content_digest,
             "content_digest_storage": summary.get("content_digest_storage")
             or content_payload["content_digest_storage"],
+            "sources": summary.get("sources") or source_map.get("sources", []),
             "source_map": source_map,
             "issue_frame": issue_frame,
             "source_article_ids": summary.get("source_article_ids")
@@ -212,7 +215,7 @@ class IntegratedIssueComposer:
             or missing_or_uncertain_points(selected_facts, policy=self.policy),
             "quality": {**quality, **(summary.get("quality") or {})},
             "input_bundle_ref": _input_bundle_ref(input_bundle),
-        }
+        })
 
 
 def _build_fact_summary(
@@ -425,17 +428,449 @@ def _source_coverage(
     ]
     covered = sorted({source_id for source_id in source_ids if source_id in fact_source_ids})
     return {
-        "source_article_ids": source_ids,
-        "raw_article_ids": source_ids,
-        "covered_source_article_ids": covered,
-        "covered_raw_article_ids": covered,
-        "uncovered_source_article_ids": [
-            source_id for source_id in source_ids if source_id not in covered
-        ],
-        "uncovered_raw_article_ids": [
-            source_id for source_id in source_ids if source_id not in covered
-        ],
+        "total_source_count": len(source_ids),
+        "covered_source_count": len(covered),
+        "uncovered_source_count": len(source_ids) - len(covered),
     }
+
+
+def _public_issue_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    text_refs = _EvidenceTextRegistry()
+    issue_frame = _public_issue_frame(payload.get("issue_frame", {}), text_refs=text_refs)
+    evidence = _public_evidence(payload, text_refs=text_refs)
+    return {
+        "schema_version": "integrated_issue_v3",
+        "issue_brief": _issue_brief(payload),
+        "analysis_ready_inputs": _analysis_ready_inputs(payload),
+        "content_digest": payload.get("content_digest", {}),
+        "issue_frame": issue_frame,
+        "sources": payload.get("sources", []),
+        "evidence": evidence,
+        "quality": _public_quality(payload.get("quality", {})),
+        "metadata": _public_metadata(payload),
+    }
+
+
+def _issue_brief(payload: dict[str, Any]) -> dict[str, Any]:
+    analyzed_ids = _normalize_int_list(
+        payload.get("analyzed_article_ids")
+        or payload.get("source_article_ids")
+        or payload.get("raw_article_ids")
+    )
+    return {
+        "is_valid": bool(payload.get("is_valid_summary", True)),
+        "headline": _first_non_empty(payload.get("headline"), payload.get("main_issue")),
+        "one_line_summary": _first_non_empty(
+            payload.get("one_line_summary"),
+            payload.get("integrated_text"),
+        ),
+        "main_company": payload.get("main_company", ""),
+        "mentioned_peer_companies": payload.get("mentioned_peer_companies", []),
+        "event_type": payload.get("cluster_event_type") or payload.get("event_type"),
+        "sectors": payload.get("sectors") or payload.get("mentioned_sectors") or [],
+        "source_family": payload.get("source_family", ""),
+        "scope_type": payload.get("scope_type", ""),
+        "analysis_scope": {
+            "analyzed_source_ids": analyzed_ids,
+        },
+        "confidence": payload.get("confidence", 0.0),
+        "reason": payload.get("reason", ""),
+    }
+
+
+def _analysis_ready_inputs(payload: dict[str, Any]) -> dict[str, Any]:
+    content = payload.get("content_digest") if isinstance(payload.get("content_digest"), dict) else {}
+    sections = [
+        {
+            "section": section.get("section"),
+            "title": section.get("title"),
+            "summary": section.get("summary", ""),
+            "keywords": section.get("keywords", []),
+        }
+        for section in _as_dict_list(content.get("sections"))
+    ]
+    return {
+        "core_question": _core_question(payload),
+        "key_developments": _key_developments(payload),
+        "materiality_signals": _materiality_signals(payload),
+        "uncertainty_points": _uncertainty_points(payload),
+        "suggested_sections": sections,
+    }
+
+
+def _public_evidence(
+    payload: dict[str, Any],
+    *,
+    text_refs: "_EvidenceTextRegistry",
+) -> dict[str, Any]:
+    facts = _public_evidence_facts(payload, text_refs=text_refs)
+    by_section: dict[str, list[dict[str, Any]]] = {}
+    for fact in facts:
+        section = str(fact.get("section") or "general_fact")
+        by_section.setdefault(section, []).append(fact)
+    return {
+        "references": text_refs.items(),
+        "by_section": [
+            {
+                "section": section,
+                "title": _evidence_section_title(section),
+                "facts": section_facts,
+            }
+            for section, section_facts in by_section.items()
+        ],
+        "claims": _public_claims(payload.get("claim_ledger")),
+        "uncertain_points": _uncertainty_points(payload),
+    }
+
+
+def _public_evidence_facts(
+    payload: dict[str, Any],
+    *,
+    text_refs: "_EvidenceTextRegistry",
+) -> list[dict[str, Any]]:
+    extracted = payload.get("extracted_facts") or []
+    facts = [
+        _public_extracted_fact(fact, text_refs=text_refs)
+        for fact in _as_dict_list(extracted)
+    ]
+    facts = [fact for fact in facts if fact.get("fact")]
+    if facts:
+        return facts
+    basis = payload.get("fact_basis") or payload.get("consolidated_facts") or []
+    return [
+        fact
+        for fact in (
+            _public_basis_fact(item, text_refs=text_refs)
+            for item in _as_dict_list(basis)
+        )
+        if fact.get("fact")
+    ]
+
+
+def _public_extracted_fact(
+    fact: dict[str, Any],
+    *,
+    text_refs: "_EvidenceTextRegistry",
+) -> dict[str, Any]:
+    fact_text = _first_non_empty(fact.get("normalized_fact"), fact.get("fact"))
+    evidence_text = str(fact.get("evidence_text") or "").strip()
+    source_ids = _normalize_int_list(fact.get("article_id"))
+    out: dict[str, Any] = {
+        "fact_id": fact.get("fact_id"),
+        "fact": fact_text,
+        "source_ids": source_ids,
+        "section": _evidence_section(fact),
+        "fact_type": fact.get("fact_type"),
+        "summary_role": fact.get("summary_role"),
+        "entities": _clean_entities(fact.get("entities")),
+        "numbers": fact.get("numbers", []),
+        "dates": fact.get("dates", []),
+        "confidence": fact.get("confidence"),
+    }
+    if evidence_text and _compact_text(evidence_text) != _compact_text(fact_text):
+        ref_id = text_refs.add(evidence_text, source_ids=source_ids)
+        if ref_id:
+            out["evidence_ref_id"] = ref_id
+    return out
+
+
+def _public_basis_fact(
+    item: dict[str, Any],
+    *,
+    text_refs: "_EvidenceTextRegistry",
+) -> dict[str, Any]:
+    evidence_texts = _normalize_string_list(item.get("evidence_texts"))
+    evidence_text = evidence_texts[0] if evidence_texts else str(item.get("evidence_text") or "")
+    fact_text = _first_non_empty(item.get("fact"), item.get("claim"), evidence_text)
+    source_ids = _normalize_int_list(item.get("source_article_ids") or item.get("raw_article_ids"))
+    out: dict[str, Any] = {
+        "fact_id": (item.get("fact_ids") or [item.get("fact_id")])[0]
+        if isinstance(item.get("fact_ids"), list)
+        else item.get("fact_id"),
+        "fact": fact_text,
+        "source_ids": source_ids,
+        "section": _evidence_section(item),
+        "fact_type": item.get("fact_type"),
+        "summary_role": item.get("summary_role"),
+        "numbers": _numbers_from_text(f"{fact_text} {evidence_text}"),
+        "dates": [],
+        "confidence": item.get("confidence"),
+    }
+    if evidence_text and _compact_text(evidence_text) != _compact_text(fact_text):
+        ref_id = text_refs.add(evidence_text, source_ids=source_ids)
+        if ref_id:
+            out["evidence_ref_id"] = ref_id
+    return out
+
+
+def _public_claims(value: Any) -> list[dict[str, Any]]:
+    claims: list[dict[str, Any]] = []
+    for claim in _as_dict_list(value):
+        claims.append(
+            {
+                "claim_id": claim.get("claim_id"),
+                "claim": claim.get("claim"),
+                "claim_type": claim.get("claim_type"),
+                "fact_ids": claim.get("fact_ids", []),
+                "confidence": claim.get("confidence"),
+            }
+        )
+    return claims
+
+
+def _public_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "cluster_id": payload.get("cluster_id"),
+        "representative_id": payload.get("representative_id"),
+        "bundle_id": payload.get("bundle_id"),
+        "summary_scope": payload.get("summary_scope"),
+        "issue_component": payload.get("issue_component"),
+        "integration_component": payload.get("integration_component"),
+        "integration_input": payload.get("integration_input"),
+        "issue_source_type": payload.get("issue_source_type"),
+        "model": payload.get("model"),
+        "coverage": payload.get("coverage"),
+        "source_count": payload.get("source_count"),
+        "cluster_source_count": payload.get("cluster_source_count"),
+        "validation_warnings": payload.get("validation_warnings", []),
+        "fact_extraction_failed": bool(payload.get("fact_extraction_failed", False)),
+        "integrated_at": payload.get("integrated_at"),
+        "input_bundle_ref": payload.get("input_bundle_ref", {}),
+    }
+
+
+def _public_quality(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return _strip_internal_refs(value)
+
+
+def _core_question(payload: dict[str, Any]) -> str:
+    company = _first_non_empty(payload.get("main_company"), "해당 자료")
+    event_type = _first_non_empty(payload.get("cluster_event_type"), payload.get("event_type"))
+    topic = _first_non_empty(payload.get("headline"), payload.get("main_issue"), payload.get("one_line_summary"))
+    if topic:
+        return f"{company}의 {event_type or '이슈'}에서 '{topic}'이 보여주는 사업/시장 의미는 무엇인가?"
+    return f"{company}의 {event_type or '이슈'}가 보여주는 사업/시장 의미는 무엇인가?"
+
+
+def _key_developments(payload: dict[str, Any]) -> list[str]:
+    values = _normalize_string_list(payload.get("fact_summary"))
+    if not values:
+        values = [
+            str(item.get("fact") or "")
+            for item in _as_dict_list(payload.get("consolidated_facts"))
+        ]
+    if not values:
+        content = payload.get("content_digest") if isinstance(payload.get("content_digest"), dict) else {}
+        values = [
+            str(point.get("point") or point.get("fact") or "")
+            for point in _as_dict_list(content.get("key_points"))
+        ]
+    return _dedupe_strings(values)[:5]
+
+
+def _materiality_signals(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    content = payload.get("content_digest") if isinstance(payload.get("content_digest"), dict) else {}
+    for section in _as_dict_list(content.get("sections")):
+        signals.append(
+            {
+                "type": section.get("section") or "content_section",
+                "title": section.get("title") or section.get("section"),
+                "keywords": section.get("keywords", []),
+                "numbers_and_dates": section.get("numbers_and_dates", []),
+            }
+        )
+    for number in _as_dict_list(payload.get("key_numbers")):
+        signals.append(
+            {
+                "type": "key_number",
+                "metric_name": number.get("metric_name"),
+                "metric_label": number.get("metric_label"),
+                "value": number.get("value"),
+                "unit": number.get("unit"),
+                "period": number.get("period"),
+                "numbers_and_dates": number.get("numbers_and_dates", []),
+            }
+        )
+    for signal in _as_dict_list(payload.get("business_signals")):
+        signals.append({"type": "business_signal", **signal})
+    return signals[:8]
+
+
+def _public_issue_frame(
+    value: Any,
+    *,
+    text_refs: "_EvidenceTextRegistry",
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return _strip_internal_refs(value, text_refs=text_refs)
+
+
+def _strip_internal_refs(
+    value: Any,
+    *,
+    text_refs: "_EvidenceTextRegistry | None" = None,
+) -> Any:
+    if isinstance(value, dict):
+        omitted = {
+            "raw_article_id",
+            "raw_article_ids",
+            "basis_raw_article_ids",
+            "eligible_raw_article_ids",
+            "source_article_ids",
+            "source_indexes",
+            "source_index",
+            "source_fields",
+        }
+        source_ids = _normalize_int_list(
+            value.get("source_ids")
+            or value.get("raw_article_ids")
+            or value.get("source_article_ids")
+        )
+        public: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in omitted:
+                continue
+            if key == "evidence_text":
+                ref_id = text_refs.add(item, source_ids=source_ids) if text_refs else ""
+                if ref_id:
+                    public["evidence_ref_id"] = ref_id
+                continue
+            public[key] = _strip_internal_refs(item, text_refs=text_refs)
+        return public
+    if isinstance(value, list):
+        return [_strip_internal_refs(item, text_refs=text_refs) for item in value]
+    return value
+
+
+def _uncertainty_points(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    points = [
+        point for point in _as_dict_list(payload.get("missing_or_uncertain_points"))
+    ]
+    for fact in _as_dict_list(payload.get("extracted_facts")):
+        if fact.get("fact_type") == "uncertain_fact" or fact.get("summary_role") == "uncertainty_detail":
+            points.append(
+                {
+                    "fact_id": fact.get("fact_id"),
+                    "point": _first_non_empty(fact.get("normalized_fact"), fact.get("evidence_text")),
+                }
+            )
+    return points[:6]
+
+
+def _evidence_section(fact: dict[str, Any]) -> str:
+    role = str(fact.get("summary_role") or "")
+    fact_type = str(fact.get("fact_type") or "")
+    if role in {"main_event", "product_definition", "service_function", "application_case", "numeric_effect"}:
+        return role
+    if fact_type in {"risk_fact", "uncertain_fact"} or role in {"risk_detail", "uncertainty_detail"}:
+        return "risk_or_uncertainty"
+    if fact_type:
+        return fact_type
+    return "general_fact"
+
+
+def _evidence_section_title(section: str) -> str:
+    return {
+        "main_event": "핵심 사건",
+        "product_definition": "제품/서비스 정의",
+        "service_function": "기능/역할",
+        "application_case": "적용 사례",
+        "numeric_effect": "수치/효과",
+        "risk_or_uncertainty": "리스크/불확실성",
+        "business_signal": "사업 변화",
+        "general_fact": "주요 근거",
+    }.get(section, section.replace("_", " "))
+
+
+def _clean_entities(value: Any) -> list[str]:
+    return _dedupe_strings(
+        entity
+        for entity in _normalize_string_list(value)
+        if _valid_entity(entity)
+    )[:8]
+
+
+def _valid_entity(value: str) -> bool:
+    text = str(value or "").strip()
+    if len(text) < 2:
+        return False
+    stopwords = {
+        "며", "고", "및", "등", "은", "는", "이", "가", "을", "를", "의", "에", "에서",
+        "으로", "로", "까지", "부터", "했다", "말했다", "통해",
+    }
+    if text in stopwords:
+        return False
+    if re.fullmatch(r"[가-힣]{1,2}", text) and text not in {"AI", "RX"}:
+        return False
+    return bool(re.search(r"[A-Za-z0-9가-힣]", text))
+
+
+def _numbers_from_text(text: str) -> list[str]:
+    return re.findall(r"\d+(?:[.,]\d+)*\s*(?:%|원|조|억|만|건|명|개|년|월|일)?", text or "")
+
+
+def _compact_text(text: Any) -> str:
+    return re.sub(r"\s+", "", str(text or "").strip().lower())
+
+
+def _as_dict_list(value: Any) -> list[dict[str, Any]]:
+    return [item for item in (value or []) if isinstance(item, dict)]
+
+
+class _EvidenceTextRegistry:
+    """Deduplicate repeated evidence snippets in the public IntegratedIssue payload."""
+
+    def __init__(self) -> None:
+        self._items: list[dict[str, Any]] = []
+        self._id_by_key: dict[str, str] = {}
+
+    def add(self, text: Any, *, source_ids: list[int] | None = None) -> str:
+        cleaned = _reference_text(text)
+        if not cleaned:
+            return ""
+        key = _compact_text(cleaned)
+        ref_id = self._id_by_key.get(key)
+        if ref_id:
+            self._merge_source_ids(ref_id, source_ids)
+            return ref_id
+        ref_id = f"ev{len(self._items) + 1}"
+        item: dict[str, Any] = {"id": ref_id, "text": cleaned}
+        ids = _normalize_int_list(source_ids)
+        if ids:
+            item["source_ids"] = ids
+        self._items.append(item)
+        self._id_by_key[key] = ref_id
+        return ref_id
+
+    def items(self) -> list[dict[str, Any]]:
+        return [dict(item) for item in self._items]
+
+    def _merge_source_ids(self, ref_id: str, source_ids: list[int] | None) -> None:
+        ids = _normalize_int_list(source_ids)
+        if not ids:
+            return
+        for item in self._items:
+            if item.get("id") != ref_id:
+                continue
+            merged = _normalize_int_list([*item.get("source_ids", []), *ids])
+            if merged:
+                item["source_ids"] = merged
+            return
+
+
+def _reference_text(value: Any) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    if text.startswith(("input_bundle.", "raw_articles.", "sources.")):
+        return ""
+    if re.fullmatch(r"[A-Za-z0-9_./:-]+", text):
+        return ""
+    return text
 
 
 def _facts_from_existing_summary(summary: dict[str, Any]) -> list[dict[str, Any]]:
@@ -471,7 +906,6 @@ def _input_bundle_ref(input_bundle: AnalysisInputBundle) -> dict[str, Any]:
         "cluster_id": input_bundle.cluster_id,
         "source_type": input_bundle.source_type,
         "source_count": len(input_bundle.sources),
-        "raw_article_ids": _raw_item_ids(input_bundle.items),
     }
 
 
@@ -564,6 +998,25 @@ def _dedupe_ints(values: Any) -> list[int]:
         if number > 0 and number not in ids:
             ids.append(number)
     return ids
+
+
+def _normalize_int_list(value: Any) -> list[int]:
+    if value is None:
+        values: list[Any] = []
+    elif isinstance(value, list | tuple | set):
+        values = list(value)
+    else:
+        values = [value]
+    return _dedupe_ints(values)
+
+
+def _dedupe_strings(values: Any) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def _first_non_empty(*values: Any) -> str:

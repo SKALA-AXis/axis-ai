@@ -41,23 +41,29 @@ class IssueIntegrationAgent:
         return _integrate_non_news_bundle(input_bundle)
 
     def _integrate_news_bundle(self, input_bundle: AnalysisInputBundle) -> dict[str, Any]:
-        """뉴스 클러스터는 기사 묶음 전체를 fact 중심으로 통합한다."""
-        summarizer_bundle = _eligible_news_bundle(input_bundle)
-        if not summarizer_bundle.items:
+        """뉴스 클러스터는 대표 기사를 분석하고 전체 기사는 출처 참조로 유지한다."""
+        eligible_bundle = _eligible_news_bundle(input_bundle)
+        if not eligible_bundle.items:
             return IntegratedIssueComposer().compose_non_news(input_bundle)
-        cluster_id = _safe_int(summarizer_bundle.cluster_id)
-        representative_id = _representative_id(summarizer_bundle)
-        cluster_article_ids = _item_ids(summarizer_bundle.items)
+        analysis_bundle = _representative_news_analysis_bundle(eligible_bundle)
+        cluster_id = _safe_int(input_bundle.cluster_id or analysis_bundle.cluster_id)
+        representative_id = _representative_id(analysis_bundle)
+        cluster_article_ids = _cluster_article_ids(input_bundle)
         integrated_issue = self.engine.summarize_articles(
             cluster_id=cluster_id,
             representative_id=representative_id,
-            articles=summarizer_bundle.items,
+            articles=analysis_bundle.items,
             cluster_article_ids=cluster_article_ids,
         )
-        return _tag_integrated_issue(
+        tagged_issue = _tag_integrated_issue(
             integrated_issue,
-            input_bundle=input_bundle,
+            input_bundle=analysis_bundle,
             issue_component="IssueIntegrationAgent",
+        )
+        return _attach_cluster_source_references(
+            tagged_issue,
+            source_bundle=input_bundle,
+            analysis_bundle=analysis_bundle,
         )
 
     def summarize_input_bundle(self, input_bundle: AnalysisInputBundle) -> dict[str, Any]:
@@ -265,6 +271,129 @@ def _eligible_news_bundle(input_bundle: AnalysisInputBundle) -> AnalysisInputBun
     )
 
 
+def _representative_news_analysis_bundle(input_bundle: AnalysisInputBundle) -> AnalysisInputBundle:
+    representative_id = _representative_article_id(input_bundle)
+    selected_items = [
+        item for item in input_bundle.items if _item_id(item) == representative_id
+    ]
+    if not selected_items and input_bundle.items:
+        selected_items = [input_bundle.items[0]]
+        representative_id = _item_id(selected_items[0])
+    selected_ids = {_item_id(item) for item in selected_items if _item_id(item) > 0}
+    return replace(
+        input_bundle,
+        items=selected_items,
+        facts=[
+            fact
+            for fact in input_bundle.facts
+            if _safe_int(fact.get("raw_article_id") or fact.get("article_id")) in selected_ids
+        ],
+        evidence_snippets=[
+            snippet
+            for snippet in input_bundle.evidence_snippets
+            if _safe_int(snippet.get("raw_article_id") or snippet.get("article_id"))
+            in selected_ids
+        ],
+        sources=[
+            source for source in input_bundle.sources if _source_id(source) in selected_ids
+        ],
+        metadata={
+            **input_bundle.metadata,
+            "representative_id": representative_id,
+        },
+    )
+
+
+def _representative_article_id(input_bundle: AnalysisInputBundle) -> int:
+    cluster_id = _safe_int(input_bundle.cluster_id)
+    item_ids = _item_ids(input_bundle.items)
+    if cluster_id > 0 and cluster_id in item_ids:
+        return cluster_id
+    if (representative_id := _representative_id(input_bundle)) > 0:
+        return representative_id
+    for item in input_bundle.items:
+        if item.get("is_representative"):
+            return _item_id(item)
+    return item_ids[0] if item_ids else 0
+
+
+def _cluster_article_ids(input_bundle: AnalysisInputBundle) -> list[int]:
+    metadata_ids = _normalize_int_list(input_bundle.metadata.get("cluster_article_ids"))
+    return metadata_ids or _item_ids(input_bundle.items)
+
+
+def _attach_cluster_source_references(
+    integrated_issue: dict[str, Any],
+    *,
+    source_bundle: AnalysisInputBundle,
+    analysis_bundle: AnalysisInputBundle,
+) -> dict[str, Any]:
+    analyzed_ids = _item_ids(analysis_bundle.items)
+    source_refs = _cluster_source_references(source_bundle)
+    issue_brief = dict(integrated_issue.get("issue_brief") or {})
+    issue_brief["analysis_scope"] = {
+        "analyzed_source_ids": analyzed_ids,
+    }
+    metadata = {
+        **(integrated_issue.get("metadata") or {}),
+        "cluster_id": source_bundle.cluster_id,
+        "source_count": len(source_refs),
+        "cluster_source_count": len(source_refs),
+        "analyzed_source_count": len(analyzed_ids),
+    }
+    return {
+        **integrated_issue,
+        "issue_brief": issue_brief,
+        "sources": source_refs,
+        "metadata": metadata,
+    }
+
+
+def _cluster_source_references(input_bundle: AnalysisInputBundle) -> list[dict[str, Any]]:
+    item_by_id = {_item_id(item): item for item in input_bundle.items if _item_id(item) > 0}
+    refs: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for source in input_bundle.sources or []:
+        source_id = _source_id(source)
+        if source_id <= 0 or source_id in seen:
+            continue
+        seen.add(source_id)
+        item = item_by_id.get(source_id, {})
+        refs.append(_source_reference(source=source, item=item, source_id=source_id))
+    for item in input_bundle.items or []:
+        item_id = _item_id(item)
+        if item_id <= 0 or item_id in seen:
+            continue
+        seen.add(item_id)
+        refs.append(_source_reference(source={}, item=item, source_id=item_id))
+    return refs
+
+
+def _source_reference(
+    *,
+    source: dict[str, Any],
+    item: dict[str, Any],
+    source_id: int,
+) -> dict[str, Any]:
+    return {
+        "id": source_id,
+        "title": _first_non_empty(source.get("title"), item.get("title")),
+        "source_name": _first_non_empty(
+            source.get("source_name"),
+            item.get("source_name"),
+            item.get("publisher"),
+        ),
+        "source_type": _first_non_empty(source.get("source_type"), item.get("source_type")),
+        "publisher": _first_non_empty(source.get("publisher"), item.get("publisher")),
+        "published_at": _first_non_empty(source.get("published_at"), item.get("published_at")),
+        "url": _first_non_empty(source.get("url"), item.get("url")),
+        "relevance_label": _first_non_empty(
+            source.get("relevance_label"), item.get("relevance_label")
+        ),
+        "relevance_score": source.get("relevance_score", item.get("relevance_score")),
+    }
+
+
 def _source_eligible(source: dict[str, Any] | None) -> bool:
     if not source:
         return True
@@ -308,6 +437,17 @@ def _normalize_string_list(value: Any) -> list[str]:
     return [stripped] if stripped else []
 
 
+def _normalize_int_list(value: Any) -> list[int]:
+    values: list[Any]
+    if value is None:
+        values = []
+    elif isinstance(value, list | tuple | set):
+        values = list(value)
+    else:
+        values = [value]
+    return _dedupe_ints([_safe_int(item) for item in values])
+
+
 def _dedupe_ints(values: list[int]) -> list[int]:
     seen: set[int] = set()
     result: list[int] = []
@@ -317,6 +457,18 @@ def _dedupe_ints(values: list[int]) -> list[int]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _source_id(source: dict[str, Any]) -> int:
+    return _safe_int(source.get("raw_article_id") or source.get("article_id") or source.get("id"))
+
+
+def _first_non_empty(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
 
 
 def _safe_int(value: Any) -> int:

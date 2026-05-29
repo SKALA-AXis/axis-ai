@@ -145,6 +145,7 @@ class CardNewsAgent:
 
         DB 저장은 하지 않는다.
         """
+        summary = _summary_compat(summary)
         analysis = analysis or {}
         classification = classification or {}
         articles = articles if articles is not None else _load_source_articles(summary)
@@ -585,11 +586,70 @@ def _default_sources(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _summary_compat(summary: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(summary, dict) or "issue_brief" not in summary:
+        return summary
+    brief = summary.get("issue_brief") if isinstance(summary.get("issue_brief"), dict) else {}
+    metadata = summary.get("metadata") if isinstance(summary.get("metadata"), dict) else {}
+    evidence = summary.get("evidence") if isinstance(summary.get("evidence"), dict) else {}
+    evidence_text_by_ref = {
+        str(item.get("id")): str(item.get("text") or "")
+        for item in evidence.get("references", []) or []
+        if isinstance(item, dict) and item.get("id") and item.get("text")
+    }
+    facts = [
+        fact
+        for section in evidence.get("by_section", []) or []
+        if isinstance(section, dict)
+        for fact in section.get("facts", []) or []
+        if isinstance(fact, dict)
+    ]
+    compat = dict(summary)
+    compat.setdefault("cluster_id", metadata.get("cluster_id"))
+    compat.setdefault("representative_id", metadata.get("representative_id"))
+    compat.setdefault("main_company", brief.get("main_company", ""))
+    compat.setdefault("headline", brief.get("headline", ""))
+    compat.setdefault("one_line_summary", brief.get("one_line_summary", ""))
+    compat.setdefault("is_valid_summary", brief.get("is_valid", True))
+    compat.setdefault("cluster_event_type", brief.get("event_type"))
+    compat.setdefault("confidence", brief.get("confidence", 0.0))
+    compat.setdefault("fact_extraction_failed", metadata.get("fact_extraction_failed", False))
+    compat.setdefault(
+        "source_article_ids",
+        (brief.get("analysis_scope") or {}).get("analyzed_source_ids")
+        or (brief.get("analysis_scope") or {}).get("analyzed_raw_article_ids", []),
+    )
+    compat.setdefault("fact_summary", [fact.get("fact") for fact in facts if fact.get("fact")][:3])
+    compat.setdefault(
+        "consolidated_facts",
+        [{"fact": fact.get("fact"), "fact_id": fact.get("fact_id")} for fact in facts],
+    )
+    compat.setdefault(
+        "fact_basis",
+        [
+            {
+                "summary_line_index": index,
+                "fact": fact.get("fact"),
+                "source_article_ids": fact.get("source_ids", []),
+                "fact_ids": [fact.get("fact_id")] if fact.get("fact_id") else [],
+                "evidence_texts": [
+                    fact.get("evidence_text")
+                    or evidence_text_by_ref.get(str(fact.get("evidence_ref_id") or ""))
+                    or fact.get("fact")
+                ],
+            }
+            for index, fact in enumerate(facts[:3], start=1)
+        ],
+    )
+    compat.setdefault("missing_or_uncertain_points", evidence.get("uncertain_points", []))
+    return compat
+
+
 def _load_source_articles(summary: dict[str, Any]) -> list[dict[str, Any]]:
     article_ids = [
         article_id
         for article_id in (
-            _optional_int(raw_id) for raw_id in _list_string(summary.get("source_article_ids"))
+            _optional_int(raw_id) for raw_id in _summary_source_ids(summary)
         )
         if article_id is not None
     ]
@@ -1007,7 +1067,7 @@ def _source_indexes(sources: list[dict[str, Any]]) -> list[int]:
 
 
 def _source_article_ids(summary: dict[str, Any], articles: list[dict[str, Any]]) -> list[int]:
-    raw_ids = _list_string(summary.get("source_article_ids"))
+    raw_ids = _summary_source_ids(summary)
     article_ids = [
         article_id
         for article_id in (_optional_int(raw_id) for raw_id in raw_ids)
@@ -1020,6 +1080,19 @@ def _source_article_ids(summary: dict[str, Any], articles: list[dict[str, Any]])
         for article_id in (_optional_int(article.get("id")) for article in articles)
         if article_id is not None
     ]
+
+
+def _summary_source_ids(summary: dict[str, Any]) -> list[Any]:
+    for key in ("source_article_ids", "analyzed_article_ids"):
+        values = _list_string(summary.get(key))
+        if values:
+            return values
+    source_ids = [
+        source.get("id")
+        for source in summary.get("sources", []) or []
+        if isinstance(source, dict) and source.get("id") is not None
+    ]
+    return source_ids
 
 
 def _published_date(articles: list[dict[str, Any]], created_at: str) -> str:

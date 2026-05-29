@@ -65,6 +65,11 @@ class IntegrationPolicy:
         "투자",
         "리스크",
         "규제",
+        "판결",
+        "파기환송",
+        "대법원",
+        "소송",
+        "재산분할",
         "전략",
         "사업",
         "고객",
@@ -116,6 +121,15 @@ class IntegrationPolicy:
     integrated_body_extract_limit: int = 18
     content_section_limit: int = 8
     content_section_keyword_limit: int = 8
+    # Downstream agent views are prompt/input projections, not storage payloads.
+    # They keep the canonical IntegratedIssue rich while preventing each agent
+    # from receiving repeated raw sections, full source maps, and full ledgers.
+    agent_view_source_limit: int = 8
+    agent_view_section_limit: int = 6
+    agent_view_key_point_limit: int = 8
+    agent_view_extract_limit: int = 6
+    agent_view_fact_limit: int = 10
+    agent_view_signal_limit: int = 8
     content_sentence_score_weights: dict[str, float] = field(
         default_factory=lambda: {
             "materiality_terms": 1.0,

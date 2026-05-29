@@ -308,7 +308,7 @@ class SourceSummarizer:
         requested_cluster_ids = list(cluster_article_ids or [])
         coverage_warning = ""
         if not requested_cluster_ids:
-            coverage_warning = "cluster_article_ids 없음"
+            coverage_warning = "클러스터 기사 id 목록 없음"
         cluster_article_count = len(requested_cluster_ids or source_article_ids)
         analyzed_article_count = len(source_article_ids)
         coverage = _coverage_info(
@@ -829,8 +829,27 @@ def _rule_based_entities(sentences: list[str]) -> list[str]:
     quoted = re.findall(r"['\"‘’“”]([^'\"‘’“”]{2,40})['\"‘’“”]", text)
     acronym_like = re.findall(r"\b[A-Z][A-Za-z0-9+\-/]{1,20}\b", text)
     return _dedupe_keep_order(
-        [_clean_domain_term(term) for term in [*quoted, *acronym_like] if _clean_domain_term(term)]
+        [
+            term
+            for term in (_clean_domain_term(term) for term in [*quoted, *acronym_like])
+            if _is_valid_domain_entity(term)
+        ]
     )[:12]
+
+
+def _is_valid_domain_entity(value: str) -> bool:
+    text = str(value or "").strip()
+    if len(text) < 2:
+        return False
+    stopwords = {
+        "며", "고", "및", "등", "은", "는", "이", "가", "을", "를", "의", "에",
+        "에서", "으로", "로", "까지", "부터", "통해", "위해", "했다", "말했다",
+    }
+    if text in stopwords:
+        return False
+    if re.fullmatch(r"[가-힣]{1,2}", text):
+        return False
+    return bool(re.search(r"[A-Za-z0-9가-힣]", text))
 
 
 def _select_rule_based_sentences(sentences: list[str]) -> list[str]:
@@ -1091,6 +1110,11 @@ def _build_extracted_facts(
             activity_type=activity_type or cluster_event_type,
         )
         normalized_role = _normalize_summary_role(summary_role, fact_type=inferred_type)
+        clean_entities = [
+            entity
+            for entity in _dedupe_keep_order(_normalize_string_list(entities))
+            if _is_valid_domain_entity(entity)
+        ]
         facts.append(
             {
                 "fact_id": f"c{cluster_id}_a{article_id}_f{counters[article_id]}",
@@ -1100,7 +1124,7 @@ def _build_extracted_facts(
                 "role_priority": _summary_role_priority(normalized_role),
                 "evidence_text": evidence,
                 "normalized_fact": text,
-                "entities": _dedupe_keep_order(_normalize_string_list(entities)),
+                "entities": clean_entities,
                 "numbers": _dedupe_keep_order(
                     [*_normalize_string_list(numbers), *_number_tokens(evidence)]
                 ),
@@ -2432,7 +2456,7 @@ def _coverage_info(
     if cluster_article_count and analyzed_article_count < cluster_article_count:
         coverage_warning = (
             f"{coverage_warning}; " if coverage_warning else ""
-        ) + "일부 cluster_article_ids 기사 조회 실패"
+        ) + "일부 클러스터 기사 조회 실패"
     return {
         "cluster_article_count": cluster_article_count,
         "analyzed_article_count": analyzed_article_count,

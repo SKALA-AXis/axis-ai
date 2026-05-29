@@ -13,6 +13,8 @@ from typing import Any
 from src.analysis.models import AnalysisInputBundle
 from src.config.companies import COMPANIES, company_name_ko
 from src.config.event_types import (
+    EVENT_KEYWORDS_REQUIRING_CONTEXT,
+    EVENT_TYPE_CONTEXT_KEYWORDS,
     EVENT_TYPE_KEYWORDS,
     EVENT_TYPE_TIE_BREAK_PRIORITY,
     EVENT_TYPES,
@@ -31,6 +33,26 @@ _PERSON_ROLE_PATTERN = re.compile(r"([가-힣]{2,4})\s*(회장|대표이사|대�
 _INSTITUTION_PATTERN = re.compile(
     r"([A-Za-z가-힣0-9㈜().&·\s]{0,18}(?:대법원|법원|위원회|정부|재단|그룹|센터|연구원|거래소|금융감독원))"
 )
+_INVALID_PERSON_NAMES = {
+    "그룹",
+    "나비",
+    "선대",
+    "원고",
+    "피고",
+    "대법원",
+    "서울고법",
+    "재판부",
+}
+_INVALID_ENTITY_FRAGMENTS = (
+    "했다",
+    "됐다",
+    "된다",
+    "밝혔다",
+    "설명했다",
+    "판단했다",
+    "못박았다",
+    "취지다",
+)
 
 
 def build_issue_frame(
@@ -44,8 +66,22 @@ def build_issue_frame(
 ) -> dict[str, Any]:
     """Build a deterministic issue frame from structured and text signals."""
 
-    fact_basis = facts or input_bundle.facts or []
+    fact_basis = facts if facts is not None else input_bundle.facts or []
     text_by_article = _text_by_article(input_bundle.items)
+    eligible_raw_ids = {
+        _safe_int(raw_id) for raw_id in source_map.get("eligible_raw_article_ids") or []
+    }
+    has_source_rows = bool(source_map.get("sources"))
+    allow_content_mining = bool(eligible_raw_ids) or not has_source_rows
+    content_text_by_article = (
+        {
+            raw_id: text
+            for raw_id, text in text_by_article.items()
+            if raw_id in eligible_raw_ids
+        }
+        if eligible_raw_ids
+        else (text_by_article if allow_content_mining else {})
+    )
     source_index_by_raw_id = {
         _safe_int(raw_id): _safe_int(index)
         for raw_id, index in (source_map.get("raw_article_id_to_source_index") or {}).items()
@@ -53,6 +89,7 @@ def build_issue_frame(
     companies = _company_candidates(
         input_bundle=input_bundle,
         text_by_article=text_by_article,
+        content_text_by_article=content_text_by_article,
         source_index_by_raw_id=source_index_by_raw_id,
         policy=policy,
     )
@@ -66,6 +103,7 @@ def build_issue_frame(
         input_bundle=input_bundle,
         facts=fact_basis,
         text_by_article=text_by_article,
+        content_text_by_article=content_text_by_article,
         source_index_by_raw_id=source_index_by_raw_id,
         policy=policy,
     )
@@ -75,6 +113,7 @@ def build_issue_frame(
         content_digest=content_digest,
         sectors=sectors,
         event=event,
+        allow_content_mining=allow_content_mining,
         source_index_by_raw_id=source_index_by_raw_id,
         policy=policy,
     )
@@ -93,18 +132,22 @@ def build_issue_frame(
     entities = _entities(
         companies=companies,
         input_bundle=input_bundle,
-        text_by_article=text_by_article,
+        text_by_article=content_text_by_article,
         source_index_by_raw_id=source_index_by_raw_id,
         policy=policy,
     )
-    relations = _relations(
-        companies=companies,
-        sectors=sectors,
-        event=event,
-        topics=topics,
-        facts=fact_basis,
-        source_index_by_raw_id=source_index_by_raw_id,
-        policy=policy,
+    relations = (
+        _relations(
+            companies=companies,
+            sectors=sectors,
+            event=event,
+            topics=topics,
+            facts=fact_basis,
+            source_index_by_raw_id=source_index_by_raw_id,
+            policy=policy,
+        )
+        if allow_content_mining
+        else []
     )
     return {
         "frame_version": "issue_frame_v1",
@@ -114,9 +157,9 @@ def build_issue_frame(
             "source_type": input_bundle.source_type,
             "source_family": source_profile.source_family,
             "scope_type": source_profile.scope_type,
-            "raw_article_ids": content_digest.get("raw_article_ids", []),
-            "basis_raw_article_ids": content_digest.get("basis_raw_article_ids", []),
-            "eligible_raw_article_ids": content_digest.get("eligible_raw_article_ids", []),
+            "raw_article_ids": source_map.get("raw_article_ids", []),
+            "basis_raw_article_ids": source_map.get("basis_raw_article_ids", []),
+            "eligible_raw_article_ids": source_map.get("eligible_raw_article_ids", []),
             "source_count": source_map.get("source_count", 0),
         },
         "companies": _company_frame(companies),
@@ -141,6 +184,7 @@ def build_issue_frame(
             topics=topics,
             entities=entities,
             source_profile=source_profile,
+            has_analysis_eligible_source=allow_content_mining,
         ),
     }
 
@@ -149,6 +193,7 @@ def _company_candidates(
     *,
     input_bundle: AnalysisInputBundle,
     text_by_article: dict[int, str],
+    content_text_by_article: dict[int, str],
     source_index_by_raw_id: dict[int, int],
     policy: IntegrationPolicy,
 ) -> list[dict[str, Any]]:
@@ -210,8 +255,8 @@ def _company_candidates(
                         source_fields=["raw_articles.company", "raw_articles.matched_companies"],
                     )
                 )
-        title = str(item.get("title") or "")
-        content = str(item.get("content") or "")
+        title = _item_title(input_bundle.items, raw_id) if raw_id in content_text_by_article else ""
+        content = content_text_by_article.get(raw_id, "")
         for normalized, alias in _company_alias_hits(title):
             candidates.append(
                 _candidate(
@@ -352,6 +397,7 @@ def _event_frame(
     input_bundle: AnalysisInputBundle,
     facts: list[dict[str, Any]],
     text_by_article: dict[int, str],
+    content_text_by_article: dict[int, str],
     source_index_by_raw_id: dict[int, int],
     policy: IntegrationPolicy,
 ) -> dict[str, Any]:
@@ -370,7 +416,7 @@ def _event_frame(
         }
 
     matches: list[dict[str, Any]] = []
-    for raw_id, text in text_by_article.items():
+    for raw_id, text in content_text_by_article.items():
         title = _item_title(input_bundle.items, raw_id)
         matches.extend(
             _event_matches(
@@ -440,6 +486,7 @@ def _topics(
     content_digest: dict[str, Any],
     sectors: list[dict[str, Any]],
     event: dict[str, Any],
+    allow_content_mining: bool,
     source_index_by_raw_id: dict[int, int],
     policy: IntegrationPolicy,
 ) -> list[dict[str, Any]]:
@@ -505,6 +552,8 @@ def _topics(
                     confidence=_confidence(policy, "fact_keyword"),
                 )
             )
+    if not allow_content_mining:
+        return _merge_topics(topics)[: policy.frame_topic_limit]
     for section in content_digest.get("sections") or []:
         if not isinstance(section, dict):
             continue
@@ -571,7 +620,7 @@ def _timeline(
         if not isinstance(source, dict):
             continue
         date = _normalize_date(source.get("published_at"))
-        raw_id = _safe_int(source.get("raw_article_id"))
+        raw_id = _safe_int(source.get("raw_article_id") or source.get("id"))
         if not date or (date, "source_published", raw_id) in seen:
             continue
         seen.add((date, "source_published", raw_id))
@@ -650,9 +699,12 @@ def _entities(
             )
         text = text_by_article.get(raw_id, "")
         for match in _PERSON_ROLE_PATTERN.finditer(text):
+            name = match.group(1)
+            if not _is_valid_person_name(name):
+                continue
             entities.append(
                 _entity(
-                    name=match.group(1),
+                    name=name,
                     entity_type="person",
                     role=match.group(2),
                     raw_article_ids=[raw_id],
@@ -663,7 +715,7 @@ def _entities(
             )
         for match in _INSTITUTION_PATTERN.finditer(text):
             name = " ".join(match.group(1).split())
-            if len(name) < 2:
+            if not _is_valid_entity_name(name):
                 continue
             entities.append(
                 _entity(
@@ -752,6 +804,7 @@ def _quality(
     topics: list[dict[str, Any]],
     entities: list[dict[str, Any]],
     source_profile: SourceProfile,
+    has_analysis_eligible_source: bool,
 ) -> dict[str, Any]:
     parts = [
         bool(companies) or source_profile.scope_type in {"industry", "market", "mixed"},
@@ -762,6 +815,9 @@ def _quality(
     ]
     score = sum(1 for part in parts if part) / len(parts)
     warnings: list[str] = []
+    if not has_analysis_eligible_source:
+        warnings.append("no_analysis_eligible_source_rows")
+        score = min(score, 0.4)
     if source_profile.scope_type == "peer_company" and not companies:
         warnings.append("missing_primary_company")
     if not topics:
@@ -985,6 +1041,22 @@ def _merge_entities(entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
+def _is_valid_person_name(name: str) -> bool:
+    text = str(name or "").strip()
+    return bool(text) and text not in _INVALID_PERSON_NAMES
+
+
+def _is_valid_entity_name(name: str) -> bool:
+    text = str(name or "").strip()
+    if len(text) < 2 or len(text) > 32:
+        return False
+    if any(mark in text for mark in (".", '"', "“", "”")):
+        return False
+    if any(fragment in text for fragment in _INVALID_ENTITY_FRAGMENTS):
+        return False
+    return True
+
+
 def _event_matches(
     *,
     text: str,
@@ -998,7 +1070,16 @@ def _event_matches(
         return []
     matches: list[dict[str, Any]] = []
     for event_type, keywords in EVENT_TYPE_KEYWORDS.items():
-        trigger_terms = [keyword for keyword in keywords if keyword.lower() in lowered]
+        trigger_terms = [
+            keyword
+            for keyword in keywords
+            if keyword.lower() in lowered
+            and _event_keyword_has_context(
+                event_type=event_type,
+                keyword=keyword,
+                lowered_text=lowered,
+            )
+        ]
         if not trigger_terms:
             continue
         matches.append(
@@ -1022,7 +1103,25 @@ def _event_trigger_terms(event_type: str, text: str) -> list[str]:
         keyword
         for keyword in EVENT_TYPE_KEYWORDS.get(event_type, [])
         if keyword.lower() in lowered
+        and _event_keyword_has_context(
+            event_type=event_type,
+            keyword=keyword,
+            lowered_text=lowered,
+        )
     ]
+
+
+def _event_keyword_has_context(
+    *,
+    event_type: str,
+    keyword: str,
+    lowered_text: str,
+) -> bool:
+    guarded_keywords = EVENT_KEYWORDS_REQUIRING_CONTEXT.get(event_type, [])
+    if not any(keyword.lower() == guarded.lower() for guarded in guarded_keywords):
+        return True
+    context_terms = EVENT_TYPE_CONTEXT_KEYWORDS.get(event_type, [])
+    return any(term.lower() in lowered_text for term in context_terms)
 
 
 def _first_fact_matching_event(

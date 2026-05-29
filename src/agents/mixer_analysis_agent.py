@@ -38,6 +38,7 @@ from src.services.agent_output_validation import (
     clip_string,
     confidence_in_range,
 )
+from src.services.issue_integration.agent_views import mixer_agent_issue_input
 
 log = logging.getLogger(__name__)
 
@@ -977,18 +978,7 @@ def _compact_json(value: object, *, limit: int = 900) -> str:
 
 
 def _compact_integrated_issue(value: dict) -> dict:
-    if not value:
-        return {}
-    return {
-        "main_issue": value.get("main_issue") or value.get("headline"),
-        "integrated_text": value.get("integrated_text"),
-        "fact_summary": value.get("fact_summary"),
-        "consolidated_facts": value.get("consolidated_facts", [])[:5],
-        "key_numbers": value.get("key_numbers", [])[:5],
-        "business_signals": value.get("business_signals", [])[:5],
-        "main_company": value.get("main_company"),
-        "event_type": value.get("cluster_event_type"),
-    }
+    return mixer_agent_issue_input(value) if value else {}
 
 
 def _compact_analysis_result(value: dict) -> dict:
