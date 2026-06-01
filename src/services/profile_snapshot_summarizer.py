@@ -276,7 +276,7 @@ def _normalize_evidence_text_item(item: Any) -> dict[str, Any]:
         )
         if not text:
             return {}
-        normalized = {"text": text}
+        normalized: dict[str, Any] = {"text": text}
         refs = _unique_refs(item.get("source_refs") or [item.get("source_ref")])
         if refs:
             normalized["source_refs"] = refs[:2]
@@ -562,15 +562,17 @@ def _key_products_services(
             )
 
     for item in evidence_pack.get("direction_evidence") or []:
-        area = _map_to_official_area(str(item.get("business_area") or ""), item, official_areas)
-        if not area or area == "company_total":
+        mapped_area = _map_to_official_area(
+            str(item.get("business_area") or ""), item, official_areas
+        )
+        if not mapped_area or mapped_area == "company_total":
             continue
         services = _extract_service_terms(
             f"{item.get('claim') or ''} {item.get('evidence_text') or ''}"
         )
         if not services:
             continue
-        _merge_product_service(out, area, services, item.get("source_ref"))
+        _merge_product_service(out, mapped_area, services, item.get("source_ref"))
     return out[:8]
 
 
