@@ -35,6 +35,37 @@ class _FakeSession:
             return _Result(
                 [_Row(id="lg_cns", name="LG CNS", keywords=["LG CNS"], core_keywords=["AX"])]
             )
+        if "GROUP BY source_type" in sql:
+            return _Result(
+                [
+                    _Row(source_type="dart", document_count=1),
+                    _Row(source_type="ir", document_count=1),
+                    _Row(source_type="official", document_count=1),
+                ]
+            )
+        if "source_type = 'securities_report'" in sql and "recent_document_count" in sql:
+            return _Result(
+                [
+                    _Row(
+                        document_count=0,
+                        recent_document_count=0,
+                        first_published_at=None,
+                        latest_published_at=None,
+                    )
+                ]
+            )
+        if (
+            "source_type = 'securities_report'" in sql
+            and "business_signal_count" in sql
+            and "financial_metric_count" in sql
+        ):
+            return _Result([_Row(business_signal_count=0, financial_metric_count=0)])
+        if (
+            "source_type = 'ir'" in sql
+            and "business_signal_count" in sql
+            and "financial_metric_count" in sql
+        ):
+            return _Result([_Row(business_signal_count=1, financial_metric_count=2)])
         if "FROM (" in sql and "raw_article_financial_metrics" in sql:
             return _Result([_Row(period_year=2026, period_quarter=1)])
         if "FROM raw_articles" in sql and "source_type = 'dart'" in sql:
@@ -55,6 +86,16 @@ class _FakeSession:
                     )
                 ]
             )
+        if (
+            "FROM raw_article_financial_metrics fm" in sql
+            and "fm.source_type = 'securities_report'" in sql
+        ):
+            return _Result([])
+        if (
+            "FROM raw_article_business_signals bs" in sql
+            and "bs.source_type = 'securities_report'" in sql
+        ):
+            return _Result([])
         if "FROM raw_article_financial_metrics fm" in sql:
             return _Result(
                 [
@@ -152,9 +193,9 @@ class _FakeSession:
 
 
 def test_normalize_business_area_maps_source_labels() -> None:
-    assert normalize_business_area("ai_ax") == "클라우드&AI"
-    assert normalize_business_area("logistics") == "스마트 엔지니어링"
-    assert normalize_business_area("Enterprise IT") == "Digital Business Service"
+    assert normalize_business_area("ai_ax") == "AI/AX"
+    assert normalize_business_area("logistics") == "물류"
+    assert normalize_business_area("Enterprise IT") == "IT서비스/SI"
 
 
 def test_profile_input_builder_builds_evidence_pack() -> None:
@@ -164,9 +205,12 @@ def test_profile_input_builder_builds_evidence_pack() -> None:
 
     assert pack["company"]["id"] == "lg_cns"
     assert pack["period"] == "2026Q1"
-    assert len(pack["business_area_evidence"]) == 3
-    assert pack["direction_evidence"][0]["business_area"] == "클라우드&AI"
+    assert len(pack["business_area_evidence"]) == 1
+    assert pack["business_area_evidence"][0]["business_area"] == "DART 공식 사업영역 후보"
+    assert "클라우드&AI" in pack["business_area_evidence"][0]["evidence_text"]
+    assert pack["direction_evidence"][0]["business_area"] == "AI/AX"
     assert pack["financial_evidence"][0]["yoy_pct"] == 6.7
     assert all(item["metric"] != "operating_profit" for item in pack["financial_evidence"])
     assert pack["execution_evidence"][0]["business_area"] == "스마트 엔지니어링"
+    assert pack["source_coverage"]["securities_report"]["status"] == "unavailable"
     assert pack["source_index"]

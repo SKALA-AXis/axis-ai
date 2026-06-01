@@ -339,14 +339,18 @@ def _dart_article_select_sql(limit_sql: str, *, peer_id: str | None = None) -> s
         financial_record_expr = "COALESCE(pr.financial_record, '{}'::jsonb)"
         warnings_expr = "COALESCE(pr.warnings, '[]'::jsonb)"
 
-    peer_filter_sql = """
+    peer_filter_sql = (
+        """
                 AND (
                     ra.company ? :peer_id
                     OR {metadata_expr}->>'peer_id' = :peer_id
                     OR {metadata_expr}->>'company' = :peer_id
                     OR {metadata_expr}->>'corp_name' = :peer_id
                 )
-    """.format(metadata_expr=metadata_expr) if peer_id else ""
+    """.format(metadata_expr=metadata_expr)
+        if peer_id
+        else ""
+    )
 
     return f"""
                 SELECT

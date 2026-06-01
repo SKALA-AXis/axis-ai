@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config.sectors import SECTOR_KEYWORDS
+from src.crawler.parsers.pdf_payload import extract_pdf_payload
 
 log = logging.getLogger(__name__)
 
@@ -949,15 +950,23 @@ def _pages_from_ir_article(article: Any, extra: dict[str, Any]) -> list[dict[str
             if text:
                 pages.append({"page": page_no, "text": text, "blocks": blocks})
 
+    content_pages = _pages_from_article_content(str(_article_get(article, "content", "") or ""))
+    if _should_use_content_pages(content_pages, pages):
+        return content_pages
+
     if pages:
         return pages
 
-    text = str(_article_get(article, "content", "") or "")
+    return content_pages
+
+
+def _pages_from_article_content(text: str) -> list[dict[str, Any]]:
     matches = list(_PAGE_SPLIT_PATTERN.finditer(text))
 
     if not matches:
         return [{"page": None, "text": text}] if text else []
 
+    pages: list[dict[str, Any]] = []
     for idx, match in enumerate(matches):
         page_no = int(match.group(1))
         start = match.end()
@@ -967,6 +976,25 @@ def _pages_from_ir_article(article: Any, extra: dict[str, Any]) -> list[dict[str
             pages.append({"page": page_no, "text": page_text})
 
     return pages
+
+
+def _should_use_content_pages(
+    content_pages: list[dict[str, Any]],
+    block_pages: list[dict[str, Any]],
+) -> bool:
+    if not content_pages:
+        return False
+    if not block_pages:
+        return True
+
+    content_text = "\n".join(str(page.get("text") or "") for page in content_pages)
+    block_text = "\n".join(str(page.get("text") or "") for page in block_pages)
+    if "[OCR]" in content_text:
+        return True
+
+    content_chars = len(re.findall(r"[0-9A-Za-z가-힣]", content_text))
+    block_chars = len(re.findall(r"[0-9A-Za-z가-힣]", block_text))
+    return content_chars > block_chars + 500 and content_chars > block_chars * 1.2
 
 
 def _page_text_from_pdf_blocks(blocks: Any) -> str:
@@ -3099,6 +3127,9 @@ class IRParser:
                 "chart_parse_strategy": extra.get("chart_parse_strategy"),
                 "contains_images": extra.get("contains_images"),
                 "image_count": extra.get("image_count"),
+                "drawing_count": extra.get("drawing_count"),
+                "ocr_applied": extra.get("ocr_applied"),
+                "ocr_pages": extra.get("ocr_pages"),
             },
             "financial_record": financial_record,
             "warnings": warnings,
@@ -3129,29 +3160,32 @@ class IRParser:
             return {"ok": False, "reason": f"파일 없음: {path}", "warnings": []}
 
         try:
-            import pymupdf  # type: ignore
-        except ImportError:
-            return {"ok": False, "reason": "pymupdf 미설치 - `uv add pymupdf`", "warnings": []}
-
-        try:
-            doc = pymupdf.open(path)
+            with path.open("rb") as pdf_file:
+                payload = extract_pdf_payload(pdf_file.read())
         except Exception as exc:
             return {"ok": False, "reason": f"PDF 열기 실패: {exc}", "warnings": []}
 
-        pages: list[str] = []
-        try:
-            for idx in range(min(len(doc), max_pages)):
-                page = doc.load_page(idx)
-                pages.append(page.get_text("text") or "")
-        finally:
-            doc.close()
+        pages_payload = payload.get("pages", [])[:max_pages]
+        pages = [str(page.get("text") or "") for page in pages_payload if isinstance(page, dict)]
 
         article = {
             "title": path.name,
             "url": str(path),
             "content": "\n".join(f"[PAGE {idx + 1}]\n{text}" for idx, text in enumerate(pages)),
             "peer_id": peer_id,
-            "extra": {"pdf_pages": len(pages), "pdf_parsed_pages": len(pages)},
+            "extra": {
+                "pdf_pages": payload.get("page_count"),
+                "pdf_parsed_pages": len(pages),
+                "pdf_page_blocks": pages_payload,
+                "pdf_text_chars": len(payload.get("text") or ""),
+                "pdf_parse_strategy": payload.get("pdf_parse_strategy"),
+                "table_parse_strategy": payload.get("table_parse_strategy"),
+                "chart_parse_strategy": payload.get("chart_parse_strategy"),
+                "contains_images": payload.get("contains_images"),
+                "image_count": payload.get("image_count"),
+                "ocr_applied": payload.get("ocr_applied"),
+                "ocr_pages": payload.get("ocr_pages"),
+            },
         }
         result = self.parse_article(article, include_raw_pages=True)
         result["page_count"] = len(pages)
