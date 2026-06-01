@@ -199,8 +199,9 @@ def main() -> int:
     print(f"  cache_consistent   = {ctx == ctx2}")
 
     section("✅ Validation complete")
+    pipeline_status = "PASS" if result.get("persisted_row_count", 0) > 0 else "FAIL"
     print(
-        f"  결과: 5-phase pipeline {'PASS' if result.get('persisted_row_count', 0) > 0 else 'FAIL'}, "
+        f"  결과: 5-phase pipeline {pipeline_status}, "
         f"persisted={result.get('persisted_row_count')} rows, "
         f"trend_context cache={'OK' if ctx == ctx2 else 'INCONSISTENT'}"
     )

@@ -45,6 +45,14 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="증권사 리포트 분석 fact/signal 재생성")
     parser.add_argument("--limit", type=int, default=0, help="처리할 문서 수 제한")
     parser.add_argument(
+        "--article-id",
+        dest="article_ids",
+        action="append",
+        type=int,
+        default=[],
+        help="특정 raw_article_id만 선택 처리. 여러 번 지정 가능",
+    )
+    parser.add_argument(
         "--reparse",
         action="store_true",
         help="SecuritiesReportParser를 다시 실행해 metadata parser 관련 필드를 갱신",
@@ -77,7 +85,7 @@ def main() -> None:
     if not args.reparse and not args.upsert_metrics and not args.upsert_signals:
         raise SystemExit("--reparse, --upsert-metrics, --upsert-signals 중 하나 이상을 지정하세요.")
 
-    articles = _load_articles(limit=args.limit)
+    articles = _load_articles(limit=args.limit, article_ids=args.article_ids)
     log.info("증권사 리포트 로드 완료 | count=%d", len(articles))
 
     all_metrics: list[dict[str, Any]] = []
@@ -124,9 +132,13 @@ def main() -> None:
         log.info("securities_report business signals upsert 완료 | count=%d", count)
 
 
-def _load_articles(*, limit: int = 0) -> list[dict[str, Any]]:
+def _load_articles(*, limit: int = 0, article_ids: list[int] | None = None) -> list[dict[str, Any]]:
     limit_sql = "LIMIT :limit" if limit > 0 else ""
     params = {"limit": limit} if limit > 0 else {}
+    article_ids = [article_id for article_id in article_ids or [] if article_id > 0]
+    article_filter_sql = "AND ra.id = ANY(:article_ids)" if article_ids else ""
+    if article_ids:
+        params["article_ids"] = article_ids
     with SessionLocal() as db:
         has_unified = _table_exists(db, "raw_article_metadata_unified")
         has_source_metadata = _table_exists(db, "raw_article_source_metadata")
@@ -173,6 +185,7 @@ def _load_articles(*, limit: int = 0) -> list[dict[str, Any]]:
                 FROM raw_articles ra
                 {metadata_join}
                 WHERE ra.source_type = 'securities_report'
+                  {article_filter_sql}
                 ORDER BY ra.published_at DESC NULLS LAST, ra.id DESC
                 {limit_sql}
             """),

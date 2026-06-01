@@ -51,6 +51,13 @@ def _input_pack() -> dict[str, Any]:
                 "confidence": 0.85,
             }
         ],
+        "source_coverage": {
+            "securities_report": {
+                "available": False,
+                "status": "unavailable",
+                "reason": "최근 3년 내 증권사 리포트 없음",
+            }
+        },
         "source_index": [],
     }
 
@@ -59,6 +66,60 @@ class _Builder:
     def build(self, peer_id: str) -> dict[str, Any]:
         assert peer_id == "lg_cns"
         return _input_pack()
+
+
+class _FakeMessage:
+    content = """
+{
+  "company_id": "lg_cns",
+  "company_name": "LG CNS",
+  "schema_version": "peer-profile-snapshot-v1",
+  "generated_at": "2026-06-01T00:00:00+00:00",
+  "one_liner": "LG CNS는 클라우드&AI 중심의 IT서비스 기업입니다.",
+  "company_summary": "LG CNS는 클라우드&AI와 스마트 엔지니어링을 중심으로 사업을 전개합니다.",
+  "business_areas": [
+    {
+      "name": "클라우드&AI",
+      "summary": "클라우드 전환과 AI 적용을 지원합니다.",
+      "core_capabilities": ["MSP", "AI"],
+      "recent_direction": "AgenticWorks 기반 사업 확대",
+      "evidence_texts": [],
+      "source_refs": [{"raw_article_id": 14499}]
+    }
+  ],
+  "core_capabilities": ["MSP", "AI"],
+  "recent_changes": [],
+  "evidence_digest": [],
+  "financial_summary": {},
+  "market_view": {
+    "status": "unavailable",
+    "reason": "",
+    "positive_points": [],
+    "watch_points": [],
+    "valuation_notes": [],
+    "source_refs": []
+  },
+  "capability_evolution": {
+    "period": {"from": "", "to": ""},
+    "overall_change": "",
+    "changes": [],
+    "watch_points": []
+  },
+  "cautions": [],
+  "source_coverage": {},
+  "source_index": []
+}
+"""
+
+
+class _FakeLLM:
+    def __init__(self) -> None:
+        self.called = False
+
+    def invoke(self, prompt: str) -> _FakeMessage:
+        self.called = True
+        assert "evidence_pack" in prompt
+        return _FakeMessage()
 
 
 def test_peer_profile_agent_builds_valid_snapshot() -> None:
@@ -76,4 +137,24 @@ def test_peer_profile_agent_builds_valid_snapshot() -> None:
     assert snapshot["validation"]["is_valid"] is True
     assert snapshot["business_areas"]
     assert snapshot["financial_summary"] == {"company_total": {}, "segment_revenue": []}
+    assert snapshot["market_view"]["status"] == "unavailable"
+    assert snapshot["source_coverage"]["securities_report"]["status"] == "unavailable"
     assert any(change["business_area"] == "클라우드&AI" for change in snapshot["recent_changes"])
+
+
+def test_peer_profile_agent_builds_snapshot_with_llm() -> None:
+    llm = _FakeLLM()
+    agent = PeerProfileAgent(
+        input_builder=_Builder(),
+        evidence_selector=ProfileEvidenceSelector(),
+        summarizer=ProfileSnapshotSummarizer(),
+        validator=ProfileSnapshotValidator(),
+        llm=llm,
+    )
+
+    snapshot = agent.build_snapshot("lg_cns", use_llm=True)
+
+    assert llm.called is True
+    assert snapshot["company_id"] == "lg_cns"
+    assert snapshot["company_summary"]
+    assert snapshot["validation"]["is_valid"] is True

@@ -34,6 +34,10 @@ class ProfileSnapshotValidator:
             errors.append("business_areas must be a list")
         if not isinstance(snapshot.get("financial_summary"), dict):
             errors.append("financial_summary must be an object")
+        if "market_view" in snapshot and not isinstance(snapshot.get("market_view"), dict):
+            errors.append("market_view must be an object")
+        if "source_coverage" in snapshot and not isinstance(snapshot.get("source_coverage"), dict):
+            errors.append("source_coverage must be an object")
         if not isinstance(snapshot.get("source_index"), list):
             errors.append("source_index must be a list")
 
@@ -79,8 +83,11 @@ def _allowed_refs(evidence_pack: dict[str, Any]) -> set[tuple[str, Any]]:
     for bucket in (
         "business_area_evidence",
         "financial_evidence",
+        "operational_evidence",
         "direction_evidence",
         "execution_evidence",
+        "evolution_evidence",
+        "market_evidence",
         "source_index",
     ):
         for item in evidence_pack.get(bucket) or []:
