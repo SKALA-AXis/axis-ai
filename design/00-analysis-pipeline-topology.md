@@ -88,13 +88,13 @@ ProfileContext
 
 - 글로벌 회사별 뉴스룸은 카드뉴스 생성 대상이다. Microsoft, AWS, Google, NVIDIA,
   OpenAI 같은 회사별 뉴스룸은 일반 이슈처럼
-  `IntegratedIssue → AnalysisAgent → ImplicationAgent → CardNewsAgent` 흐름을 탄다.
+  `IntegratedIssue → StrategicAnalyzer → ImplicationAgent → CardNewsAgent` 흐름을 탄다.
 - SPRi / BCG 자료는 카드뉴스 생성 대상이 아니다. `ITTrendAgent`가 이 자료와 과거
   `TrendContext`를 함께 보고 글로벌·산업 흐름을 갱신한다.
 - 글로벌 회사별 뉴스룸의 `IntegratedIssue`와 `AnalysisResult`도 `ITTrendAgent`가
   실행 신호로 참고해 `TrendContext`를 갱신한다.
 - `ITTrendAgent` 출력은 카드뉴스가 아니라 `TrendContext`다.
-- `AnalysisAgent`는 이슈 분석 시 필요하면 `TrendContext`를 참고할 수 있다.
+- `StrategicAnalyzer`는 이슈 분석 시 필요하면 `TrendContext`를 참고할 수 있다.
 - 카드뉴스 화면 결과나 글로벌 뉴스룸 원문을 `TrendContext` 입력으로 직접 쓰지는 않는다.
 
 ## AnalysisGraphRunner
@@ -120,7 +120,7 @@ AnalysisInputBundle
 → ① issue_integrate          IntegrationAgent → IntegratedIssue
 → ② profile_context          ProfileContextLoader.load → ProfileContext (Tier A snapshot + Tier B enrichment)
 → ③ build_analysis_context   AnalysisContextBuilder → AnalysisContext (6 layer, ≤4,000 token)
-→ ④ strategic_analyze        AnalysisAgent (StrategicAnalyzer) → AnalysisResult
+→ ④ strategic_analyze        StrategicAnalyzer → AnalysisResult
 → ⑤ implication              ImplicationAgent v4.0/v5.0 → ImplicationResult
 → ⑥ validate                 _hard_validate + EvaluatorAgent → ValidationReport
    ├ pass → ⑦ assemble → ⑧ card_writer → save_card_news (v2 schema) → END
@@ -166,7 +166,7 @@ LangGraph `RetryPolicy / with_retry` 정식 도입은 별도 PR (`design/01-anal
 - 카드뉴스용 3줄 요약을 만들지 않는다.
 - 시사점이나 대응 방향을 만들지 않는다.
 
-## AnalysisAgent
+## StrategicAnalyzer
 
 `IntegratedIssue`를 기반으로 전략적 의미를 분석한다.
 
@@ -189,7 +189,7 @@ LangGraph `RetryPolicy / with_retry` 정식 도입은 별도 PR (`design/01-anal
 주의:
 - 원문/클러스터/문서 전체를 다시 읽지 않는다.
 - 원문 기반 fact 통합은 IntegrationAgent 책임이다.
-- AnalysisAgent는 IntegratedIssue 안의 `integrated_text`, `consolidated_facts`,
+- StrategicAnalyzer는 IntegratedIssue 안의 `integrated_text`, `consolidated_facts`,
   `key_numbers`, `business_signals`, `fact_basis`를 근거로 해석한다.
 - `TrendContext`가 있으면 글로벌/산업 배경으로만 참고하며, IntegratedIssue에 없는
   사실을 새로 만들지 않는다.
@@ -211,7 +211,7 @@ ProfileAgent 는 단순 context provider 가 아니라 **원천 데이터 (DART 
 
 ### 출력의 두 관점 (Peer 와 SK AX 분리)
 
-- **`ProfileContext.peer_profiles[peer_id]`** — AnalysisAgent 의 입력. peer 의 전략·역량·
+- **`ProfileContext.peer_profiles[peer_id]`** — StrategicAnalyzer 의 입력. peer 의 전략·역량·
   사업 방향 자체를 해석하는 데 사용.
 - **`ProfileContext.skax_profile`** — ImplicationAgent 의 입력. SK AX 관점에서 기회/위협/
   대응 방향을 도출하는 데 사용.

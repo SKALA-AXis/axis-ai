@@ -1,7 +1,7 @@
 # 1단계 데이터 분석 Pipeline — 구현 계획서 (v3.2.2)
 
 > 작성: 2026-05-20 KST · 갱신: 2026-05-21 v3.2.2 (외부 리뷰 R-rename 반영 — Supervisor → Analysis Pipeline / Analysis Flow)
-> 대상: `axis-ai/src/agents/analysis_graph_runner.py` (= `AnalysisGraphRunner` alias) 및 산하 4 child + CardNews + Context layer + Evaluator
+> 대상: `axis-ai/src/agents/analysis_graph_runner.py` (`AnalysisGraphRunner`) 및 산하 4 child + CardNews + Context layer + Evaluator
 > 기준 설계: [`design/00-analysis-pipeline-topology.md`](00-analysis-pipeline-topology.md)
 > 교차 검증: [`docs/AGENT_ARCHITECTURE_VERIFICATION.md`](../docs/AGENT_ARCHITECTURE_VERIFICATION.md)
 > 실측 검증: `kubectl exec postgres-...` 으로 cluster DB 직접 쿼리 (2026-05-20 KST). 발견 8 critical issue 는 §2.4 참고.
@@ -9,13 +9,13 @@
 > **명칭 주의 (외부 리뷰 2026-05-21 R-rename)**: 본 계획서의 "Supervisor" / "AnalysisGraphRunner"
 > 는 multi-agent supervisor pattern 이 아닌 **고정 순서 DAG pipeline** 의 일반 코디네이터 의미.
 > 새 코드에서는 `AnalysisGraphRunner` / `AnalysisFlowState` / `build_analysis_flow_graph` 사용 권장.
-> 기존 `Supervisor*` 이름은 backward-compat 으로 유지.
+> 기존 `Supervisor*` 이름은 제거하고 `AnalysisGraphRunner` 기준으로 정리한다.
 
 ---
 
 ## 0. 한 줄 요약
 
-수집·전처리·매칭이 끝난 데이터를 받아 **Analysis Pipeline runner** (코드 상 `AnalysisGraphRunner` / `AnalysisGraphRunner` alias) 가 4 child agent 를 조율해 `AnalysisPackage` 를 만들고 `CardNewsAgent` 가 카드로 재가공하는 **wire 는 동작 중**. 그러나 (a) 시사점이 LLM 미사용 heuristic 이라 카드 가치의 핵심이 약하고, (b) Profile context 가 cluster-time 에 빈약하며, (c) **Analysis Pipeline 이 plain Python 순차 호출** 이라 retry·관측·검증이 모두 부재. **추가로 (d) 시사점·대응 추론에 필요한 과거 누적 맥락 (뉴스 14k, business_signals 27k, financial_metrics 3.4k, IR/DART) 이 cluster-time 에 활용되지 않고 있으며**, (e) 카드뉴스 형식이 `요약` 중심이라 `요약+시사점+대응` 세 섹션을 명확히 분리하는 schema 정합화가 필요. 본 계획서는 (a)(b)(c) 를 **LangGraph 기반 고정 순서 DAG (`AnalysisFlowGraph`) 로 재설계**, (d) 를 **4-Layer Context Model + AnalysisContextBuilder + 운영 CronJob 2~3종** 으로 해결, (e) 를 **카드뉴스 v2 schema (`summary_lines` + `implication.skax_implication.recommended_actions` 명시화)** 로 마무리. **핵심: 신규 DB 테이블은 거의 불필요 (기존 `card_news` / `raw_article_business_signals` / `raw_article_financial_metrics` / `peer_companies.peer_plus_payload` JSONB / `legacy_records` 로 모두 흡수 가능). 추가는 VIEW 2 + MATERIALIZED VIEW 1 + 인덱스 3개 + V34 (옵션) `event_chain_links` 1 테이블.**
+수집·전처리·매칭이 끝난 데이터를 받아 **Analysis Pipeline runner** (코드 상 `AnalysisGraphRunner`) 가 4 child agent 를 조율해 `AnalysisPackage` 를 만들고 `CardNewsAgent` 가 카드로 재가공하는 **wire 는 동작 중**. 그러나 (a) 시사점이 LLM 미사용 heuristic 이라 카드 가치의 핵심이 약하고, (b) Profile context 가 cluster-time 에 빈약하며, (c) **Analysis Pipeline 이 plain Python 순차 호출** 이라 retry·관측·검증이 모두 부재. **추가로 (d) 시사점·대응 추론에 필요한 과거 누적 맥락 (뉴스 14k, business_signals 27k, financial_metrics 3.4k, IR/DART) 이 cluster-time 에 활용되지 않고 있으며**, (e) 카드뉴스 형식이 `요약` 중심이라 `요약+시사점+대응` 세 섹션을 명확히 분리하는 schema 정합화가 필요. 본 계획서는 (a)(b)(c) 를 **LangGraph 기반 고정 순서 DAG (`AnalysisFlowGraph`) 로 재설계**, (d) 를 **4-Layer Context Model + AnalysisContextBuilder + 운영 CronJob 2~3종** 으로 해결, (e) 를 **카드뉴스 v2 schema (`summary_lines` + `implication.skax_implication.recommended_actions` 명시화)** 로 마무리. **핵심: 신규 DB 테이블은 거의 불필요 (기존 `card_news` / `raw_article_business_signals` / `raw_article_financial_metrics` / `peer_companies.peer_plus_payload` JSONB / `legacy_records` 로 모두 흡수 가능). 추가는 VIEW 2 + MATERIALIZED VIEW 1 + 인덱스 3개 + V34 (옵션) `event_chain_links` 1 테이블.**
 
 **v3.1 핵심 변경 (실측 기반)**: §2.4 에 8 critical issue 추가 (cluster_id 의미 불일치 / source_raw_article_ids 누락 15% / metric_name 정규화 누락 / matched_companies 표기 혼재 등). §3.4 의 ContextBuilder query 를 **`source_raw_article_ids[]` 기반 join + peer_id alias 정규화 + metric_name canonicalization + chunked LLM input** 으로 재설계. W4 단계 앞에 **W4-0 (data hygiene precondition)** 신설.
 
@@ -74,7 +74,7 @@
 | 1 | `AnalysisGraphRunner` | `agents/analysis_graph_runner.py` | 241 | ❌ 조율 | via children | 🟢 wire / 🔴 retry 없음 |
 | 2 | `IntegrationAgent` | `agents/integration_agent.py` | 610 | via summarizer | `raw_articles` read | 🟢 |
 | 2a | `SourceSummarizer` (engine) | `analysis/summarizer.py` | 2,630 | ✅ 2 invoke | `raw_articles` | 🟢 `summary-v4.0` |
-| 3 | `AnalysisAgent` (= `StrategicAnalyzer`) | `agents/analysis_agent.py` + `analysis/analyzer.py` | 343 | ✅ 1 invoke | in-memory | 🟢 `analysis-v3.0` |
+| 3 | `StrategicAnalyzer` | `agents/strategic_analyzer.py` | 343 | ✅ 1 invoke | in-memory | 🟢 `analysis-v3.0` |
 | 4 | `ProfileAgent` | `agents/profile_agent.py` | 4,056 | ✅ 7+ spot | `peer_companies`, `raw_article_*` | 🟢 / 🟡 cluster-time 빈약 |
 | 4a | `SKAXProfileLoader` | `services/skax_profile_context_loader.py` | 1,587 | ✅ | `raw_articles` (sk_ax_site) | 🟢 |
 | 5 | `ImplicationAgent` (현재) | `agents/implication_agent.py` + `analysis/implication.py` | 167 | ❌ heuristic | in-memory | 🔴 **LLM 미사용** |
@@ -219,7 +219,7 @@
           ↓
    [build_analysis_context]       # ③ AnalysisContextBuilder — NO LLM (DB+Qdrant), main_company 기준 4-Layer
           ↓
-   [strategic_analyze]            # ④ AnalysisAgent (LLM, peer 관점 only)
+   [strategic_analyze]            # ④ StrategicAnalyzer (LLM, peer 관점 only)
           ↓
    [implication]                  # ⑤ ImplicationAgent v4.0/v5.0 (LLM, SK AX 관점) ← P0-1 / P3-1 fix
           ↓
@@ -1230,7 +1230,7 @@ class ImplicationAgent:
 **파일 변경**:
 ```text
 src/analysis/models.py                      (AnalysisResult / IntegratedIssue 재정의)
-src/analysis/analyzer.py                    (_normalize_analysis_result → dataclass)
+src/agents/strategic_analyzer.py       (_normalize_analysis_result → dataclass)
 src/agents/integration_agent.py       (_tag_integrated_issue → dataclass)
 src/agents/analysis_graph_runner.py     (typed read)
 ```

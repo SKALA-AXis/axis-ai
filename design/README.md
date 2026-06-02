@@ -46,7 +46,7 @@ Raw / 정제 데이터 저장소
 AnalysisGraphRunner (= 1단계 분석 Pipeline 의 thin wrapper)
         ├─ IntegrationAgent
         ├─ ProfileAgent
-        ├─ AnalysisAgent
+        ├─ StrategicAnalyzer
         └─ ImplicationAgent
         │
         ▼
@@ -147,7 +147,7 @@ CardNewsAgent
   `raw_article_business_signals` 등을 함께 조회한다.
 - 조회한 데이터를 `AnalysisInputBundle`로 구성한다.
 - 다음 노드 순서로 child agent 를 호출한다 — `IntegrationAgent` → `ProfileAgent` →
-  (`AnalysisContextBuilder`) → `AnalysisAgent` → `ImplicationAgent`.
+  (`AnalysisContextBuilder`) → `StrategicAnalyzer` → `ImplicationAgent`.
 - 최종 결과를 `AnalysisPackage`로 묶어 `CardNewsAgent`에 전달한다 (in-graph `card_writer`
   노드).
 
@@ -158,7 +158,7 @@ AnalysisInputBundle
 → ① IntegrationAgent      → IntegratedIssue (main_company 확정)
 → ② ProfileContext Loader      → ProfileContext (Tier A snapshot + Tier B recent)
 → ③ AnalysisContextBuilder     → AnalysisContext (timeline / sector pulse / financial 등)
-→ ④ AnalysisAgent              → AnalysisResult (peer 관점)
+→ ④ StrategicAnalyzer              → AnalysisResult (peer 관점)
 → ⑤ ImplicationAgent           → ImplicationResult (SK AX 관점)
 → ⑥ validate                   → ValidationReport (hard / soft + W5-1 metric)
    ├ pass → ⑦ assemble → ⑧ card_writer → card_news INSERT (v2 schema)
@@ -207,7 +207,7 @@ AnalysisInputBundle
 - `src/agents/integration_agent.py`
 - `src/analysis/summarizer.py`
 
-### AnalysisAgent
+### StrategicAnalyzer
 
 `IntegratedIssue`만을 기반으로 전략적 의미를 분석한다.
 
@@ -225,13 +225,12 @@ AnalysisInputBundle
 - 해당 이슈가 단순 정보인지 전략적 변화 신호인지 판단
 
 현재 코드 기준:
-- `src/agents/analysis_agent.py`
-- `src/analysis/analyzer.py`
+- `src/agents/strategic_analyzer.py`
 
 주의:
-- AnalysisAgent는 원문/클러스터/문서 전체를 다시 읽지 않는다.
+- StrategicAnalyzer는 원문/클러스터/문서 전체를 다시 읽지 않는다.
 - 원문 기반 fact 통합은 IntegrationAgent 책임이다.
-- AnalysisAgent는 IntegratedIssue 안의 `integrated_text`, `consolidated_facts`,
+- StrategicAnalyzer는 IntegratedIssue 안의 `integrated_text`, `consolidated_facts`,
   `key_numbers`, `business_signals`, `fact_basis`를 근거로 해석한다.
 
 ### ProfileAgent
@@ -251,7 +250,7 @@ ProfileAgent 는 단순 context provider 가 아니라 **DART / IR / 공식 news
   financial_metrics 보강 (DB query only, LLM X).
 
 출력은 **두 관점으로 분리**:
-* `ProfileContext.peer_profiles[peer_id]` — AnalysisAgent 입력 (peer 의 전략·역량 해석).
+* `ProfileContext.peer_profiles[peer_id]` — StrategicAnalyzer 입력 (peer 의 전략·역량 해석).
 * `ProfileContext.skax_profile` — ImplicationAgent 입력 (SK AX 의 기회/위협/대응 도출).
 
 주의:

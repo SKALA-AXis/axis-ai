@@ -8,9 +8,6 @@ W2-1 이후 본 클래스는 직접 child agent 를 조율하지 않고 LangGrap
 * "Supervisor" 이름은 LLM-router 가 worker 를 동적 선택하는 multi-agent supervisor
   pattern 을 의미하지 않는다. 실제는 정적 DAG pipeline.
 * 새 코드는 ``AnalysisGraphRunner`` 사용을 권장.
-* 기존 ``DataAnalysisSupervisorAgent`` / ``AnalysisSupervisorAgent`` 는
-  backward-compat alias 로 유지.
-
 기존 외부 인터페이스 (``analyze_cluster`` / ``analyze_input_bundle`` → AnalysisPackage)
 는 유지하므로 호출부 변경 최소화.
 """
@@ -20,12 +17,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.agents.analysis_agent import AnalysisAgent
 from src.agents.implication_agent import ImplicationAgent
 from src.agents.integration_agent import (
     IntegrationAgent,
     analysis_input_bundle_from_articles,
 )
+from src.agents.strategic_analyzer import StrategicAnalyzer
 from src.analysis.models import (
     AnalysisInputBundle,
     AnalysisPackage,
@@ -54,7 +51,7 @@ class AnalysisGraphRunner:
         integration_agent: IntegrationAgent | None = None,
         issue_integrator: IntegrationAgent | None = None,
         summarizer: IntegrationAgent | None = None,
-        analyzer: AnalysisAgent | None = None,
+        analyzer: StrategicAnalyzer | None = None,
         implication_generator: ImplicationAgent | None = None,
     ) -> None:
         deps = SupervisorDeps(
@@ -75,7 +72,7 @@ class AnalysisGraphRunner:
         return self._deps.issue_integrator
 
     @property
-    def analyzer(self) -> AnalysisAgent:
+    def analyzer(self) -> StrategicAnalyzer:
         return self._deps.analyzer
 
     @property
@@ -155,14 +152,6 @@ class AnalysisGraphRunner:
         return pkg
 
 
-class DataAnalysisSupervisorAgent(AnalysisGraphRunner):
-    """Backward compatible alias for AnalysisGraphRunner."""
-
-
-class AnalysisSupervisorAgent(AnalysisGraphRunner):
-    """Backward compatible alias for AnalysisGraphRunner."""
-
-
 def _cluster_fetch_ids(
     representative_id: int,
     cluster_article_ids: list[int] | None,
@@ -175,7 +164,5 @@ def _cluster_fetch_ids(
 
 __all__ = [
     "AnalysisGraphRunner",
-    "AnalysisSupervisorAgent",
-    "DataAnalysisSupervisorAgent",
     "ProfileContext",
 ]
