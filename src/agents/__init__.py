@@ -25,7 +25,6 @@ _EXPORT_MODULES = {
     "MixerAgent": "src.agents.mixer_analysis_agent",
     "MixerAnalysisAgent": "src.agents.mixer_analysis_agent",
     "PeerProfileAgent": "src.agents.peer_profile_agent",
-    "ProfileAgent": "src.agents.profile_agent",
     "ReportAgent": "src.agents.report_agent",
 }
 

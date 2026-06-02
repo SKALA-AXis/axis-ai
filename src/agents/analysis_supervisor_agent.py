@@ -27,7 +27,6 @@ from src.agents.issue_integration_agent import (
     IssueIntegrationAgent,
     analysis_input_bundle_from_articles,
 )
-from src.agents.profile_agent import ProfileAgent
 from src.analysis.models import (
     AnalysisInputBundle,
     AnalysisPackage,
@@ -58,13 +57,11 @@ class DataAnalysisSupervisorAgent:
         issue_integrator: IssueIntegrationAgent | None = None,
         summarizer: IssueIntegrationAgent | None = None,
         analyzer: AnalysisAgent | None = None,
-        profile_agent: ProfileAgent | None = None,
         implication_generator: ImplicationAgent | None = None,
     ) -> None:
         deps = SupervisorDeps(
             issue_integrator=issue_integrator or summarizer,
             analyzer=analyzer,
-            profile_agent=profile_agent,
             implication_agent=implication_generator,
         )
         self._deps = deps
@@ -78,10 +75,6 @@ class DataAnalysisSupervisorAgent:
     @property
     def analyzer(self) -> AnalysisAgent:
         return self._deps.analyzer
-
-    @property
-    def profile_agent(self) -> ProfileAgent:
-        return self._deps.profile_agent
 
     @property
     def implication_generator(self) -> ImplicationAgent:
