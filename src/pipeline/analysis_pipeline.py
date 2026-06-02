@@ -1,7 +1,7 @@
 """1단계 분석·카드뉴스 생성 파이프라인 베이스 러너.
 
-W2-1 이후 본 runner 는 LangGraph supervisor 그래프를 invoke 하고 결과 (state) 를
-호환 dict 로 반환한다. 카드 저장 (`save_card_news`) 은 supervisor 의 `card_writer`
+W2-1 이후 본 runner 는 LangGraph analysis flow 그래프를 invoke 하고 결과 (state) 를
+호환 dict 로 반환한다. 카드 저장 (`save_card_news`) 은 analysis flow 의 `card_writer`
 노드 안에서 일어나므로 runner 의 외부 `save_card` 옵션은 호환을 위해 유지한다.
 """
 
@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from src.agents.analysis_supervisor_agent import DataAnalysisSupervisorAgent
+from src.agents.analysis_graph_runner import AnalysisGraphRunner
 from src.agents.card_news_agent import CardNewsAgent
 from src.analysis.models import AnalysisInputBundle
 from src.db.article_store import get_articles_by_ids, save_card_news
@@ -29,10 +29,12 @@ class AnalysisPipelineRunner:
     def __init__(
         self,
         *,
-        analysis_supervisor: DataAnalysisSupervisorAgent | None = None,
+        analysis_runner: AnalysisGraphRunner | None = None,
+        analysis_supervisor: AnalysisGraphRunner | None = None,
         card_news_agent: CardNewsAgent | None = None,
     ) -> None:
-        self.analysis_supervisor = analysis_supervisor or DataAnalysisSupervisorAgent()
+        self.analysis_runner = analysis_runner or analysis_supervisor or AnalysisGraphRunner()
+        self.analysis_supervisor = self.analysis_runner
         self.card_news_agent = card_news_agent or CardNewsAgent()
 
     def run_cluster(
@@ -103,9 +105,9 @@ class AnalysisPipelineRunner:
         classification: dict[str, Any] | None = None,
         save_card: bool = False,
     ) -> dict[str, Any]:
-        """W2-1: supervisor graph 를 invoke 하여 카드까지 한 번에 처리.
+        """W2-1: analysis flow graph 를 invoke 하여 카드까지 한 번에 처리.
 
-        - supervisor 의 `card_writer` 노드가 이미 `card_news` INSERT 를 수행한다.
+        - analysis flow 의 `card_writer` 노드가 이미 `card_news` INSERT 를 수행한다.
         - 따라서 본 runner 의 `save_card=True` 는 backward-compat 만을 위한 옵션이며,
           그래프가 카드를 저장하지 않은 경우 (validation fail 등) 에만 의미가 있다.
         """
@@ -121,7 +123,7 @@ class AnalysisPipelineRunner:
             articles=articles,
             overrides=classification,
         )
-        from src.agents.issue_integration_agent import analysis_input_bundle_from_articles
+        from src.agents.integration_agent import analysis_input_bundle_from_articles
 
         input_bundle = analysis_input_bundle_from_articles(
             cluster_id=cluster_id,
@@ -161,7 +163,7 @@ class AnalysisPipelineRunner:
         classification: dict[str, Any] | None = None,
         save_card: bool = False,
     ) -> dict[str, Any]:
-        """AnalysisInputBundle 을 직접 받아 supervisor 그래프를 호출."""
+        """AnalysisInputBundle 을 직접 받아 analysis flow 그래프를 호출."""
         effective_classification = classification or input_bundle.metadata.get(
             "classification",
             {},

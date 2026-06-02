@@ -1,7 +1,7 @@
 """Layer B 분석·카드뉴스·벡터 인덱싱 파이프라인.
 
 develop 의 PreprocessingService (Layer A) 이후 실행된다.
-DataAnalysisSupervisorAgent → CardNewsAgent 흐름은 AnalysisPipelineRunner 가 담당하며,
+AnalysisGraphRunner → CardNewsAgent 흐름은 AnalysisPipelineRunner 가 담당하며,
 본 모듈은 전처리 결과를 받아 카드 생성과 Qdrant 인덱싱을 조율한다.
 
 As-Is: ingestion_graph.card_news_node + vector_index_node

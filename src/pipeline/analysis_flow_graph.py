@@ -39,8 +39,7 @@ from src.agents.analysis_agent import AnalysisAgent
 from src.agents.card_news_agent import CardNewsAgent
 from src.agents.evaluator_agent import EvaluatorAgent
 from src.agents.implication_agent import ImplicationAgent
-from src.agents.issue_integration_agent import IssueIntegrationAgent
-from src.agents.profile_agent import ProfileAgent
+from src.agents.integration_agent import IntegrationAgent
 from src.analysis.implication import ImplicationGenerator
 from src.analysis.models import (
     AnalysisContext,
@@ -156,8 +155,8 @@ class SupervisorDeps:
     def __init__(
         self,
         *,
-        profile_agent: ProfileAgent | None = None,
-        issue_integrator: IssueIntegrationAgent | None = None,
+        integration_agent: IntegrationAgent | None = None,
+        issue_integrator: IntegrationAgent | None = None,
         analyzer: AnalysisAgent | None = None,
         implication_agent: ImplicationAgent | None = None,
         evaluator: EvaluatorAgent | None = None,
@@ -166,8 +165,8 @@ class SupervisorDeps:
         card_news_agent: CardNewsAgent | None = None,
         implication_fallback: ImplicationGenerator | None = None,
     ) -> None:
-        self.profile_agent = profile_agent or ProfileAgent()
-        self.issue_integrator = issue_integrator or IssueIntegrationAgent()
+        self.integration_agent = integration_agent or issue_integrator or IntegrationAgent()
+        self.issue_integrator = self.integration_agent
         self.analyzer = analyzer or AnalysisAgent()
         self.implication_agent = implication_agent or ImplicationAgent(
             fallback=implication_fallback
@@ -205,16 +204,11 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
             )
             return cast(SupervisorState, {**state, "profile_context": ctx})
         except Exception as exc:  # noqa: BLE001
-            log.warning("profile_context v2 실패, legacy fallback | error=%s", exc)
-            legacy = deps.profile_agent.build_context(
-                companies=companies,
-                sectors=sectors,
-                event_type=bundle.event_type,
-            )
+            log.warning("profile_context load 실패, empty fallback | error=%s", exc)
             ctx = ProfileContext(
-                skax_profile=legacy.get("skax_profile") or {},
-                peer_profiles=legacy.get("peer_profiles") or {},
-                sector_context=legacy.get("sector_context") or {},
+                skax_profile={},
+                peer_profiles={company_id: {"company_id": company_id} for company_id in companies},
+                sector_context={"selected_sector_ids": sectors},
             )
             return cast(SupervisorState, {**state, "profile_context": ctx})
 

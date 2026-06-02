@@ -36,8 +36,8 @@
 
 | # | Component | 위치 | 호출 시점 | LLM |
 |---|---|---|---|---|
-| 1 | **AnalysisGraphRunner** (재설계 — alias of `DataAnalysisSupervisorAgent`) | `pipeline/supervisor_graph.py` (= 곧 `analysis_flow_graph.py`) | cluster 마다 | ❌ (조율) |
-| 2 | IssueIntegrationAgent (유지) | `agents/issue_integration_agent.py` | Analysis Pipeline 노드 | ✅ |
+| 1 | **AnalysisGraphRunner** (재설계 — alias of `AnalysisGraphRunner`) | `pipeline/supervisor_graph.py` (= 곧 `analysis_flow_graph.py`) | cluster 마다 | ❌ (조율) |
+| 2 | IntegrationAgent (유지) | `agents/integration_agent.py` | Analysis Pipeline 노드 | ✅ |
 | 3 | AnalysisAgent (유지) | `agents/analysis_agent.py` | Analysis Pipeline 노드 | ✅ |
 | 4 | ProfileAgent (2-tier 분리) | `agents/profile_agent.py` | Analysis Pipeline 노드 | ❌ (CronJob 분리) |
 | 5 | **ImplicationAgent v4.0** (신규) | `agents/implication_agent.py` | Analysis Pipeline 노드 | ✅ |
@@ -107,7 +107,7 @@
 |---|---|---|
 | **ProfileAgent** (2-tier) | **READ**: `peer_companies.profile_snapshot` JSONB 컬럼 (Tier A) + `raw_article_business_signals` 최근 30일 top-3 + `raw_article_financial_metrics` 최근 분기 (Tier B) | `ProfileContext` (메모리) |
 | **AnalysisContextBuilder** ⭐신규 | **READ**: `peer_event_timeline` VIEW (90일) + `peer_companies.peer_plus_payload['capability_evolution']` + `sector_pulse` MV (4주) + `peer_financial_trend` VIEW (8분기) + `card_news.evidence_payload.financial_refs` + Qdrant `axis_main` (top-3) | `AnalysisContext` (메모리, ≤4k token) |
-| **IssueIntegrationAgent** | `AnalysisInputBundle` (cluster 의 raw_articles) | `IntegratedIssue` (메모리, consolidated_facts / key_numbers / fact_basis) |
+| **IntegrationAgent** | `AnalysisInputBundle` (cluster 의 raw_articles) | `IntegratedIssue` (메모리, consolidated_facts / key_numbers / fact_basis) |
 | **AnalysisAgent** | `IntegratedIssue` + `ProfileContext` | `AnalysisResult` (메모리, strategic_meaning / impact_level / risk_or_opportunity) |
 | **ImplicationAgent v4.0** ⭐신규 | `Bundle` + `IntegratedIssue` + `AnalysisResult` + `ProfileContext` + `AnalysisContext` | `ImplicationResult` (메모리, peer_implication / skax_implication / follow_up / confidence) |
 | **Validate 노드 + EvaluatorAgent** ⭐신규 (W2-3 + W5-1) | 전체 AnalysisFlowState (= SupervisorState alias) + rolling 7d confidence | `ValidationReport` (pass/fail + violations + **rule-based 5 metric**) |

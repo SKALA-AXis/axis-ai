@@ -417,12 +417,12 @@ def invalidate_trend_context_cache() -> None:
         _trend_cache.clear()
 ```
 
-#### (b) Inject 지점 — `src/agents/issue_integration_agent.py` (`analysis_input_bundle_from_articles`)
+#### (b) Inject 지점 — `src/agents/integration_agent.py` (`analysis_input_bundle_from_articles`)
 
 `AnalysisInputBundle.metadata` 가 만들어지는 **정확한 line 154 의 dict 리터럴** 에 `"trend_context"` 추가:
 
 ```python
-# src/agents/issue_integration_agent.py:143-160 (변경 후)
+# src/agents/integration_agent.py:143-160 (변경 후)
 return AnalysisInputBundle(
     bundle_id=bundle_id,
     cluster_id=str(cluster_id) if cluster_id is not None else None,
@@ -449,7 +449,7 @@ return AnalysisInputBundle(
 
 이렇게 하면:
 
-1. `IssueIntegrationAgent` 가 `AnalysisInputBundle` 만들 때 자동으로 `metadata["trend_context"]` 채워짐.
+1. `IntegrationAgent` 가 `AnalysisInputBundle` 만들 때 자동으로 `metadata["trend_context"]` 채워짐.
 2. `analysis_flow_graph.py:631-653` 의 `_cluster_metadata(bundle, profile_context)` 가 그 `trend_context` 를 자동으로 cluster_metadata 에 포함.
 3. `analyzer.py:227-238` 의 `_cluster_metadata_for_prompt(cluster_metadata)` 가 prompt 변수로 자동 추출.
 4. `_PEER_NEWS_ANALYSIS_PROMPT` (analyzer.py:36-81) 가 `trend_context` 변수를 받아 자연어로 흘려보냄.
@@ -820,8 +820,8 @@ def upsert_global_industry_trends(rows: list[dict]) -> int:
 | 컴포넌트 | line | 동작 |
 |---|---|---|
 | (신규) `db/article_store.py` `fetch_latest_trend_context()` | 신규 | `global_industry_trends` 최근 N일 → TrendContext shape dict |
-| (수정 1줄) `src/agents/issue_integration_agent.py:143-160` | 154 | `metadata={...}` dict 에 `"trend_context": fetch_latest_trend_context(7)` 추가 |
-| (수정 1줄) `src/agents/issue_integration_agent.py:98-111` | 110 | 동일하게 metadata dict 에 `"trend_context"` 추가 |
+| (수정 1줄) `src/agents/integration_agent.py:143-160` | 154 | `metadata={...}` dict 에 `"trend_context": fetch_latest_trend_context(7)` 추가 |
+| (수정 1줄) `src/agents/integration_agent.py:98-111` | 110 | 동일하게 metadata dict 에 `"trend_context"` 추가 |
 | (변경 없음) `src/pipeline/analysis_flow_graph.py:631-653` `_cluster_metadata` | 635 | 이미 `bundle.metadata.get("trend_context")` 를 읽음 |
 | (변경 없음) `src/analysis/analyzer.py:227-238` `_cluster_metadata_for_prompt` | 238 | 이미 prompt 변수로 추출 |
 | (변경 없음) `src/analysis/analyzer.py:36-81` `_PEER_NEWS_ANALYSIS_PROMPT` | 41/60 | 이미 prompt 안에 `trend_context` 변수 슬롯 |
@@ -966,7 +966,7 @@ spec:
 | **S2** | `db/article_store.py` 에 reader 2개 추가 (`fetch_global_trend_inputs`, `fetch_peer_cards_for_alignment`) | 1~2h |
 | **S3** | `ITTrendAgent.generate()` Phase 1~5 구현 (LLM prompt 3개 작성) | 6~8h |
 | **S4** | `ITTrendAgent.generate()` 끝에서 `upsert_global_industry_trends(rows)` 직접 호출 (⚠ `@with_ledger_writeback` 데코레이터는 **적용하지 않는다** — V30 line 694 에서 `analysis_ledger` DROP) | 30분 |
-| **S5** | (a) `db/article_store.py` 에 `fetch_latest_trend_context()` + `invalidate_trend_context_cache()` 신규 추가 (**process-level TTL 60초 캐시 포함** — hot path, `threading.Lock` 사용), (b) `src/agents/issue_integration_agent.py` 의 metadata dict 2곳 (L98-111, L143-160) 에 `"trend_context": fetch_latest_trend_context(7)` 1줄씩 추가, (c) `ITTrendAgent.generate()` 끝에 `invalidate_trend_context_cache()` 호출 추가 (cron path 즉시 반영). `analysis_flow_graph` 자체는 이미 read hook 보유라 수정 불필요. | 1.5h |
+| **S5** | (a) `db/article_store.py` 에 `fetch_latest_trend_context()` + `invalidate_trend_context_cache()` 신규 추가 (**process-level TTL 60초 캐시 포함** — hot path, `threading.Lock` 사용), (b) `src/agents/integration_agent.py` 의 metadata dict 2곳 (L98-111, L143-160) 에 `"trend_context": fetch_latest_trend_context(7)` 1줄씩 추가, (c) `ITTrendAgent.generate()` 끝에 `invalidate_trend_context_cache()` 호출 추가 (cron path 즉시 반영). `analysis_flow_graph` 자체는 이미 read hook 보유라 수정 불필요. | 1.5h |
 | **S6** | `api/router.py` 에 `POST /global/trends/run` 등록 | 30분 |
 | **S7** | `axis-infra/k8s/base/cronjob-global-trend.yaml` 추가 + kustomize overlay 연결 | 30분 |
 | **S8** | 검증: `kubectl exec` 로 한 번 호출 → `global_industry_trends` row 생성 확인 → `payload.peer_alignment` 5 peer 모두 들어가는지 확인 | 1h |
@@ -1042,7 +1042,7 @@ spec:
 | **R5** (H2) | §12 S4 가 `@with_ledger_writeback` 데코레이터 적용을 지시 — §7 의 "직접 INSERT" 정책과 모순 | 문서 자체 cross-read | §12 S4 의 작업 항목을 "직접 `upsert_global_industry_trends()` 호출, **데코레이터는 적용하지 않는다**" 로 변경. |
 | **R6** (M1) | `build_input()` → `_split_trend_inputs()` 가 글로벌 6사 raw 를 unsupported 로 drop. 실제 raw_articles.source_type='official' 인데 상수는 `{global_newsroom, company_newsroom}` 만 통과 | [it_trend_agent.py:21,145,161](../../src/agents/it_trend_agent.py) + DB 의 source_type 분포 | §4.1 신설 — 3 옵션 비교 후 **옵션 B (fetcher 가 source_type 정규화)** 채택. `fetch_global_trend_inputs()` 코드 명시. §3.1 의 `_GLOBAL_NEWSROOM_SOURCE_TYPES` 줄에 ⚠ 표시. |
 | **R7** (M2) | `api/global_trends_schemas.py` 정본 자체가 없음 — Finder 중복본만 있고 router.py 미등록. 다른 schema 는 정본+중복본 모두 있는데 global_trends 만 정본 누락 | `ls src/api/global_trends*` + `head -25 router.py` | §3.1, §3.4, §12 S1 모두 "rename" → "신규 정본 생성 + router 등록" 으로 정정. |
-| **R8** (M3) | trend_context wire-up 의 구체적 inject 지점이 추상적 ("analysis_flow_graph 에서 채우면 됨") — 실제로 bundle 을 생성하는 곳 (issue_integration_agent.py:143-160) 의 metadata dict 가 미명시 | `grep AnalysisInputBundle\(` → issue_integration_agent.py 의 두 build 함수 발견 | §5.2 + §8.1 + §12 S5 모두 **issue_integration_agent.py L98-111 + L143-160 의 metadata dict 에 1줄씩 추가** 로 구체화. fetch_latest_trend_context() 코드 명시. |
+| **R8** (M3) | trend_context wire-up 의 구체적 inject 지점이 추상적 ("analysis_flow_graph 에서 채우면 됨") — 실제로 bundle 을 생성하는 곳 (integration_agent.py:143-160) 의 metadata dict 가 미명시 | `grep AnalysisInputBundle\(` → integration_agent.py 의 두 build 함수 발견 | §5.2 + §8.1 + §12 S5 모두 **integration_agent.py L98-111 + L143-160 의 metadata dict 에 1줄씩 추가** 로 구체화. fetch_latest_trend_context() 코드 명시. |
 
 #### 외부 LLM Review (3차, 2026-05-26)
 
@@ -1051,7 +1051,7 @@ spec:
 | **R9** (H1) | §0 TL;DR / §1 메타 / §2 책임 DO 7번 / §3 코드 주석 / line 186 표현 등 **상단 5곳이 여전히 "analysis_ledger → 자동 복제" 라는 dead path 를 정답처럼 기술** — 구현자가 상단만 보고 따라가면 silent fail 코드 작성 | 본 문서 자체 cross-read | 5곳 모두 "global_industry_trends 직접 upsert" 로 정정. §15.4 의 일관성 체크리스트도 다시 통과. |
 | **R10** (H2) | `_make_source_analysis_id` 의 batch_id (22자) + `-` + slug 80자 = **103자** → `VARCHAR(100)` 제약 초과 → INSERT 실패. slug 충돌 (한글 slugify 후 같아질 수 있음) 도 미해결 | DB 의 `character_maximum_length=100` 확인 + 길이 계산 | `_make_source_analysis_id(batch_id, idx, keyword)` 으로 변경 — **`idx:03d` (batch 내 순번)** 으로 unique 보장 + slug 40자 cap + 100자 hard cap + sha1 8자 fallback (safety net). |
 | **R11** (M1) | `global_trends_schemas 2.py` 는 macOS Finder 중복본이고 **git untracked** (`?? src/api/global_trends_schemas 2.py`) — 다른 팀원 clone 에는 아예 없음. S1 의 "복제" 가 실제로는 불가능 | `git ls-files` + `git status --short` 로 untracked 확인 | source-of-truth 를 **`axis-infra/api/openapi.yaml` 의 `GlobalTrendsRequest` / `GlobalTrendsResult` components** (git tracked, line 2933/6846/6874) 로 변경. §3.1 + §3.4 + §12 S1 모두 정정. |
-| **R12** (M2) | `fetch_latest_trend_context()` 가 `issue_integration_agent.py` 의 cluster 분석 hot path 에서 매번 DB SELECT — burst 시 같은 SELECT 반복 | 본 design 의 §5.2 inject 지점이 hot 함을 자체 인정 | reader 에 **process-level TTL 60초 캐시** 추가 (in-memory dict + `threading.Lock`). `invalidate_trend_context_cache()` helper 도 추가해서 ITTrendAgent.generate() 가 upsert 후 직접 invalidate (cron path 즉시 반영). §12 S5 작업 항목에도 cache 포함 명시. |
+| **R12** (M2) | `fetch_latest_trend_context()` 가 `integration_agent.py` 의 cluster 분석 hot path 에서 매번 DB SELECT — burst 시 같은 SELECT 반복 | 본 design 의 §5.2 inject 지점이 hot 함을 자체 인정 | reader 에 **process-level TTL 60초 캐시** 추가 (in-memory dict + `threading.Lock`). `invalidate_trend_context_cache()` helper 도 추가해서 ITTrendAgent.generate() 가 upsert 후 직접 invalidate (cron path 즉시 반영). §12 S5 작업 항목에도 cache 포함 명시. |
 | **R13** (Low) | §10 Quality Gate 표의 failure action 이 아직 `"ledger 저장 skip, alert"` — operational runbook 성격이라 혼동 유발 | 본 문서 자체 cross-read | `"global_industry_trends upsert skip + alert (slack/langfuse warning)"` 로 정정. |
 
 ### 15.3 충돌 없음 — 통합 검증
