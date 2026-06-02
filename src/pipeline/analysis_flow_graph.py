@@ -35,6 +35,8 @@ from typing import Annotated, Any, Callable, TypedDict, cast
 from langgraph.graph import END, StateGraph
 from langgraph.types import RetryPolicy
 
+from src.agents.card_news_agent import CardNewsAgent
+from src.agents.evaluator_agent import EvaluatorAgent
 from src.agents.implication_agent import ImplicationAgent
 from src.agents.integration_agent import IntegrationAgent
 from src.agents.strategic_analyzer import StrategicAnalyzer
@@ -44,15 +46,14 @@ from src.analysis.models import (
     AnalysisContext,
     AnalysisInputBundle,
     AnalysisPackage,
+    AnalysisResult,
     EvaluationMetrics,
     ImplicationResult,
     NumericViolation,
     ProfileContext,
     ValidationReport,
 )
-from src.composers.card_news_composer import CardNewsComposer
 from src.db.article_store import save_card_news, save_pipeline_log
-from src.evaluators.evaluator import Evaluator
 from src.services.agent_output_validation import confidence_in_range
 from src.services.analysis_context_builder import AnalysisContextBuilder
 from src.services.profile_context_loader import ProfileContextLoader
@@ -146,7 +147,7 @@ def _logged_step(step_name: str) -> Callable[[Callable], Callable]:
 
 
 class SupervisorDeps:
-    """Supervisor 가 의존하는 4 child agent + evaluator + builder.
+    """Supervisor 가 의존하는 fixed-step agents + evaluator + context builders.
 
     테스트 시 각 의존성을 mock 으로 교체 가능. 본 모듈은 `build_supervisor_graph()`
     가 만든 단일 인스턴스를 재사용.
@@ -159,27 +160,73 @@ class SupervisorDeps:
         issue_integrator: IntegrationAgent | None = None,
         analyzer: StrategicAnalyzer | None = None,
         implication_agent: ImplicationAgent | None = None,
-        strategic_insight_agent: StrategicInsightAgent | None = None,
-        evaluator: Evaluator | None = None,
+        strategic_insight_agent: StrategicInsightAgent | Any | None = None,
+        evaluator: EvaluatorAgent | None = None,
         context_builder: AnalysisContextBuilder | None = None,
         profile_context_loader: ProfileContextLoader | None = None,
-        card_news_composer: CardNewsComposer | None = None,
+        card_news_agent: CardNewsAgent | None = None,
+        card_news_composer: Any | None = None,
         implication_fallback: ImplicationGenerator | None = None,
     ) -> None:
+        legacy_agents_supplied = analyzer is not None or implication_agent is not None
         self.integration_agent = integration_agent or issue_integrator or IntegrationAgent()
         self.issue_integrator = self.integration_agent
         self.analyzer = analyzer or StrategicAnalyzer()
         self.implication_agent = implication_agent or ImplicationAgent(
             fallback=implication_fallback
         )
-        self.strategic_insight_agent = strategic_insight_agent or StrategicInsightAgent(
-            analyzer=self.analyzer,
-            implication_agent=self.implication_agent,
+        self.strategic_insight_agent = strategic_insight_agent or (
+            _LegacyStrategicInsightAdapter(self.analyzer, self.implication_agent)
+            if legacy_agents_supplied
+            else StrategicInsightAgent(
+                fallback_analyzer=self.analyzer,
+                fallback_implication_agent=self.implication_agent,
+            )
         )
-        self.evaluator = evaluator or Evaluator()
+        self.evaluator = evaluator or EvaluatorAgent()
         self.context_builder = context_builder or AnalysisContextBuilder()
         self.profile_context_loader = profile_context_loader or ProfileContextLoader()
-        self.card_news_composer = card_news_composer or CardNewsComposer()
+        self.card_news_agent = card_news_agent or card_news_composer or CardNewsAgent()
+
+
+class _LegacyStrategicInsightAdapter:
+    """Test/backward-compat adapter that preserves separate legacy calls."""
+
+    def __init__(self, analyzer: StrategicAnalyzer, implication_agent: ImplicationAgent) -> None:
+        self._analyzer = analyzer
+        self._implication_agent = implication_agent
+
+    def generate(
+        self,
+        *,
+        input_bundle: AnalysisInputBundle,
+        integrated_issue: dict[str, Any],
+        classification: dict[str, Any],
+        profile_context: ProfileContext | None,
+        analysis_context: AnalysisContext | None,
+        cluster_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        analysis = self._analyzer.analyze(
+            integrated_issue=integrated_issue,
+            classification=classification,
+            cluster_metadata=cluster_metadata,
+        )
+        implication = self._implication_agent.generate(
+            input_bundle=input_bundle,
+            integrated_issue=integrated_issue,
+            analysis=AnalysisResult.from_dict(analysis).to_dict(),
+            profile_context=profile_context,
+            analysis_context=analysis_context,
+            classification=classification,
+        )
+        return {
+            "is_valid_strategic_insight": bool(
+                analysis.get("is_valid_analysis") and implication.get("is_valid_implication")
+            ),
+            "analysis": analysis,
+            "implication": implication,
+            "fallback_reason": "legacy_analyzer_implication",
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -197,6 +244,12 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
     @_logged_step("profile_context")
     def profile_context_node(state: SupervisorState) -> SupervisorState:
         """IntegratedIssue 가 확정한 main_company / mentioned_peer_companies 우선 사용."""
+        existing = state.get("profile_context")
+        if isinstance(existing, ProfileContext) and (
+            existing.peer_profiles or existing.skax_profile
+        ):
+            return state
+
         bundle = state["input_bundle"]
         integrated = state.get("integrated_issue") or {}
         sectors = list(bundle.sectors or [])
@@ -238,9 +291,9 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
             input_bundle=bundle,
             integrated_issue=integrated,
             classification=classification,
-            cluster_metadata=_cluster_metadata(bundle, state.get("profile_context")),
             profile_context=state.get("profile_context"),
             analysis_context=state.get("analysis_context"),
+            cluster_metadata=_cluster_metadata(bundle, state.get("profile_context")),
         )
         return cast(
             SupervisorState,
@@ -315,7 +368,7 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         pkg = state.get("analysis_package")
         if pkg is None:
             return cast(SupervisorState, {**state, "card_news_id": None})
-        card = deps.card_news_composer.generate_from_analysis_package(
+        card = deps.card_news_agent.generate_from_analysis_package(
             pkg,
             classification=state.get("classification") or {},
         )
@@ -416,7 +469,10 @@ def _hard_validate(
     analysis_valid = bool(analysis.get("is_valid_analysis", True))
     implication_valid = bool(implication.get("is_valid_implication", True))
 
-    text_blocks = _implication_text_blocks(implication)
+    text_blocks = {
+        **_analysis_text_blocks(analysis),
+        **_implication_text_blocks(implication),
+    }
 
     grounded_corpus = _grounded_corpus(
         evidence_payload=evidence_payload,
@@ -516,6 +572,20 @@ def _implication_text_blocks(implication: dict[str, Any]) -> dict[str, str]:
     return blocks
 
 
+def _analysis_text_blocks(analysis: dict[str, Any]) -> dict[str, str]:
+    blocks: dict[str, str] = {}
+    if analysis.get("analysis_summary"):
+        blocks["analysis.analysis_summary"] = str(analysis["analysis_summary"])
+    strategic = " ".join(str(item) for item in (analysis.get("strategic_meaning") or []) if item)
+    if strategic:
+        blocks["analysis.strategic_meaning"] = strategic
+    if analysis.get("market_signal"):
+        blocks["analysis.market_signal"] = str(analysis["market_signal"])
+    if analysis.get("impact_reason"):
+        blocks["analysis.impact_reason"] = str(analysis["impact_reason"])
+    return blocks
+
+
 def _grounded_corpus(
     *,
     evidence_payload: dict[str, Any],
@@ -523,16 +593,28 @@ def _grounded_corpus(
     sources: list[dict[str, Any]],
 ) -> str:
     chunks: list[str] = []
-    for key in ("financial_refs", "source_links", "mbb_refs"):
-        value = evidence_payload.get(key)
-        if value:
-            chunks.append(_stringify(value))
-    for key in ("fact_basis", "key_numbers", "consolidated_facts", "integrated_text"):
+    for key in ("fact_basis", "key_numbers", "representative_sources"):
         value = integrated_issue.get(key)
         if value:
             chunks.append(_stringify(value))
+    # Backward compatibility for older AnalysisPackage evidence payloads.
+    # New StrategicInsightAgent outputs must ground numbers/dates in the three
+    # IntegrationAgent evidence fields above; these payload refs only keep legacy
+    # cards from false positives during transition.
+    for key in ("financial_refs", "source_links"):
+        value = evidence_payload.get(key)
+        if value:
+            chunks.append(_stringify(value))
     for source in sources:
-        chunks.append(_stringify(source))
+        if source.get("published_at") or source.get("article_id"):
+            chunks.append(
+                _stringify(
+                    {
+                        "published_at": source.get("published_at"),
+                        "article_id": source.get("article_id"),
+                    }
+                )
+            )
     return " | ".join(chunks)
 
 
@@ -738,6 +820,7 @@ def run_supervisor(
     *,
     input_bundle: AnalysisInputBundle,
     classification: dict[str, Any] | None = None,
+    profile_context: ProfileContext | None = None,
     graph: Any | None = None,
 ) -> SupervisorState:
     """단일 cluster 처리 진입점.
@@ -754,6 +837,7 @@ def run_supervisor(
         {
             "input_bundle": input_bundle,
             "classification": classification or {},
+            "profile_context": profile_context,
             "errors": [],
             "human_review_flags": [],
         },

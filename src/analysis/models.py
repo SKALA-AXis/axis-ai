@@ -429,7 +429,7 @@ SummaryResult = LegacySummaryResult
 
 @dataclass(slots=True)
 class AnalysisResult:
-    """StrategicAnalyzer 출력의 typed view.
+    """StrategicAnalyzer 또는 StrategicInsightAgent.analysis 출력의 typed view.
 
     실 LLM 출력 key 와 1:1. dict 호환은 ``to_dict()``.
     """

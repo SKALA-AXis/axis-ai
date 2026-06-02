@@ -152,6 +152,41 @@ def test_supervisor_graph_happy_path_writes_card():
     assert "samsung_sds" in (profile_call.kwargs.get("companies") or [])
 
 
+def test_supervisor_graph_uses_injected_profile_context():
+    deps = _stub_deps()
+    graph = build_supervisor_graph(deps)
+    injected_profile = ProfileContext(
+        skax_profile={"company_id": "sk_ax", "business_areas": [{"name": "AI 운영"}]},
+        peer_profiles={
+            "samsung_sds": {
+                "company_id": "samsung_sds",
+                "schema_version": "peer-profile-snapshot-v1",
+                "business_areas": [{"name": "클라우드"}],
+            }
+        },
+        sector_context={"selected_sector_ids": ["ax"]},
+    )
+
+    with (
+        patch("src.pipeline.analysis_flow_graph.save_card_news", return_value="CN-OK"),
+        patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
+    ):
+        result = graph.invoke(
+            {
+                "input_bundle": _stub_bundle(),
+                "classification": {"sector": "ax", "event_type": "partnership"},
+                "profile_context": injected_profile,
+                "errors": [],
+                "human_review_flags": [],
+            }
+        )
+
+    assert result.get("analysis_package") is not None
+    deps.profile_context_loader.load.assert_not_called()
+    context_call = deps.context_builder.build.call_args
+    assert context_call.kwargs.get("profile_context") is injected_profile
+
+
 def test_supervisor_graph_routes_human_review_on_fake_numeric():
     """integrated_issue 의 fact_basis 에 없는 수치를 implication 이 만들면 validate fail."""
     deps = _stub_deps()

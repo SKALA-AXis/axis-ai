@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.briefing_schemas import BriefingGenerateRequest, BriefingGenerateResponse
 from src.api.global_trends_schemas import GlobalTrendsRequest, GlobalTrendsResponse
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
 from src.api.link_verification_schemas import LinkVerificationRequest, LinkVerificationResponse
@@ -156,6 +157,48 @@ async def run_delivery(req: BriefingRequest) -> BriefingContent:
         text=state["text"],
         recipients=[],
     )
+
+
+@app.post("/briefing/generate", response_model=BriefingGenerateResponse)
+async def generate_briefing(request: BriefingGenerateRequest) -> BriefingGenerateResponse:
+    """기간별 카드뉴스 브리핑 생성.
+
+    backend ``/api/briefings/generate`` 가 호출할 내부 endpoint. 로컬 CLI 와 달리
+    mock 입력을 받지 않고 항상 DB ``card_news`` 기간 필터를 기준으로 실행한다.
+    """
+    from src.agents.briefing_generation_agent import BriefingGenerationAgent
+
+    log.info(
+        "Briefing 요청 | type=%s anchor=%s cards=%d peers=%d sectors=%d save=%s",
+        request.briefing_type,
+        request.anchor_date,
+        len(request.card_ids or []),
+        len(request.peer_ids or []),
+        len(request.sectors or []),
+        request.save,
+    )
+    try:
+        result = await BriefingGenerationAgent().generate(
+            briefing_type=request.briefing_type,
+            anchor_date=request.anchor_date,
+            card_ids=request.card_ids,
+            peer_ids=request.peer_ids,
+            sectors=request.sectors,
+            requested_by_user_id=request.requested_by_user_id,
+            ratios=request.ratios,
+            user_context=request.user_context,
+            limit=request.limit,
+            save=request.save,
+            use_mock=False,
+            refine_display_copy=request.refine_display_copy,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        log.exception("BriefingGenerationAgent 실행 실패 | error=%s", exc)
+        raise HTTPException(status_code=500, detail="briefing generation failed") from exc
+
+    return BriefingGenerateResponse.model_validate(result)
 
 
 @app.get("/api/cards")
