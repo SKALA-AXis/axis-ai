@@ -27,7 +27,7 @@ def _dumps(value: Any, *, limit: int | None = None) -> str:
 
 
 def main(cluster_id: int) -> None:
-    from src.agents.issue_integration_agent import (
+    from src.agents.integration_agent import (
         analysis_input_bundle_from_articles,
     )
     from src.db.article_store import get_articles_by_ids

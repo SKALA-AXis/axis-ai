@@ -5,7 +5,8 @@
 > **명칭 주의 (외부 리뷰 2026-05-21 R-rename)**: 본 문서의 "Analysis Pipeline" 은
 > LLM-router 가 worker 를 동적 선택하는 multi-agent supervisor pattern 이 아니다.
 > 실제 구조는 **LangGraph 기반 고정 순서 DAG**. 단 하나의 동적 분기는 `validate` 의
-> `pass / fail` 라우팅뿐이다. 기존 `Supervisor*` 명칭은 backward-compat 으로 유지.
+> `pass / fail` 라우팅뿐이다. 기존 `Supervisor*` 명칭은 제거하고 `AnalysisGraphRunner`
+> 기준으로 정리한다.
 >
 > ## 배포 순서 (Hard dependency, 외부 리뷰 R-6 명시)
 >
@@ -36,9 +37,9 @@
 
 | # | Component | 위치 | 호출 시점 | LLM |
 |---|---|---|---|---|
-| 1 | **AnalysisGraphRunner** (재설계 — alias of `DataAnalysisSupervisorAgent`) | `pipeline/supervisor_graph.py` (= 곧 `analysis_flow_graph.py`) | cluster 마다 | ❌ (조율) |
-| 2 | IssueIntegrationAgent (유지) | `agents/issue_integration_agent.py` | Analysis Pipeline 노드 | ✅ |
-| 3 | AnalysisAgent (유지) | `agents/analysis_agent.py` | Analysis Pipeline 노드 | ✅ |
+| 1 | **AnalysisGraphRunner** | `agents/analysis_graph_runner.py` + `pipeline/analysis_flow_graph.py` | cluster 마다 | ❌ (조율) |
+| 2 | IntegrationAgent (유지) | `agents/integration_agent.py` | Analysis Pipeline 노드 | ✅ |
+| 3 | StrategicAnalyzer (유지) | `agents/strategic_analyzer.py` | Analysis Pipeline 노드 | ✅ |
 | 4 | ProfileAgent (2-tier 분리) | `agents/profile_agent.py` | Analysis Pipeline 노드 | ❌ (CronJob 분리) |
 | 5 | **ImplicationAgent v4.0** (신규) | `agents/implication_agent.py` | Analysis Pipeline 노드 | ✅ |
 | 6 | CardNewsAgent (수정 + 이관) | `agents/card_news_agent.py` (호출은 Analysis Pipeline 의 `card_writer` 노드) | Analysis Pipeline 노드 (W2-1 작업 5) | ✅ |
@@ -107,8 +108,8 @@
 |---|---|---|
 | **ProfileAgent** (2-tier) | **READ**: `peer_companies.profile_snapshot` JSONB 컬럼 (Tier A) + `raw_article_business_signals` 최근 30일 top-3 + `raw_article_financial_metrics` 최근 분기 (Tier B) | `ProfileContext` (메모리) |
 | **AnalysisContextBuilder** ⭐신규 | **READ**: `peer_event_timeline` VIEW (90일) + `peer_companies.peer_plus_payload['capability_evolution']` + `sector_pulse` MV (4주) + `peer_financial_trend` VIEW (8분기) + `card_news.evidence_payload.financial_refs` + Qdrant `axis_main` (top-3) | `AnalysisContext` (메모리, ≤4k token) |
-| **IssueIntegrationAgent** | `AnalysisInputBundle` (cluster 의 raw_articles) | `IntegratedIssue` (메모리, consolidated_facts / key_numbers / fact_basis) |
-| **AnalysisAgent** | `IntegratedIssue` + `ProfileContext` | `AnalysisResult` (메모리, strategic_meaning / impact_level / risk_or_opportunity) |
+| **IntegrationAgent** | `AnalysisInputBundle` (cluster 의 raw_articles) | `IntegratedIssue` (메모리, consolidated_facts / key_numbers / fact_basis) |
+| **StrategicAnalyzer** | `IntegratedIssue` + `ProfileContext` | `AnalysisResult` (메모리, strategic_meaning / impact_level / risk_or_opportunity) |
 | **ImplicationAgent v4.0** ⭐신규 | `Bundle` + `IntegratedIssue` + `AnalysisResult` + `ProfileContext` + `AnalysisContext` | `ImplicationResult` (메모리, peer_implication / skax_implication / follow_up / confidence) |
 | **Validate 노드 + EvaluatorAgent** ⭐신규 (W2-3 + W5-1) | 전체 AnalysisFlowState (= SupervisorState alias) + rolling 7d confidence | `ValidationReport` (pass/fail + violations + **rule-based 5 metric**) |
 | **CardNewsAgent** (via `card_writer` 노드) | `AnalysisPackage` (모든 결과) + ValidationReport | **WRITE**: `card_news` 행 (v2 schema + `evaluation_payload.rule_based`) |

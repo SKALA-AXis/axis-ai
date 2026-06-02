@@ -2,7 +2,7 @@
 
 IntegratedIssue와 분류 메타데이터를 바탕으로 피어사의 전략적 움직임과
 산업적 의미를 분석한다. 원문/클러스터/문서 전체를 다시 읽는 책임은
-IssueIntegrationAgent에 있고, SK AX 관점의 대응 제언은 별도 단계 책임이다.
+IntegrationAgent에 있고, SK AX 관점의 대응 제언은 별도 단계 책임이다.
 """
 
 from __future__ import annotations

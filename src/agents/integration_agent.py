@@ -1,6 +1,6 @@
-"""AnalysisInputBundle 기반 이슈 통합 Agent.
+"""AnalysisInputBundle 기반 통합 Agent.
 
-IssueIntegrationAgent는 source_type별 dispatcher가 아니다. 데이터 유형별 차이는
+IntegrationAgent는 source_type별 dispatcher가 아니다. 데이터 유형별 차이는
 Parser / Extractor / 전처리 단계에서 처리되고, 이 Agent는 정규화된
 AnalysisInputBundle 또는 NormalizedDataBundle을 받아 통합 이슈를 만든다.
 
@@ -18,7 +18,7 @@ from src.analysis.summarizer import SourceSummarizer
 from src.db.article_store import fetch_latest_trend_context, get_articles_by_ids
 
 
-class IssueIntegrationAgent:
+class IntegrationAgent:
     """원문/클러스터/문서/파싱 결과를 하나의 통합 이슈로 정리하는 Agent."""
 
     def __init__(self, *, engine: SourceSummarizer | None = None) -> None:
@@ -44,7 +44,7 @@ class IssueIntegrationAgent:
         return _tag_integrated_issue(
             integrated_issue,
             input_bundle=input_bundle,
-            issue_component="IssueIntegrationAgent",
+            issue_component="IntegrationAgent",
         )
 
     def summarize_input_bundle(self, input_bundle: AnalysisInputBundle) -> dict[str, Any]:
@@ -170,7 +170,7 @@ _trend_context_failure_logged = False
 def _safe_trend_context() -> dict[str, Any]:
     """`fetch_latest_trend_context` 의 graceful wrapper.
 
-    DB 실패 / table 미생성 시 빈 dict 반환 — analyzer.py 가 already-empty-safe.
+    DB 실패 / table 미생성 시 빈 dict 반환 — StrategicAnalyzer 가 already-empty-safe.
     첫 실패만 warning 으로 emit (hot path 라 반복 로그 회피).
     design: global-trends.md §5.2.
     """
@@ -256,7 +256,7 @@ def _integrate_non_news_bundle(input_bundle: AnalysisInputBundle) -> dict[str, A
             "reason": "" if is_valid else "통합 이슈를 구성할 근거가 부족합니다.",
         },
         input_bundle=input_bundle,
-        issue_component="IssueIntegrationAgent",
+        issue_component="IntegrationAgent",
     )
 
 
@@ -638,3 +638,10 @@ def _safe_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+__all__ = [
+    "IntegrationAgent",
+    "analysis_input_bundle_from_articles",
+    "analysis_input_bundle_from_bundle",
+]

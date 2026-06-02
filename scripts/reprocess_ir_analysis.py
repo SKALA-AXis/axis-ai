@@ -1090,17 +1090,23 @@ def _signals_from_chunk(
 ) -> list[tuple[int, str, str, str]]:
     section_area = _business_area_from_section(chunk)
     signals: list[tuple[int, str, str, str]] = []
-    sentences = _sentences(text_value)
+    normalized_text_value = _normalize_ocr_signal_text(text_value)
+    normalized_page_context = _normalize_ocr_signal_text(page_context)
+    sentences = _sentences(normalized_text_value)
     for sentence_index, sentence in enumerate(sentences, start=1):
         if len(sentence) < 30 or _is_low_value_signal_sentence(sentence):
             continue
-        if _is_ir_sentence_excluded_for_peer(peer_id, sentence, page_context=page_context):
+        if _is_ir_sentence_excluded_for_peer(
+            peer_id, sentence, page_context=normalized_page_context
+        ):
             continue
         if not _looks_like_narrative_signal_sentence(sentence):
             continue
 
         context_text = _signal_context_text(sentences, sentence_index - 1)
-        if _is_ir_sentence_excluded_for_peer(peer_id, context_text, page_context=page_context):
+        if _is_ir_sentence_excluded_for_peer(
+            peer_id, context_text, page_context=normalized_page_context
+        ):
             continue
         signal_types = _detect_signal_types(sentence)
         if not signal_types:
@@ -1111,11 +1117,13 @@ def _signals_from_chunk(
             peer_id=peer_id,
             sentence=sentence,
             context_text=context_text,
-            page_context=page_context,
+            page_context=normalized_page_context,
             section_area=section_area,
-            chunk_text=text_value,
+            chunk_text=normalized_text_value,
         )
         evidence_text = _signal_evidence_text(sentence=sentence, context_text=context_text)
+        if _is_degraded_ocr_signal_text(evidence_text):
+            continue
 
         eligible_signal_types = [
             signal_type
@@ -1403,7 +1411,10 @@ def _signal_type_priority(signal_type: str) -> int:
 
 def _is_low_value_signal_sentence(text_value: str) -> bool:
     lowered = text_value.lower()
-    return any(term.lower() in lowered for term in _IR_SIGNAL_EXCLUDE_TERMS)
+    return any(term.lower() in lowered for term in _IR_SIGNAL_EXCLUDE_TERMS) or (
+        _is_degraded_ocr_signal_text(text_value)
+        and not _has_high_value_ocr_signal_terms(text_value)
+    )
 
 
 def _looks_like_narrative_signal_sentence(text_value: str) -> bool:
@@ -1616,7 +1627,7 @@ def _sentiment_from_text(text_value: str) -> str:
 
 
 def _summary_from_evidence(evidence_text: str) -> str:
-    value = re.sub(r"\s+", " ", evidence_text).strip()
+    value = re.sub(r"\s+", " ", _normalize_ocr_signal_text(evidence_text)).strip()
     if _is_numeric_heavy_signal_text(value):
         cleaned = _clean_numeric_heavy_summary(value)
         if len(cleaned) >= 24:
@@ -1645,13 +1656,85 @@ def _signal_confidence(
     signal_type: str,
     text_value: str,
 ) -> float:
+    text_value = _normalize_ocr_signal_text(text_value)
     detected_area = _detect_business_area(text_value)
     detected_type = _signal_type_from_text(text_value)
+    penalty = 0.1 if _has_ocr_marker_or_noise(text_value) else 0.0
     if detected_area == business_area and detected_type == signal_type:
-        return 0.78
+        return max(0.58, 0.78 - penalty)
     if business_area == "company_total":
-        return 0.68
-    return 0.72
+        return max(0.55, 0.68 - penalty)
+    return max(0.55, 0.72 - penalty)
+
+
+def _normalize_ocr_signal_text(text_value: str) -> str:
+    value = str(text_value or "")
+    value = re.sub(r"\[PAGE\s+\d+\]", " ", value, flags=re.IGNORECASE)
+    value = value.replace("[OCR]", " ")
+    replacements = (
+        (r"\bAl\b", "AI"),
+        (r"\bAl(?=Ops\b)", "AI"),
+        (r"\bAl(?=\s*(?:Native|Full|Agent|Orchestrator|Data|Machine)\b)", "AI"),
+        (r"\bAl(?=\s*(?:인프라|플랫폼|서비스|솔루션|클라우드|데이터|컴퓨팅))", "AI"),
+        (r"\b시\s*/\s*클라우드", "AI/클라우드"),
+        (r"\b시\s*컴퓨팅", "AI 컴퓨팅"),
+        (r"\b시\s*데이터", "AI 데이터"),
+        (r"\bAx\b", "AX"),
+    )
+    for pattern, replacement in replacements:
+        value = re.sub(pattern, replacement, value, flags=re.IGNORECASE)
+    value = re.sub(r"AI\s*-\s*AI", "AI", value)
+    value = re.sub(r"AX\s*-\s*AI", "AX-AI", value)
+    return value
+
+
+def _has_ocr_marker_or_noise(text_value: str) -> bool:
+    return "[OCR]" in text_value or _ocr_noise_ratio(text_value) >= 0.18
+
+
+def _is_degraded_ocr_signal_text(text_value: str) -> bool:
+    value = re.sub(r"\s+", " ", str(text_value or "")).strip()
+    if not value:
+        return True
+    semantic_chars = len(re.findall(r"[0-9A-Za-z가-힣]", value))
+    if semantic_chars < 24:
+        return True
+    if _ocr_noise_ratio(value) >= 0.28:
+        return True
+    noisy_tokens = len(re.findall(r"[{}<>|\\^~]{1,}|[A-Za-z]{1,}\d{2,}[A-Za-z]*", value))
+    semantic_tokens = len(re.findall(r"[A-Za-z가-힣]{2,}", value))
+    return noisy_tokens >= 3 and noisy_tokens > semantic_tokens
+
+
+def _ocr_noise_ratio(text_value: str) -> float:
+    value = str(text_value or "")
+    compact = re.sub(r"\s+", "", value)
+    if not compact:
+        return 1.0
+    noisy = re.sub(r"[0-9A-Za-z가-힣%&/.,:;+\-()·ㆍ\[\]]", "", compact)
+    return len(noisy) / max(len(compact), 1)
+
+
+def _has_high_value_ocr_signal_terms(text_value: str) -> bool:
+    lowered = _normalize_ocr_signal_text(text_value).lower()
+    return any(
+        term in lowered
+        for term in (
+            "full stack",
+            "inorganic",
+            "gpuaas",
+            "npuaas",
+            "vertical ai",
+            "ai native",
+            "ai 인프라",
+            "ai 플랫폼",
+            "ai 컴퓨팅",
+            "ax-ai",
+            "ai/클라우드",
+            "aiops",
+            "mlops",
+        )
+    )
 
 
 def _company_peer_id(company: Any) -> str | None:

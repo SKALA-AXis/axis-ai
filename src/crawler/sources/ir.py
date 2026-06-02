@@ -20,6 +20,7 @@ from src.config.companies import IR_CONFIG
 from src.crawler.article_filter import strip_html
 from src.crawler.base import RawArticle
 from src.crawler.base_crawler import BaseCrawler
+from src.crawler.parsers.pdf_payload import extract_pdf_payload
 from src.crawler.playwright_client import PlaywrightClient
 from src.db.article_store import article_exists_by_url
 
@@ -1110,6 +1111,9 @@ def _build_ir_article_from_pdf(
             "pdf_parsed_pages": pdf_payload.get("parsed_page_count", 0),
             "contains_images": pdf_payload.get("contains_images", False),
             "image_count": pdf_payload.get("image_count", 0),
+            "drawing_count": pdf_payload.get("drawing_count", 0),
+            "ocr_applied": pdf_payload.get("ocr_applied", False),
+            "ocr_pages": pdf_payload.get("ocr_pages", []),
             "contains_tables": None,
             "table_count": None,
             "table_parse_strategy": pdf_payload.get(
@@ -1235,82 +1239,7 @@ async def _fetch_pdf_text(client: httpx.AsyncClient, pdf_url: str) -> str:
 
 
 def _extract_pdf_payload(pdf_bytes: bytes) -> dict:
-    try:
-        import pymupdf
-
-        with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
-            chunks: list[str] = []
-            pages_payload: list[dict] = []
-            current_length = 0
-            image_count = 0
-
-            for page_index, page in enumerate(doc, start=1):
-                page_text = page.get_text("text", sort=True)
-                page_text = _clean_pdf_text(page_text)
-                page_blocks = _extract_pdf_page_blocks(page)
-                page_images = len(page.get_images(full=True))
-                ocr_used = False
-
-                if _needs_ocr_page(page_text, page_images):
-                    ocr_text = _extract_pdf_page_ocr_text(page)
-                    if len(ocr_text) > len(page_text):
-                        page_text = ocr_text
-                        page_blocks = [
-                            {
-                                "bbox": [],
-                                "text": line,
-                                "source": "ocr",
-                            }
-                            for line in page_text.splitlines()
-                            if line.strip()
-                        ]
-                        ocr_used = True
-
-                image_count += page_images
-
-                chunks.append(f"\n[PAGE {page_index}]\n{page_text}")
-                current_length += len(page_text)
-
-                pages_payload.append(
-                    {
-                        "page": page_index,
-                        "text_chars": len(page_text),
-                        "image_count": page_images,
-                        "ocr_used": ocr_used,
-                        "blocks": page_blocks,
-                    }
-                )
-
-                if current_length >= PDF_MAX_TEXT_CHARS:
-                    break
-
-            text = "\n".join(chunks).strip()[:PDF_MAX_TEXT_CHARS]
-
-            return {
-                "text": text,
-                "page_count": len(doc),
-                "parsed_page_count": len(pages_payload),
-                "image_count": image_count,
-                "contains_images": image_count > 0,
-                "pages": pages_payload,
-                "pdf_parse_strategy": "text_blocks_with_optional_ocr",
-                "table_parse_strategy": "pdf_text_blocks",
-                "chart_parse_strategy": "not_parsed",
-            }
-
-    except Exception as e:
-        log.debug("PDF 텍스트 변환 실패 | error=%s", e)
-        return {
-            "text": "",
-            "page_count": 0,
-            "parsed_page_count": 0,
-            "image_count": 0,
-            "contains_images": False,
-            "pages": [],
-            "pdf_parse_strategy": "failed",
-            "table_parse_strategy": "not_parsed",
-            "chart_parse_strategy": "not_parsed",
-        }
+    return extract_pdf_payload(pdf_bytes, max_text_chars=PDF_MAX_TEXT_CHARS)
 
 
 def _clean_pdf_text(text: str) -> str:

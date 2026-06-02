@@ -70,7 +70,7 @@
 
 | 출력 | 설명 |
 |---|---|
-| `TrendContext` | 이후 `AnalysisAgent` 가 참고할 글로벌 IT 트렌드 context |
+| `TrendContext` | 이후 `StrategicAnalyzer` 가 참고할 글로벌 IT 트렌드 context |
 | `global_industry_trends` | trend keyword 단위로 저장되는 read model |
 
 `TrendContext` 예:

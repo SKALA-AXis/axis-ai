@@ -37,8 +37,8 @@ class AnalysisPackage:
 ```
 
 입력 의미:
-- `integrated_issue`: IssueIntegrationAgent가 만든 통합 이슈
-- `analysis`: AnalysisAgent가 만든 전략 의미 분석
+- `integrated_issue`: IntegrationAgent가 만든 통합 이슈
+- `analysis`: StrategicAnalyzer가 만든 전략 의미 분석
 - `implication`: ImplicationAgent가 만든 SK AX 관점 시사점
 - `sources`: 원문 출처
 - `validation`: 분석 패키지 검증 정보
@@ -97,7 +97,7 @@ card_news / card_news_articles / evidence_chain
 3. 수치·적용 사례·후속 단계·시장 반응·불확실성 중 가장 구체적인 사실
 
 주의:
-- `IssueIntegrationAgent`의 `integrated_text`를 그대로 복사하지 않는다.
+- `IntegrationAgent`의 `integrated_text`를 그대로 복사하지 않는다.
 - 원문에 없는 수치, 제품명, 고객명, 원인을 만들지 않는다.
 - 시사점 문장을 사실 요약에 섞지 않는다.
 - 카드뉴스 문장은 사용자 화면에서 읽기 좋은 presentation 문장으로 재작성한다.

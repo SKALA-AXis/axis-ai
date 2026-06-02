@@ -503,7 +503,7 @@ class AnalysisContext:
 class TrendContext:
     """SPRi/BCG + 글로벌 뉴스룸 분석 결과 기반 글로벌·산업 흐름 context.
 
-    DB schema가 아니며, ITTrendAgent가 생성/갱신해 AnalysisAgent가 참고할 수 있는
+    DB schema가 아니며, ITTrendAgent가 생성/갱신해 StrategicAnalyzer가 참고할 수 있는
     내부 DTO이다. 글로벌 회사별 뉴스룸 원문은 카드뉴스 생성 파이프라인을 먼저 타고,
     그 산출물인 IntegratedIssue / AnalysisResult가 실행 신호 입력으로 들어온다.
     """

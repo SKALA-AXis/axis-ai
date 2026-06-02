@@ -2305,8 +2305,8 @@ _trend_cache_lock = threading.Lock()
 def fetch_latest_trend_context(within_days: int = 7) -> dict[str, Any]:
     """``global_industry_trends`` 의 최근 N 일 row 를 TrendContext shape 로 aggregate.
 
-    AnalysisAgent prompt 에 들어갈 글로벌 배경 정보. trend 가 없으면 빈 dict 반환
-    (``analyzer.py`` 가 already-empty-safe). process-level TTL 60 초 캐시.
+    StrategicAnalyzer prompt 에 들어갈 글로벌 배경 정보. trend 가 없으면 빈 dict 반환
+    (``strategic_analyzer.py`` 가 already-empty-safe). process-level TTL 60 초 캐시.
     """
     import time
 

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from src.analysis.models import (
     AnalysisContext,
     AnalysisInputBundle,
+    ProfileContext,
 )
 from src.pipeline.analysis_flow_graph import (
     SupervisorDeps,
@@ -40,13 +41,6 @@ def _stub_bundle() -> AnalysisInputBundle:
 
 def _stub_deps() -> SupervisorDeps:
     """모든 child agent 를 mock 으로 교체해 LLM 호출 0."""
-    profile_agent = MagicMock()
-    profile_agent.build_context.return_value = {
-        "skax_profile": {"business_lines": ["에이전틱AI", "MSP"]},
-        "peer_profiles": {"samsung_sds": {"peer_id": "samsung_sds"}},
-        "sector_context": {"selected_sector_ids": ["ax"]},
-    }
-
     issue_integrator = MagicMock()
     issue_integrator.integrate_input_bundle.return_value = {
         "is_valid_summary": True,
@@ -106,7 +100,11 @@ def _stub_deps() -> SupervisorDeps:
     context_builder.build.return_value = AnalysisContext()
 
     profile_context_loader = MagicMock()
-    profile_context_loader.load.side_effect = RuntimeError("force legacy")
+    profile_context_loader.load.return_value = ProfileContext(
+        skax_profile={"business_lines": ["에이전틱AI", "MSP"]},
+        peer_profiles={"samsung_sds": {"peer_id": "samsung_sds"}},
+        sector_context={"selected_sector_ids": ["ax"]},
+    )
 
     card_news_agent = MagicMock()
     card_news_agent.generate_from_analysis_package.return_value = {
@@ -117,7 +115,6 @@ def _stub_deps() -> SupervisorDeps:
     }
 
     return SupervisorDeps(
-        profile_agent=profile_agent,
         issue_integrator=issue_integrator,
         analyzer=analyzer,
         implication_agent=implication,
@@ -151,7 +148,7 @@ def test_supervisor_graph_happy_path_writes_card():
     # R-1: issue_integrate 가 가장 먼저 실행되어야 한다.
     deps.issue_integrator.integrate_input_bundle.assert_called_once()
     # ProfileContext 는 integrated_issue.main_company (= samsung_sds) 를 받았는지.
-    profile_call = deps.profile_agent.build_context.call_args
+    profile_call = deps.profile_context_loader.load.call_args
     assert "samsung_sds" in (profile_call.kwargs.get("companies") or [])
 
 
