@@ -373,9 +373,8 @@ def _normalize_analysis_block(
 ) -> dict[str, Any]:
     strategic_meaning = _string_list(data.get("strategic_meaning"), max_items=3)
     return {
-        "is_valid_analysis": bool(data.get("is_valid_analysis", True)) and bool(
-            data.get("analysis_summary") or strategic_meaning
-        ),
+        "is_valid_analysis": bool(data.get("is_valid_analysis", True))
+        and bool(data.get("analysis_summary") or strategic_meaning),
         "analysis_scope": "peer_and_industry",
         "analysis_summary": str(data.get("analysis_summary") or "").strip(),
         "strategic_meaning": strategic_meaning,
@@ -733,9 +732,7 @@ def _business_line_candidate_details(profile: dict[str, Any]) -> list[dict[str, 
                 {
                     "name": name,
                     "summary": str(area.get("summary") or "").strip(),
-                    "core_capabilities": _string_list(
-                        area.get("core_capabilities"), max_items=5
-                    ),
+                    "core_capabilities": _string_list(area.get("core_capabilities"), max_items=5),
                     "recent_direction": str(area.get("recent_direction") or "").strip(),
                     "source_refs": _compact_value(area.get("source_refs") or []),
                 }
