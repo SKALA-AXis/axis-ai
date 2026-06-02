@@ -18,3 +18,5 @@ htmlcov/
 .coverage
 dist/
 src/crawler/crawler_results/
+src/agents/profile_dryruns/*.llm.dryrun.json
+src/agents/profile_dryruns/peer_profile_llm_dryrun_summary.json
