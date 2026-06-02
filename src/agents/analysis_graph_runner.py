@@ -23,6 +23,7 @@ from src.agents.integration_agent import (
     analysis_input_bundle_from_articles,
 )
 from src.agents.strategic_analyzer import StrategicAnalyzer
+from src.agents.strategic_insight_agent import StrategicInsightAgent
 from src.analysis.models import (
     AnalysisInputBundle,
     AnalysisPackage,
@@ -52,11 +53,13 @@ class AnalysisGraphRunner:
         issue_integrator: IntegrationAgent | None = None,
         summarizer: IntegrationAgent | None = None,
         analyzer: StrategicAnalyzer | None = None,
+        strategic_insight_agent: StrategicInsightAgent | None = None,
         implication_generator: ImplicationAgent | None = None,
     ) -> None:
         deps = SupervisorDeps(
             integration_agent=integration_agent or issue_integrator or summarizer,
             analyzer=analyzer,
+            strategic_insight_agent=strategic_insight_agent,
             implication_agent=implication_generator,
         )
         self._deps = deps
@@ -78,6 +81,10 @@ class AnalysisGraphRunner:
     @property
     def implication_generator(self) -> ImplicationAgent:
         return self._deps.implication_agent
+
+    @property
+    def strategic_insight_agent(self) -> Any:
+        return self._deps.strategic_insight_agent
 
     # ──────────────────────────────────────────────────────────────────
     # Public API (backwards-compat)
@@ -122,9 +129,15 @@ class AnalysisGraphRunner:
         classification_payload = classification or input_bundle.metadata.get("classification") or {}
         # ProfileContext 외부 주입은 supervisor 내부 build 가 우선이지만, 기존 호출자가
         # 외부 context 를 함께 전달했다면 그래프 input 에 함께 실어준다.
+        profile_context = _profile_context_from_external(
+            input_bundle=input_bundle,
+            peer_profile_context=peer_profile_context,
+            skax_profile_context=skax_profile_context,
+        )
         state = run_supervisor(
             input_bundle=input_bundle,
             classification=classification_payload,
+            profile_context=profile_context,
             graph=self._graph,
         )
         pkg = state.get("analysis_package")
@@ -166,3 +179,62 @@ __all__ = [
     "AnalysisGraphRunner",
     "ProfileContext",
 ]
+
+
+def _profile_context_from_external(
+    *,
+    input_bundle: AnalysisInputBundle,
+    peer_profile_context: dict[str, Any] | None,
+    skax_profile_context: dict[str, Any] | None,
+) -> ProfileContext | None:
+    if not peer_profile_context and not skax_profile_context:
+        return None
+
+    peer_profiles = _normalize_peer_profile_context(
+        peer_profile_context=peer_profile_context or {},
+        fallback_peer_ids=list(input_bundle.companies or []),
+    )
+    return ProfileContext(
+        skax_profile=dict(skax_profile_context or {}),
+        peer_profiles=peer_profiles,
+        sector_context={"selected_sector_ids": list(input_bundle.sectors or [])},
+    )
+
+
+def _normalize_peer_profile_context(
+    *,
+    peer_profile_context: dict[str, Any],
+    fallback_peer_ids: list[str],
+) -> dict[str, Any]:
+    if not peer_profile_context:
+        return {}
+
+    if _looks_like_single_profile(peer_profile_context):
+        peer_id = str(
+            peer_profile_context.get("peer_id")
+            or peer_profile_context.get("company_id")
+            or (fallback_peer_ids[0] if fallback_peer_ids else "")
+        )
+        return {peer_id: dict(peer_profile_context)} if peer_id else {}
+
+    return {
+        str(peer_id): dict(profile)
+        for peer_id, profile in peer_profile_context.items()
+        if isinstance(profile, dict)
+    }
+
+
+def _looks_like_single_profile(payload: dict[str, Any]) -> bool:
+    return any(
+        key in payload
+        for key in (
+            "peer_id",
+            "company_id",
+            "company_name",
+            "company_name_ko",
+            "schema_version",
+            "business_areas",
+            "core_capabilities",
+            "recent_changes",
+        )
+    )

@@ -146,8 +146,8 @@ CardNewsAgent
   `raw_article_parse_results`, `raw_article_financial_metrics`,
   `raw_article_business_signals` 등을 함께 조회한다.
 - 조회한 데이터를 `AnalysisInputBundle`로 구성한다.
-- 다음 노드 순서로 child agent 를 호출한다 — `IntegrationAgent` → `ProfileAgent` →
-  (`AnalysisContextBuilder`) → `StrategicAnalyzer` → `ImplicationAgent`.
+- 다음 노드 순서로 child agent 를 호출한다 — `IntegrationAgent` → `ProfileContextLoader` →
+  (`AnalysisContextBuilder`) → `StrategicInsightAgent`.
 - 최종 결과를 `AnalysisPackage`로 묶어 `CardNewsAgent`에 전달한다 (in-graph `card_writer`
   노드).
 
@@ -158,10 +158,9 @@ AnalysisInputBundle
 → ① IntegrationAgent      → IntegratedIssue (main_company 확정)
 → ② ProfileContext Loader      → ProfileContext (Tier A snapshot + Tier B recent)
 → ③ AnalysisContextBuilder     → AnalysisContext (timeline / sector pulse / financial 등)
-→ ④ StrategicAnalyzer              → AnalysisResult (peer 관점)
-→ ⑤ ImplicationAgent           → ImplicationResult (SK AX 관점)
-→ ⑥ validate                   → ValidationReport (hard / soft + W5-1 metric)
-   ├ pass → ⑦ assemble → ⑧ card_writer → card_news INSERT (v2 schema)
+→ ④ StrategicInsightAgent      → analysis + implication (분리 출력)
+→ ⑤ validate                   → ValidationReport (hard / soft + W5-1 metric)
+   ├ pass → ⑥ assemble → ⑦ card_writer → card_news INSERT (v2 schema)
    └ fail → human_review (flag only)
 ```
 
@@ -207,31 +206,37 @@ AnalysisInputBundle
 - `src/agents/integration_agent.py`
 - `src/analysis/summarizer.py`
 
-### StrategicAnalyzer
+### StrategicInsightAgent
 
-`IntegratedIssue`만을 기반으로 전략적 의미를 분석한다.
+`StrategicAnalyzer`와 `ImplicationAgent`의 기본 실행 경로를 하나의 LLM agent로 통합한다.
+단, 저장 및 후속 처리 호환성을 위해 출력은 `analysis`와 `implication` 두 블록으로
+분리한다.
 
 입력:
-- `IntegratedIssue`
-- company / sector / event_type metadata
-- sources
+- `IntegrationAgent`가 만든 `IntegratedIssue`
+- `classification`
+- `AnalysisInputBundle.metadata`
+- `ProfileContextLoader`가 만든 `ProfileContext`
+- `AnalysisContextBuilder`가 만든 `AnalysisContext`
 
 주요 책임:
-- 기업의 전략적 움직임 분석
-- 섹터 변화 분석
-- Peer사 경쟁 구도 해석
-- 시장 신호 분석
-- 리스크 요인 분석
-- 해당 이슈가 단순 정보인지 전략적 변화 신호인지 판단
+- `analysis` 블록: 피어사/산업 관점의 전략적 의미, 시장 신호, 영향도 판단
+- `implication` 블록: SK AX 관점의 중요성, 기회/위협, 대응 방향, 관찰 질문
+- 피어 관점 분석과 SK AX 대응을 섞지 않고 분리 출력
+- `IntegratedIssue`에 없는 사실, 수치, 회사명, 제품명 생성 금지
+- 수치/날짜/정량 표현은 `fact_basis`, `key_numbers`, `representative_sources` 근거 필요
 
 현재 코드 기준:
-- `src/agents/strategic_analyzer.py`
+- `src/agents/strategic_insight_agent.py`
+- `design/30-analysis/strategic-insight-agent.md`
+- `src/agents/strategic_analyzer.py` / `src/agents/implication_agent.py` 는 fallback 및
+  backward-compat 경로로 유지
 
 주의:
-- StrategicAnalyzer는 원문/클러스터/문서 전체를 다시 읽지 않는다.
+- StrategicInsightAgent는 원문/클러스터/문서 전체를 다시 읽지 않는다.
 - 원문 기반 fact 통합은 IntegrationAgent 책임이다.
-- StrategicAnalyzer는 IntegratedIssue 안의 `integrated_text`, `consolidated_facts`,
-  `key_numbers`, `business_signals`, `fact_basis`를 근거로 해석한다.
+- ProfileContext와 AnalysisContext는 해석 보조 맥락이며, IntegratedIssue에 없는 새
+  사건을 사실처럼 쓰는 근거가 아니다.
 
 ### ProfileAgent
 
@@ -250,8 +255,10 @@ ProfileAgent 는 단순 context provider 가 아니라 **DART / IR / 공식 news
   financial_metrics 보강 (DB query only, LLM X).
 
 출력은 **두 관점으로 분리**:
-* `ProfileContext.peer_profiles[peer_id]` — StrategicAnalyzer 입력 (peer 의 전략·역량 해석).
-* `ProfileContext.skax_profile` — ImplicationAgent 입력 (SK AX 의 기회/위협/대응 도출).
+* `ProfileContext.peer_profiles[peer_id]` — StrategicInsightAgent의 `analysis` 블록 입력
+  (peer 의 전략·역량 해석).
+* `ProfileContext.skax_profile` — StrategicInsightAgent의 `implication` 블록 입력
+  (SK AX 의 기회/위협/대응 도출).
 
 주의:
 - 전처리의 기업·섹터·이벤트 **매칭** (raw data 라벨링) 과 다르다.
@@ -265,7 +272,9 @@ ProfileAgent 는 단순 context provider 가 아니라 **DART / IR / 공식 news
 
 ### ImplicationAgent
 
-분석 결과와 프로필 context를 결합해 SK AX 관점의 시사점을 도출한다.
+기존 시사점 Agent. 현재 기본 flow에서는 `StrategicInsightAgent`가 `implication` 블록을
+생성하며, `ImplicationAgent`는 LLM 실패 또는 legacy 주입 테스트의 fallback/compat 경로로
+유지한다.
 
 입력:
 - `AnalysisResult`
