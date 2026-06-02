@@ -177,12 +177,16 @@ class StrategicInsightAgent:
         self,
         *,
         llm: ChatOpenAI | None = None,
+        analyzer: StrategicAnalyzer | None = None,
+        implication_agent: ImplicationAgent | None = None,
         fallback_analyzer: StrategicAnalyzer | None = None,
         fallback_implication_agent: ImplicationAgent | None = None,
     ) -> None:
         self._llm = llm
-        self._fallback_analyzer = fallback_analyzer or StrategicAnalyzer()
-        self._fallback_implication_agent = fallback_implication_agent or ImplicationAgent()
+        self._fallback_analyzer = fallback_analyzer or analyzer or StrategicAnalyzer()
+        self._fallback_implication_agent = (
+            fallback_implication_agent or implication_agent or ImplicationAgent()
+        )
         self.model = _LLM_MODEL
 
     def generate(

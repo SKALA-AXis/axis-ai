@@ -23,6 +23,7 @@ from src.agents.it_trend_agent import (
     _make_source_analysis_id,
     _reference_issue_ids,
     _slugify,
+    _trend_confidence_for_keyword,
 )
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -224,6 +225,56 @@ def test_dedupe_items_by_id_keeps_rows_without_id() -> None:
     items = [{"title": "x"}, {"title": "y"}, {"id": 1, "title": "z"}]
     deduped = _dedupe_items_by_id(items)
     assert len(deduped) == 3
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# _trend_confidence_for_keyword — keyword 별 evidence 기반 confidence
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_trend_confidence_rewards_keyword_level_evidence() -> None:
+    strong = _trend_confidence_for_keyword(
+        det={
+            "theme": "cloud",
+            "mention_count": 50,
+            "leading_companies": ["microsoft", "google", "amazon"],
+        },
+        peers=[
+            {"alignment_type": "aligned", "evidence_card_ids": ["1", "2"]},
+            {"alignment_type": "aligned", "evidence_card_ids": ["3"]},
+        ],
+        evidence_raw_ids=[1, 2, 3, 4, 5],
+        has_llm_title=True,
+        has_llm_summary=True,
+        llm_batch_confidence=0.7,
+    )
+    weak = _trend_confidence_for_keyword(
+        det={"theme": "quantum", "mention_count": 3, "leading_companies": []},
+        peers=[
+            {"alignment_type": "missing", "evidence_card_ids": []},
+            {"alignment_type": "missing", "evidence_card_ids": []},
+        ],
+        evidence_raw_ids=[],
+        has_llm_title=False,
+        has_llm_summary=False,
+        llm_batch_confidence=0.7,
+    )
+
+    assert strong > weak
+    assert strong != 0.7
+    assert 0.0 <= weak <= 1.0
+
+
+def test_trend_confidence_clips_llm_batch_confidence() -> None:
+    score = _trend_confidence_for_keyword(
+        det={"theme": "gpu", "mention_count": 20, "leading_companies": ["nvidia"]},
+        peers=[],
+        evidence_raw_ids=[1],
+        has_llm_title=True,
+        has_llm_summary=True,
+        llm_batch_confidence=9.9,
+    )
+    assert 0.0 <= score <= 1.0
 
 
 # ──────────────────────────────────────────────────────────────────────────

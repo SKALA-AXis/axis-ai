@@ -11,7 +11,6 @@ from typing import Any
 _EXPORT_MODULES = {
     "AnalysisGraphRunner": "src.agents.analysis_graph_runner",
     "BriefingGenerationAgent": "src.agents.briefing_generation_agent",
-    "CardNewsAgent": "src.agents.card_news_agent",
     "ChatbotAgent": "src.agents.chatbot_agent",
     "IntegrationAgent": "src.agents.integration_agent",
     "ImplicationAgent": "src.agents.implication_agent",

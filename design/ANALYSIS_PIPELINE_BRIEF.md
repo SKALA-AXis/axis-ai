@@ -24,12 +24,11 @@
 >
 > ## Retry / Tracing 현재 상태 (외부 리뷰 R-7 명시)
 >
-> * LangGraph `RetryPolicy` 는 LLM 호출 노드 중심으로 적용되어 있다.
+> * LangGraph `RetryPolicy / with_retry` 정식 적용: **별도 PR** (W3-4 trace + retry 묶음).
 > * 현재는 `_logged_step` 데코레이터의 try/except 가 노드 예외를 잡아 `state.errors[]` 에
->   누적하고, `StrategicInsightAgent` 는 LLM 실패 시 기존 `StrategicAnalyzer` +
->   `ImplicationAgent` 조합으로 fallback 한다.
-> * Langfuse tracing 은 `StrategicInsightAgent` / `ImplicationAgent` /
->   `CapabilityEvolutionAgent` 중심으로 부분 적용되어 있다.
+>   누적하고, ImplicationAgent 가 내부에서 LLM 실패 시 heuristic generator 로 자동 fallback.
+> * Langfuse tracing 도 ImplicationAgent / CapabilityEvolutionAgent 만 부분 적용 — 다른
+>   Analysis Pipeline 노드 (issue_integrate / strategic_insight) 는 별도 PR 에서 trace metadata 부착.
 > 작성: 2026-05-20 / 갱신: 2026-05-21 · Critical path **~40h** / 총 **~85h** / **5-5.5주** (W5 Evaluation Layer 포함)
 
 ---
@@ -40,17 +39,16 @@
 |---|---|---|---|---|
 | 1 | **AnalysisGraphRunner** | `agents/analysis_graph_runner.py` + `pipeline/analysis_flow_graph.py` | cluster 마다 | ❌ (조율) |
 | 2 | IntegrationAgent (유지) | `agents/integration_agent.py` | Analysis Pipeline 노드 | ✅ |
-| 3 | **StrategicInsightAgent** (신규) | `agents/strategic_insight_agent.py` | Analysis Pipeline 노드 | ✅ |
+| 3 | StrategicInsightAgent (facade) | `agents/strategic_insight_agent.py` | Analysis Pipeline 노드 | ✅ |
 | 4 | ProfileAgent (2-tier 분리) | `agents/profile_agent.py` | Analysis Pipeline 노드 | ❌ (CronJob 분리) |
-| 5 | ImplicationAgent v4.0 (fallback 유지) | `agents/implication_agent.py` | StrategicInsightAgent fallback/compat | ✅ |
-| 6 | CardNewsAgent (수정 + 이관) | `agents/card_news_agent.py` (호출은 Analysis Pipeline 의 `card_writer` 노드) | Analysis Pipeline 노드 (W2-1 작업 5) | ✅ |
-| 7 | **AnalysisContextBuilder** (신규) | `services/analysis_context_builder.py` | Analysis Pipeline 노드 | ❌ |
+| 5 | CardNewsComposer (수정 + 이관) | `composers/card_news_composer.py` (호출은 Analysis Pipeline 의 `card_writer` 노드) | Analysis Pipeline 노드 (W2-1 작업 5) | ❌ |
+| 6 | **AnalysisContextBuilder** (신규) | `services/analysis_context_builder.py` | Analysis Pipeline 노드 | ❌ |
+| 7 | **Evaluator** (W5-1 신규, rule-based 5 metric) | `evaluators/evaluator.py` + `validate` 노드 확장 | Analysis Pipeline 노드 (in-graph) | ❌ |
 | 8 | **CapabilityEvolutionAgent** (신규) | `agents/context/capability_evolution_agent.py` | 월1회 CronJob | ✅ |
 | 9 | **SectorPulseAggregator** (신규) | `scripts/refresh_sector_pulse.py` | 주1회 CronJob | ❌ |
 | 10 | **EventChainDiscoveryJob** (옵션) | `scripts/event_chain_discovery_job.py` | 매일 CronJob | ✅ |
 | 11 | **ProfileSnapshotAgent** (신규) | `scripts/refresh_peer_profile_snapshots.py` | 분기 1회 CronJob | ✅ |
-| 12 | **EvaluatorAgent** (W5-1 신규, rule-based 5 metric) | `agents/evaluator_agent.py` + `validate` 노드 확장 | Analysis Pipeline 노드 (in-graph) | ❌ |
-| 13 | **CardEvaluatorSidecar** (W5-2 신규, LLM-as-Judge 4 score) | `scripts/evaluate_recent_cards.py` | 5분 주기 CronJob (sidecar) | ✅ gpt-4o-mini |
+| 12 | **CardEvaluatorSidecar** (W5-2 신규, LLM-as-Judge 4 score) | `scripts/evaluate_recent_cards.py` | 5분 주기 CronJob (sidecar) | ✅ gpt-4o-mini |
 
 ---
 
@@ -72,14 +70,13 @@
 │                          ↓                                          │
 │   ② LLM reasoning                                                   │
 │      issue_integrate (LLM) → strategic_insight (LLM)                │
-│                              analysis + implication 분리 출력       │
 │                                       ↓                             │
 │   ③ validation + rule-based eval (W5-1)                             │
 │      validate (단정/수치 차단 + 5 metric 계산) ── fail ─→ human_review│
 │                ↓ pass / low_quality_score → human_review_flags      │
 │   ④ package generation                                              │
 │      assemble → AnalysisPackage                                     │
-│             → card_writer (CardNewsAgent.write_card)                │
+│             → card_writer (CardNewsComposer)                        │
 │                          ↓                                          │
 │         card_news WRITE (v2 schema + evaluation_payload.rule_based) │
 └─────────────────────────────────────────────────────────────────────┘
@@ -96,7 +93,7 @@
                                           evaluation_payload.llm_judge
 ```
 
-> **As-Is design debt (v3.1.3 해소)**: 현재 코드에서는 카드 생성 (`CardNewsAgent.write_card`) 이 `ingestion_graph.card_news_node` 에서 호출됨 — Layer 위반. **W2-1 작업 5 에서 `card_writer` 노드로 Analysis Pipeline 의 마지막 노드에 통합** (W2-1 시간 +2~3h, 본 계획서 범위 내). 카드뉴스는 분석/시사점/대응의 직렬화 결과 = Layer B 의 산출물.
+> **As-Is design debt (v3.1.3 해소)**: 현재 코드에서는 카드 생성 (`CardNewsComposer`) 이 `ingestion_graph.card_news_node` 에서 호출됨 — Layer 위반. **W2-1 작업 5 에서 `card_writer` 노드로 Analysis Pipeline 의 마지막 노드에 통합** (W2-1 시간 +2~3h, 본 계획서 범위 내). 카드뉴스는 분석/시사점/대응의 직렬화 결과 = Layer B 의 산출물.
 
 ---
 
@@ -109,10 +106,10 @@
 | **ProfileAgent** (2-tier) | **READ**: `peer_companies.profile_snapshot` JSONB 컬럼 (Tier A) + `raw_article_business_signals` 최근 30일 top-3 + `raw_article_financial_metrics` 최근 분기 (Tier B) | `ProfileContext` (메모리) |
 | **AnalysisContextBuilder** ⭐신규 | **READ**: `peer_event_timeline` VIEW (90일) + `peer_companies.peer_plus_payload['capability_evolution']` + `sector_pulse` MV (4주) + `peer_financial_trend` VIEW (8분기) + `card_news.evidence_payload.financial_refs` + Qdrant `axis_main` (top-3) | `AnalysisContext` (메모리, ≤4k token) |
 | **IntegrationAgent** | `AnalysisInputBundle` (cluster 의 raw_articles) | `IntegratedIssue` (메모리, consolidated_facts / key_numbers / fact_basis) |
-| **StrategicInsightAgent** ⭐신규 | `IntegratedIssue` + `classification` + `AnalysisInputBundle.metadata` + `ProfileContext` + `AnalysisContext` | `{ analysis, implication }` 분리 출력 (메모리, `analysis`: peer/industry 의미, `implication`: peer/skax 시사점) |
-| **StrategicAnalyzer / ImplicationAgent** | StrategicInsightAgent LLM 실패 또는 legacy 주입 테스트 fallback | 기존 `AnalysisResult` / `ImplicationResult` 호환 출력 |
-| **Validate 노드 + EvaluatorAgent** ⭐신규 (W2-3 + W5-1) | 전체 AnalysisFlowState (= SupervisorState alias) + rolling 7d confidence | `ValidationReport` (pass/fail + violations + **rule-based 5 metric**) |
-| **CardNewsAgent** (via `card_writer` 노드) | `AnalysisPackage` (모든 결과) + ValidationReport | **WRITE**: `card_news` 행 (v2 schema + `evaluation_payload.rule_based`) |
+| **StrategicAnalyzer** | `IntegratedIssue` + `ProfileContext` | `AnalysisResult` (메모리, strategic_meaning / impact_level / risk_or_opportunity) |
+| **ImplicationAgent v4.0** ⭐신규 | `Bundle` + `IntegratedIssue` + `AnalysisResult` + `ProfileContext` + `AnalysisContext` | `ImplicationResult` (메모리, peer_implication / skax_implication / follow_up / confidence) |
+| **Validate 노드 + Evaluator** ⭐신규 (W2-3 + W5-1) | 전체 AnalysisFlowState (= SupervisorState alias) + rolling 7d confidence | `ValidationReport` (pass/fail + violations + **rule-based 5 metric**) |
+| **CardNewsComposer** (via `card_writer` 노드) | `AnalysisPackage` (모든 결과) + ValidationReport | **WRITE**: `card_news` 행 (v2 schema + `evaluation_payload.rule_based`) |
 
 ### 3.2 Context Layer CronJobs (배치) + Evaluation Sidecar (W5)
 
@@ -185,7 +182,7 @@ CREATE MATERIALIZED VIEW sector_pulse AS ...;    -- sector×week 단위 집계 (
 
 | 단계 | 작업 | 시간 |
 |---|---|---|
-| **W1** (1주차) | StrategicInsightAgent / schema 정합화 / metadata typed / card v2 lint | 12h |
+| **W1** (1주차) | ImplicationAgent v4.0 / schema 정합화 / metadata typed / card v2 lint | 12h |
 | **W2** (2주차) | Analysis Pipeline → LangGraph DAG (+ CardNews 이관) / Profile 2-tier / Validate 노드 / CardNews 정리 | 22-25h |
 | **W3** (3주차) | design docs / tests / Langfuse / cleanup | 12h |
 | **W4** (4주차) | **data hygiene → V33 → ContextBuilder → CapabilityEvol → SectorPulse → prompt v5.0** | 22h |
@@ -199,7 +196,7 @@ CREATE MATERIALIZED VIEW sector_pulse AS ...;    -- sector×week 단위 집계 (
 
 | 지표 | 현재 | W4 완료 | **W5 완료** |
 |---|---|---|---|
-| Stage 1 LLM 호출 / cluster | 4 | 4 (`StrategicInsightAgent`가 analysis+implication 통합) | 4 (W5-1 LLM X) |
+| Stage 1 LLM 호출 / cluster | 4 | 5 (+implication) | 5 (W5-1 LLM X) |
 | 일일 LLM 비용 (Stage 1 + CronJobs) | $1.17 | $1.87 (한도의 25%) | **$3.37 (한도의 46%, +$1.5/일 sidecar)** |
 | Cluster 처리 시간 (p50) | 30초 | 33초 | 33초 (W5-1 rule-based <50ms) |
 | LLM 실패 시 cluster 손실률 | 100% | ~10% | ~10% (sidecar 실패가 cluster 영향 X) |
@@ -236,4 +233,4 @@ CREATE MATERIALIZED VIEW sector_pulse AS ...;    -- sector×week 단위 집계 (
 
 - **`card_news.peer_company_id` FK NULL** (5/15 부분 → 5/16~ 100%, 누적 60건+) — `card_news.company` 와 `peer_companies.id` 100% 매칭 확인됨 → `UPDATE card_news SET peer_company_id = company WHERE peer_company_id IS NULL AND company IN (SELECT id FROM peer_companies)` 1쿼리로 복구
 - **`card_news.primary_keyword_category` NULL** (5/20 부터 11건) — `raw_articles.matched_sectors` 정상 → `UPDATE … SET primary_keyword_category = (raw_articles.matched_sectors->>0 FROM source_raw_article_ids …)`
-- **회귀 원인 추적** (별도 P1) — axis-ai `CardNewsAgent` 후처리의 5/14~5/20 git 변경 이력 점검 (두 시점 회귀이므로 2개 커밋 식별)
+- **회귀 원인 추적** (별도 P1) — axis-ai `CardNewsComposer` 후처리의 5/14~5/20 git 변경 이력 점검 (두 시점 회귀이므로 2개 커밋 식별)

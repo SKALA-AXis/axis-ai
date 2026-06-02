@@ -213,6 +213,171 @@ class AnalysisInputBundle:
         """metadata dict 를 typed view 로 반환 (P2-5)."""
         return AnalysisInputMetadata.from_dict(self.metadata)
 
+    @property
+    def is_news_cluster(self) -> bool:
+        """뉴스 MVP 경로 여부."""
+        return self.source_type in {"news", "news_cluster"}
+
+    @property
+    def representative_id(self) -> int:
+        """대표 raw_article id.
+
+        우선 metadata.representative_id 를 사용하고, 없으면 representative 표시가 있는
+        item, 그래도 없으면 첫 raw article id 를 사용한다.
+        """
+        metadata_id = _safe_int(self.metadata.get("representative_id"), 0)
+        if metadata_id > 0:
+            return metadata_id
+        for item in self.items:
+            if item.get("is_representative"):
+                item_id = _raw_article_id(item)
+                if item_id > 0:
+                    return item_id
+        return self.raw_article_ids[0] if self.raw_article_ids else 0
+
+    @property
+    def cluster_article_ids(self) -> list[int]:
+        """클러스터에 속한 raw article ids."""
+        raw = self.metadata.get("cluster_article_ids") or []
+        ids: list[int] = []
+        if isinstance(raw, list | tuple | set):
+            ids.extend(_safe_int(item, 0) for item in raw)
+        ids.extend(self.raw_article_ids)
+        return _dedupe_positive_ints(ids)
+
+    @property
+    def classification(self) -> dict[str, Any]:
+        """전처리/분류 결과 payload."""
+        raw = self.metadata.get("classification") or {}
+        return raw if isinstance(raw, dict) else {}
+
+    @property
+    def raw_article_ids(self) -> list[int]:
+        """items 에 포함된 raw article ids."""
+        return _dedupe_positive_ints([_raw_article_id(item) for item in self.items])
+
+    @property
+    def matched_companies(self) -> list[str]:
+        """전처리 relevance output 의 matched companies."""
+        values = [*self.companies]
+        for item in self.items:
+            values.extend(_string_list(item.get("matched_companies")))
+            values.extend(_string_list((item.get("metadata") or {}).get("matched_companies")))
+        values.extend(_string_list(self.classification.get("company")))
+        values.extend(_string_list(self.classification.get("companies")))
+        return _dedupe_strings(values)
+
+    @property
+    def matched_sectors(self) -> list[str]:
+        """전처리 relevance/classification output 의 matched sectors."""
+        values = [*self.sectors]
+        for item in self.items:
+            values.extend(_string_list(item.get("matched_sectors")))
+            values.extend(_string_list((item.get("metadata") or {}).get("matched_sectors")))
+        values.extend(_string_list(self.classification.get("sector")))
+        values.extend(_string_list(self.classification.get("sectors")))
+        return _dedupe_strings(values)
+
+    @property
+    def business_signal_rows(self) -> list[dict[str, Any]]:
+        """raw_article_business_signals rows attached to items."""
+        rows: list[dict[str, Any]] = []
+        for item in self.items:
+            article_id = _raw_article_id(item)
+            for signal in _dict_rows(item.get("business_signals")):
+                rows.append({"raw_article_id": article_id, **signal})
+        return rows
+
+    @property
+    def financial_metric_rows(self) -> list[dict[str, Any]]:
+        """raw_article_financial_metrics rows attached to items."""
+        rows: list[dict[str, Any]] = []
+        for item in self.items:
+            article_id = _raw_article_id(item)
+            for metric in _dict_rows(item.get("financial_metrics")):
+                rows.append({"raw_article_id": article_id, **metric})
+        return rows
+
+    @property
+    def parser_outputs(self) -> list[dict[str, Any]]:
+        """raw_article_parse_results-derived payloads attached to items."""
+        outputs: list[dict[str, Any]] = []
+        for item in self.items:
+            article_id = _raw_article_id(item)
+            parser_result = item.get("parser_result")
+            financial_record = item.get("financial_record")
+            parser_warnings = item.get("parser_warnings")
+            if parser_result or financial_record or parser_warnings:
+                outputs.append(
+                    {
+                        "raw_article_id": article_id,
+                        "parser_result": parser_result if isinstance(parser_result, dict) else {},
+                        "financial_record": financial_record
+                        if isinstance(financial_record, dict)
+                        else {},
+                        "parser_warnings": parser_warnings
+                        if isinstance(parser_warnings, list)
+                        else [],
+                    }
+                )
+        return outputs
+
+    @property
+    def news_preprocessing_outputs(self) -> dict[str, Any]:
+        """IntegrationAgent가 참고할 뉴스 전처리 output 묶음."""
+        return {
+            "raw_article_ids": self.raw_article_ids,
+            "representative_id": self.representative_id,
+            "cluster_article_ids": self.cluster_article_ids,
+            "matched_companies": self.matched_companies,
+            "matched_sectors": self.matched_sectors,
+            "classification": self.classification,
+            "business_signals": self.business_signal_rows,
+            "financial_metrics": self.financial_metric_rows,
+            "parser_outputs": self.parser_outputs,
+        }
+
+    def validate_news_contract(self) -> dict[str, Any]:
+        """뉴스 MVP용 AnalysisInputBundle contract 검증.
+
+        hard validation 이 아니라 IntegrationAgent가 입력 품질을 이해하기 위한
+        structured diagnostic 이다. 뉴스 MVP는 raw_articles 중심이라 문서 분석용
+        financial_metrics / business_signals / parser_outputs 를 요구하지 않는다.
+        """
+        missing_fields: list[str] = []
+        warnings: list[str] = []
+        if not self.is_news_cluster:
+            warnings.append(f"source_type is not news/news_cluster: {self.source_type}")
+        if not self.items:
+            missing_fields.append("items")
+        if not self.raw_article_ids:
+            missing_fields.append("items[].id")
+        if not self.representative_id:
+            missing_fields.append("metadata.representative_id")
+        if not self.cluster_article_ids:
+            missing_fields.append("metadata.cluster_article_ids")
+        if not self.matched_companies:
+            warnings.append("matched_companies empty")
+        if not self.matched_sectors:
+            warnings.append("matched_sectors empty")
+
+        outputs = self.news_preprocessing_outputs
+        return {
+            "pass": not missing_fields,
+            "source_type": self.source_type,
+            "item_count": len(self.items),
+            "raw_article_ids": outputs["raw_article_ids"],
+            "representative_id": outputs["representative_id"],
+            "cluster_article_ids": outputs["cluster_article_ids"],
+            "matched_companies": outputs["matched_companies"],
+            "matched_sectors": outputs["matched_sectors"],
+            "business_signal_count": len(outputs["business_signals"]),
+            "financial_metric_count": len(outputs["financial_metrics"]),
+            "parser_output_count": len(outputs["parser_outputs"]),
+            "missing_fields": missing_fields,
+            "warnings": warnings,
+        }
+
 
 # Backward compatibility: 기존 코드의 EvidencePack import는 내부 DTO alias로 유지한다.
 EvidencePack = AnalysisInputBundle
@@ -622,7 +787,7 @@ class ImplicationResult:
             "confidence": self.confidence,
             "evidence_label": self.evidence_label,
             "provenance": self.provenance.to_dict(),
-            # Backward-compat flatten — CardNewsAgent / heuristic fallback 호환.
+            # Backward-compat flatten — CardNewsComposer / heuristic fallback 호환.
             "opportunities": skax.get("opportunities", []) if isinstance(skax, dict) else [],
             "threats": skax.get("threats", []) if isinstance(skax, dict) else [],
             "recommended_actions": (
@@ -791,6 +956,50 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _raw_article_id(item: dict[str, Any]) -> int:
+    return _safe_int(item.get("id") or item.get("raw_article_id") or item.get("preprocess_id"), 0)
+
+
+def _dedupe_positive_ints(values: list[int]) -> list[int]:
+    seen: set[int] = set()
+    out: list[int] = []
+    for value in values:
+        if value <= 0 or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    if isinstance(value, list | tuple | set):
+        return [str(item).strip() for item in value if str(item).strip()]
+    stripped = str(value).strip()
+    return [stripped] if stripped else []
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _dict_rows(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 __all__ = [

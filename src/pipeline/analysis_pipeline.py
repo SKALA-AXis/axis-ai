@@ -14,8 +14,8 @@ from typing import Any
 from sqlalchemy import text
 
 from src.agents.analysis_graph_runner import AnalysisGraphRunner
-from src.agents.card_news_agent import CardNewsAgent
 from src.analysis.models import AnalysisInputBundle
+from src.composers.card_news_composer import CardNewsComposer
 from src.db.article_store import get_articles_by_ids, save_card_news
 from src.db.postgres import SessionLocal
 from src.pipeline.analysis_flow_graph import run_supervisor
@@ -31,11 +31,11 @@ class AnalysisPipelineRunner:
         *,
         analysis_runner: AnalysisGraphRunner | None = None,
         analysis_supervisor: AnalysisGraphRunner | None = None,
-        card_news_agent: CardNewsAgent | None = None,
+        card_news_composer: CardNewsComposer | None = None,
     ) -> None:
         self.analysis_runner = analysis_runner or analysis_supervisor or AnalysisGraphRunner()
         self.analysis_supervisor = self.analysis_runner
-        self.card_news_agent = card_news_agent or CardNewsAgent()
+        self.card_news_composer = card_news_composer or CardNewsComposer()
 
     def run_cluster(
         self,
@@ -208,7 +208,7 @@ class AnalysisPipelineRunner:
                 integrated_issue.get("reason"),
             )
             return {}
-        return self.card_news_agent.generate_from_analysis_package(
+        return self.card_news_composer.generate_from_analysis_package(
             analysis_package,
             classification=classification,
         )

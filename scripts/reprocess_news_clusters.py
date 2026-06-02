@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,17 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--published-since",
+        default=None,
+        help="published_at 하한 ISO timestamp. 예: 2025-06-02T00:00:00+00:00",
+    )
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=0,
+        help="현재 UTC 기준 최근 N일 기사만 재처리. --published-since보다 우선.",
+    )
+    parser.add_argument(
         "--include-skipped",
         action="store_true",
         help="SKIPPED 기사도 재처리 대상에 포함.",
@@ -114,15 +126,29 @@ def main() -> None:
     source_types = _normalize_source_types(args.source_type)
     statuses = _normalize_statuses(args.status, include_skipped=args.include_skipped)
     companies = list(dict.fromkeys(args.company or []))
+    published_since = _resolve_published_since(args)
 
-    before = _count_targets(source_types=source_types, statuses=statuses, companies=companies)
-    raw_before = _count_raw(source_types=source_types, companies=companies)
+    before = _count_targets(
+        source_types=source_types,
+        statuses=statuses,
+        companies=companies,
+        published_since=published_since,
+    )
+    raw_before = _count_raw(
+        source_types=source_types,
+        companies=companies,
+        published_since=published_since,
+    )
     log.info(
-        "재처리 대상 확인 | profile=%s source_types=%s statuses=%s companies=%s total=%d raw=%d",
+        (
+            "재처리 대상 확인 | profile=%s source_types=%s statuses=%s "
+            "companies=%s published_since=%s total=%d raw=%d"
+        ),
         profile,
         source_types,
         statuses,
         companies or ["*"],
+        published_since,
         before,
         raw_before,
     )
@@ -133,12 +159,18 @@ def main() -> None:
         print(f"  source_types: {source_types}")
         print(f"  statuses:     {statuses}")
         print(f"  companies:    {companies or ['*']}")
+        print(f"  published_since: {published_since or '*'}")
         print(f"  target rows:  {before}")
         print(f"  current RAW:  {raw_before}")
         return
 
     if not args.skip_reset:
-        updated = _reset_targets(source_types=source_types, statuses=statuses, companies=companies)
+        updated = _reset_targets(
+            source_types=source_types,
+            statuses=statuses,
+            companies=companies,
+            published_since=published_since,
+        )
         log.info("재처리 상태 초기화 완료 | updated=%d", updated)
 
     if args.reset_only:
@@ -148,6 +180,7 @@ def main() -> None:
         _run_cluster_only(
             source_types=source_types,
             companies=companies,
+            published_since=published_since,
             limit=max(1, args.limit),
             max_batches=max(0, args.max_batches),
         )
@@ -156,9 +189,16 @@ def main() -> None:
     _run_batches(
         source_types=source_types,
         companies=companies,
+        published_since=published_since,
         limit=max(1, args.limit),
         max_batches=max(0, args.max_batches),
     )
+
+
+def _resolve_published_since(args: argparse.Namespace) -> str | None:
+    if args.lookback_days and args.lookback_days > 0:
+        return (datetime.now(UTC) - timedelta(days=args.lookback_days)).isoformat()
+    return args.published_since
 
 
 def _normalize_source_types(values: list[str]) -> list[str]:
@@ -185,15 +225,25 @@ def _count_targets(
     source_types: list[str],
     statuses: list[str],
     companies: list[str],
+    published_since: str | None,
 ) -> int:
     with SessionLocal() as db:
         return int(
-            db.execute(_count_sql(), _params(source_types, companies, statuses)).scalar() or 0
+            db.execute(
+                _count_sql(),
+                _params(source_types, companies, statuses, published_since),
+            ).scalar()
+            or 0
         )
 
 
-def _count_raw(*, source_types: list[str], companies: list[str]) -> int:
-    params = _params(source_types, companies, ["RAW"])
+def _count_raw(
+    *,
+    source_types: list[str],
+    companies: list[str],
+    published_since: str | None,
+) -> int:
+    params = _params(source_types, companies, ["RAW"], published_since)
     with SessionLocal() as db:
         return int(
             db.execute(
@@ -209,8 +259,9 @@ def _reset_targets(
     source_types: list[str],
     statuses: list[str],
     companies: list[str],
+    published_since: str | None,
 ) -> int:
-    params = _params(source_types, companies, statuses)
+    params = _params(source_types, companies, statuses, published_since)
     with SessionLocal() as db:
         result = db.execute(
             text(f"""
@@ -231,13 +282,14 @@ def _reset_targets(
             params,
         )
         db.commit()
-        return int(result.rowcount or 0)
+        return int(getattr(result, "rowcount", 0) or 0)
 
 
 def _run_batches(
     *,
     source_types: list[str],
     companies: list[str],
+    published_since: str | None,
     limit: int,
     max_batches: int,
 ) -> None:
@@ -256,6 +308,7 @@ def _run_batches(
             company=companies,
             source_types=source_types,
             trigger_type="manual:reprocess_news_clusters",
+            published_since=published_since,
             limit=limit,
         )
         raw_count = len(result.get("raw_article_ids", []))
@@ -297,6 +350,7 @@ def _run_cluster_only(
     *,
     source_types: list[str],
     companies: list[str],
+    published_since: str | None,
     limit: int,
     max_batches: int,
 ) -> None:
@@ -313,6 +367,7 @@ def _run_cluster_only(
         article_ids = _list_cluster_only_article_ids(
             source_types=source_types,
             companies=companies,
+            published_since=published_since,
             limit=limit,
         )
         if not article_ids:
@@ -352,9 +407,10 @@ def _list_cluster_only_article_ids(
     *,
     source_types: list[str],
     companies: list[str],
+    published_since: str | None,
     limit: int,
 ) -> list[int]:
-    params = _params(source_types, companies, ["RAW"])
+    params = _params(source_types, companies, ["RAW"], published_since)
     params["limit"] = limit
     with SessionLocal() as db:
         rows = db.execute(
@@ -374,12 +430,14 @@ def _params(
     source_types: list[str],
     companies: list[str],
     statuses: list[str],
+    published_since: str | None,
 ) -> dict[str, Any]:
     return {
         "source_types": source_types,
         "statuses": statuses,
         "companies": companies if companies else [""],
         "no_company_filter": not companies,
+        "published_since": published_since,
     }
 
 
@@ -396,6 +454,7 @@ def _target_where_sql() -> str:
         source_type = ANY(:source_types)
         AND processing_status = ANY(:statuses)
         AND crawl_status = 'success'
+        AND (:published_since IS NULL OR published_at >= CAST(:published_since AS timestamptz))
         AND (:no_company_filter OR company ?| :companies)
     """
 

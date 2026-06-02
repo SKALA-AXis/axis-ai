@@ -33,12 +33,28 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        log.warning("실수 환경변수 파싱 실패, 기본값 사용 | name=%s default=%s", name, default)
+        return default
+
+
 _LLM_MODEL = os.getenv("OPENAI_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o"
 _PROMPT_VERSION = "summary-v4.0"
 _FACT_EXTRACTION_BATCH_SIZE = 10
 _FACT_EXTRACTION_MAX_TOKENS = _env_int("FACT_EXTRACTION_MAX_TOKENS", 3000)
 _SUMMARY_MAX_TOKENS = _env_int("SUMMARY_MAX_TOKENS", 1500)
 _VALIDATION_MAX_TOKENS = _env_int("VALIDATION_MAX_TOKENS", 1200)
+_ARTICLE_CONTENT_CHARS = _env_int("NEWS_SUMMARY_ARTICLE_CONTENT_CHARS", 2400)
+_COMPACT_ARTICLE_CONTENT_CHARS = _env_int("NEWS_SUMMARY_COMPACT_ARTICLE_CONTENT_CHARS", 1200)
+_FULL_TEXT_ARTICLE_LIMIT = _env_int("NEWS_SUMMARY_FULL_TEXT_ARTICLE_LIMIT", 3)
+_SUPPORTING_ARTICLE_CONTENT_CHARS = _env_int("NEWS_SUMMARY_SUPPORTING_ARTICLE_CONTENT_CHARS", 0)
+_NEAR_DUPLICATE_SIMILARITY = _env_float("NEWS_SUMMARY_NEAR_DUPLICATE_SIMILARITY", 0.86)
+_SNIPPETS_PER_ARTICLE = _env_int("NEWS_SUMMARY_SNIPPETS_PER_ARTICLE", 4)
+_SNIPPET_CANDIDATE_SENTENCES = _env_int("NEWS_SUMMARY_SNIPPET_CANDIDATE_SENTENCES", 80)
+_SNIPPET_DEDUP_SIMILARITY = _env_float("NEWS_SUMMARY_SNIPPET_DEDUP_SIMILARITY", 0.88)
 _EVENT_TYPES = (
     "contract",
     "partnership",
@@ -415,12 +431,14 @@ def _build_fetch_ids(
     cluster_article_ids: list[int] | None,
     max_cluster_articles: int | None,
 ) -> list[int]:
-    del max_cluster_articles
     if not cluster_article_ids:
         return [representative_id]
 
     others = [article_id for article_id in cluster_article_ids if article_id != representative_id]
-    return _dedupe_ints([representative_id, *others])
+    ids = _dedupe_ints([representative_id, *others])
+    if max_cluster_articles and max_cluster_articles > 0:
+        return ids[:max_cluster_articles]
+    return ids
 
 
 def _format_articles(
@@ -429,22 +447,31 @@ def _format_articles(
     representative_id: int,
     compact: bool = False,
 ) -> str:
+    del representative_id, compact
+    seen_snippets: list[str] = []
     lines = [
         f"cluster_target_peer_companies: {json.dumps(target_companies, ensure_ascii=False)}",
         "cluster_target_peer_aliases: "
         f"{json.dumps(_target_company_aliases(target_companies), ensure_ascii=False)}",
+        "content_policy: 원문 전체 content는 LLM에 넣지 않습니다. "
+        "각 기사에서 rule-based로 추출한 evidence_snippets만 사용하고, "
+        "중복 문장은 LLM 호출 전에 제거합니다.",
     ]
 
     for index, article in enumerate(articles, start=1):
         article_id = _article_numeric_id(article)
         metadata = _metadata(article)
-        content = _normalize_content(article.get("content") or "")
-        if compact:
-            content = content[:1200]
+        snippets = _article_prompt_snippets(
+            article=article,
+            target_companies=target_companies,
+            seen_snippets=seen_snippets,
+        )
+        seen_snippets.extend(snippets)
         lines.append(
             "\n".join(
                 [
                     f"[{index}] article_id: {article_id}",
+                    "article_role: evidence_snippets",
                     f"title: {article.get('title') or ''}",
                     f"source_name: {article.get('source_name') or ''}",
                     f"publisher: {article.get('publisher') or ''}",
@@ -453,12 +480,167 @@ def _format_articles(
                     "matched_companies: "
                     f"{json.dumps(_matched_companies(article), ensure_ascii=False)}",
                     f"metadata: {json.dumps(_summary_metadata(metadata), ensure_ascii=False)}",
-                    f"content: {content}",
+                    f"evidence_snippets: {json.dumps(snippets, ensure_ascii=False)}",
                 ]
             )
         )
 
     return "\n\n".join(lines)
+
+
+def _article_prompt_snippets(
+    *,
+    article: dict[str, Any],
+    target_companies: list[str],
+    seen_snippets: list[str],
+) -> list[str]:
+    title = normalize_korean_spacing(article.get("title") or "")
+    sentences = _dedupe_keep_order(
+        [
+            title,
+            *_split_evidence_sentences(
+                article.get("content") or "",
+                limit=_SNIPPET_CANDIDATE_SENTENCES,
+            ),
+        ]
+    )
+    scored = sorted(
+        (
+            (_snippet_score(sentence, article=article, target_companies=target_companies), sentence)
+            for sentence in sentences
+            if sentence
+        ),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    selected: list[str] = []
+    local_seen: list[str] = []
+    for score, sentence in scored:
+        if score <= 0 and selected:
+            continue
+        if _is_near_duplicate_snippet(sentence, [*seen_snippets, *local_seen]):
+            continue
+        selected.append(sentence)
+        local_seen.append(sentence)
+        if len(selected) >= _SNIPPETS_PER_ARTICLE:
+            break
+    if not selected and title and not _is_near_duplicate_snippet(title, seen_snippets):
+        selected.append(title)
+    return selected
+
+
+def _snippet_score(
+    sentence: str,
+    *,
+    article: dict[str, Any],
+    target_companies: list[str],
+) -> float:
+    text = str(sentence or "")
+    compact_text = _compact(text)
+    score = 0.0
+    title = normalize_korean_spacing(article.get("title") or "")
+    if text == title:
+        score += 3.0
+    aliases = _target_company_aliases(target_companies)
+    if any(_compact(alias) in compact_text for alias in aliases):
+        score += 3.0
+    if any(_compact(company) in compact_text for company in _matched_companies(article)):
+        score += 1.0
+    event_type = _rule_based_event_type([text])
+    if event_type != "general_update":
+        score += 2.0
+    score += min(2.0, 0.5 * len(_number_tokens(text)))
+    score += min(1.0, 0.5 * len(_date_tokens(text)))
+    if _rule_based_entities([text]):
+        score += 1.0
+    return score
+
+
+def _is_near_duplicate_snippet(text: str, selected_texts: list[str]) -> bool:
+    if not text or not selected_texts:
+        return False
+    return any(
+        _text_similarity(text, selected) >= _SNIPPET_DEDUP_SIMILARITY for selected in selected_texts
+    )
+
+
+def _full_text_article_ids(
+    *,
+    articles: list[dict[str, Any]],
+    representative_id: int,
+) -> set[int]:
+    """Select a small evidence set for expensive content analysis.
+
+    News clusters can contain many long articles. The summarizer should still
+    know the whole cluster membership, but only a few high-signal articles
+    should contribute full body text to the LLM prompt.
+    """
+    if _FULL_TEXT_ARTICLE_LIMIT <= 0:
+        return set()
+    ranked: list[tuple[float, int, int, dict[str, Any]]] = []
+    for index, article in enumerate(articles):
+        article_id = _article_numeric_id(article)
+        if article_id <= 0:
+            continue
+        score = _article_evidence_score(article, representative_id=representative_id)
+        ranked.append((score, -index, article_id, article))
+    ranked.sort(reverse=True)
+    selected: list[int] = []
+    selected_texts: list[str] = []
+    for _, _, article_id, article in ranked:
+        dedupe_text = _article_dedupe_text(article)
+        is_representative = article_id == representative_id or bool(
+            article.get("is_representative")
+        )
+        if (
+            not is_representative
+            and dedupe_text
+            and _is_near_duplicate_article(dedupe_text, selected_texts)
+        ):
+            continue
+        selected.append(article_id)
+        if dedupe_text:
+            selected_texts.append(dedupe_text)
+        if len(selected) >= _FULL_TEXT_ARTICLE_LIMIT:
+            break
+    return set(selected[:_FULL_TEXT_ARTICLE_LIMIT])
+
+
+def _article_evidence_score(article: dict[str, Any], *, representative_id: int) -> float:
+    article_id = _article_numeric_id(article)
+    score = 0.0
+    if article_id == representative_id:
+        score += 10.0
+    if article.get("is_representative"):
+        score += 8.0
+    score += _clamp_float(article.get("importance_score"), default=0.0) * 3.0
+    score += _clamp_float(article.get("relevance_score"), default=0.0) * 2.0
+    if _matched_companies(article):
+        score += 1.0
+    if article.get("content"):
+        score += 0.5
+    return score
+
+
+def _article_dedupe_text(article: dict[str, Any]) -> str:
+    text = " ".join(
+        part
+        for part in (
+            str(article.get("title") or ""),
+            _normalize_content(article.get("content") or "")[:1600],
+        )
+        if part
+    )
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _is_near_duplicate_article(text: str, selected_texts: list[str]) -> bool:
+    if not text or not selected_texts:
+        return False
+    return any(
+        SequenceMatcher(None, text, selected).ratio() >= _NEAR_DUPLICATE_SIMILARITY
+        for selected in selected_texts
+    )
 
 
 def _extract_article_fact_notes_batch(
@@ -2250,19 +2432,16 @@ def normalize_korean_spacing(value: Any) -> str:
 
 
 def _candidate_peer_companies(articles: list[dict[str, Any]]) -> list[str]:
-    candidates: list[str] = []
-    text = " ".join(
-        f"{article.get('title') or ''} {article.get('content') or ''}" for article in articles
-    )
-    compact_text = _compact(text)
+    """Return the actual target companies for this cluster.
 
+    Use preprocessing outputs only. Article body alias matches are too broad for
+    target selection because market/theme articles often mention peer companies
+    as context, not as the cluster subject.
+    """
+    candidates: list[str] = []
     for article in articles:
         candidates.extend(_company_list(article))
         candidates.extend(_matched_companies(article))
-
-    for company_id, aliases in _PEER_ALIASES.items():
-        if any(_compact(alias) in compact_text for alias in aliases):
-            candidates.append(company_id)
 
     return [
         company_id

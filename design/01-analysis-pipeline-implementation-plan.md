@@ -10,19 +10,12 @@
 > 는 multi-agent supervisor pattern 이 아닌 **고정 순서 DAG pipeline** 의 일반 코디네이터 의미.
 > 새 코드에서는 `AnalysisGraphRunner` / `AnalysisFlowState` / `build_analysis_flow_graph` 사용 권장.
 > 기존 `Supervisor*` 이름은 제거하고 `AnalysisGraphRunner` 기준으로 정리한다.
->
-> **현행 구현 보정 (2026-06-02)**: 본 문서 일부 표와 작업 항목에는 과거 계획인
-> `StrategicAnalyzer → ImplicationAgent` 분리 경로가 남아 있다. 현재 기본 실행 경로는
-> `StrategicInsightAgent` 하나의 LLM 호출이 `analysis`와 `implication` 두 블록을 분리
-> 생성하는 구조다. 기존 `StrategicAnalyzer` / `ImplicationAgent` 는 LLM 실패 또는 legacy
-> 주입 테스트를 위한 fallback/compat 경로로만 유지한다. 최신 topology 는
-> [`00-analysis-pipeline-topology.md`](00-analysis-pipeline-topology.md)를 기준으로 본다.
 
 ---
 
 ## 0. 한 줄 요약
 
-수집·전처리·매칭이 끝난 데이터를 받아 **Analysis Pipeline runner** (코드 상 `AnalysisGraphRunner`) 가 4 child agent 를 조율해 `AnalysisPackage` 를 만들고 `CardNewsAgent` 가 카드로 재가공하는 **wire 는 동작 중**. 그러나 (a) 시사점이 LLM 미사용 heuristic 이라 카드 가치의 핵심이 약하고, (b) Profile context 가 cluster-time 에 빈약하며, (c) **Analysis Pipeline 이 plain Python 순차 호출** 이라 retry·관측·검증이 모두 부재. **추가로 (d) 시사점·대응 추론에 필요한 과거 누적 맥락 (뉴스 14k, business_signals 27k, financial_metrics 3.4k, IR/DART) 이 cluster-time 에 활용되지 않고 있으며**, (e) 카드뉴스 형식이 `요약` 중심이라 `요약+시사점+대응` 세 섹션을 명확히 분리하는 schema 정합화가 필요. 본 계획서는 (a)(b)(c) 를 **LangGraph 기반 고정 순서 DAG (`AnalysisFlowGraph`) 로 재설계**, (d) 를 **4-Layer Context Model + AnalysisContextBuilder + 운영 CronJob 2~3종** 으로 해결, (e) 를 **카드뉴스 v2 schema (`summary_lines` + `implication.skax_implication.recommended_actions` 명시화)** 로 마무리. **핵심: 신규 DB 테이블은 거의 불필요 (기존 `card_news` / `raw_article_business_signals` / `raw_article_financial_metrics` / `peer_companies.peer_plus_payload` JSONB / `legacy_records` 로 모두 흡수 가능). 추가는 VIEW 2 + MATERIALIZED VIEW 1 + 인덱스 3개 + V34 (옵션) `event_chain_links` 1 테이블.**
+수집·전처리·매칭이 끝난 데이터를 받아 **Analysis Pipeline runner** (코드 상 `AnalysisGraphRunner`) 가 4 child agent 를 조율해 `AnalysisPackage` 를 만들고 `CardNewsComposer` 가 카드로 재가공하는 **wire 는 동작 중**. 그러나 (a) 시사점이 LLM 미사용 heuristic 이라 카드 가치의 핵심이 약하고, (b) Profile context 가 cluster-time 에 빈약하며, (c) **Analysis Pipeline 이 plain Python 순차 호출** 이라 retry·관측·검증이 모두 부재. **추가로 (d) 시사점·대응 추론에 필요한 과거 누적 맥락 (뉴스 14k, business_signals 27k, financial_metrics 3.4k, IR/DART) 이 cluster-time 에 활용되지 않고 있으며**, (e) 카드뉴스 형식이 `요약` 중심이라 `요약+시사점+대응` 세 섹션을 명확히 분리하는 schema 정합화가 필요. 본 계획서는 (a)(b)(c) 를 **LangGraph 기반 고정 순서 DAG (`AnalysisFlowGraph`) 로 재설계**, (d) 를 **4-Layer Context Model + AnalysisContextBuilder + 운영 CronJob 2~3종** 으로 해결, (e) 를 **카드뉴스 v2 schema (`summary_lines` + `implication.skax_implication.recommended_actions` 명시화)** 로 마무리. **핵심: 신규 DB 테이블은 거의 불필요 (기존 `card_news` / `raw_article_business_signals` / `raw_article_financial_metrics` / `peer_companies.peer_plus_payload` JSONB / `legacy_records` 로 모두 흡수 가능). 추가는 VIEW 2 + MATERIALIZED VIEW 1 + 인덱스 3개 + V34 (옵션) `event_chain_links` 1 테이블.**
 
 **v3.1 핵심 변경 (실측 기반)**: §2.4 에 8 critical issue 추가 (cluster_id 의미 불일치 / source_raw_article_ids 누락 15% / metric_name 정규화 누락 / matched_companies 표기 혼재 등). §3.4 의 ContextBuilder query 를 **`source_raw_article_ids[]` 기반 join + peer_id alias 정규화 + metric_name canonicalization + chunked LLM input** 으로 재설계. W4 단계 앞에 **W4-0 (data hygiene precondition)** 신설.
 
@@ -51,7 +44,7 @@
 │        ↓                                                            │
 │   ③ validation        Evidence chain / numeric / 단정 표현 검사     │
 │        ↓                                                            │
-│   ④ package generation AnalysisPackage → CardNewsAgent →            │
+│   ④ package generation AnalysisPackage → CardNewsComposer →            │
 │                        card_news WRITE (v2)                         │
 │   책임: Layer A 가 적재한 데이터를 받아 cluster 단위 시사점·대응을  │
 │         추론하고 카드뉴스 v2 로 직렬화.                             │
@@ -66,7 +59,7 @@
                   └─────────────────────────┘
 ```
 
-> **As-Is 의 design debt (v3.1.3 에서 해소 예정)**: 현재 코드에서는 카드 생성 (`CardNewsAgent.write_card`) 이 `ingestion_graph.card_news_node` (Layer A 그래프) 안에서 호출됨. 카드뉴스는 분석/시사점/대응의 직렬화 결과 (= Layer B 의 산출물) 이므로 의미상 Layer 위반. **W2-1 작업 5 에서 이관 — `card_writer` 노드로 supervisor 의 마지막에 통합 (본 계획서 범위 내, W2-1 시간 +2~3h)**. 본 계획서가 "카드 dedup 강화 / source 강제 검증 / FK 회귀 추적" 을 "Layer B 카드 생성 단" 으로 분류하는 이유.
+> **As-Is 의 design debt (v3.1.3 에서 해소 예정)**: 현재 코드에서는 카드 생성 (`CardNewsComposer.generate_from_analysis_package`) 이 `ingestion_graph.card_news_node` (Layer A 그래프) 안에서 호출됨. 카드뉴스는 분석/시사점/대응의 직렬화 결과 (= Layer B 의 산출물) 이므로 의미상 Layer 위반. **W2-1 작업 5 에서 이관 — `card_writer` 노드로 supervisor 의 마지막에 통합 (본 계획서 범위 내, W2-1 시간 +2~3h)**. 본 계획서가 "카드 dedup 강화 / source 강제 검증 / FK 회귀 추적" 을 "Layer B 카드 생성 단" 으로 분류하는 이유.
 >
 > **용어 정정 (v3.1.2)**: 본 문서에서 더 이상 "ingestion-side" 라는 표현으로 카드 생성 후속 작업을 가리키지 않는다. ingestion 은 Layer A (수집·전처리·DB 적재) 만 의미. 카드 생성 단 / 후처리 단 / Layer B 카드 단 등을 사용한다.
 
@@ -81,19 +74,19 @@
 | 1 | `AnalysisGraphRunner` | `agents/analysis_graph_runner.py` | 241 | ❌ 조율 | via children | 🟢 wire / 🔴 retry 없음 |
 | 2 | `IntegrationAgent` | `agents/integration_agent.py` | 610 | via summarizer | `raw_articles` read | 🟢 |
 | 2a | `SourceSummarizer` (engine) | `analysis/summarizer.py` | 2,630 | ✅ 2 invoke | `raw_articles` | 🟢 `summary-v4.0` |
-| 3 | `StrategicAnalyzer` | `agents/strategic_analyzer.py` | 343 | ✅ 1 invoke | in-memory | 🟢 `analysis-v3.0` |
+| 3 | `StrategicInsightAgent` | `agents/strategic_insight_agent.py` | 343 | ✅ 1 invoke | in-memory | 🟢 `analysis-v3.0` |
 | 4 | `ProfileAgent` | `agents/profile_agent.py` | 4,056 | ✅ 7+ spot | `peer_companies`, `raw_article_*` | 🟢 / 🟡 cluster-time 빈약 |
 | 4a | `SKAXProfileLoader` | `services/skax_profile_context_loader.py` | 1,587 | ✅ | `raw_articles` (sk_ax_site) | 🟢 |
 | 5 | `ImplicationAgent` (현재) | `agents/implication_agent.py` + `analysis/implication.py` | 167 | ❌ heuristic | in-memory | 🔴 **LLM 미사용** |
 | 5a | (legacy) LLM 시사점 | `agents/_deprecated/implication_agent.py` | 136 | ✅ | in-memory | 🟠 입력 계약 다름, 부분 참고만 |
-| 6 | `CardNewsAgent` | `agents/card_news_agent.py` | 1,409 | ✅ 5 invoke | `card_news` WRITE | 🟢 / 🟡 implication 이중 처리 |
+| 6 | `CardNewsComposer` | `composers/card_news_composer.py` | 1,409 | ✅ 5 invoke | `card_news` WRITE | 🟢 / 🟡 implication 이중 처리 |
 | 7 | `AnalysisPipelineRunner` | `pipeline/analysis_pipeline.py` | 479 | — | `raw_article_*` read | 🟢 3 진입점 |
 | 8 | `ingestion_graph.card_news_node` | `pipeline/ingestion_graph.py` | (전체 322) | via runner | `card_news` WRITE | 🟢 `_GPT_WORKERS=5` 병렬 |
 | 9 | `AnalysisContextBuilder` (W4 신규) | `services/analysis_context_builder.py` | (예상 ~350) | ❌ DB + Qdrant only | timeline / capability / sector_pulse / financial / RAG read | ⚪ 계획 |
 | 10 | `CapabilityEvolutionAgent` (W4 신규) | `agents/context/capability_evolution_agent.py` | (예상 ~250) | ✅ 월1회 | `raw_article_business_signals` read, `peer_companies.peer_plus_payload` write | ⚪ 계획 |
 | 11 | `SectorPulseAggregator` (W4 신규) | `scripts/refresh_sector_pulse.py` | (예상 ~50) | ❌ MATERIALIZED VIEW REFRESH | `sector_pulse` MV refresh | ⚪ 계획 |
 | 12 | `EventChainDiscoveryJob` (W4-6 옵션) | `scripts/event_chain_discovery_job.py` | (예상 ~300) | ✅ 매일 | `card_news` read, `evidence_payload['related_card_ids']` write | ⚪ 보류 |
-| 13 | `EvaluatorAgent` (W5-1 신규) | `agents/evaluator_agent.py` + `validate` 노드 확장 | (예상 ~250) | ❌ rule-based | in-memory (validate 결과) + `card_news.evaluation_payload['rule_based']` write | ⚪ 계획 |
+| 13 | `Evaluator` (W5-1 신규) | `evaluators/evaluator.py` + `validate` 노드 확장 | (예상 ~250) | ❌ rule-based | in-memory (validate 결과) + `card_news.evaluation_payload['rule_based']` write | ⚪ 계획 |
 | 14 | `CardEvaluatorSidecar` (W5-2 신규) | `scripts/evaluate_recent_cards.py` (CronJob, 5분 주기) | (예상 ~350) | ✅ gpt-4o-mini | `card_news` read (미평가 카드), `card_news.evaluation_payload['llm_judge']` write | ⚪ 계획 |
 
 ### 1.2 cluster postgres 실측 (2026-05-20, v3.1 갱신)
@@ -130,7 +123,7 @@
 | **P1-1** | Analysis Pipeline 이 LangGraph state machine 이 아니라 plain Python 순차 호출 | 노드별 elapsed_ms · token 추적 불가, retry/fallback 라우팅 어려움 |
 | **P1-2** | `AnalysisResult` / `ImplicationResult` dataclass ↔ 실 LLM 출력 키 mismatch (schema drift) | 타입 안전 무력, 신규 팀원 혼란 |
 | **P1-3** | Supervisor 레벨 quality gate 부재 (출처 수치 검증, 단정 표현 검출, evidence_chain 무결성) | hallucination 카드가 production 으로 빠져나감 |
-| **P1-4** | CardNewsAgent 가 implication 을 2번 처리 (analysis 기반 + ImplicationAgent 결과) | 같은 의미 중복 LLM 가능, 출력 일관성 약함 |
+| **P1-4** | CardNewsComposer 가 implication 을 중복 처리 (analysis 기반 + ImplicationAgent 결과) | 같은 의미 중복 LLM 가능, 출력 일관성 약함 |
 
 ### 🟡 P2 — 품질 / 운영성
 
@@ -164,8 +157,8 @@
 |---|---|---|---|
 | **P3-CRIT-1** | `card_news.cluster_id` 가 stable cluster identifier 가 아닌 **ephemeral sequence**. distinct 21개, max 90,001. 같은 cluster_id=0 에 38건 카드, cluster_id=1 에 27건. raw_articles 의 cluster_id (distinct 671, max 39,337) 와 의미 다름. | event_chain join 불가, AnalysisContext 의 `cluster_id` 기반 precedent 조회 무효 | **`source_raw_article_ids[]` 또는 `(peer_company_id, event_type, DATE(created_at))` 복합키로 join key 재정의** |
 | **P3-CRIT-2** | `card_news.source_raw_article_ids` 가 **15% 카드 (28건) 에서 빈 array**. 1개 source 161건, 2개 1건, 3개 1건 → 사실상 단일 source 도미넌트. | raw_articles 까지 provenance chain 끊김, evidence_chain 무결성 위반 | **W4-2 의 ContextBuilder query 가 source_raw_article_ids 빈 경우 graceful fallback (sources JSONB 활용) + 카드 생성 단계에서 source 강제 검증 (별도 P0 작업)** |
-| **P3-CRIT-3** | **같은 (cluster_id, date, peer) 조합에 카드 4-6건** 다수 — 예: cluster_id=0, 2026-05-14, samsung_sds → 6 카드. 같은 이슈 (오픈AI 파트너십, AI 컴퓨팅센터) 가 여러 카드로 분리 생성. | event_chain candidate 가 "precedent" 가 아닌 "duplicate" 가 됨, ImplicationAgent 의 `precedent_link` 가 같은 이슈 자기참조 | **W4-6 (EventChainDiscovery) 도입 보류 + 카드 dedup 강화 (Layer B 카드 생성 단 — 현재 `ingestion_graph.card_news_node`, To-Be `CardNewsAgent`) 가 더 시급**. ingestion (Layer A) 책임이 아님 — As-Is 코드 위치만 ingestion_graph 안일 뿐 의미상 Supervisor 영역. |
-| **P3-CRIT-4** | **이번 주 (5/18 이후) 신규 카드 36건 전부 `peer_company_id` FK NULL + 5/20 부터 `primary_keyword_category` 도 NULL (11건)**. 단 `card_news.company` 는 100% 채워짐 (`lg_cns`/`samsung_sds`/`hyundai_autoever` — 모두 `peer_companies.id` 매칭), `raw_articles.matched_companies` / `matched_sectors` 도 100% 정상. **즉 ingestion 식별은 정상, 카드 후처리 단의 FK 연결 + sector 분류만 회귀**. 회귀 시점 2개: ① 5/15 부분 → 5/16 완전 (FK), ② 5/20 신규 (sector) | sector_pulse `peer_event_count=0`, peer-level context 빈약 — 단 **데이터 손실 X 이므로 백필 1쿼리로 즉시 복구 가능** | **W4-0 첫 마이그레이션에서 즉시 백필**: `UPDATE card_news SET peer_company_id = company WHERE peer_company_id IS NULL AND company IN (SELECT id FROM peer_companies)` + `UPDATE card_news SET primary_keyword_category = (raw_articles.matched_sectors->>0 …)`. **회귀 원인 추적은 axis-ai `CardNewsAgent` (또는 후처리) 의 5/14~5/20 변경 이력 — 별도 P1 ticket** (ingestion 회귀 아님). 백필 후 `general_event_timeline` fallback 불필요. |
+| **P3-CRIT-3** | **같은 (cluster_id, date, peer) 조합에 카드 4-6건** 다수 — 예: cluster_id=0, 2026-05-14, samsung_sds → 6 카드. 같은 이슈 (오픈AI 파트너십, AI 컴퓨팅센터) 가 여러 카드로 분리 생성. | event_chain candidate 가 "precedent" 가 아닌 "duplicate" 가 됨, ImplicationAgent 의 `precedent_link` 가 같은 이슈 자기참조 | **W4-6 (EventChainDiscovery) 도입 보류 + 카드 dedup 강화 (Layer B 카드 생성 단 — 현재 `ingestion_graph.card_news_node`, To-Be `CardNewsComposer`) 가 더 시급**. ingestion (Layer A) 책임이 아님 — As-Is 코드 위치만 ingestion_graph 안일 뿐 의미상 Supervisor 영역. |
+| **P3-CRIT-4** | **이번 주 (5/18 이후) 신규 카드 36건 전부 `peer_company_id` FK NULL + 5/20 부터 `primary_keyword_category` 도 NULL (11건)**. 단 `card_news.company` 는 100% 채워짐 (`lg_cns`/`samsung_sds`/`hyundai_autoever` — 모두 `peer_companies.id` 매칭), `raw_articles.matched_companies` / `matched_sectors` 도 100% 정상. **즉 ingestion 식별은 정상, 카드 후처리 단의 FK 연결 + sector 분류만 회귀**. 회귀 시점 2개: ① 5/15 부분 → 5/16 완전 (FK), ② 5/20 신규 (sector) | sector_pulse `peer_event_count=0`, peer-level context 빈약 — 단 **데이터 손실 X 이므로 백필 1쿼리로 즉시 복구 가능** | **W4-0 첫 마이그레이션에서 즉시 백필**: `UPDATE card_news SET peer_company_id = company WHERE peer_company_id IS NULL AND company IN (SELECT id FROM peer_companies)` + `UPDATE card_news SET primary_keyword_category = (raw_articles.matched_sectors->>0 …)`. **회귀 원인 추적은 axis-ai `CardNewsComposer` (또는 후처리) 의 5/14~5/20 변경 이력 — 별도 P1 ticket** (ingestion 회귀 아님). 백필 후 `general_event_timeline` fallback 불필요. |
 
 #### 🟠 P3-DATA — Data schema / sparsity (W4 query 재설계)
 
@@ -226,15 +219,17 @@
           ↓
    [build_analysis_context]       # ③ AnalysisContextBuilder — NO LLM (DB+Qdrant), main_company 기준 4-Layer
           ↓
-   [strategic_insight]            # ④ StrategicInsightAgent (LLM, analysis+implication 분리 출력)
+   [strategic_insight]            # ④ StrategicInsightAgent (LLM, peer 분석 + SK AX 시사점)
           ↓
-   [validate]                     # ⑤ 출처 수치 / 단정 표현 / evidence 무결성 + W5-1 metric ← P1-3 fix
+   [implication]                  # ⑤ ImplicationAgent v4.0/v5.0 (LLM, SK AX 관점) ← P0-1 / P3-1 fix
+          ↓
+   [validate]                     # ⑥ 출처 수치 / 단정 표현 / evidence 무결성 + W5-1 metric ← P1-3 fix
        ↓             ↓
    pass=true      pass=false
        ↓             ↓
    [assemble]    [human_review]   # human_review_flags 추가 후 종료
        ↓             ↓
-   [card_writer]   (END)          # ⑦ CardNewsAgent.write_card 호출 + save_card_news v2 INSERT (R-2)
+   [card_writer]   (END)          # ⑧ CardNewsComposer.generate_from_analysis_package 호출 + save_card_news v2 INSERT (R-2)
        ↓
      (END) → card_news WRITE (v2 schema: peer_company_id / primary_keyword_category /
                                 source_raw_article_ids / evidence_payload /
@@ -249,8 +244,9 @@
 |---|---|---|
 | `issue_integrate` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | 2회 실패 → 빈 IntegratedIssue → `validate` 가 `integrated_issue_valid=false` → human_review |
 | `profile_context` | None (DB only) | `ProfileContextLoader.load` 실패 → legacy `ProfileAgent.build_context` fallback |
-| `build_analysis_context` | None (DB+Qdrant only) | layer 별 query try/except → 빈 AnalysisContext 로 진행 |
-| `strategic_insight` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | StrategicInsightAgent LLM 실패 → 기존 StrategicAnalyzer + ImplicationAgent 조합 fallback |
+| `build_analysis_context` | None (DB+Qdrant only) | layer 별 query try/except → 빈 AnalysisContext, ImplicationAgent v4.0 사용 |
+| `strategic_insight` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | 2회 실패 → `is_valid_analysis=false` → human_review |
+| `implication` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | LangGraph 2회 실패 후 ImplicationAgent 내부 try/except → heuristic generator |
 | `validate` | None (rule-based) | hard fail → human_review |
 | `assemble` | None | — |
 | `card_writer` | `RetryPolicy(initial_interval=0.5, backoff_factor=2.0, max_attempts=2)` | DB transient 실패 시 자동 retry, 2회 실패 시 `card_news_id=None` 반환 |
@@ -258,9 +254,7 @@
 
 구현: `src/pipeline/analysis_flow_graph.py` 의 `_NODE_RETRY_POLICIES` dict + `build_supervisor_graph` 의 `g.add_node(name, fn, retry_policy=...)`.
 
-→ **부분 실패 흡수**: LLM 호출 노드는 LangGraph 가 exponential backoff 로 자동 재시도한다.
-`StrategicInsightAgent` 는 실패 시 기존 `StrategicAnalyzer` + `ImplicationAgent` 조합으로
-fallback 하며, 그래도 유효한 결과가 없으면 `validate` 가 human_review 로 보낸다.
+→ **부분 실패 흡수**: LLM 호출 노드는 LangGraph 가 exponential backoff 로 자동 재시도 후 노드 내부 fallback (heuristic / 빈 결과) 으로 graceful degradation. cluster 전체 손실 방지.
 
 ### 3.2 ProfileContext 2-tier 분리
 
@@ -1159,7 +1153,7 @@ W1-2 (schema 정합화)            ─┼─→ W2-1 (LangGraph 화) ──→ W
 W1-3 (typed metadata)           ─┘                                        ↑
 W1-4 (card_news v2 schema lint)                                            │
                                   W2-2 (Profile 2-tier) ─────────────────┘
-                                  W2-4 (CardNewsAgent 이중 처리 제거)
+                                  W2-4 (CardNewsComposer 이중 처리 제거)
 W3-1 (design docs)
 W3-2 (_deprecated 정리)
 W3-4 (Langfuse 전수)
@@ -1236,7 +1230,7 @@ class ImplicationAgent:
 **파일 변경**:
 ```text
 src/analysis/models.py                      (AnalysisResult / IntegratedIssue 재정의)
-src/agents/strategic_analyzer.py       (_normalize_analysis_result → dataclass)
+src/agents/strategic_insight_agent.py       (_normalize_analysis_result → dataclass)
 src/agents/integration_agent.py       (_tag_integrated_issue → dataclass)
 src/agents/analysis_graph_runner.py     (typed read)
 ```
@@ -1263,14 +1257,14 @@ src/agents/integration_agent.py:analysis_input_bundle_from_articles
 #### W1-4. `card_news` v2 schema lint ★ P3-5 / P3-LOG-1
 
 - `card_news` 에 `card_schema_version VARCHAR(10) DEFAULT 'v1'` 컬럼 추가.
-- `CardNewsAgent.generate_from_analysis_package()` 이 새 카드는 `'v2'` 로 INSERT 하도록 변경.
+- `CardNewsComposer.generate_from_analysis_package()` 이 새 카드는 `'v2'` 로 INSERT 하도록 변경.
 - `implication` JSONB 에 W1-1 의 `ImplicationResult` v4.0 schema 가 정확히 들어가도록 직렬화.
 - 기존 191 행은 `'v1'` 로 유지 — graceful fallback (§3.5.4 옵션 A).
 
 **파일 변경**:
 ```text
 [V33 통합 — DDL 자체는 W4-1 의 V33__context_engineering.sql 에 포함. W1-4 는 axis-ai 측 코드 변경만]
-src/agents/card_news_agent.py                (INSERT 시 card_schema_version='v2')
+src/composers/card_news_composer.py                (INSERT 시 card_schema_version='v2')
 src/db/article_store.py                      (INSERT statement 갱신)
 ```
 
@@ -1307,18 +1301,18 @@ def _build_supervisor_graph() -> CompiledStateGraph:
     g.add_node("profile_context", _profile_context_node)
     g.add_node("build_analysis_context", _build_analysis_context_node)  # W4 신설 — LLM X
     g.add_node("issue_integrate", _issue_integrate_node)
-    g.add_node("strategic_analyze", _analyze_node)
+    g.add_node("strategic_insight", _analyze_node)
     g.add_node("implication", _implication_node)
     g.add_node("validate", _validate_node)
     g.add_node("assemble", _assemble_node)
-    g.add_node("card_writer", _card_writer_node)            # W2-1 작업 5 신설 — CardNewsAgent 호출
+    g.add_node("card_writer", _card_writer_node)            # W2-1 작업 5 신설 — CardNewsComposer 호출
     g.add_node("human_review", _human_review_node)
 
     g.set_entry_point("profile_context")
     g.add_edge("profile_context", "build_analysis_context")    # W4 신설
     g.add_edge("build_analysis_context", "issue_integrate")    # W4 신설
-    g.add_edge("issue_integrate", "strategic_analyze")
-    g.add_edge("strategic_analyze", "implication")
+    g.add_edge("issue_integrate", "strategic_insight")
+    g.add_edge("strategic_insight", "implication")
     g.add_edge("implication", "validate")
     g.add_conditional_edges("validate", _route_after_validate, {
         "pass": "assemble",
@@ -1330,9 +1324,9 @@ def _build_supervisor_graph() -> CompiledStateGraph:
     return g.compile()
 
 def _card_writer_node(state: SupervisorState) -> SupervisorState:
-    """As-Is 의 ingestion_graph.card_news_node 를 이관. CardNewsAgent.write_card 호출."""
+    """As-Is 의 ingestion_graph.card_news_node 를 이관. CardNewsComposer.generate_from_analysis_package 호출."""
     pkg = state["analysis_package"]
-    card_id = CardNewsAgent().write_card(pkg)  # card_news WRITE (v2 schema)
+    card_id = CardNewsComposer().write_card(pkg)  # card_news WRITE (v2 schema)
     return {**state, "card_news_id": card_id}
 
 # W2 시점에 build_analysis_context 는 stub (W4-2 에서 본격 구현):
@@ -1349,7 +1343,7 @@ class AnalysisGraphRunner:
 
 각 노드에 `@_logged_step` 데코레이터 (ingestion_graph 와 동일 패턴) → `pipeline_logs` 에 elapsed_ms/in/out count 자동 기록.
 
-**작업 5 (v3.1.3 신설) — CardNewsAgent 를 Supervisor 의 last 노드로 이관**
+**작업 5 (v3.1.3 신설) — CardNewsComposer 를 Supervisor 의 last 노드로 이관**
 
 > §0.1 의 Layer 분리 약속을 이행. 카드뉴스는 분석/시사점/대응의 직렬화 결과 (= Analysis Pipeline 의 산출물) 이므로 `ingestion_graph` 가 아닌 `analysis_flow_graph` (호환 alias `supervisor_graph`) 의 마지막 노드에서 작성.
 
@@ -1364,7 +1358,7 @@ src/pipeline/supervisor_graph.py            (신규, ~450 LoC)  # card_writer �
 src/agents/analysis_graph_runner.py     (~241 → ~80 LoC, graph 호출 wrapper)
 src/pipeline/analysis_pipeline.py           (Supervisor 호출부만 변경, 외부 계약 동일)
 src/pipeline/ingestion_graph.py             (card_news_node 제거, ingestion 의 마지막은 classification)
-src/agents/card_news_agent.py               (호출 인터페이스 그대로, 호출 위치만 supervisor 노드로 이동)
+src/composers/card_news_composer.py               (호출 인터페이스 그대로, 호출 위치만 supervisor 노드로 이동)
 src/db/article_store.py                     (save_pipeline_log 호출 추가)
 ```
 
@@ -1503,14 +1497,14 @@ src/pipeline/supervisor_graph.py            (_validate_node)
 src/analysis/models.py                      (ValidationReport)
 ```
 
-#### W2-4. CardNewsAgent implication 이중 처리 제거 ★ P1-4
+#### W2-4. CardNewsComposer implication 처리 제거 ★ P1-4
 
 - `_implication()` (analysis 기반 fallback) → ImplicationAgent 가 fail 했을 때만 호출
 - `_implication_from_result()` → 정상 path, ImplicationResult 의 `skax_implication.why_important` + `potential_impact` 합성
 - frontend_implication 매핑도 새 schema 기반
 
 ```python
-# src/agents/card_news_agent.py:generate_from_analysis_package
+# src/composers/card_news_composer.py:generate_from_analysis_package
 implication_result = package.get("implication") or {}
 if isinstance(implication_result, ImplicationResult) and implication_result.is_valid_implication:
     card["implication"] = _format_implication(implication_result)
@@ -1522,7 +1516,7 @@ else:
 
 **파일 변경**:
 ```text
-src/agents/card_news_agent.py               (분기 명확화)
+src/composers/card_news_composer.py               (분기 명확화)
 ```
 
 ---
@@ -1550,7 +1544,7 @@ src/agents/card_news_agent.py               (분기 명확화)
 ```text
 tests/test_supervisor_graph.py              (신규)
 tests/test_integration_agent.py       (신규)
-tests/test_strategic_analyzer.py            (신규)
+tests/test_strategic_insight_agent.py            (신규)
 tests/test_implication_agent.py             (W1-1 에서 시작, 보강)
 tests/test_profile_agent_context.py         (신규)
 tests/golden/
@@ -1638,7 +1632,7 @@ def is_card_provenance_traceable(card: dict) -> bool:
 
 **작업 5. `V32_5__card_news_backfill.sql` 신규** — P3-CRIT-4 즉시 복구 (≤ 1분 실행)
 
-> `card_news.company` 와 `raw_articles.matched_companies/matched_sectors` 는 모두 정상이지만, CardNewsAgent 후처리의 두 시점 회귀 (5/15 FK, 5/20 sector) 로 `peer_company_id` / `primary_keyword_category` 가 누적 60건+ NULL. **데이터는 다 있으므로 join 만 다시 채우면 됨.**
+> `card_news.company` 와 `raw_articles.matched_companies/matched_sectors` 는 모두 정상이지만, CardNewsComposer 후처리의 두 시점 회귀 (5/15 FK, 5/20 sector) 로 `peer_company_id` / `primary_keyword_category` 가 누적 60건+ NULL. **데이터는 다 있으므로 join 만 다시 채우면 됨.**
 
 ```sql
 -- axis-backend/src/main/resources/db/migration/V32_5__card_news_backfill.sql
@@ -1681,7 +1675,7 @@ WHERE created_at >= '2026-05-15';
 COMMIT;
 ```
 
-> **회귀 원인 추적은 별도 P1 ticket** — axis-ai `CardNewsAgent` (또는 후처리 단계) 의 5/14~5/20 변경 이력 점검. 두 시점 회귀이므로 2개 커밋 식별 필요. 추적 완료 전까지 백필 SQL 은 매일 CronJob 으로 1회 idempotent 재실행 (`WHERE … IS NULL` 가드 덕에 안전).
+> **회귀 원인 추적은 별도 P1 ticket** — axis-ai `CardNewsComposer` (또는 후처리 단계) 의 5/14~5/20 변경 이력 점검. 두 시점 회귀이므로 2개 커밋 식별 필요. 추적 완료 전까지 백필 SQL 은 매일 CronJob 으로 1회 idempotent 재실행 (`WHERE … IS NULL` 가드 덕에 안전).
 
 **파일 변경**:
 ```text
@@ -1879,7 +1873,7 @@ LLM 비용 (도입 시): 약 **$0.30/일** = $9/월.
 
 > 기존 `validate` 노드 (W2-3, 단정표현·수치 차단) 에 5 metric 계산 로직 추가. LLM 호출 없음.
 
-**작업 1. `agents/evaluator_agent.py` 신규** — 5 metric 계산기
+**작업 1. `evaluators/evaluator.py` 신규** — 5 metric 계산기
 
 ```python
 @dataclass(slots=True)
@@ -1890,7 +1884,7 @@ class EvaluationMetrics:
     actionability_score: float      # verb-first + 구체성
     regression_drift: float | None  # rolling 7d 대비 confidence delta (None 가능)
     
-class EvaluatorAgent:
+class Evaluator:
     def evaluate(
         self,
         implication: ImplicationResult,
@@ -1902,14 +1896,14 @@ class EvaluatorAgent:
 
 **작업 2. `pipeline/supervisor_graph.py` — `validate` 노드 확장**
 
-기존 validate 후 `EvaluatorAgent.evaluate()` 호출. **v3.2.1: Phase 1 (4 metric, threshold X) / Phase 2 (drift + threshold 활성화, 운영 14일 후)**.
+기존 validate 후 `Evaluator.evaluate()` 호출. **v3.2.1: Phase 1 (4 metric, threshold X) / Phase 2 (drift + threshold 활성화, 운영 14일 후)**.
 
 ```python
 def _validate_node(state: SupervisorState) -> SupervisorState:
     report = _hard_validate(...)
     if report.passed:
         # Phase 1: 항상 4 metric 계산. drift 는 baseline 7일 미만이면 None.
-        report.metrics = EvaluatorAgent().evaluate(
+        report.metrics = Evaluator().evaluate(
             implication=state["implication"],
             evidence_payload=state["analysis_package"].evidence_payload,
             analysis_context=state["analysis_context"],
@@ -1931,9 +1925,9 @@ def _validate_node(state: SupervisorState) -> SupervisorState:
 
 **파일 변경**:
 ```text
-src/agents/evaluator_agent.py               (신규, ~250 LoC)
+src/evaluators/evaluator.py               (신규, ~250 LoC)
 src/pipeline/supervisor_graph.py            (_validate_node 확장, _card_writer_node INSERT 갱신)
-tests/test_evaluator_agent.py               (신규 — 5 metric 각각의 golden 케이스)
+tests/test_evaluator.py               (신규 — 5 metric 각각의 golden 케이스)
 ```
 
 #### W5-2. `axis-cron-card-evaluator` Sidecar — LLM-as-Judge ★ Outcome Quality (6-8h)
@@ -1953,7 +1947,7 @@ def main() -> None:
         _update_card_evaluation(row["id"], judgment)
 ```
 
-**작업 2. `agents/llm_judge_prompts.py` 신규** — 프롬프트 4종
+**작업 2. `evaluators/llm_judge_prompts.py` 신규** — 프롬프트 4종
 
 각 score 별 prompt 분리. structured output (`json_mode`) 으로 `{score: 0-5, reasoning: str}` 강제.
 
@@ -1987,7 +1981,7 @@ spec:
 **파일 변경**:
 ```text
 scripts/evaluate_recent_cards.py            (신규, ~350 LoC)
-src/agents/llm_judge_prompts.py             (신규, ~150 LoC — 4 score prompts)
+src/evaluators/llm_judge_prompts.py         (신규, ~150 LoC — 4 score prompts)
 axis-infra/k8s/cronjobs/axis-cron-card-evaluator.yaml  (신규)
 tests/test_llm_judge.py                     (신규 — mock LLM, golden 3 카드)
 ```
@@ -2033,11 +2027,11 @@ axis-infra/k8s/cronjobs/axis-cron-eval-regression.yaml  (신규)
 | W1-1 | ImplicationAgent v4.0 + 프롬프트 | 6-8h | — | AI Lead |
 | W1-2 | AnalysisPackage schema 정합화 | 2-3h | — | AI Lead |
 | W1-3 | AnalysisInputMetadata typed | 1-2h | — | AI Eng |
-| W1-4 | card_news v2 schema lint + CardNewsAgent INSERT 변경 | 1-2h | **W4-1 V33 머지 필수** | AI Eng |
+| W1-4 | card_news v2 schema lint + CardNewsComposer INSERT 변경 | 1-2h | **W4-1 V33 머지 필수** | AI Eng |
 | W2-1 | Supervisor LangGraph 화 + CardNews 이관 (작업 5) | 8-11h | W1-1, W1-2 | AI Lead |
 | W2-2 | Profile 2-tier + V33 + CronJob | 6-8h | (V33 Flyway 머지) | AI Eng B |
 | W2-3 | Validate 노드 | 3-4h | W2-1 | AI Eng A |
-| W2-4 | CardNewsAgent 정리 | 1-2h | W1-1 | AI Lead |
+| W2-4 | CardNewsComposer 정리 | 1-2h | W1-1 | AI Lead |
 | W3-1 | design docs 5종 | 4-6h | W2 완료 | PM |
 | W3-2 | `_deprecated/` → `_archived/` | 30m | W1-1 | any |
 | W3-3 | Golden + 단위 테스트 보강 | 3-4h | W2 완료 | AI Eng A |
@@ -2135,7 +2129,7 @@ Critical path: W1-1 → W2-1 → W2-3 → W4-0 → W4-2 → W4-5 → **W5-1** �
 | CapabilityEvolutionAgent LLM 출력이 raw signal 인용 안 함 | 중 | 프롬프트가 `evidence_signal_ids` 출력 강제 + validate 단계에서 빈 list 시 retry 1회 |
 | 카드뉴스 frontend 가 v1/v2 mixed 표시 | 낮 | openapi `CardNewsResponse.card_schema_version` 명시 + frontend conditional render |
 | **v3.1 추가** — `card_news.cluster_id` 의 ephemeral 성질로 인한 잘못된 precedent 추출 | 높 | W4-0 `cluster_identity.py` 에서 `source_raw_article_ids` 또는 `(peer, event_type, date)` 만 사용. cluster_id 사용 금지 |
-| `source_raw_article_ids` 빈 15% 카드의 provenance chain 끊김 | 중 | `_data_quality_checks.is_card_provenance_traceable` 로 fallback (sources / evidence_payload.source_links 활용) + 카드 생성 단 (Layer B `CardNewsAgent`, As-Is `ingestion_graph.card_news_node`) 에서 source 강제 검증 — W2-1 LangGraph 재구성에 흡수 |
+| `source_raw_article_ids` 빈 15% 카드의 provenance chain 끊김 | 중 | `_data_quality_checks.is_card_provenance_traceable` 로 fallback (sources / evidence_payload.source_links 활용) + 카드 생성 단 (Layer B `CardNewsComposer`, As-Is `ingestion_graph.card_news_node`) 에서 source 강제 검증 — W2-1 LangGraph 재구성에 흡수 |
 | `period_quarter` NULL 25% 합 (signals 7.4% + metrics 17.8%) 으로 시계열 그룹화 손실 | 중 | `COALESCE(period_quarter::text, 'annual')` fallback + period 텍스트 보조 키 |
 | `matched_companies` peer_id 표기 불일치로 query 누락 | 높 | W4-0 `peer_id_aliases.py` 가 모든 query 의 single source of truth. 신규 peer 추가 시 PR 강제 |
 | **CapabilityEvolution LLM input 170k token 초과** (peer 당 4분기 raw text) | 높 | W4-3 의 SQL pre-aggregation (그룹별 top-5 confidence) — 평균 10-20k token 으로 압축 |
@@ -2143,7 +2137,7 @@ Critical path: W1-1 → W2-1 → W2-3 → W4-0 → W4-2 → W4-5 → **W5-1** �
 | event_chain 이 cluster duplicate 와 구분 안 됨 | 높 | W4-6 옵션 보류. 도입 시 Qdrant cosine ≥ 0.75 + 시간차 ≥ 7일 강제 |
 | 191 기존 v1 카드의 v2 backfill 비용 | 낮 | $4.2 + 4h. graceful fallback 으로 시작, W4 종료 후 결정 |
 | `peer_companies.peer_plus_payload` 가 모든 peer 에 비어있음 | 낮 | W2-2 profile_snapshot CronJob 이 채움. 첫 CronJob 실행 전엔 static-only fallback |
-| **v3.1 갱신** — 이번 주 신규 카드 `peer_company_id` FK NULL (P3-CRIT-4) | 낮 | **데이터 손실 X — `card_news.company` 와 `raw_articles.matched_companies` 모두 정상**. W4-0 첫 마이그레이션에서 백필 SQL 2개로 즉시 복구. 회귀 추적은 axis-ai `CardNewsAgent` 후처리의 5/14~5/20 변경 이력 (별도 P1 ticket). |
+| **v3.1 갱신** — 이번 주 신규 카드 `peer_company_id` FK NULL (P3-CRIT-4) | 낮 | **데이터 손실 X — `card_news.company` 와 `raw_articles.matched_companies` 모두 정상**. W4-0 첫 마이그레이션에서 백필 SQL 2개로 즉시 복구. 회귀 추적은 axis-ai `CardNewsComposer` 후처리의 5/14~5/20 변경 이력 (별도 P1 ticket). |
 | V33 SQL dry-run 시 cluster 데이터 무결성 | 낮 | **이미 dry-run 통과 (§10.1)** — `BEGIN; ... ROLLBACK;` 으로 prod schema 에 직접 시뮬레이션 검증 완료 |
 
 ---
@@ -2165,7 +2159,7 @@ Critical path: W1-1 → W2-1 → W2-3 → W4-0 → W4-2 → W4-5 → **W5-1** �
 - [ ] V33 migration 이 Mode B (local docker) 에서 PASS, cluster prod profile 에서 자동 적용 검증
 - [ ] `peer_companies.profile_snapshot` 5 행이 모두 non-empty (4 peer + sk_ax)
 - [ ] Validate 노드가 일부러 만든 단정 표현 카드 1건 차단 확인 (`human_review_flags` 추가됨)
-- [ ] `pipeline_logs` 에 supervisor 노드 7개 (profile_context / build_analysis_context / issue_integrate / strategic_analyze / implication / validate / **card_writer**) 모두 elapsed_ms 기록됨
+- [ ] `pipeline_logs` 에 supervisor 노드 7개 (profile_context / build_analysis_context / issue_integrate / strategic_insight / implication / validate / **card_writer**) 모두 elapsed_ms 기록됨
 - [ ] **W2-1 작업 5**: `ingestion_graph.card_news_node` 가 제거됨 (또는 thin shim 만 잔존), cluster sample 카드 INSERT 가 supervisor 의 `card_writer` 노드에서 일어남 — Langfuse trace 또는 `pipeline_logs.step='card_writer'` 로 확인
 
 ### W3 Done
@@ -2200,7 +2194,7 @@ Critical path: W1-1 → W2-1 → W2-3 → W4-0 → W4-2 → W4-5 → **W5-1** �
 **W5 Phase 1 — Rule-based 4 metric + Sidecar 4 score (즉시 도입)**
 
 - [ ] **V33 마이그레이션 (W4-1 통합)**: `card_news.evaluation_payload JSONB DEFAULT '{}'::jsonb` 컬럼 + `idx_card_news_unjudged_v2` partial index 존재
-- [ ] **W5-1**: `agents/evaluator_agent.py` 의 4 metric (context_hit_ratio / evidence_claim_ratio / specificity_score / actionability_score) 각각 golden 케이스 PASS — mypy strict
+- [ ] **W5-1**: `evaluators/evaluator.py` 의 4 metric (context_hit_ratio / evidence_claim_ratio / specificity_score / actionability_score) 각각 golden 케이스 PASS — mypy strict
 - [ ] **W5-1**: `context_hit_ratio` 분모가 `available_layer_count` 인지 unit test 검증 (신규 peer 케이스에서 6 고정 페널티 없음)
 - [ ] **W5-1**: `actionability_score` 의 한국어 verb-suffix 사전 (`한다 / 할 것 / 검토 / 착수 / ...`) 매칭 unit test PASS — "디지털 전환을 가속화한다" 가 verb-match, "디지털 전환 가속화" 는 no-match
 - [ ] **W5-1**: `validate` 노드가 metric 계산 후 `state.validation.metrics` 에 저장, `card_writer` 가 `evaluation_payload['rule_based']` 로 INSERT — cluster sample 5개 모두 `rule_based` non-null
@@ -2258,7 +2252,7 @@ Critical path: W1-1 → W2-1 → W2-3 → W4-0 → W4-2 → W4-5 → **W5-1** �
 | LangGraph 도입 | **도입**. ingestion_graph 와 일관성, retry / logging / human_review 라우팅 필수. |
 | ProfileAgent cluster-time LLM | **호출 안 함**. CronJob 으로 분리 (Tier A) + DB-only enrichment (Tier B). |
 | ImplicationAgent fallback | **현 heuristic `ImplicationGenerator` 유지**. LLM 실패 시 graceful degrade. |
-| AnalysisPackage 외부 API | **불변**. Supervisor 내부만 리팩토링, `CardNewsAgent.generate_from_analysis_package()` 진입점 동일. |
+| AnalysisPackage 외부 API | **불변**. Supervisor 내부만 리팩토링, `CardNewsComposer.generate_from_analysis_package()` 진입점 동일. |
 | V33 Flyway 의 정체성 | **인덱스 3 + VIEW 3 + MATERIALIZED VIEW 1 + `card_news.card_schema_version` 컬럼 1 + W2-2 의 `peer_companies.peer_plus_payload` JSONB key namespace 표준화**. `profile_snapshot` 별도 컬럼 X → JSONB 내부. `peer_financial_trend` VIEW 에 metric_name_canonical 매핑 포함. |
 | Context engineering — 신규 테이블 수 | **0개 (MVP)**. timeline / financial_trend / general_event_timeline 은 VIEW, `sector_pulse` 는 MATERIALIZED VIEW, `capability_evolution` 은 `peer_plus_payload` JSONB, snapshot history 는 `legacy_records` 재사용. |
 | `event_chain_links` (V34) | **MVP 보류**. `card_news.evidence_payload['related_card_ids']` JSONB 로 시작 → W4 운영 4주 측정 후 도입 결정. **도입 시 Qdrant cosine ≥ 0.75 + 시간차 ≥ 7일 강제** (단순 keyword overlap X — 실측 시 자기참조 위험). |
@@ -2274,7 +2268,7 @@ Critical path: W1-1 → W2-1 → W2-3 → W4-0 → W4-2 → W4-5 → **W5-1** �
 | **v3.1 신설** — sparse peer (LG CNS) 의 시사점 | **`evidence_density_per_peer` 신호** → ImplicationAgent prompt 가 peer-level confidence 차등 부여. sparse → 자동 `evidence_label="moderate"` 강등. |
 | **v3.1 신설** — `evidence_payload.financial_refs.narrative` 재사용 | cluster-time financial_trend 재계산 대신 기존 narrative 우선 활용 (P3-LOG-2). VIEW 는 fallback. |
 | **v3.1 신설** — 191 v1 카드 backfill | **graceful fallback 으로 시작** (옵션 A). W4 운영 안정화 + frontend v2 표시 검증 후 옵션 B (백필 $4.2 + 4h) 결정. |
-| **v3.1 신설** — 카드 dedup 부족 | **Layer B 카드 생성 단** 의 작업으로 분리 (As-Is `ingestion_graph.card_news_node`, To-Be `CardNewsAgent`). W4-6 도입보다 dedup 강화가 시급 (실측: 같은 (peer, event_type, date) 에 카드 4-6건). ingestion (Layer A) 책임 아님. |
+| **v3.1 신설** — 카드 dedup 부족 | **Layer B 카드 생성 단** 의 작업으로 분리 (As-Is `ingestion_graph.card_news_node`, To-Be `CardNewsComposer`). W4-6 도입보다 dedup 강화가 시급 (실측: 같은 (peer, event_type, date) 에 카드 4-6건). ingestion (Layer A) 책임 아님. |
 | **v3.2 신설** — Evaluation & Observability Layer 도입 | **W5 신설 (12-18h)**. 출력 품질 정량화. **Hybrid placement**: rule-based 5 metric (W5-1) 은 in-graph `validate` 노드 확장 (LLM X, latency <50ms, 회귀 즉시 차단), LLM-as-Judge 4 score (W5-2) 는 sidecar CronJob (`axis-cron-card-evaluator`, 5분 주기, gpt-4o-mini, +$1.5/일). 두 결과 모두 `card_news.evaluation_payload` JSONB 에 누적 → §3.6.3 의 regression detection CronJob (W5-3, 옵션) 자동화 가능. |
 | **v3.2 신설** — Evaluator critical path 영향 | **In-graph rule-based 만 supervisor critical path 에 포함** (validate 노드 확장, +50ms 미만). LLM-as-Judge sidecar 는 critical path 밖 (5분 지연 후 평가) — cluster 처리 속도 / 사용자 가시 latency 에 영향 0. Sidecar 실패가 카드 가시성에 영향 X (frontend graceful fallback). |
 | **v3.2 신설** — Hard-block vs soft-flag | **W5-1 의 5 metric 은 `human_review_flags` 만 추가** (hard fail X). 카드는 항상 INSERT 되되 품질 신호가 동반. Hard fail 은 기존 validate 노드의 numeric/단정표현 차단으로 한정. → 평가 자체로 인한 카드 손실 0. |
@@ -2285,7 +2279,7 @@ Critical path: W1-1 → W2-1 → W2-3 → W4-0 → W4-2 → W4-5 → **W5-1** �
 | **v3.2.1 신설** — Rule-based metric 정정 | (1) `context_hit_ratio` 분모를 6 고정 → `available_layer_count` (신규 peer 의 unfair penalty 제거). (2) `actionability_score` 의 "verb-first" → 한국어 verb-suffix 사전 매칭 (`한다 / 할 것 / 검토 / 착수 / ...`). |
 | **v3.2.1 신설** — Self-evaluation bias 대응 | Phase 1 은 gpt-4o-mini 단독. **Phase 2 (운영 1주 후) 부터 매주 10% sampling 을 Claude 3.5 Sonnet 로 cross-check** (+$0.30/일). 두 evaluator 의 `faithfulness` gap > 1.0 일관시 evaluator prompt 재검토 ticket. |
 | **v3.2.1 신설** — Cost cap 정책 | **Daily $5/일 soft cap** (≈100 카드). 도달 시 sidecar batch skip + Slack 알림, 다음 KST 00:00 자동 재개. Hard kill 아님 — backlog 다음날 이연. `daily_budget_remaining()` 함수가 batch limit 동적 조정. |
-| **v3.1 갱신** — 이번 주 (5/18 이후) 신규 카드 `peer_company_id` FK NULL | **W4-0 첫 마이그레이션에서 백필** (`UPDATE card_news SET peer_company_id = company`, `… SET primary_keyword_category = matched_sectors->>0`). 데이터 손실 X — `card_news.company` / `raw_articles.matched_companies` 모두 정상. ingestion 회귀 아닌 axis-ai `CardNewsAgent` 후처리 회귀 (5/15 FK, 5/20 sector 두 시점). 원인 추적은 별도 P1 ticket. |
+| **v3.1 갱신** — 이번 주 (5/18 이후) 신규 카드 `peer_company_id` FK NULL | **W4-0 첫 마이그레이션에서 백필** (`UPDATE card_news SET peer_company_id = company`, `… SET primary_keyword_category = matched_sectors->>0`). 데이터 손실 X — `card_news.company` / `raw_articles.matched_companies` 모두 정상. ingestion 회귀 아닌 axis-ai `CardNewsComposer` 후처리 회귀 (5/15 FK, 5/20 sector 두 시점). 원인 추적은 별도 P1 ticket. |
 
 ---
 
@@ -2333,7 +2327,7 @@ kubectl exec -n $NS $POD -- psql -U axuser -d axis -c "
   GROUP BY peer_id ORDER BY total_chars DESC;"
 # 예상: peer 당 ~500k chars ≈ 170k token
 
-# 5. P3-CRIT-4 재현 (CardNewsAgent 후처리 회귀 — FK + sector, 두 시점)
+# 5. P3-CRIT-4 재현 (CardNewsComposer 후처리 회귀 — FK + sector, 두 시점)
 kubectl exec -n $NS $POD -- psql -U axuser -d axis -c "
   SELECT DATE(created_at) AS d, company,
          COUNT(*) AS total,
@@ -2394,9 +2388,9 @@ cluster DB 직접 쿼리로 W5 의 schema 가정과 baseline 충족 여부 점�
 *v3.0 변경점: §3.4 / §3.5 / W1-4 / W4 단계 신설 / §6.1·6.2 / §7 W4 Done / §9 결정사항 6항 갱신*
 *v3.1 변경점 (실측 기반): §2.4 9 critical issue (P3-CRIT 4 + P3-DATA 8 + P3-LOG 4) / W4-0 (data hygiene precondition) 신설 / §3.4.3 metric_name_canonical 매핑 + general_event_timeline VIEW / §3.4.5 PEER_ID_ALIASES + cluster identity 재정의 + token budget 실측 / §3.4.6 chunked LLM input + sector_pulse Phase 분리 / §6.3 신규 리스크 13항 / §9 결정사항 v3.1 10항 추가*
 *v3.1 검증 완료 (2026-05-20): §10.1 9 issue 모두 cluster DB 에서 재현 검증 / §10.2 V33 SQL 5단계 dry-run 모두 PASS / 내부 일관성 점검 (W1-4 ↔ W4-1 V33 단일화, SupervisorState 의 analysis_context 정합, build_analysis_context 노드 정합) 완료*
-*v3.1.1 정정 (2026-05-20 21:00) — P3-CRIT-4 재진단: `card_news.company` 와 `raw_articles.matched_companies/matched_sectors` 모두 정상임을 확인 (회귀 범위 좁아짐). ingestion 회귀가 아닌 axis-ai `CardNewsAgent` 후처리의 두 시점 회귀 (5/15 FK, 5/20 sector). 데이터 손실 X → W4-0 작업 5 (`V32_5__card_news_backfill.sql`) 로 즉시 복구 가능, 별도 P0 (ingestion-side) 항목에서 제외 / 회귀 원인 추적은 별도 P1 ticket.*
-*v3.1.2 정정 (2026-05-20 21:05) — Layer 경계 명확화: §0.1 신설하여 시스템을 Layer A (Data Pipeline — ingestion = crawl/dedup/classify/정제/DB 적재까지만) 와 Layer B (Analysis Supervisor Graph — context assemble → LLM reasoning → validation → package generation) 의 2-layer 로 명시. 본 계획서의 모든 작업은 Layer B. 카드 dedup / source 강제 검증 / FK 회귀 등은 "ingestion-side" 가 아닌 "Layer B 카드 생성 단" (As-Is `ingestion_graph.card_news_node`, To-Be `CardNewsAgent` 이관) 으로 재분류 — §2.4 P3-CRIT-3, §2.4 P3-LOG-3, §6.3 리스크, §9 결정 4군데 표기 정정. SUPERVISOR_BRIEF §2 그림에 DB 경계 추가 및 카드 생성을 Layer B 의 ④ package generation 으로 이동.*
-*v3.1.3 정정 (2026-05-20 21:15) — As-Is debt 해소: §0.1 의 "W2-1 시 이관 예정" promise 를 실행 가능한 task 로 전환. **W2-1 작업 5 신설** — `ingestion_graph.card_news_node` 제거 + `card_writer` 노드를 supervisor 의 last 노드로 신설 (assemble → card_writer → END). §3.1 다이어그램에서 `(외부) CardNewsAgent` 제거, retry 정책에 `card_writer` 추가. W2-1 시간 6-8h → 8-11h (+2~3h). W2 Done 에 card_writer wired 검증 항목 + supervisor 노드 7개 elapsed_ms 항목. SUPERVISOR_BRIEF §2 그림 / §9 갱신. 카드뉴스가 "분석/시사점/대응의 결과물 = Supervisor 의 산출물" 이라는 사용자 의도가 코드 위치에서도 일치.*
+*v3.1.1 정정 (2026-05-20 21:00) — P3-CRIT-4 재진단: `card_news.company` 와 `raw_articles.matched_companies/matched_sectors` 모두 정상임을 확인 (회귀 범위 좁아짐). ingestion 회귀가 아닌 axis-ai `CardNewsComposer` 후처리의 두 시점 회귀 (5/15 FK, 5/20 sector). 데이터 손실 X → W4-0 작업 5 (`V32_5__card_news_backfill.sql`) 로 즉시 복구 가능, 별도 P0 (ingestion-side) 항목에서 제외 / 회귀 원인 추적은 별도 P1 ticket.*
+*v3.1.2 정정 (2026-05-20 21:05) — Layer 경계 명확화: §0.1 신설하여 시스템을 Layer A (Data Pipeline — ingestion = crawl/dedup/classify/정제/DB 적재까지만) 와 Layer B (Analysis Supervisor Graph — context assemble → LLM reasoning → validation → package generation) 의 2-layer 로 명시. 본 계획서의 모든 작업은 Layer B. 카드 dedup / source 강제 검증 / FK 회귀 등은 "ingestion-side" 가 아닌 "Layer B 카드 생성 단" (As-Is `ingestion_graph.card_news_node`, To-Be `CardNewsComposer` 이관) 으로 재분류 — §2.4 P3-CRIT-3, §2.4 P3-LOG-3, §6.3 리스크, §9 결정 4군데 표기 정정. SUPERVISOR_BRIEF §2 그림에 DB 경계 추가 및 카드 생성을 Layer B 의 ④ package generation 으로 이동.*
+*v3.1.3 정정 (2026-05-20 21:15) — As-Is debt 해소: §0.1 의 "W2-1 시 이관 예정" promise 를 실행 가능한 task 로 전환. **W2-1 작업 5 신설** — `ingestion_graph.card_news_node` 제거 + `card_writer` 노드를 supervisor 의 last 노드로 신설 (assemble → card_writer → END). §3.1 다이어그램에서 `(외부) CardNewsComposer` 제거, retry 정책에 `card_writer` 추가. W2-1 시간 6-8h → 8-11h (+2~3h). W2 Done 에 card_writer wired 검증 항목 + supervisor 노드 7개 elapsed_ms 항목. SUPERVISOR_BRIEF §2 그림 / §9 갱신. 카드뉴스가 "분석/시사점/대응의 결과물 = Supervisor 의 산출물" 이라는 사용자 의도가 코드 위치에서도 일치.*
 *v3.2 추가 (2026-05-21 10:00) — **Evaluation & Observability Layer (W5) 신설**: 출력 품질 정량화. §3 6번 조항 (Evaluation Layer) + §3.6 (5 rule-based metric + 4 LLM-judge score 정의, evaluation_payload JSONB schema, sidecar 운영 흐름) + W5-1~3 작업 단락 + §5 일정 (W5 12-18h, critical path +4h, 총 ~85h / 5-5.5주) + §6.1 비용 (+$1.5/일, 일일 총합 $3.37, 한도의 46%) + §6.2 지표 (5+4 신규 metric 목표) + §7 W5 Done + §8 사후 모니터링 SQL 6개 + §9 결정 3항 (Hybrid placement / critical path 영향 / soft-flag 정책) 추가. SUPERVISOR_BRIEF agent 11→13, §2 그림에 evaluator sidecar 박스 추가, §3.2 CardEvaluatorSidecar+RegressionCheck, §4 evaluation_payload 활용, §6 5단계, §7 W5 컬럼, §8 결정 7항 추가.*
 *v3.2.1 정정 (2026-05-21 11:00) — **W5 검증 후 6 issue 패치** (사용자 결정 반영): (P5-CRIT-1) `evaluation_payload` 컬럼 실측 미존재 확인 → V33 (W4-1) 에 `ALTER TABLE ADD COLUMN evaluation_payload JSONB DEFAULT '{}'::jsonb` + partial index 추가, §3.6.2 정정. (P5-DATA-1) `regression_drift` baseline 6일치 부족 → Phase 분리 (Phase 1 즉시 4 metric / Phase 2 운영 14일 후 drift+W5-3). (P5-DATA-2) v1 카드 191건 평가 제외 → sidecar SQL `WHERE card_schema_version = 'v2'` guard. (P5-LOG-1) `actionability_score` 한국어 verb-suffix 사전 패턴으로 변경. (P5-LOG-2) `context_hit_ratio` 분모를 `available_layer_count` 로 변경 (unfair penalty 제거). (P5-LOG-3) §3.6.5 신설 — Phase 2 부터 Claude 10% cross-check sampling. §3.6.6 신설 — Threshold lenient 시작 (1주 후 percentile calibration), Sidecar burst 대응, Cost cap $5/일 soft 정책. §5 W5 시간 +1~2h (총 ~88h, critical path 39-41h). §7 W5 Done Phase 1/2 분리. §9 결정 표 6항 추가. §10.3 신설 (W5 사전 검증 결과). SUPERVISOR_BRIEF 정합성 갱신.*
 *다음 갱신 권고: W4-0 완료 후 (실 데이터에서 alias / metric / cluster identity 통합 효과 측정) · W1 완료 후 (`evidence_label` 첫 측정값 + LLM 비용 실측 반영) · W4 운영 4주 후 (W4-6 도입 결정 + sector_pulse Phase 2 활성화)*

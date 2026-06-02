@@ -1431,7 +1431,7 @@ def _source_articles_payload(card: dict[str, Any], source_ids: list[int]) -> lis
 def _resolve_peer_company_id(card: dict[str, Any]) -> Optional[str]:
     """카드 INSERT 시 peer_company_id FK 를 직접 확정한다.
 
-    우선순위: card['peer_company_id'] (CardNewsAgent 가 set 했을 수 있음) →
+    우선순위: card['peer_company_id'] (CardNewsComposer 가 set 했을 수 있음) →
     card['company'] (peer_companies.id 와 동일 표기) → card['peer_id'].
     SK AX 같은 self 회사는 FK NULL (peer_companies 가 self 도 포함하지만,
     안전을 위해 None 으로 두고 보조 컬럼 company 만 사용).
@@ -1471,7 +1471,7 @@ def _normalize_int_list(value: Any) -> list[int]:
 def _build_evidence_payload(card: dict[str, Any]) -> dict[str, Any]:
     """카드 저장 시 `evidence_payload` JSONB 의 단일 출처.
 
-    supervisor 의 메모리 `evidence_payload` 와 CardNewsAgent 의 `evidence_chain` /
+    supervisor 의 메모리 `evidence_payload` 와 CardNewsComposer 의 `evidence_chain` /
     `sources` 를 합쳐서 sidecar (W5-2) 가 단일 컬럼만 보고도 풍부한 근거에 접근 가능.
     """
     payload: dict[str, Any] = {}

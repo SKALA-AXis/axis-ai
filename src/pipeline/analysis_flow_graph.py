@@ -165,6 +165,7 @@ class SupervisorDeps:
         context_builder: AnalysisContextBuilder | None = None,
         profile_context_loader: ProfileContextLoader | None = None,
         card_news_agent: CardNewsAgent | None = None,
+        card_news_composer: Any | None = None,
         implication_fallback: ImplicationGenerator | None = None,
     ) -> None:
         legacy_agents_supplied = analyzer is not None or implication_agent is not None
@@ -185,7 +186,7 @@ class SupervisorDeps:
         self.evaluator = evaluator or EvaluatorAgent()
         self.context_builder = context_builder or AnalysisContextBuilder()
         self.profile_context_loader = profile_context_loader or ProfileContextLoader()
-        self.card_news_agent = card_news_agent or CardNewsAgent()
+        self.card_news_agent = card_news_agent or card_news_composer or CardNewsAgent()
 
 
 class _LegacyStrategicInsightAdapter:

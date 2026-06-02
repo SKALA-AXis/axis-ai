@@ -45,8 +45,8 @@ routing 가치가 낮고, deterministic pipeline 이 운영 예측·debugging·�
   ① issue_integrate         (LLM gpt-4o)  IntegratedIssue 생성
   ② profile_context         (DB only)     main_company 확정 후 ProfileContext 합성
   ③ build_analysis_context  (DB+Qdrant)   AnalysisContext (4-Layer, ≤4,000 token)
-  ④ strategic_insight       (LLM gpt-4o)  analysis + implication 분리 출력
-  ⑤ validate                (rule-based)  numeric/certainty/evidence + EvaluatorAgent
+  ④ strategic_insight       (LLM gpt-4o)  AnalysisResult + ImplicationResult
+  ⑤ validate                (rule-based)  numeric/certainty/evidence + Evaluator
        pass → ⑥ assemble → ⑦ card_writer → card_news INSERT (v2 schema)
        fail → human_review (flag only, 카드 생성 X)
 
@@ -87,13 +87,13 @@ ProfileContext
 
 - 글로벌 회사별 뉴스룸은 카드뉴스 생성 대상이다. Microsoft, AWS, Google, NVIDIA,
   OpenAI 같은 회사별 뉴스룸은 일반 이슈처럼
-  `IntegratedIssue → StrategicInsightAgent → CardNewsAgent` 흐름을 탄다.
+  `IntegratedIssue → StrategicInsightAgent → CardNewsComposer` 흐름을 탄다.
 - SPRi / BCG 자료는 카드뉴스 생성 대상이 아니다. `ITTrendAgent`가 이 자료와 과거
   `TrendContext`를 함께 보고 글로벌·산업 흐름을 갱신한다.
 - 글로벌 회사별 뉴스룸의 `IntegratedIssue`와 `AnalysisResult`도 `ITTrendAgent`가
   실행 신호로 참고해 `TrendContext`를 갱신한다.
 - `ITTrendAgent` 출력은 카드뉴스가 아니라 `TrendContext`다.
-- `StrategicInsightAgent`는 이슈 분석 시 필요하면 `TrendContext`를 참고할 수 있다.
+- `StrategicAnalyzer`는 이슈 분석 시 필요하면 `TrendContext`를 참고할 수 있다.
 - 카드뉴스 화면 결과나 글로벌 뉴스룸 원문을 `TrendContext` 입력으로 직접 쓰지는 않는다.
 
 ## AnalysisGraphRunner
@@ -110,17 +110,17 @@ ProfileContext
   `raw_article_business_signals` 등을 함께 조회한다.
 - 조회한 데이터를 `AnalysisInputBundle`로 구성한다.
 - 하위 Agent를 조율한다.
-- 최종 결과를 `AnalysisPackage`로 묶어 `CardNewsAgent`에 전달한다.
+- 최종 결과를 `AnalysisPackage`로 묶어 `CardNewsComposer`에 전달한다.
 
-내부 흐름 (v3.3, LangGraph StateGraph):
+내부 흐름 (v3.2.1, LangGraph StateGraph 9-node):
 
 ```text
 AnalysisInputBundle
 → ① issue_integrate          IntegrationAgent → IntegratedIssue
 → ② profile_context          ProfileContextLoader.load → ProfileContext (Tier A snapshot + Tier B enrichment)
 → ③ build_analysis_context   AnalysisContextBuilder → AnalysisContext (6 layer, ≤4,000 token)
-→ ④ strategic_insight        StrategicInsightAgent → analysis + implication (분리 출력)
-→ ⑤ validate                 _hard_validate + EvaluatorAgent → ValidationReport
+→ ④ strategic_insight        StrategicInsightAgent → AnalysisResult + ImplicationResult
+→ ⑤ validate                 _hard_validate + Evaluator → ValidationReport
    ├ pass → ⑥ assemble → ⑦ card_writer → save_card_news (v2 schema) → END
    └ fail → human_review (flag only) → END
 ```
@@ -129,11 +129,11 @@ AnalysisInputBundle
 elapsed_ms 기록. 부분 실패는 다음과 같이 흡수:
 
 - ② ProfileContextLoader fail → legacy `ProfileAgent.build_context` fallback
-- ③ DB unavailable → 빈 `AnalysisContext` 로 진행
-- ④ LLM fail → 기존 `StrategicAnalyzer` + `ImplicationAgent` 조합으로 fallback
+- ③ DB unavailable → 빈 `AnalysisContext` (StrategicInsightAgent 내부 implication fallback 사용)
+- ④ LLM fail → 내부 fallback (`is_valid_implication=true` 단순 출력)
 
-LangGraph `RetryPolicy`는 LLM 호출 노드 중심으로 적용되어 있으며, `_logged_step`
-try/except가 노드 예외를 `state.errors[]`에 누적한다.
+LangGraph `RetryPolicy / with_retry` 정식 도입은 별도 PR (`design/01-analysis-pipeline-implementation-plan.md`
+의 §3.1 retry 표는 미구현 — 현재는 `_logged_step` try/except + ImplicationAgent fallback 만).
 
 ## IntegrationAgent
 
@@ -164,47 +164,33 @@ try/except가 노드 예외를 `state.errors[]`에 누적한다.
 - 카드뉴스용 3줄 요약을 만들지 않는다.
 - 시사점이나 대응 방향을 만들지 않는다.
 
-## StrategicInsightAgent
+## StrategicAnalyzer
 
-`IntegratedIssue`를 기반으로 피어사/산업 관점 분석과 SK AX 관점 시사점을 한 번에
-생성한다. 단, 출력은 후속 저장/검증 호환성을 위해 `analysis`와 `implication` 두 블록으로
-분리한다.
+`IntegratedIssue`를 기반으로 전략적 의미를 분석한다.
 
 입력:
 - `IntegratedIssue`
-- `classification`
-- `AnalysisInputBundle.metadata`
-- `ProfileContext`
-- `AnalysisContext`
+- company / sector / event_type metadata
+- 필요 시 `TrendContext`
 
 출력:
 
 ```json
 {
-  "analysis": {
-    "analysis_summary": "",
-    "strategic_meaning": [],
-    "market_signal": "",
-    "impact_level": "high|medium|low",
-    "risk_or_opportunity": "risk|opportunity|neutral"
-  },
-  "implication": {
-    "peer_implication": {},
-    "skax_implication": {},
-    "follow_up_questions": [],
-    "watch_points": []
-  }
+  "strategic_moves": [],
+  "market_signals": [],
+  "competitive_meaning": "",
+  "risk_factors": []
 }
 ```
 
 주의:
 - 원문/클러스터/문서 전체를 다시 읽지 않는다.
 - 원문 기반 fact 통합은 IntegrationAgent 책임이다.
-- `IntegratedIssue`에 없는 사실, 수치, 회사명, 제품명은 생성하지 않는다.
-- 수치/날짜/정량 표현은 `fact_basis`, `key_numbers`, `representative_sources` 중 하나에
-  근거가 있어야 한다.
-- `ProfileContext`와 `AnalysisContext`는 해석 보조 맥락이며, IntegratedIssue에 없는
-  사실을 새로 만드는 근거로 사용하지 않는다.
+- StrategicAnalyzer는 IntegratedIssue 안의 `integrated_text`, `consolidated_facts`,
+  `key_numbers`, `business_signals`, `fact_basis`를 근거로 해석한다.
+- `TrendContext`가 있으면 글로벌/산업 배경으로만 참고하며, IntegratedIssue에 없는
+  사실을 새로 만들지 않는다.
 
 ## ProfileAgent
 
@@ -223,10 +209,10 @@ ProfileAgent 는 단순 context provider 가 아니라 **원천 데이터 (DART 
 
 ### 출력의 두 관점 (Peer 와 SK AX 분리)
 
-- **`ProfileContext.peer_profiles[peer_id]`** — StrategicInsightAgent 의 `analysis` 블록
-  입력. peer 의 전략·역량·사업 방향 자체를 해석하는 데 사용.
-- **`ProfileContext.skax_profile`** — StrategicInsightAgent 의 `implication` 블록 입력.
-  SK AX 관점에서 기회/위협/대응 방향을 도출하는 데 사용.
+- **`ProfileContext.peer_profiles[peer_id]`** — StrategicAnalyzer 의 입력. peer 의 전략·역량·
+  사업 방향 자체를 해석하는 데 사용.
+- **`ProfileContext.skax_profile`** — ImplicationAgent 의 입력. SK AX 관점에서 기회/위협/
+  대응 방향을 도출하는 데 사용.
 
 ### 주의
 
@@ -237,9 +223,7 @@ ProfileAgent 는 단순 context provider 가 아니라 **원천 데이터 (DART 
 
 ## ImplicationAgent
 
-기존 시사점 Agent. 기본 flow는 `StrategicInsightAgent`가 `implication` 블록을 생성하며,
-`ImplicationAgent`는 StrategicInsightAgent LLM 실패 또는 legacy 주입 테스트의 fallback
-경로로 유지한다.
+분석 결과와 프로필 context를 결합해 SK AX 관점의 시사점을 도출한다.
 
 입력:
 - `AnalysisResult`
@@ -259,7 +243,7 @@ ProfileAgent 는 단순 context provider 가 아니라 **원천 데이터 (DART 
 }
 ```
 
-## CardNewsAgent
+## CardNewsComposer
 
 `AnalysisPackage`를 사용자에게 보여주기 좋은 카드뉴스/API 응답 형태로 재가공한다.
 
