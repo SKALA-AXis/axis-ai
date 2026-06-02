@@ -43,6 +43,28 @@ _MAX_BRIDGE_TOPIC_TERMS = 1
 _MIN_RELATED_TERM_LENGTH = 6
 _TERM_NGRAM_SIMILARITY = 0.45
 _ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
+_EVENT_BUCKET_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "market_reaction",
+        (
+            "주가",
+            "상한가",
+            "급등",
+            "특징주",
+            "거래량",
+            "거래대금",
+            "매수세",
+            "증시키워드",
+            "관심종목",
+            "목표주가",
+        ),
+    ),
+    ("investment_deal", ("투자", "지분", "인수", "두나무", "m&a", "ma")),
+    ("ax_strategy", ("ax", "ai자율공장", "자율공장", "스마트팩토리", "생성형ai", "ai전환")),
+    ("cloud_infra", ("클라우드", "데이터센터", "gpu", "gpuass", "gpu서비스", "인프라")),
+    ("security", ("보안", "침해", "해킹", "취약점")),
+    ("industry_theme", ("si주", "si株", "it서비스업종", "테마", "업종전반", "관련업종")),
+)
 
 # 단독(singleton) 클러스터 처리 정책.
 #   - bridge risk(제목에 주제어 없음 + 본문 주제어 다수) 가 의심되어도 cluster 를 유지한다.
@@ -75,13 +97,12 @@ class ArticleDeduplicator:
         if not articles:
             return {}, []
 
-        embeddings = _embed(articles)
-
-        cluster_map = _cluster(
+        cluster_map = _cluster_rule_first(
             articles=articles,
-            embeddings=embeddings,
             threshold=DEDUP_THRESHOLD,
         )
+
+        embeddings = _embed(articles)
 
         representative_ids = _select_representatives(
             cluster_map=cluster_map,
@@ -128,12 +149,12 @@ def deduplicate_articles(
     normalized = [_normalize_local_article(article, id_key) for article in articles]
 
     try:
-        embeddings = _embed(normalized, allow_openai_fallback=False)
-        cluster_map = _cluster(
+        cluster_map = _cluster_rule_first(
             articles=normalized,
-            embeddings=embeddings,
             threshold=DEDUP_THRESHOLD,
+            allow_openai_fallback=False,
         )
+        embeddings = _embed(normalized, allow_openai_fallback=False)
         representative_ids = _select_representatives(
             cluster_map=cluster_map,
             articles=normalized,
@@ -295,6 +316,45 @@ def _normalize_vectors(vecs: np.ndarray) -> np.ndarray:
     return vecs / np.maximum(norms, 1e-9)
 
 
+def _cluster_rule_first(
+    *,
+    articles: list[dict[str, Any]],
+    threshold: float,
+    allow_openai_fallback: bool = True,
+) -> dict[int, list[int]]:
+    """Rule-first clustering.
+
+    Articles must pass deterministic company/event-signature grouping before
+    BGE similarity is allowed to merge them. This prevents one broad high-sim
+    article from bridging unrelated same-company news into a mega-cluster.
+    """
+    final_values: list[list[int]] = []
+    for group_articles in _rule_prefilter_groups(articles):
+        if len(group_articles) == 1:
+            final_values.append([int(group_articles[0]["id"])])
+            continue
+        embeddings = _embed(group_articles, allow_openai_fallback=allow_openai_fallback)
+        local_map = _cluster(
+            articles=group_articles,
+            embeddings=embeddings,
+            threshold=threshold,
+        )
+        final_values.extend(local_map.values())
+    return {cluster_id: ids for cluster_id, ids in enumerate(final_values)}
+
+
+def _rule_prefilter_groups(articles: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for article in articles:
+        groups.setdefault(_rule_prefilter_key(article), []).append(article)
+    return list(groups.values())
+
+
+def _rule_prefilter_key(article: dict[str, Any]) -> str:
+    companies = ",".join(_company_key(article)) or "*"
+    return f"{companies}::{_event_signature(article)}"
+
+
 def _cluster(
     articles: list[dict[str, Any]],
     embeddings: np.ndarray,
@@ -329,7 +389,9 @@ def _cluster(
 
     id_to_article = {int(article["id"]): article for article in articles}
     cluster_values = [
-        ids for ids in groups.values() if not _support_only_singleton(ids, id_to_article)
+        ids
+        for ids in _split_cluster_values_by_event_bucket(groups.values(), id_to_article)
+        if not _support_only_singleton(ids, id_to_article)
     ]
 
     return {cluster_id: ids for cluster_id, ids in enumerate(cluster_values)}
@@ -474,6 +536,12 @@ def _should_merge_articles(
     if not _within_cluster_time_window(left, right):
         return False
 
+    if not _event_buckets_compatible(left, right):
+        return False
+
+    if not _event_signatures_compatible(left, right):
+        return False
+
     if _same_issue(left, right):
         return True
 
@@ -487,6 +555,97 @@ def _should_merge_articles(
         return False
 
     return True
+
+
+def _split_cluster_values_by_event_bucket(
+    cluster_values: Any,
+    id_to_article: dict[int, dict[str, Any]],
+) -> list[list[int]]:
+    """Prevent union-find bridge chains from creating mixed event mega-clusters."""
+    split_values: list[list[int]] = []
+    for article_ids in cluster_values:
+        buckets: dict[str, list[int]] = {}
+        for article_id in article_ids:
+            article = id_to_article.get(int(article_id), {})
+            buckets.setdefault(_event_signature(article), []).append(int(article_id))
+        split_values.extend(buckets.values())
+    return split_values
+
+
+def _event_buckets_compatible(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_bucket = _event_bucket(left)
+    right_bucket = _event_bucket(right)
+    if left_bucket == "general" or right_bucket == "general":
+        return True
+    return left_bucket == right_bucket
+
+
+def _event_signatures_compatible(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_signature = _event_signature(left)
+    right_signature = _event_signature(right)
+    if left_signature.endswith(":general") or right_signature.endswith(":general"):
+        return True
+    return left_signature == right_signature
+
+
+def _event_signature(article: dict[str, Any]) -> str:
+    """Fine-grained deterministic issue key used before BGE similarity."""
+    bucket = _event_bucket(article)
+    title = _compact_text(str(article.get("title") or ""))
+    text = _issue_text(article)
+
+    if bucket == "market_reaction":
+        return f"market_reaction:{_published_day(article)}"
+    if "두나무" in text:
+        return "investment_deal:dunamu"
+    if "ax서밋" in text or "axsummit" in text:
+        return "ax_strategy:ax_summit"
+    if "자율공장" in text:
+        return "ax_strategy:ai_factory"
+    if "인더스트리데이" in text:
+        return "ax_strategy:industry_day"
+    if "데이터센터" in text or "ai인프라" in text:
+        return "cloud_infra:ai_datacenter"
+    if "si주" in text or "it서비스업종" in text or "테마주" in text:
+        return "industry_theme:si_theme"
+
+    title_terms = sorted(_title_topic_terms(article))
+    if title_terms:
+        return f"{bucket}:{title_terms[0]}"
+    if title:
+        return f"{bucket}:title:{title[:24]}"
+    return f"{bucket}:general"
+
+
+def _published_day(article: dict[str, Any]) -> str:
+    published_at = _parse_datetime(article.get("published_at") or article.get("collected_at"))
+    if published_at is None:
+        return "unknown_day"
+    return published_at.date().isoformat()
+
+
+def _event_bucket(article: dict[str, Any]) -> str:
+    """Coarse event bucket for card-news-level clustering.
+
+    Embedding similarity is good at grouping same-company/theme articles, but it
+    can over-merge different event layers such as market reaction, investment,
+    and AX strategy. Title receives priority because it usually encodes the
+    article's actual news angle.
+    """
+    title = _compact_text(str(article.get("title") or ""))
+    title_bucket = _event_bucket_from_text(title)
+    if title_bucket != "general":
+        return title_bucket
+    return _event_bucket_from_text(_issue_text(article))
+
+
+def _event_bucket_from_text(text: str) -> str:
+    if not text:
+        return "general"
+    for bucket, markers in _EVENT_BUCKET_PATTERNS:
+        if any(_compact_text(marker) in text for marker in markers):
+            return bucket
+    return "general"
 
 
 def _within_cluster_time_window(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -849,6 +1008,19 @@ def _terms_have_relation(left: list[str], right: list[str]) -> bool:
 
 def _compact_text(value: str) -> str:
     return re.sub(r"[\s·'‘’\"“”「」()\[\]{}:：,._\-…]+", "", value.lower())
+
+
+def _safe_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _json_safe_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
 
 
 def _select_representatives(

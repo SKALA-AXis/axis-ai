@@ -31,7 +31,7 @@
 
 ```python
 class ProvenanceContext(TypedDict):
-    agent_class: str                # "CardNewsAgent"
+    agent_class: str                # "CardNewsComposer"
     agent_method: str               # "compose" / "summarize" / "analyze"
     inputs: dict                    # {"raw_article_ids": [...], "cluster_id": 7, ...}
     llm_model: str | None           # "gpt-4o" / "gpt-4o-mini" / None (deterministic)
@@ -56,7 +56,7 @@ class Provenance(TypedDict):
     request_id: str | None              # FastAPI middleware UUID — BE 의 MDC request_id 와 일치
 
     # Extensions (agent-specific, optional)
-    agent: str                      # "CardNewsAgent"
+    agent: str                      # "CardNewsComposer"
     agent_method: str | None        # "summarize" / "analyze" / "compose"
     evidence_version: str | None    # evidence chain spec 버전 (v3.0)
     parser_strategy: str | None     # Parser 가 사용한 strategy
@@ -128,7 +128,7 @@ def with_provenance(agent_class: str, method: str = "run"):
     return deco
 
 # 사용
-@with_provenance("CardNewsAgent", "generate")
+@with_provenance("CardNewsComposer", "generate")
 async def analyze(cluster, **kwargs): ...
 ```
 

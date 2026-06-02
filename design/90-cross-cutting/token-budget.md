@@ -33,7 +33,7 @@
 
 ```python
 class BudgetCheckInput(TypedDict):
-    agent: str                       # "CardNewsAgent.generate"
+    agent: str                       # "CardNewsComposer.generate"
     model: str                       # "gpt-4o" | "gpt-4o-mini"
     estimated_input_tokens: int
     max_output_tokens: int           # 호출자가 요청한 max
@@ -68,7 +68,7 @@ CREATE TABLE usage_logs (
     occurred_date DATE NOT NULL,                -- 일자 집계 인덱스
     user_id BIGINT,                              -- chat / briefing 의 호출자 (nullable: scheduled)
     actor_kind VARCHAR(20) NOT NULL,            -- user / scheduler / admin
-    agent VARCHAR(120) NOT NULL,                -- "CardNewsAgent.generate"
+    agent VARCHAR(120) NOT NULL,                -- "CardNewsComposer.generate"
     model VARCHAR(60) NOT NULL,
     input_tokens INT NOT NULL,
     output_tokens INT NOT NULL,

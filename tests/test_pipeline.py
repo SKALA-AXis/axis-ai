@@ -1,6 +1,15 @@
 """파이프라인 단위 테스트"""
 
-from src.preprocessing.dedup import _company_presence_score, _same_issue
+import numpy as np
+
+from src.preprocessing import dedup
+from src.preprocessing.dedup import (
+    _cluster,
+    _company_presence_score,
+    _event_signature,
+    _same_issue,
+    _should_merge_articles,
+)
 from src.preprocessing.preprocessing import PreprocessingResult
 
 
@@ -71,3 +80,88 @@ def test_representative_prefers_article_with_company_in_title():
     }
 
     assert _company_presence_score(title_article) > _company_presence_score(no_title_article)
+
+
+def test_cluster_merge_blocks_different_event_buckets_even_with_high_similarity():
+    ax_strategy = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성전자 AI 자율공장 전환 가속…수혜주는 삼성SDS",
+        "content": "삼성그룹의 AX 확산에 따라 삼성SDS의 스마트팩토리 사업 기회가 커졌다.",
+        "published_at": "2026-05-29T06:39:00+00:00",
+    }
+    market_reaction = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성에스디에스, 장중 24% 급등…두나무 투자·AX 기대감",
+        "content": "삼성에스디에스 주가가 두나무 지분 취득과 AX 기대감에 급등했다.",
+        "published_at": "2026-05-29T04:56:00+00:00",
+    }
+
+    assert _should_merge_articles(ax_strategy, market_reaction, 0.97, 0.80) is False
+
+
+def test_cluster_merge_keeps_different_event_buckets_separate_even_with_llm_env(monkeypatch):
+    monkeypatch.setenv("ENABLE_OPENAI_CALLS", "true")
+    monkeypatch.setenv("ENABLE_CLUSTER_LLM_JUDGE", "true")
+    ax_strategy = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성전자 AI 자율공장 전환 가속…수혜주는 삼성SDS",
+        "content": "삼성그룹의 AX 확산에 따라 삼성SDS의 스마트팩토리 사업 기회가 커졌다.",
+        "published_at": "2026-05-29T06:39:00+00:00",
+    }
+    market_reaction = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성에스디에스, 장중 24% 급등…두나무 투자·AX 기대감",
+        "content": "삼성에스디에스 주가가 두나무 지분 취득과 AX 기대감에 급등했다.",
+        "published_at": "2026-05-29T04:56:00+00:00",
+    }
+
+    assert _should_merge_articles(ax_strategy, market_reaction, 0.97, 0.80) is False
+
+
+def test_event_signature_splits_market_reaction_by_day():
+    first_day = {
+        "title": "삼성에스디에스 주가 장중 급등",
+        "content": "주가가 급등했다.",
+        "published_at": "2026-05-27T05:56:00+00:00",
+    }
+    second_day = {
+        "title": "삼성에스디에스 주가 장중 하락",
+        "content": "주가가 하락했다.",
+        "published_at": "2026-06-02T02:12:00+00:00",
+    }
+
+    assert _event_signature(first_day) == "market_reaction:2026-05-27"
+    assert _event_signature(second_day) == "market_reaction:2026-06-02"
+
+
+def test_cluster_splits_union_bridge_by_event_bucket(monkeypatch):
+    monkeypatch.setattr(dedup, "_should_merge_articles", lambda *args, **kwargs: True)
+    articles = [
+        {
+            "id": 1,
+            "company": ["samsung_sds"],
+            "title": "삼성SDS AX 서밋서 AI 네이티브 전환 전략 공개",
+            "content": "AX 로드맵을 공개했다.",
+        },
+        {
+            "id": 2,
+            "company": ["samsung_sds"],
+            "title": "삼성SDS 두나무 지분 투자 결정",
+            "content": "두나무 지분을 취득했다.",
+        },
+        {
+            "id": 3,
+            "company": ["samsung_sds"],
+            "title": "삼성에스디에스 주가 장중 급등",
+            "content": "주가가 급등했다.",
+        },
+    ]
+    embeddings = np.ones((3, 2), dtype=np.float32)
+
+    cluster_map = _cluster(articles=articles, embeddings=embeddings, threshold=0.8)
+
+    assert sorted(len(ids) for ids in cluster_map.values()) == [1, 1, 1]

@@ -131,7 +131,7 @@ def _get_llm() -> ChatOpenAI:
     return _llm
 
 
-class CardNewsAgent:
+class CardNewsComposer:
     """뉴스 요약 결과를 우선 사용해 card_news 저장/API 스키마를 생성한다."""
 
     def generate(
@@ -362,7 +362,7 @@ class CardNewsAgent:
             response = _get_llm().invoke(
                 prompt,
                 config=tracing_config(
-                    agent="CardNewsAgent",
+                    agent="CardNewsComposer",
                     prompt_version=_PROMPT_VERSION,
                     company=company,
                     cluster_id=cluster_id,
@@ -734,7 +734,7 @@ def _frontend_implication_from_result(
 ) -> dict[str, Any]:
     """v4.0 schema 인식 — peer_implication / skax_implication dict 의 핵심 필드 추출.
 
-    W2-4: 기존에 peer_implication 전체를 str() 으로 변환하던 버그 정정. CardNewsAgent
+    W2-4: 기존에 peer_implication 전체를 str() 으로 변환하던 버그 정정. CardNewsComposer
     가 frontend 에 보내는 표면 schema 와 일치.
     """
     fallback = fallback or {}
@@ -796,7 +796,7 @@ def _implication_from_result(
     *,
     fallback: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """W2-4: CardNewsAgent 가 DB 에 저장할 implication JSONB 의 단일 출처.
+    """W2-4: CardNewsComposer 가 DB 에 저장할 implication JSONB 의 단일 출처.
 
     v2 schema 의 `peer_implication` / `skax_implication` / `follow_up_questions` /
     `watch_points` / `confidence` / `evidence_label` / `provenance` 를 모두 포함하고,
@@ -1486,3 +1486,10 @@ def peer_company_label(company_id: str | None) -> str:
         return ""
     local_name = company_name_ko(company_id)
     return local_name if local_name != company_id else global_company_name_ko(company_id)
+
+
+__all__ = [
+    "CardNewsComposer",
+    "mark_near_duplicate_card_candidates",
+    "peer_company_label",
+]

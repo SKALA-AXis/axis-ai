@@ -53,7 +53,7 @@ AnalysisGraphRunner (= 1단계 분석 Pipeline 의 thin wrapper)
 AnalysisPackage
         │
         ▼
-CardNewsAgent
+CardNewsComposer
         │
         ▼
 카드뉴스 / 시사점 저장소
@@ -146,9 +146,9 @@ CardNewsAgent
   `raw_article_parse_results`, `raw_article_financial_metrics`,
   `raw_article_business_signals` 등을 함께 조회한다.
 - 조회한 데이터를 `AnalysisInputBundle`로 구성한다.
-- 다음 노드 순서로 child agent 를 호출한다 — `IntegrationAgent` → `ProfileAgent` →
-  (`AnalysisContextBuilder`) → `StrategicAnalyzer` → `ImplicationAgent`.
-- 최종 결과를 `AnalysisPackage`로 묶어 `CardNewsAgent`에 전달한다 (in-graph `card_writer`
+- 다음 노드 순서로 child component 를 호출한다 — `IntegrationAgent` → `ProfileContextLoader` →
+  `AnalysisContextBuilder` → `StrategicInsightAgent`.
+- 최종 결과를 `AnalysisPackage`로 묶어 `CardNewsComposer`에 전달한다 (in-graph `card_writer`
   노드).
 
 흐름 (외부 리뷰 R-1 반영 — issue_integrate 가 먼저):
@@ -158,10 +158,9 @@ AnalysisInputBundle
 → ① IntegrationAgent      → IntegratedIssue (main_company 확정)
 → ② ProfileContext Loader      → ProfileContext (Tier A snapshot + Tier B recent)
 → ③ AnalysisContextBuilder     → AnalysisContext (timeline / sector pulse / financial 등)
-→ ④ StrategicAnalyzer              → AnalysisResult (peer 관점)
-→ ⑤ ImplicationAgent           → ImplicationResult (SK AX 관점)
-→ ⑥ validate                   → ValidationReport (hard / soft + W5-1 metric)
-   ├ pass → ⑦ assemble → ⑧ card_writer → card_news INSERT (v2 schema)
+→ ④ StrategicInsightAgent       → AnalysisResult + ImplicationResult
+→ ⑤ validate                   → ValidationReport (hard / soft + W5-1 metric)
+   ├ pass → ⑥ assemble → ⑦ card_writer → card_news INSERT (v2 schema)
    └ fail → human_review (flag only)
 ```
 
@@ -225,7 +224,7 @@ AnalysisInputBundle
 - 해당 이슈가 단순 정보인지 전략적 변화 신호인지 판단
 
 현재 코드 기준:
-- `src/agents/strategic_analyzer.py`
+- `src/agents/strategic_insight_agent.py`
 
 주의:
 - StrategicAnalyzer는 원문/클러스터/문서 전체를 다시 읽지 않는다.
@@ -284,7 +283,7 @@ ProfileAgent 는 단순 context provider 가 아니라 **DART / IR / 공식 news
 - `src/agents/implication_agent.py`
 - `src/analysis/implication.py`
 
-### CardNewsAgent
+### CardNewsComposer
 
 `AnalysisPackage`를 사용자에게 보여주기 좋은 카드뉴스/API 응답 형태로 재가공한다.
 
@@ -303,7 +302,7 @@ ProfileAgent 는 단순 context provider 가 아니라 **DART / IR / 공식 news
 - 최종 저장은 기존 `card_news`, `card_news_articles`, `evidence_chain` 구조에 맞춘다.
 
 현재 코드 기준:
-- `src/agents/card_news_agent.py`
+- `src/composers/card_news_composer.py`
 
 ## 2단계 활용 Agent
 

@@ -13,6 +13,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from src.agents.prompts.integration_v1 import (
+    INTEGRATED_ISSUE_REQUIRED_FIELDS,
+    INTEGRATED_ISSUE_SCHEMA_VERSION,
+    INTEGRATION_PROMPT_VERSION,
+)
 from src.analysis.models import AnalysisInputBundle, NormalizedDataBundle
 from src.analysis.summarizer import SourceSummarizer
 from src.db.article_store import fetch_latest_trend_context, get_articles_by_ids
@@ -268,6 +273,13 @@ def _tag_integrated_issue(
 ) -> dict[str, Any]:
     if not isinstance(integrated_issue, dict):
         return integrated_issue
+    input_contract_validation = (
+        input_bundle.validate_news_contract() if input_bundle.is_news_cluster else {}
+    )
+    preprocessing_outputs = (
+        input_bundle.news_preprocessing_outputs if input_bundle.is_news_cluster else {}
+    )
+    source_article_ids = _source_article_ids_for_issue(integrated_issue, input_bundle)
     main_issue = (
         integrated_issue.get("main_issue")
         or integrated_issue.get("main_topic")
@@ -289,25 +301,511 @@ def _tag_integrated_issue(
         consolidated_facts = [
             {"fact": fact} for fact in _normalize_string_list(integrated_issue.get("fact_summary"))
         ]
-    return {
+    fact_summary = _fact_summary_from_issue(
+        integrated_issue,
+        consolidated_facts=consolidated_facts,
+        integrated_text=str(integrated_text),
+    )
+    representative_sources = integrated_issue.get("representative_sources")
+    if not isinstance(representative_sources, list) or not representative_sources:
+        representative_sources = input_bundle.sources[:5]
+    main_company = _first_non_empty(
+        integrated_issue.get("main_company"),
+        input_bundle.companies[0] if input_bundle.companies else "",
+    )
+    mentioned_peer_companies = _mentioned_peer_companies(
+        integrated_issue=integrated_issue,
+        input_bundle=input_bundle,
+        main_company=main_company,
+    )
+    cluster_event_type = _first_non_empty(
+        integrated_issue.get("cluster_event_type"),
+        input_bundle.event_type,
+        _classification(input_bundle).get("event_type"),
+        "general_update",
+    )
+    fact_basis = _normalized_fact_basis(
+        integrated_issue.get("fact_basis"),
+        consolidated_facts=consolidated_facts,
+        fact_summary=fact_summary,
+        source_article_ids=source_article_ids,
+    )
+    missing_or_uncertain_points = _missing_or_uncertain_points(
+        integrated_issue.get("missing_or_uncertain_points"),
+        fact_summary=fact_summary,
+        fact_basis=fact_basis,
+        source_article_ids=source_article_ids,
+    )
+    confidence = _integration_confidence(
+        integrated_issue,
+        fact_summary=fact_summary,
+        fact_basis=fact_basis,
+        missing_or_uncertain_points=missing_or_uncertain_points,
+        source_article_ids=source_article_ids,
+    )
+    headline = _first_non_empty(integrated_issue.get("headline"), main_issue)
+    one_line_summary = _first_non_empty(
+        integrated_issue.get("one_line_summary"),
+        fact_summary[0] if fact_summary else "",
+        main_issue,
+    )
+    integrated_article = _integrated_article_from_issue(
+        integrated_issue,
+        title=headline,
+        lead=one_line_summary,
+        body_summary_lines=fact_summary,
+        consolidated_facts=consolidated_facts,
+        fact_basis=fact_basis,
+        source_article_ids=source_article_ids,
+        representative_sources=representative_sources,
+    )
+    payload = {
         **integrated_issue,
+        "integration_schema_version": INTEGRATED_ISSUE_SCHEMA_VERSION,
+        "prompt_version": integrated_issue.get("prompt_version") or INTEGRATION_PROMPT_VERSION,
         "issue_component": issue_component,
         "integration_component": issue_component,
         "integration_input": "analysis_input_bundle",
         "bundle_id": input_bundle.bundle_id,
         "issue_source_type": input_bundle.source_type,
+        "main_company": main_company,
+        "mentioned_peer_companies": mentioned_peer_companies,
+        "cluster_event_type": cluster_event_type,
         "main_issue": str(main_issue),
+        "headline": headline,
+        "one_line_summary": one_line_summary,
+        "integrated_article": integrated_article,
         "integrated_text": str(integrated_text),
+        "fact_summary": fact_summary,
         "consolidated_facts": consolidated_facts,
+        "key_numbers": integrated_issue.get("key_numbers", []),
         "business_signals": integrated_issue.get("business_signals", []),
-        "missing_or_uncertain_points": integrated_issue.get("missing_or_uncertain_points", []),
+        "representative_sources": representative_sources,
+        "fact_basis": fact_basis,
+        "missing_or_uncertain_points": missing_or_uncertain_points,
+        "source_article_ids": source_article_ids,
+        "cluster_article_ids": _dedupe_ints(
+            [
+                *source_article_ids,
+                *[
+                    _safe_int(value)
+                    for value in _normalize_string_list(integrated_issue.get("cluster_article_ids"))
+                ],
+            ]
+        )
+        or source_article_ids,
+        "analyzed_article_ids": source_article_ids,
+        "summary_scope": integrated_issue.get("summary_scope") or "integrated_issue",
+        "confidence": confidence,
         "input_bundle_ref": {
             "bundle_id": input_bundle.bundle_id,
             "cluster_id": input_bundle.cluster_id,
             "source_type": input_bundle.source_type,
             "source_count": len(input_bundle.sources),
         },
+        "input_contract_validation": input_contract_validation,
+        "preprocessing_outputs": _compact_preprocessing_outputs(preprocessing_outputs),
+        "downstream_usage": {
+            "card_news": "title/summary_lines/fact_basis/source_article_ids",
+            "mixer": "integrated_issue+analysis+implication in evidence_payload",
+            "briefing": "card_news.evidence_payload.analysis_package.integrated_issue",
+        },
     }
+    payload["integration_validation"] = _integration_validation(payload)
+    return payload
+
+
+def _integrated_article_from_issue(
+    integrated_issue: dict[str, Any],
+    *,
+    title: str,
+    lead: str,
+    body_summary_lines: list[str],
+    consolidated_facts: list[dict[str, Any]],
+    fact_basis: list[dict[str, Any]],
+    source_article_ids: list[int],
+    representative_sources: list[dict[str, Any]],
+) -> dict[str, Any]:
+    raw = integrated_issue.get("integrated_article")
+    existing = raw if isinstance(raw, dict) else {}
+    key_facts = existing.get("key_facts")
+    if not isinstance(key_facts, list) or not key_facts:
+        key_facts = _key_facts_from_fact_basis(fact_basis) or _key_facts_from_consolidated_facts(
+            consolidated_facts
+        )
+    return {
+        **existing,
+        "title": _first_non_empty(existing.get("title"), title),
+        "lead": _first_non_empty(existing.get("lead"), lead),
+        "body_summary_lines": _normalize_summary_lines(existing.get("body_summary_lines"))
+        or body_summary_lines[:5],
+        "key_facts": key_facts,
+        "fact_basis": fact_basis,
+        "source_article_ids": source_article_ids,
+        "representative_sources": representative_sources[:5],
+    }
+
+
+def _key_facts_from_fact_basis(fact_basis: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+    for item in fact_basis[:8]:
+        fact_text = _first_non_empty(item.get("fact"), item.get("evidence_text"))
+        if not fact_text:
+            continue
+        facts.append(
+            {
+                "fact": fact_text,
+                "source_article_ids": _dedupe_ints(
+                    [
+                        _safe_int(value)
+                        for value in _normalize_string_list(item.get("source_article_ids"))
+                    ]
+                ),
+                "fact_ids": _normalize_string_list(item.get("fact_ids")),
+                "evidence_text": _first_non_empty(
+                    item.get("evidence_text"),
+                    *(_normalize_string_list(item.get("evidence_texts"))[:1]),
+                    fact_text,
+                ),
+                "fact_type": item.get("evidence_type") or "reported_fact",
+            }
+        )
+    return facts
+
+
+def _key_facts_from_consolidated_facts(
+    consolidated_facts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "fact": str(fact.get("fact") or "").strip(),
+            "source_article_ids": _dedupe_ints(
+                [
+                    _safe_int(value)
+                    for value in _normalize_string_list(fact.get("source_article_ids"))
+                ]
+            ),
+            "evidence_text": _first_non_empty(
+                fact.get("evidence_text"),
+                *(_normalize_string_list(fact.get("evidence_texts"))[:1]),
+                fact.get("fact"),
+            ),
+            "fact_type": fact.get("fact_type") or fact.get("source_type") or "reported_fact",
+        }
+        for fact in consolidated_facts[:8]
+        if str(fact.get("fact") or "").strip()
+    ]
+
+
+def _compact_preprocessing_outputs(value: dict[str, Any]) -> dict[str, Any]:
+    if not value:
+        return {}
+    return {
+        "raw_article_ids": value.get("raw_article_ids", []),
+        "representative_id": value.get("representative_id", 0),
+        "cluster_article_ids": value.get("cluster_article_ids", []),
+        "matched_companies": value.get("matched_companies", []),
+        "matched_sectors": value.get("matched_sectors", []),
+        "classification": value.get("classification", {}),
+        "business_signal_count": len(value.get("business_signals") or []),
+        "financial_metric_count": len(value.get("financial_metrics") or []),
+        "parser_output_count": len(value.get("parser_outputs") or []),
+    }
+
+
+def _source_article_ids_for_issue(
+    integrated_issue: dict[str, Any],
+    input_bundle: AnalysisInputBundle,
+) -> list[int]:
+    candidates: list[int] = []
+    for key in ("source_article_ids", "cluster_article_ids", "analyzed_article_ids"):
+        candidates.extend(
+            _safe_int(value) for value in _normalize_string_list(integrated_issue.get(key))
+        )
+    candidates.extend(_item_ids(input_bundle.items))
+    candidates.extend(
+        _safe_int(source.get("article_id"))
+        for source in input_bundle.sources
+        if isinstance(source, dict)
+    )
+    return _dedupe_ints(candidates)
+
+
+def _classification(input_bundle: AnalysisInputBundle) -> dict[str, Any]:
+    raw = input_bundle.metadata.get("classification")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _fact_summary_from_issue(
+    integrated_issue: dict[str, Any],
+    *,
+    consolidated_facts: list[dict[str, Any]],
+    integrated_text: str,
+) -> list[str]:
+    lines = _normalize_summary_lines(integrated_issue.get("fact_summary"))
+    if not lines:
+        lines = _normalize_summary_lines(integrated_issue.get("summary_lines"))
+    if not lines:
+        lines = [
+            str(fact.get("fact") or "").strip()
+            for fact in consolidated_facts[:3]
+            if str(fact.get("fact") or "").strip()
+        ]
+    if not lines and integrated_text:
+        lines = [integrated_text]
+    return _dedupe_strings(lines)[:3]
+
+
+def _normalize_summary_lines(value: Any) -> list[str]:
+    if isinstance(value, list | tuple):
+        lines: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                text = str(item.get("text") or item.get("summary") or item.get("fact") or "")
+            else:
+                text = str(item or "")
+            text = text.strip()
+            if text:
+                lines.append(text)
+        return lines
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _mentioned_peer_companies(
+    *,
+    integrated_issue: dict[str, Any],
+    input_bundle: AnalysisInputBundle,
+    main_company: str,
+) -> list[str]:
+    values = [
+        main_company,
+        *_normalize_string_list(integrated_issue.get("mentioned_peer_companies")),
+        *_normalize_string_list(integrated_issue.get("target_peer_companies")),
+        *input_bundle.companies,
+    ]
+    return _dedupe_strings(values)
+
+
+def _normalized_fact_basis(
+    raw_basis: Any,
+    *,
+    consolidated_facts: list[dict[str, Any]],
+    fact_summary: list[str],
+    source_article_ids: list[int],
+) -> list[dict[str, Any]]:
+    basis: list[dict[str, Any]] = []
+    for item in raw_basis if isinstance(raw_basis, list) else []:
+        if not isinstance(item, dict):
+            continue
+        source_ids = _dedupe_ints(
+            [_safe_int(value) for value in _normalize_string_list(item.get("source_article_ids"))]
+        )
+        fact_ids = _normalize_string_list(item.get("fact_ids"))
+        evidence_texts = _normalize_string_list(item.get("evidence_texts"))
+        evidence_text = _first_non_empty(
+            item.get("evidence_text"),
+            evidence_texts[0] if evidence_texts else "",
+            item.get("fact"),
+        )
+        line_index = _safe_int(item.get("summary_line_index") or item.get("summary_sentence_index"))
+        basis.append(
+            {
+                **item,
+                "summary_line_index": line_index or None,
+                "source_article_ids": source_ids,
+                "fact_ids": fact_ids,
+                "evidence_text": evidence_text,
+                "evidence_texts": evidence_texts or ([evidence_text] if evidence_text else []),
+                "evidence_type": item.get("evidence_type") or "reported_fact",
+            }
+        )
+
+    present_indexes = {
+        _safe_int(item.get("summary_line_index"))
+        for item in basis
+        if _safe_int(item.get("summary_line_index")) > 0
+        and _normalize_string_list(item.get("source_article_ids"))
+    }
+    for index, line in enumerate(fact_summary[:3], start=1):
+        if index in present_indexes:
+            continue
+        fact = _matching_fact(line, consolidated_facts, index=index)
+        source_ids = _dedupe_ints(
+            [
+                *[
+                    _safe_int(value)
+                    for value in _normalize_string_list(fact.get("source_article_ids"))
+                ],
+                *(source_article_ids[:1] if fact else []),
+            ]
+        )
+        evidence_texts = _normalize_string_list(fact.get("evidence_texts")) if fact else []
+        evidence_text = _first_non_empty(
+            evidence_texts[0] if evidence_texts else "",
+            fact.get("evidence_text") if fact else "",
+            fact.get("fact") if fact else "",
+            line if source_ids else "",
+        )
+        if not source_ids or not evidence_text:
+            continue
+        basis.append(
+            {
+                "summary_line_index": index,
+                "source_article_ids": source_ids,
+                "fact_ids": _normalize_string_list(fact.get("fact_id")) if fact else [],
+                "evidence_text": evidence_text,
+                "evidence_texts": evidence_texts or [evidence_text],
+                "evidence_type": fact.get("fact_type") if fact else "reported_fact",
+            }
+        )
+    return _dedupe_fact_basis(basis)
+
+
+def _matching_fact(
+    line: str,
+    facts: list[dict[str, Any]],
+    *,
+    index: int,
+) -> dict[str, Any]:
+    if not facts:
+        return {}
+    normalized_line = str(line or "").strip()
+    for fact in facts:
+        fact_text = str(fact.get("fact") or "").strip()
+        if fact_text and (fact_text in normalized_line or normalized_line in fact_text):
+            return fact
+    return facts[min(index - 1, len(facts) - 1)]
+
+
+def _dedupe_fact_basis(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[int, tuple[int, ...], str]] = set()
+    for item in items:
+        line_index = _safe_int(item.get("summary_line_index"))
+        source_ids = tuple(
+            _safe_int(value) for value in _normalize_string_list(item.get("source_article_ids"))
+        )
+        evidence_text = str(item.get("evidence_text") or "").strip()
+        key = (line_index, source_ids, evidence_text)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _missing_or_uncertain_points(
+    raw_points: Any,
+    *,
+    fact_summary: list[str],
+    fact_basis: list[dict[str, Any]],
+    source_article_ids: list[int],
+) -> list[dict[str, Any]]:
+    points = (
+        [item for item in raw_points if isinstance(item, dict)]
+        if isinstance(raw_points, list)
+        else []
+    )
+    missing_indexes = _missing_fact_basis_line_indexes(
+        fact_summary=fact_summary,
+        fact_basis=fact_basis,
+    )
+    for index in missing_indexes:
+        points.append(
+            {
+                "type": "missing_fact_basis",
+                "summary_line_index": index,
+                "description": "summary line has no source-backed fact_basis",
+            }
+        )
+    if not source_article_ids:
+        points.append(
+            {
+                "type": "missing_source_article_ids",
+                "description": "integrated issue has no raw article source ids",
+            }
+        )
+    return points
+
+
+def _integration_confidence(
+    integrated_issue: dict[str, Any],
+    *,
+    fact_summary: list[str],
+    fact_basis: list[dict[str, Any]],
+    missing_or_uncertain_points: list[dict[str, Any]],
+    source_article_ids: list[int],
+) -> float:
+    raw = _safe_float(integrated_issue.get("confidence"), 0.75)
+    if not fact_summary:
+        raw -= 0.3
+    if _missing_fact_basis_line_indexes(fact_summary=fact_summary, fact_basis=fact_basis):
+        raw -= 0.2
+    if not source_article_ids:
+        raw -= 0.2
+    if missing_or_uncertain_points:
+        raw -= min(0.15, 0.03 * len(missing_or_uncertain_points))
+    return round(max(0.0, min(raw, 1.0)), 2)
+
+
+def _integration_validation(payload: dict[str, Any]) -> dict[str, Any]:
+    missing_required = [
+        field
+        for field in INTEGRATED_ISSUE_REQUIRED_FIELDS
+        if _is_missing_required_value(payload.get(field))
+    ]
+    missing_fact_basis = _missing_fact_basis_line_indexes(
+        fact_summary=_normalize_summary_lines(payload.get("fact_summary")),
+        fact_basis=payload.get("fact_basis") or [],
+    )
+    warnings: list[str] = []
+    if missing_fact_basis:
+        warnings.append(
+            "fact_basis missing for summary_line_index: "
+            + ", ".join(str(index) for index in missing_fact_basis)
+        )
+    if missing_required:
+        warnings.append("required fields missing: " + ", ".join(missing_required))
+    return {
+        "pass": not missing_required and not missing_fact_basis,
+        "schema_version": INTEGRATED_ISSUE_SCHEMA_VERSION,
+        "prompt_version": payload.get("prompt_version"),
+        "missing_required_fields": missing_required,
+        "missing_fact_basis_line_indexes": missing_fact_basis,
+        "source_article_ids_count": len(_normalize_string_list(payload.get("source_article_ids"))),
+        "warnings": warnings,
+    }
+
+
+def _is_missing_required_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not bool(value.strip())
+    if isinstance(value, list | tuple | dict | set):
+        return not bool(value)
+    return False
+
+
+def _missing_fact_basis_line_indexes(
+    *,
+    fact_summary: list[str],
+    fact_basis: list[dict[str, Any]],
+) -> list[int]:
+    if len(fact_summary) != 3:
+        return []
+    expected = {1, 2, 3}
+    present = {
+        _safe_int(item.get("summary_line_index") or item.get("summary_sentence_index"))
+        for item in fact_basis
+        if isinstance(item, dict)
+        and _safe_int(item.get("summary_line_index") or item.get("summary_sentence_index"))
+        in expected
+        and _normalize_string_list(item.get("source_article_ids"))
+    }
+    return sorted(expected - present)
 
 
 def _consolidated_facts_from_bundle(input_bundle: AnalysisInputBundle) -> list[dict[str, Any]]:
@@ -638,6 +1136,13 @@ def _safe_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _safe_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 __all__ = [

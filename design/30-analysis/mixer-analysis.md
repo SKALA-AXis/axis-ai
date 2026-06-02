@@ -28,7 +28,7 @@
 
 - 카드 선택 자체 — frontend Mixer UI 가 사용자에게 위임
 - Insight 4-step 분석 — InsightCascadeAgent (별도)
-- 단일 카드 생성/재가공 — CardNewsAgent
+- 단일 카드 생성/재가공 — CardNewsComposer
 
 ## 4. 입력 스펙
 

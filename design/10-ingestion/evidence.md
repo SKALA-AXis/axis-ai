@@ -8,7 +8,7 @@
 | **Supervisor** | Ingestion |
 | **LangGraph node** | `evidence` (#7) |
 | **상태** | 🔴 미구현 — `EvidenceBuilder` 단일 구현체 없음. 카드 저장 경로의 source/evidence payload 일부와 `analysis_context_builder` 조회 로직만 존재 |
-| **Trigger** | CardNewsAgent 후 — card_news row 마다 1회 |
+| **Trigger** | CardNewsComposer 후 — card_news row 마다 1회 |
 
 ## 2. 책임
 
@@ -25,7 +25,7 @@
 
 ## 3. 책임 NOT
 
-- card 본문 생성 — CardNewsAgent (이전 노드)
+- card 본문 생성 — CardNewsComposer (이전 노드)
 - LLM 자유형 사실 추출 — 산식 + sub-service 의 deterministic 책임
 - Qdrant 인덱싱 — EmbedIndexService (다음 노드)
 

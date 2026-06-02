@@ -45,10 +45,9 @@ routing 가치가 낮고, deterministic pipeline 이 운영 예측·debugging·�
   ① issue_integrate         (LLM gpt-4o)  IntegratedIssue 생성
   ② profile_context         (DB only)     main_company 확정 후 ProfileContext 합성
   ③ build_analysis_context  (DB+Qdrant)   AnalysisContext (4-Layer, ≤4,000 token)
-  ④ strategic_analyze       (LLM gpt-4o)  AnalysisResult (peer 관점)
-  ⑤ implication             (LLM gpt-4o)  ImplicationResult v4.0/v5.0 (SK AX 관점)
-  ⑥ validate                (rule-based)  numeric/certainty/evidence + EvaluatorAgent
-       pass → ⑦ assemble → ⑧ card_writer → card_news INSERT (v2 schema)
+  ④ strategic_insight       (LLM gpt-4o)  AnalysisResult + ImplicationResult
+  ⑤ validate                (rule-based)  numeric/certainty/evidence + Evaluator
+       pass → ⑥ assemble → ⑦ card_writer → card_news INSERT (v2 schema)
        fail → human_review (flag only, 카드 생성 X)
 
                             ↓
@@ -88,7 +87,7 @@ ProfileContext
 
 - 글로벌 회사별 뉴스룸은 카드뉴스 생성 대상이다. Microsoft, AWS, Google, NVIDIA,
   OpenAI 같은 회사별 뉴스룸은 일반 이슈처럼
-  `IntegratedIssue → StrategicAnalyzer → ImplicationAgent → CardNewsAgent` 흐름을 탄다.
+  `IntegratedIssue → StrategicInsightAgent → CardNewsComposer` 흐름을 탄다.
 - SPRi / BCG 자료는 카드뉴스 생성 대상이 아니다. `ITTrendAgent`가 이 자료와 과거
   `TrendContext`를 함께 보고 글로벌·산업 흐름을 갱신한다.
 - 글로벌 회사별 뉴스룸의 `IntegratedIssue`와 `AnalysisResult`도 `ITTrendAgent`가
@@ -111,7 +110,7 @@ ProfileContext
   `raw_article_business_signals` 등을 함께 조회한다.
 - 조회한 데이터를 `AnalysisInputBundle`로 구성한다.
 - 하위 Agent를 조율한다.
-- 최종 결과를 `AnalysisPackage`로 묶어 `CardNewsAgent`에 전달한다.
+- 최종 결과를 `AnalysisPackage`로 묶어 `CardNewsComposer`에 전달한다.
 
 내부 흐름 (v3.2.1, LangGraph StateGraph 9-node):
 
@@ -120,10 +119,9 @@ AnalysisInputBundle
 → ① issue_integrate          IntegrationAgent → IntegratedIssue
 → ② profile_context          ProfileContextLoader.load → ProfileContext (Tier A snapshot + Tier B enrichment)
 → ③ build_analysis_context   AnalysisContextBuilder → AnalysisContext (6 layer, ≤4,000 token)
-→ ④ strategic_analyze        StrategicAnalyzer → AnalysisResult
-→ ⑤ implication              ImplicationAgent v4.0/v5.0 → ImplicationResult
-→ ⑥ validate                 _hard_validate + EvaluatorAgent → ValidationReport
-   ├ pass → ⑦ assemble → ⑧ card_writer → save_card_news (v2 schema) → END
+→ ④ strategic_insight        StrategicInsightAgent → AnalysisResult + ImplicationResult
+→ ⑤ validate                 _hard_validate + Evaluator → ValidationReport
+   ├ pass → ⑥ assemble → ⑦ card_writer → save_card_news (v2 schema) → END
    └ fail → human_review (flag only) → END
 ```
 
@@ -131,8 +129,8 @@ AnalysisInputBundle
 elapsed_ms 기록. 부분 실패는 다음과 같이 흡수:
 
 - ② ProfileContextLoader fail → legacy `ProfileAgent.build_context` fallback
-- ③ DB unavailable → 빈 `AnalysisContext` (ImplicationAgent 자동 v4.0 사용)
-- ⑤ LLM fail → `ImplicationGenerator` heuristic fallback (`is_valid_implication=true` 단순 출력)
+- ③ DB unavailable → 빈 `AnalysisContext` (StrategicInsightAgent 내부 implication fallback 사용)
+- ④ LLM fail → 내부 fallback (`is_valid_implication=true` 단순 출력)
 
 LangGraph `RetryPolicy / with_retry` 정식 도입은 별도 PR (`design/01-analysis-pipeline-implementation-plan.md`
 의 §3.1 retry 표는 미구현 — 현재는 `_logged_step` try/except + ImplicationAgent fallback 만).
@@ -245,7 +243,7 @@ ProfileAgent 는 단순 context provider 가 아니라 **원천 데이터 (DART 
 }
 ```
 
-## CardNewsAgent
+## CardNewsComposer
 
 `AnalysisPackage`를 사용자에게 보여주기 좋은 카드뉴스/API 응답 형태로 재가공한다.
 

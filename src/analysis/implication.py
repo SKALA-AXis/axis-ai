@@ -108,7 +108,7 @@ class ImplicationGenerator:
                 "used_context_layers": [],
                 "run_at": datetime.now(UTC).isoformat(),
             },
-            # Backward-compat flatten (CardNewsAgent / frontend 호환)
+            # Backward-compat flatten (CardNewsComposer / frontend 호환)
             "opportunities": [],
             "threats": [],
             "recommended_actions": [],

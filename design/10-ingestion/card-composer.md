@@ -1,18 +1,18 @@
-# CardNewsAgent — Design Plan
+# CardNewsComposer — Design Plan
 
 ## 메타
 
 | 항목 | 값 |
 |---|---|
-| 권장 이름 | `CardNewsAgent` |
+| 권장 이름 | `CardNewsComposer` |
 | 단계 | 1단계 데이터 수집·정제·통합·분석·시사점·카드뉴스 생성 |
-| 위치 | `src/agents/card_news_agent.py` |
+| 위치 | `src/composers/card_news_composer.py` |
 | 입력 | `AnalysisPackage` |
 | 출력 | 기존 카드뉴스 저장/API 구조 |
 
 ## 책임
 
-`CardNewsAgent`는 최종 결과를 카드뉴스 형태로 재가공하는 presentation Agent이다.
+`CardNewsComposer`는 최종 결과를 카드뉴스 형태로 재가공하는 presentation composer이다.
 원문 통합이나 전략 분석을 수행하지 않는다.
 
 주요 책임:
@@ -71,7 +71,7 @@ IntegratedIssue
 + validation
         │
         ▼
-CardNewsAgent
+CardNewsComposer
         │
         ├─ title
         ├─ summary_lines
@@ -126,7 +126,7 @@ card_news / card_news_articles / evidence_chain
 
 ## 설계 원칙
 
-1. `CardNewsAgent`는 `AnalysisPackage`를 재가공한다.
+1. `CardNewsComposer`는 `AnalysisPackage`를 재가공한다.
 2. raw item을 직접 분석하지 않는다.
 3. 카드뉴스용 3줄 요약은 여기서 만든다.
 4. 기존 DB schema와 API schema는 유지한다.

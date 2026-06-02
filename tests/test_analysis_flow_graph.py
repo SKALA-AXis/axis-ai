@@ -106,8 +106,8 @@ def _stub_deps() -> SupervisorDeps:
         sector_context={"selected_sector_ids": ["ax"]},
     )
 
-    card_news_agent = MagicMock()
-    card_news_agent.generate_from_analysis_package.return_value = {
+    card_news_composer = MagicMock()
+    card_news_composer.generate_from_analysis_package.return_value = {
         "id": "CN-20260520-0042",
         "company": "samsung_sds",
         "title": "삼성SDS, OpenAI 파트너십 확대",
@@ -120,7 +120,7 @@ def _stub_deps() -> SupervisorDeps:
         implication_agent=implication,
         context_builder=context_builder,
         profile_context_loader=profile_context_loader,
-        card_news_agent=card_news_agent,
+        card_news_composer=card_news_composer,
     )
 
 

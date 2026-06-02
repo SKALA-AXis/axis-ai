@@ -11,7 +11,6 @@ from typing import Any
 _EXPORT_MODULES = {
     "AnalysisGraphRunner": "src.agents.analysis_graph_runner",
     "BriefingGenerationAgent": "src.agents.briefing_generation_agent",
-    "CardNewsAgent": "src.agents.card_news_agent",
     "ChatbotAgent": "src.agents.chatbot_agent",
     "IntegrationAgent": "src.agents.integration_agent",
     "ImplicationAgent": "src.agents.implication_agent",
@@ -24,6 +23,7 @@ _EXPORT_MODULES = {
     "PeerProfileAgent": "src.agents.peer_profile_agent",
     "ReportAgent": "src.agents.report_agent",
     "StrategicAnalyzer": "src.agents.strategic_analyzer",
+    "StrategicInsightAgent": "src.agents.strategic_insight_agent",
 }
 
 __all__ = list(_EXPORT_MODULES)

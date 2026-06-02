@@ -63,7 +63,7 @@
 
 - 원문 크롤링 (`crawler/sources/spri.py`, `bcg.py`, `global_newsroom.py` 가 담당)
 - IntegratedIssue / AnalysisResult / ImplicationResult 생성 (Track A pipeline 이 담당)
-- 카드뉴스 생성 (CardNewsAgent 담당, 글로벌 newsroom 도 카드 만든 후 그 결과를 input 으로만 사용)
+- 카드뉴스 생성 (CardNewsComposer 담당, 글로벌 newsroom 도 카드 만든 후 그 결과를 input 으로만 사용)
 - Peer ↔ SK AX 양자 비교 (별도 `PeerComparisonAgent` design 으로 분리 — `design/30-analysis 2/peer-comparison.md` 참조)
 - 새 DB 테이블 / 새 SQL migration
 - 새 별도 alignment agent
@@ -832,7 +832,7 @@ def upsert_global_industry_trends(rows: list[dict]) -> int:
 
 `AnalysisResult.strategic_meaning` 이 trend_context 로 풍부해지므로 ImplicationResult 의 `skax_implication.opportunities/threats` 도 자동으로 trend-aware 가 됨. **변경 코드 0**.
 
-### 8.3 CardNewsAgent — 자연 흐름
+### 8.3 CardNewsComposer — 자연 흐름
 
 `ImplicationResult` 가 풍부해지므로 카드 implication 텍스트도 trend-aware. **변경 코드 0**.
 
@@ -1061,7 +1061,7 @@ spec:
 | `MixerAnalysisAgent` | 영향 없음. `card_news.evidence_payload` 가 풍부해지면 mixer 도 자동으로 trend-aware. |
 | `InsightAgent` (insight_cascade) | 영향 없음. card 단위로 작동. |
 | `ImplicationAgent` | 자연 흐름 — `AnalysisResult.strategic_meaning` 이 trend_context 로 풍부해지면 `SkaxImplication.opportunities/threats` 도 자동 풍부화. |
-| `CardNewsAgent` | 자연 흐름 — implication 텍스트가 trend-aware. |
+| `CardNewsComposer` | 자연 흐름 — implication 텍스트가 trend-aware. |
 | `ReportAgent` / `BriefingService` | 선택적 — 일일 브리핑에 trend top 3 표시 (추후 작업). |
 | `PeerComparisonAgent` (design 만 존재) | **별개 agent**. peer 1명 ↔ SK AX 양자 비교 (5-strategy label). 본 설계 (N peer 가 동일 trend 라인 따라가는지의 alignment) 와는 차원이 다름. 동시 운영 가능. |
 | `KeywordGraphAgent` | 영향 없음. |

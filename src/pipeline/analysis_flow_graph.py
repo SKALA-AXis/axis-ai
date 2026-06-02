@@ -9,7 +9,7 @@
 design/01-analysis-pipeline-implementation-plan.md §3.1 + 외부 리뷰 (2026-05-21) 반영:
 
     issue_integrate  →  profile_context  →  build_analysis_context
-        →  strategic_analyze  →  implication  →  validate
+        →  strategic_insight  →  validate
         → pass → assemble → card_writer → END
         → fail → human_review → END
 
@@ -35,24 +35,24 @@ from typing import Annotated, Any, Callable, TypedDict, cast
 from langgraph.graph import END, StateGraph
 from langgraph.types import RetryPolicy
 
-from src.agents.card_news_agent import CardNewsAgent
-from src.agents.evaluator_agent import EvaluatorAgent
 from src.agents.implication_agent import ImplicationAgent
 from src.agents.integration_agent import IntegrationAgent
 from src.agents.strategic_analyzer import StrategicAnalyzer
+from src.agents.strategic_insight_agent import StrategicInsightAgent
 from src.analysis.implication import ImplicationGenerator
 from src.analysis.models import (
     AnalysisContext,
     AnalysisInputBundle,
     AnalysisPackage,
-    AnalysisResult,
     EvaluationMetrics,
     ImplicationResult,
     NumericViolation,
     ProfileContext,
     ValidationReport,
 )
+from src.composers.card_news_composer import CardNewsComposer
 from src.db.article_store import save_card_news, save_pipeline_log
+from src.evaluators.evaluator import Evaluator
 from src.services.agent_output_validation import confidence_in_range
 from src.services.analysis_context_builder import AnalysisContextBuilder
 from src.services.profile_context_loader import ProfileContextLoader
@@ -159,10 +159,11 @@ class SupervisorDeps:
         issue_integrator: IntegrationAgent | None = None,
         analyzer: StrategicAnalyzer | None = None,
         implication_agent: ImplicationAgent | None = None,
-        evaluator: EvaluatorAgent | None = None,
+        strategic_insight_agent: StrategicInsightAgent | None = None,
+        evaluator: Evaluator | None = None,
         context_builder: AnalysisContextBuilder | None = None,
         profile_context_loader: ProfileContextLoader | None = None,
-        card_news_agent: CardNewsAgent | None = None,
+        card_news_composer: CardNewsComposer | None = None,
         implication_fallback: ImplicationGenerator | None = None,
     ) -> None:
         self.integration_agent = integration_agent or issue_integrator or IntegrationAgent()
@@ -171,10 +172,14 @@ class SupervisorDeps:
         self.implication_agent = implication_agent or ImplicationAgent(
             fallback=implication_fallback
         )
-        self.evaluator = evaluator or EvaluatorAgent()
+        self.strategic_insight_agent = strategic_insight_agent or StrategicInsightAgent(
+            analyzer=self.analyzer,
+            implication_agent=self.implication_agent,
+        )
+        self.evaluator = evaluator or Evaluator()
         self.context_builder = context_builder or AnalysisContextBuilder()
         self.profile_context_loader = profile_context_loader or ProfileContextLoader()
-        self.card_news_agent = card_news_agent or CardNewsAgent()
+        self.card_news_composer = card_news_composer or CardNewsComposer()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -224,31 +229,27 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         )
         return cast(SupervisorState, {**state, "analysis_context": ctx})
 
-    @_logged_step("strategic_analyze")
-    def strategic_analyze_node(state: SupervisorState) -> SupervisorState:
+    @_logged_step("strategic_insight")
+    def strategic_insight_node(state: SupervisorState) -> SupervisorState:
         bundle = state["input_bundle"]
         integrated = state.get("integrated_issue") or {}
         classification = state.get("classification") or bundle.metadata.get("classification") or {}
-        analysis = deps.analyzer.analyze(
+        insight = deps.strategic_insight_agent.generate(
+            input_bundle=bundle,
             integrated_issue=integrated,
             classification=classification,
             cluster_metadata=_cluster_metadata(bundle, state.get("profile_context")),
-        )
-        return cast(SupervisorState, {**state, "analysis": analysis})
-
-    @_logged_step("implication")
-    def implication_node(state: SupervisorState) -> SupervisorState:
-        bundle = state["input_bundle"]
-        analysis_dict = state.get("analysis") or {}
-        impl = deps.implication_agent.generate(
-            input_bundle=bundle,
-            integrated_issue=state.get("integrated_issue") or {},
-            analysis=AnalysisResult.from_dict(analysis_dict).to_dict(),
             profile_context=state.get("profile_context"),
             analysis_context=state.get("analysis_context"),
-            classification=state.get("classification"),
         )
-        return cast(SupervisorState, {**state, "implication": impl})
+        return cast(
+            SupervisorState,
+            {
+                **state,
+                "analysis": insight.get("analysis") or {},
+                "implication": insight.get("implication") or {},
+            },
+        )
 
     @_logged_step("validate")
     def validate_node(state: SupervisorState) -> SupervisorState:
@@ -314,7 +315,7 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         pkg = state.get("analysis_package")
         if pkg is None:
             return cast(SupervisorState, {**state, "card_news_id": None})
-        card = deps.card_news_agent.generate_from_analysis_package(
+        card = deps.card_news_composer.generate_from_analysis_package(
             pkg,
             classification=state.get("classification") or {},
         )
@@ -381,8 +382,7 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         "profile_context": profile_context_node,
         "build_analysis_context": build_analysis_context_node,
         "issue_integrate": issue_integrate_node,
-        "strategic_analyze": strategic_analyze_node,
-        "implication": implication_node,
+        "strategic_insight": strategic_insight_node,
         "validate": validate_node,
         "assemble": assemble_node,
         "card_writer": card_writer_node,
@@ -671,8 +671,7 @@ _NODE_RETRY_POLICIES: dict[str, RetryPolicy | None] = {
     "issue_integrate": RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2),
     "profile_context": None,  # DB only, v2→legacy fallback 으로 처리.
     "build_analysis_context": None,  # DB only, layer 별 graceful fallback.
-    "strategic_analyze": RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2),
-    "implication": RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2),
+    "strategic_insight": RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2),
     "validate": None,  # rule-based, retry 불필요.
     "assemble": None,
     "card_writer": RetryPolicy(initial_interval=0.5, backoff_factor=2.0, max_attempts=2),
@@ -684,7 +683,7 @@ def build_supervisor_graph(deps: SupervisorDeps | None = None) -> Any:
     """Compile 된 LangGraph StateGraph 반환.
 
     외부 리뷰 R-7 (2026-05-21) — LangGraph ``RetryPolicy`` 를 노드별로 적용한다.
-    LLM 호출 노드 (issue_integrate / strategic_analyze / implication / card_writer) 는
+    LLM 호출 노드 (issue_integrate / strategic_insight / card_writer) 는
     1초 시작, 2배 backoff, 최대 2 회 재시도. 다른 노드는 retry 없음 (graceful fallback 만).
     """
     deps = deps or SupervisorDeps()
@@ -701,9 +700,8 @@ def build_supervisor_graph(deps: SupervisorDeps | None = None) -> Any:
     g.set_entry_point("issue_integrate")
     g.add_edge("issue_integrate", "profile_context")
     g.add_edge("profile_context", "build_analysis_context")
-    g.add_edge("build_analysis_context", "strategic_analyze")
-    g.add_edge("strategic_analyze", "implication")
-    g.add_edge("implication", "validate")
+    g.add_edge("build_analysis_context", "strategic_insight")
+    g.add_edge("strategic_insight", "validate")
     g.add_conditional_edges(
         "validate",
         _route_after_validate,

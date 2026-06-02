@@ -1,4 +1,4 @@
-"""EvaluatorAgent — W5-1 rule-based 4 metric (+regression_drift Phase 2).
+"""Evaluator — W5-1 rule-based 4 metric (+regression_drift Phase 2).
 
 `validate` 노드 안에서 호출. LLM 사용 X. latency 추가 <50ms 목표.
 설계: design/01-analysis-pipeline-implementation-plan.md §3.6.1, §3.6.6.
@@ -73,7 +73,7 @@ _BUSINESS_KEYWORD_HINTS = (
 )
 
 
-class EvaluatorAgent:
+class Evaluator:
     """Implication 출력에 대한 rule-based 품질 metric 계산."""
 
     version = EVALUATOR_VERSION
@@ -303,4 +303,4 @@ def _safe_float(value: Any, default: float) -> float:
         return default
 
 
-__all__ = ["EVALUATOR_VERSION", "EvaluatorAgent"]
+__all__ = ["EVALUATOR_VERSION", "Evaluator"]

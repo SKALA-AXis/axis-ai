@@ -8,7 +8,7 @@
 1. ``LANGFUSE_*`` env 가 있으면 CallbackHandler 활성 / 없으면 silent no-op
    (개발 / CI / unit test 환경에서 부담 없이 동작).
 2. agent / phase / prompt_version metadata 를 호출별로 부착.
-3. CardNewsAgent 가 ``evidence_chain.provenance.langfuse_trace_id`` 에 적재할
+3. CardNewsComposer 가 ``evidence_chain.provenance.langfuse_trace_id`` 에 적재할
    수 있도록 handler 의 trace_id 노출.
 4. git_sha (Helm chart 가 ``AXIS_GIT_SHA`` env 로 주입) 를 module-level 캐시.
 
@@ -210,7 +210,7 @@ def tracing_config(
 
 
 def get_current_trace_id() -> str | None:
-    """직전 LLM 호출의 OTel trace_id 반환 (CardNewsAgent 가 provenance 적재 시 사용).
+    """직전 LLM 호출의 OTel trace_id 반환 (CardNewsComposer 가 provenance 적재 시 사용).
 
     v3+ 의 CallbackHandler 는 `last_trace_id` 속성으로 가장 최근 trace id 노출
     (OTel 16-byte hex). 호출 직후 read 가 안전 — multi-thread / async 동시 호출
