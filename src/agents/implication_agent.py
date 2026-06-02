@@ -390,14 +390,71 @@ def _shrink_profile(profile: Any) -> dict[str, Any]:
         "company_name",
         "company_name_ko",
         "peer_id",
+        "company_id",
+        "schema_version",
+        "one_liner",
+        "company_summary",
         "business_lines",
+        "business_areas",
         "core_capabilities",
         "recent_keywords",
+        "recent_changes",
         "recent_signals",
         "recent_financial",
+        "financial_summary",
+        "market_view",
+        "capability_evolution",
+        "cautions",
         "narrative",
     )
-    return {key: profile[key] for key in keys if key in profile}
+    return {key: _compact_profile_value(profile[key]) for key in keys if key in profile}
+
+
+def _compact_profile_value(value: Any) -> Any:
+    """Keep profile prompt payload useful without passing the whole snapshot verbatim."""
+    if isinstance(value, list):
+        compacted = [_compact_profile_value(item) for item in value[:5]]
+        return [item for item in compacted if item not in ({}, [], "", None)]
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        allowed_keys = {
+            "name",
+            "summary",
+            "core_capabilities",
+            "recent_direction",
+            "business_area",
+            "claim",
+            "signal_type",
+            "sentiment",
+            "metric",
+            "metric_name",
+            "metric_name_canonical",
+            "value",
+            "value_numeric",
+            "value_krwbn",
+            "unit",
+            "period",
+            "yoy_pct",
+            "company_total",
+            "segment_revenue",
+            "status",
+            "reason",
+            "positive_points",
+            "watch_points",
+            "valuation_notes",
+            "overall_change",
+            "changes",
+        }
+        for key, nested in value.items():
+            if key not in allowed_keys and len(out) >= 8:
+                continue
+            compacted = _compact_profile_value(nested)
+            if compacted not in ({}, [], "", None):
+                out[str(key)] = compacted
+        return out
+    if isinstance(value, str):
+        return value[:700]
+    return value
 
 
 def _json_dumps(value: Any) -> str:

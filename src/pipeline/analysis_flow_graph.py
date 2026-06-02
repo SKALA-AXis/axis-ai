@@ -39,7 +39,7 @@ from src.agents.analysis_agent import AnalysisAgent
 from src.agents.card_news_agent import CardNewsAgent
 from src.agents.evaluator_agent import EvaluatorAgent
 from src.agents.implication_agent import ImplicationAgent
-from src.agents.issue_integration_agent import IssueIntegrationAgent
+from src.agents.integration_agent import IntegrationAgent
 from src.analysis.implication import ImplicationGenerator
 from src.analysis.models import (
     AnalysisContext,
@@ -155,7 +155,8 @@ class SupervisorDeps:
     def __init__(
         self,
         *,
-        issue_integrator: IssueIntegrationAgent | None = None,
+        integration_agent: IntegrationAgent | None = None,
+        issue_integrator: IntegrationAgent | None = None,
         analyzer: AnalysisAgent | None = None,
         implication_agent: ImplicationAgent | None = None,
         evaluator: EvaluatorAgent | None = None,
@@ -164,7 +165,8 @@ class SupervisorDeps:
         card_news_agent: CardNewsAgent | None = None,
         implication_fallback: ImplicationGenerator | None = None,
     ) -> None:
-        self.issue_integrator = issue_integrator or IssueIntegrationAgent()
+        self.integration_agent = integration_agent or issue_integrator or IntegrationAgent()
+        self.issue_integrator = self.integration_agent
         self.analyzer = analyzer or AnalysisAgent()
         self.implication_agent = implication_agent or ImplicationAgent(
             fallback=implication_fallback

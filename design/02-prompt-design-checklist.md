@@ -170,7 +170,7 @@ raw reasoning_steps 가 더 길어도 압축할 것. 핵심 결정만 trail.
 | Agent | 필수 (Mandatory) | 권장 (Recommended) | 3-tier observability |
 |---|---|---|---|
 | **ClassificationService** | 1, 2, 3, 4, 6, 7, 14 | 9 | trace_id only |
-| **IssueIntegrationAgent** | 1, 2, 4, 6, 7, 11, 12, 14 | 16 | trace_id only |
+| **IntegrationAgent** | 1, 2, 4, 6, 7, 11, 12, 14 | 16 | trace_id only |
 | **AnalysisAgent** | 1, 2, 4, 6, 7, 10, 11, 13, 14 | 15, 17 | trace_id only |
 | **CardNewsAgent** | 1, 2, 3, 4, 6, 7, 11, 12, 13, 14 | 15, 17 | trace_id only |
 | **EvidenceBuilder** | 1, 4, 11, 12, 14 | — | trace_id only |

@@ -44,7 +44,7 @@ Raw / 정제 데이터 저장소
         │
         ▼
 AnalysisGraphRunner (= 1단계 분석 Pipeline 의 thin wrapper)
-        ├─ IssueIntegrationAgent
+        ├─ IntegrationAgent
         ├─ ProfileAgent
         ├─ AnalysisAgent
         └─ ImplicationAgent
@@ -137,7 +137,7 @@ CardNewsAgent
 
 > 명칭 (외부 리뷰 2026-05-21 R-rename) — multi-agent supervisor pattern 이 아닌
 > **LangGraph 기반 고정 순서 DAG pipeline** 의 thin wrapper. 기존 이름
-> `DataAnalysisSupervisorAgent` 는 backward-compat 으로 유지.
+> `AnalysisGraphRunner` 는 backward-compat 으로 유지.
 
 주요 책임:
 - Raw / 정제 데이터 저장소에서 분석 대상 데이터를 조회한다.
@@ -146,7 +146,7 @@ CardNewsAgent
   `raw_article_parse_results`, `raw_article_financial_metrics`,
   `raw_article_business_signals` 등을 함께 조회한다.
 - 조회한 데이터를 `AnalysisInputBundle`로 구성한다.
-- 다음 노드 순서로 child agent 를 호출한다 — `IssueIntegrationAgent` → `ProfileAgent` →
+- 다음 노드 순서로 child agent 를 호출한다 — `IntegrationAgent` → `ProfileAgent` →
   (`AnalysisContextBuilder`) → `AnalysisAgent` → `ImplicationAgent`.
 - 최종 결과를 `AnalysisPackage`로 묶어 `CardNewsAgent`에 전달한다 (in-graph `card_writer`
   노드).
@@ -155,7 +155,7 @@ CardNewsAgent
 
 ```text
 AnalysisInputBundle
-→ ① IssueIntegrationAgent      → IntegratedIssue (main_company 확정)
+→ ① IntegrationAgent      → IntegratedIssue (main_company 확정)
 → ② ProfileContext Loader      → ProfileContext (Tier A snapshot + Tier B recent)
 → ③ AnalysisContextBuilder     → AnalysisContext (timeline / sector pulse / financial 등)
 → ④ AnalysisAgent              → AnalysisResult (peer 관점)
@@ -165,7 +165,7 @@ AnalysisInputBundle
    └ fail → human_review (flag only)
 ```
 
-### IssueIntegrationAgent
+### IntegrationAgent
 
 원문/클러스터/문서/파싱 결과를 하나의 통합 이슈로 정리한다.
 
@@ -204,7 +204,7 @@ AnalysisInputBundle
 ```
 
 현재 코드 기준:
-- `src/agents/issue_integration_agent.py`
+- `src/agents/integration_agent.py`
 - `src/analysis/summarizer.py`
 
 ### AnalysisAgent
@@ -230,7 +230,7 @@ AnalysisInputBundle
 
 주의:
 - AnalysisAgent는 원문/클러스터/문서 전체를 다시 읽지 않는다.
-- 원문 기반 fact 통합은 IssueIntegrationAgent 책임이다.
+- 원문 기반 fact 통합은 IntegrationAgent 책임이다.
 - AnalysisAgent는 IntegratedIssue 안의 `integrated_text`, `consolidated_facts`,
   `key_numbers`, `business_signals`, `fact_basis`를 근거로 해석한다.
 

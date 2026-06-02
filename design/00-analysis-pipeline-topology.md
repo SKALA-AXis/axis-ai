@@ -11,7 +11,7 @@ LLM 이 다음 worker 를 동적으로 선택하는 *multi-agent supervisor patt
 
 | 기존 명칭 (backward-compat) | 권장 명칭 (외부 리뷰 R-rename) |
 |---|---|
-| `DataAnalysisSupervisorAgent` | `AnalysisGraphRunner` |
+| `AnalysisGraphRunner` | `AnalysisGraphRunner` |
 | `SupervisorState` | `AnalysisFlowState` |
 | `SupervisorDeps` | `AnalysisFlowDeps` |
 | `build_supervisor_graph()` | `build_analysis_flow_graph()` |
@@ -97,10 +97,10 @@ ProfileContext
 - `AnalysisAgent`는 이슈 분석 시 필요하면 `TrendContext`를 참고할 수 있다.
 - 카드뉴스 화면 결과나 글로벌 뉴스룸 원문을 `TrendContext` 입력으로 직접 쓰지는 않는다.
 
-## DataAnalysisSupervisorAgent
+## AnalysisGraphRunner
 
-`DataAnalysisSupervisorAgent`는 1단계 분석 흐름을 조율하는 Supervisor Agent이다.
-직접 통합, 분석, 시사점을 모두 수행하는 Agent가 아니라 하위 Agent들의 실행 순서와
+`AnalysisGraphRunner`는 1단계 분석 흐름을 조율하는 analysis flow runner다.
+직접 통합, 분석, 시사점을 모두 수행하는 Agent가 아니라 고정 DAG 노드들의 실행 순서와
 데이터 전달을 관리한다.
 
 주요 책임:
@@ -117,7 +117,7 @@ ProfileContext
 
 ```text
 AnalysisInputBundle
-→ ① issue_integrate          IssueIntegrationAgent → IntegratedIssue
+→ ① issue_integrate          IntegrationAgent → IntegratedIssue
 → ② profile_context          ProfileContextLoader.load → ProfileContext (Tier A snapshot + Tier B enrichment)
 → ③ build_analysis_context   AnalysisContextBuilder → AnalysisContext (6 layer, ≤4,000 token)
 → ④ strategic_analyze        AnalysisAgent (StrategicAnalyzer) → AnalysisResult
@@ -137,7 +137,7 @@ elapsed_ms 기록. 부분 실패는 다음과 같이 흡수:
 LangGraph `RetryPolicy / with_retry` 정식 도입은 별도 PR (`design/01-analysis-pipeline-implementation-plan.md`
 의 §3.1 retry 표는 미구현 — 현재는 `_logged_step` try/except + ImplicationAgent fallback 만).
 
-## IssueIntegrationAgent
+## IntegrationAgent
 
 기존 요약 Agent의 역할을 대체하는 이슈 통합 Agent이다.
 
@@ -188,7 +188,7 @@ LangGraph `RetryPolicy / with_retry` 정식 도입은 별도 PR (`design/01-anal
 
 주의:
 - 원문/클러스터/문서 전체를 다시 읽지 않는다.
-- 원문 기반 fact 통합은 IssueIntegrationAgent 책임이다.
+- 원문 기반 fact 통합은 IntegrationAgent 책임이다.
 - AnalysisAgent는 IntegratedIssue 안의 `integrated_text`, `consolidated_facts`,
   `key_numbers`, `business_signals`, `fact_basis`를 근거로 해석한다.
 - `TrendContext`가 있으면 글로벌/산업 배경으로만 참고하며, IntegratedIssue에 없는
@@ -266,8 +266,8 @@ ProfileAgent 는 단순 context provider 가 아니라 **원천 데이터 (DART 
 
 2단계 활용 흐름을 조율하는 Supervisor이다.
 
-DataAnalysisSupervisorAgent와의 차이:
-- `DataAnalysisSupervisorAgent`는 하나의 이슈/클러스터/문서를 분석해 카드뉴스를 만드는 1단계 Supervisor이다.
+AnalysisGraphRunner와의 차이:
+- `AnalysisGraphRunner`는 하나의 이슈/클러스터/문서를 분석해 카드뉴스를 만드는 1단계 Supervisor이다.
 - `DataUsageOrchestrator`는 이미 저장된 결과를 활용해 리포트, 인사이트, 챗봇, 키워드 그래프를 만드는 2단계 Supervisor이다.
 
 지원 Agent:
