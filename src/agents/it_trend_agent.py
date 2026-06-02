@@ -2,7 +2,7 @@
 
 design: ``axis-ai/design/30-analysis/global-trends.md``.
 
-ITTrendAgent 는 카드뉴스 생성 에이전트가 아니다. 글로벌 6 사 (NVIDIA / Apple /
+ITTrendAgent는 글로벌 6 사 (NVIDIA / Apple /
 Microsoft / Google / Amazon / Meta) 뉴스룸 + SPRi / BCG 리서치 자료를 기반으로
 글로벌 IT 트렌드를 추출하고, AX / peer 4사의 동향이 그 트렌드와 같은 결로
 가는지 alignment 를 계산한다.
@@ -355,14 +355,14 @@ class ITTrendAgent:
         per_keyword_title: dict[str, str] = synthesis.get("per_keyword_title", {}) or {}
         per_keyword_summary: dict[str, str] = synthesis.get("per_keyword_summary", {}) or {}
         per_keyword_implication: dict[str, str] = synthesis.get("per_keyword_implication", {}) or {}
-        confidence: float = float(synthesis.get("confidence", 0.6) or 0.6)
+        llm_batch_confidence: float = float(synthesis.get("confidence", 0.6) or 0.6)
         reasoning_steps.append(
             {
                 "step_idx": 5,
                 "phase": "synthesis",
                 "question": "SK AX 가 다음 1Q / 6M / 1Y 에 어떤 자세를 가져야 하는가?",
                 "answer": final_one_liner or "(synthesis empty)",
-                "confidence": confidence,
+                "confidence": llm_batch_confidence,
             }
         )
 
@@ -379,7 +379,7 @@ class ITTrendAgent:
             per_keyword_title=per_keyword_title,
             per_keyword_summary=per_keyword_summary,
             per_keyword_implication=per_keyword_implication,
-            confidence=confidence,
+            llm_batch_confidence=llm_batch_confidence,
             sk_ax_implication=sk_ax_implication,
             final_one_liner=final_one_liner,
         )
@@ -396,7 +396,7 @@ class ITTrendAgent:
             except Exception:
                 log.exception("ITTrendAgent | invalidate_trend_context_cache 실패 (best-effort)")
 
-        # 8) TrendContext shape — AnalysisAgent 가 직접 참조할 수 있는 DTO.
+        # 8) TrendContext shape — StrategicAnalyzer 가 직접 참조할 수 있는 DTO.
         trend_context = _build_trend_context(
             period=trend_input.period,
             detections=detections,
@@ -434,7 +434,7 @@ class ITTrendAgent:
             "signals": trend_context.signals,
             "sources": trend_context.sources,
             "reference_issue_ids": _reference_issue_ids(trend_input.reference_issue_results),
-            "confidence": confidence,
+            "confidence": llm_batch_confidence,
             "warning": warning,
             "validation": {
                 "pass": persisted > 0,
@@ -943,7 +943,7 @@ def _build_persistence_rows(
     per_keyword_title: dict[str, str],
     per_keyword_summary: dict[str, str],
     per_keyword_implication: dict[str, str],
-    confidence: float,
+    llm_batch_confidence: float,
     sk_ax_implication: str,
     final_one_liner: str,
 ) -> list[dict[str, Any]]:
@@ -957,6 +957,14 @@ def _build_persistence_rows(
         evidence_card_ids = [cid for p in peers for cid in p.get("evidence_card_ids", []) if cid]
         evidence_raw_ids = _evidence_raw_ids(global_rows, keyword)
         impact_score = _impact_score_for_keyword(det, peers)
+        keyword_confidence = _trend_confidence_for_keyword(
+            det=det,
+            peers=peers,
+            evidence_raw_ids=evidence_raw_ids,
+            has_llm_title=bool(per_keyword_title.get(keyword)),
+            has_llm_summary=bool(per_keyword_summary.get(keyword)),
+            llm_batch_confidence=llm_batch_confidence,
+        )
         rows.append(
             {
                 "source_analysis_id": _make_source_analysis_id(batch_id, idx, keyword),
@@ -971,7 +979,7 @@ def _build_persistence_rows(
                 "summary": per_keyword_summary.get(keyword) or _fallback_summary(keyword, det),
                 "mention_count": int(det.get("mention_count", 0) or 0),
                 "impact_score": impact_score,
-                "confidence": confidence,
+                "confidence": keyword_confidence,
                 "related_peer_ids": aligned_peers,
                 "related_card_ids": evidence_card_ids,
                 "source_raw_article_ids": evidence_raw_ids,
@@ -983,6 +991,14 @@ def _build_persistence_rows(
                     "leading_companies": det.get("leading_companies", []),
                     "intensity": det.get("intensity"),
                     "frequency_delta_pct": det.get("frequency_delta_pct"),
+                    "confidence_factors": {
+                        "raw_evidence_count": len(evidence_raw_ids),
+                        "leading_company_count": len(det.get("leading_companies", []) or []),
+                        "peer_evidence_count": sum(1 for p in peers if p.get("evidence_card_ids")),
+                        "has_llm_title": bool(per_keyword_title.get(keyword)),
+                        "has_llm_summary": bool(per_keyword_summary.get(keyword)),
+                        "llm_batch_confidence": llm_batch_confidence,
+                    },
                     "snapshots_summary": [
                         {"company_id": s["company_id"], "card_count": s["card_count"]}
                         for s in snapshots
@@ -993,6 +1009,46 @@ def _build_persistence_rows(
             }
         )
     return rows
+
+
+def _trend_confidence_for_keyword(
+    *,
+    det: dict[str, Any],
+    peers: list[dict[str, Any]],
+    evidence_raw_ids: list[int],
+    has_llm_title: bool,
+    has_llm_summary: bool,
+    llm_batch_confidence: float,
+) -> float:
+    """Keyword-level confidence based on evidence coverage, not LLM self-score alone."""
+    mention_count = float(det.get("mention_count", 0) or 0)
+    mention_score = min(mention_count / 20.0, 1.0)
+
+    raw_evidence_score = min(len(evidence_raw_ids) / 5.0, 1.0)
+    leading_company_score = min(len(det.get("leading_companies", []) or []) / 3.0, 1.0)
+
+    if peers:
+        peer_evidence_count = sum(1 for p in peers if p.get("evidence_card_ids"))
+        aligned_count = sum(1 for p in peers if p.get("alignment_type") == "aligned")
+        peer_score = 0.5 * (peer_evidence_count / len(peers)) + 0.5 * (aligned_count / len(peers))
+    else:
+        peer_score = 0.0
+
+    synthesis_score = 0.0
+    if has_llm_title:
+        synthesis_score += 0.5
+    if has_llm_summary:
+        synthesis_score += 0.5
+
+    llm_score = _confidence_in_range(llm_batch_confidence)
+    score = (
+        0.30 * mention_score
+        + 0.25 * raw_evidence_score
+        + 0.20 * leading_company_score
+        + 0.15 * peer_score
+        + 0.10 * synthesis_score * llm_score
+    )
+    return round(max(0.0, min(score, 1.0)), 2)
 
 
 def _evidence_raw_ids(global_rows: list[dict[str, Any]], keyword: str) -> list[int]:

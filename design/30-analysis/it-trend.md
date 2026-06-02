@@ -73,10 +73,40 @@
 | `TrendContext` | 이후 `StrategicAnalyzer` 가 참고할 글로벌 IT 트렌드 context |
 | `global_industry_trends` | trend keyword 단위로 저장되는 read model |
 
+### 6.1 Result Schema — `TrendContext`
+
+`TrendContext` 는 분석 agent 가 바로 참고할 수 있도록 글로벌 IT 트렌드 흐름을 압축한
+context 객체다. 여러 문서의 원문을 그대로 담지 않고, trend summary / trend line /
+signal / source 중심으로 정리한다.
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `period` | `string \| null` | 분석 기간. 예: `last_30d`, `2026-05` |
+| `trend_summary` | `string` | 전체 트렌드를 1~2문장으로 요약한 문장 |
+| `trend_lines` | `string[]` | 주요 trend 흐름을 문장 단위로 정리한 목록 |
+| `signals` | `object[]` | trend keyword 별 구조화된 신호 목록 |
+| `source_groups` | `string[]` | 사용된 source 묶음. 예: `SPRi`, `BCG`, `global_newsroom` |
+| `sources` | `object[]` | 근거 문서의 최소 메타데이터 목록 |
+| `updated_at` | `string` | context 생성 또는 갱신 시각 |
+| `validation` | `object` | 결과 유효성 정보 |
+| `metadata` | `object` | row count, trend count 등 부가 정보 |
+
+`signals[]` 의 구조:
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `signal` | `string` | trend keyword 또는 trend name |
+| `intensity` | `string` | trend 강도. 예: `weak`, `moderate`, `strong` |
+| `mention_count` | `number` | 분석 대상 문서에서 등장한 횟수 |
+| `source_count` | `number` | 해당 trend 가 등장한 source 수 |
+| `leading_sources` | `string[]` | 해당 trend 를 주로 언급한 source 목록 |
+| `evidence_source_ids` | `string[]` | 근거 문서 id 목록 |
+
 `TrendContext` 예:
 
 ```json
 {
+  "period": "last_30d",
   "trend_summary": "최근 글로벌 IT 흐름은 agentic AI, AI infrastructure, cloud 최적화로 요약된다.",
   "trend_lines": [
     "agentic AI 관련 발표가 글로벌 뉴스룸과 리서치 자료에서 반복적으로 등장한다.",
@@ -87,15 +117,25 @@
       "signal": "agentic ai",
       "intensity": "strong",
       "mention_count": 18,
-      "leading_sources": ["BCG", "Microsoft", "Google"]
+      "source_count": 3,
+      "leading_sources": ["BCG", "Microsoft", "Google"],
+      "evidence_source_ids": ["raw-101", "raw-228"]
     }
   ],
+  "source_groups": ["SPRi", "BCG", "global_newsroom"],
   "sources": [],
+  "updated_at": "2026-06-02T09:00:00+09:00",
   "validation": {
     "pass": true
+  },
+  "metadata": {
+    "row_count": 42,
+    "trend_count": 8
   }
 }
 ```
+
+### 6.2 Result Schema — `global_industry_trends`
 
 `global_industry_trends` 는 1 trend keyword 를 1 row 로 저장한다.
 
@@ -112,6 +152,58 @@
 | `confidence` | 결과 신뢰도 |
 | `source_raw_article_ids` | 근거 raw article id |
 | `payload` | trend line, source breakdown, prompt version 등 상세 JSON |
+
+`payload` 의 기본 구조:
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `trend_lines` | `string[]` | 해당 keyword 를 설명하는 trend line 목록 |
+| `source_breakdown` | `object[]` | source 별 mention count / evidence 요약 |
+| `evidence` | `object[]` | title, key sentence 등 최소 근거 |
+| `intensity` | `string` | trend 강도 |
+| `prompt_version` | `string` | LLM summary prompt 버전 |
+| `batch_id` | `string` | 실행 batch id |
+
+저장 row 예:
+
+```json
+{
+  "trend_date": "2026-06-02",
+  "industry": "ai",
+  "region": "global",
+  "keyword": "agentic ai",
+  "keyword_category": "ai_tech",
+  "title": "Agentic AI 확산",
+  "summary": "글로벌 뉴스룸과 리서치 자료에서 agentic AI 기반 업무 자동화 흐름이 반복적으로 관측된다.",
+  "mention_count": 18,
+  "confidence": 0.82,
+  "source_raw_article_ids": [101, 228],
+  "payload": {
+    "trend_lines": [
+      "agentic AI는 enterprise workflow 자동화 흐름과 함께 반복적으로 언급된다."
+    ],
+    "source_breakdown": [
+      {
+        "source": "BCG",
+        "mention_count": 4
+      },
+      {
+        "source": "global_newsroom",
+        "mention_count": 14
+      }
+    ],
+    "evidence": [
+      {
+        "title": "AI agents reshape enterprise workflows",
+        "key_sentences": ["..."]
+      }
+    ],
+    "intensity": "strong",
+    "prompt_version": "it-trend-v1",
+    "batch_id": "it-trend-20260602-090000"
+  }
+}
+```
 
 ## 7. 처리 흐름
 
