@@ -170,7 +170,7 @@ _trend_context_failure_logged = False
 def _safe_trend_context() -> dict[str, Any]:
     """`fetch_latest_trend_context` 의 graceful wrapper.
 
-    DB 실패 / table 미생성 시 빈 dict 반환 — analyzer.py 가 already-empty-safe.
+    DB 실패 / table 미생성 시 빈 dict 반환 — StrategicAnalyzer 가 already-empty-safe.
     첫 실패만 warning 으로 emit (hot path 라 반복 로그 회피).
     design: global-trends.md §5.2.
     """
@@ -640,12 +640,8 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
-# Backward-compatible class name. New code should use IntegrationAgent.
-IssueIntegrationAgent = IntegrationAgent
-
 __all__ = [
     "IntegrationAgent",
-    "IssueIntegrationAgent",
     "analysis_input_bundle_from_articles",
     "analysis_input_bundle_from_bundle",
 ]

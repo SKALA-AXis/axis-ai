@@ -1,6 +1,5 @@
-"""Analysis pipeline components."""
+"""Analysis pipeline DTOs and helper components."""
 
-from src.analysis.analyzer import StrategicAnalyzer
 from src.analysis.implication import ImplicationGenerator
 from src.analysis.models import (
     AnalysisInputBundle,
@@ -26,6 +25,5 @@ __all__ = [
     "NormalizedDataBundle",
     "ProfileContext",
     "SourceSummarizer",
-    "StrategicAnalyzer",
     "SummaryResult",
 ]

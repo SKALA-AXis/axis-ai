@@ -14,7 +14,7 @@
 | 새 agent 만들어야 하나? | **❌ 만들지 않는다.** 기존 `ITTrendAgent` 의 `generate()` 만 채운다. |
 | 새 DB 테이블 만들어야 하나? | **❌ 만들지 않는다.** `global_industry_trends` (DDL 완비, V29) 그대로 사용. ⚠ `analysis_ledger` 는 V30 line 694 에서 DROP — 직접 INSERT 경로 (§7). |
 | Peer alignment 결과를 어디에 담나? | `global_industry_trends.payload` JSONB 의 `peer_alignment` 키 (1행 × keyword 안에 4 peer + SK AX 모두 포함). |
-| 다른 agent 와의 통합 방법 | `analyzer.py` 가 이미 `cluster_metadata["trend_context"]` 를 prompt 에 반영 — 채워주는 **wire-up 만** 추가. |
+| 다른 agent 와의 통합 방법 | `strategic_analyzer.py` 가 이미 `cluster_metadata["trend_context"]` 를 prompt 에 반영 — 채워주는 **wire-up 만** 추가. |
 | 새 API endpoint 필요한가? | `POST /global/trends/run` schema 가 `src/api/global_trends_schemas 2.py` 에 이미 정의. 파일명 정리 + router 등록만 필요. |
 | 새 cronjob 필요한가? | 1 개 — `axis-cron-global-trend` (매일 새벽 02:30 KST). |
 
@@ -57,7 +57,7 @@
 5. **Forecast** (LLM, P4): 1Q/6M/1Y horizon 별 narrative + recommended_response
 6. **Synthesis** (LLM, P5): final_one_liner + sk_ax_implication
 7. **Persistence**: `global_industry_trends` 에 **직접 upsert** (1 keyword = 1 row, `source_analysis_id` per-keyword 유니크). ⚠ `analysis_ledger` 경로는 V30 에서 DROP — 사용 불가.
-8. **TrendContext upcast**: 결과를 `TrendContext` DTO 로도 반환해서 `AnalysisAgent` 가 prompt context 로 사용
+8. **TrendContext upcast**: 결과를 `TrendContext` DTO 로도 반환해서 `StrategicAnalyzer` 가 prompt context 로 사용
 
 ### 책임 NOT
 
@@ -82,7 +82,7 @@
 | `_TREND_SOURCE_NAMES = {"spri", "bcg"}` | it_trend_agent.py:20 | 그대로 (research source 분류용). |
 | `_GLOBAL_NEWSROOM_SOURCE_TYPES = {"global_newsroom","company_newsroom"}` | it_trend_agent.py:21 | ⚠ **실제 DB 의 raw_articles.source_type 은 `'official'`** (e.g. `nvidia_official`, `meta_official`). 즉 현재 상수는 raw 매칭 안 됨. **확장 또는 우회**. §4.1 참조. |
 | `DataUsageOrchestrator.run` 의 `it_trend` 라우팅 | [data_usage_orchestrator.py:58-67](../../src/pipeline/data_usage_orchestrator.py) | 그대로. peer_alignment 도 같은 task 안에서 자동 처리. |
-| `analyzer.py` prompt 의 `trend_context` 변수 | [src/analysis/analyzer.py:41,60,238,242](../../src/analysis/analyzer.py) | 그대로. ITTrendAgent 결과만 `cluster_metadata["trend_context"]` 로 wire-up. |
+| `strategic_analyzer.py` prompt 의 `trend_context` 변수 | [src/agents/strategic_analyzer.py:41,60,238,242](../../src/agents/strategic_analyzer.py) | 그대로. ITTrendAgent 결과만 `cluster_metadata["trend_context"]` 로 wire-up. |
 | `analysis_flow_graph.py` 의 `bundle.metadata["trend_context"]` 읽기 | [src/pipeline/analysis_flow_graph.py:635](../../src/pipeline/analysis_flow_graph.py) | 그대로. |
 | ~~`analysis_ledger` writeback decorator~~ | `src/middleware/analysis_ledger.py` (`@with_ledger_writeback`) | ⚠ **사용 불가** — `analysis_ledger` 테이블이 V30 line 694 에서 `DROP TABLE`. 데코레이터는 silent fail 상태. ITTrendAgent 는 `global_industry_trends` 에 **직접 INSERT** (§7 참조). |
 | `GlobalTrendsRequest/Response` schema | **source-of-truth = [`axis-infra/api/openapi.yaml` `#/components/schemas/GlobalTrendsRequest` / `GlobalTrendsResult`](../../../axis-infra/api/openapi.yaml)** (git tracked). | ⚠ axis-ai 의 `src/api/global_trends_schemas.py` (정본) 은 **존재하지 않음**. ` 2` suffix Finder 중복본은 untracked (`?? src/api/global_trends_schemas 2.py`) 라 다른 팀원 clone 에는 아예 없음. S1 은 **openapi.yaml 의 schema 정의를 보고 Pydantic class 신규 작성** (단순 rename/복제 아님). |
@@ -343,7 +343,7 @@ def fetch_global_trend_inputs(window_days: int = 30) -> list[dict[str, Any]]:
 | `reasoning_steps` | 전 phase | `payload.reasoning_steps` |
 | `confidence` | LLM | `global_industry_trends.confidence` |
 
-### 5.2 부산물 — TrendContext (AnalysisAgent 용)
+### 5.2 부산물 — TrendContext (StrategicAnalyzer 용)
 
 ITTrendAgent.generate 의 반환값은 그대로 `TrendContext` shape. wire-up 의 **구체적 inject 지점은 2곳**:
 
@@ -365,8 +365,8 @@ _trend_cache_lock = threading.Lock()
 def fetch_latest_trend_context(within_days: int = 7) -> dict[str, Any]:
     """global_industry_trends 의 최근 N일 row 를 TrendContext shape 로 aggregate.
     
-    AnalysisAgent prompt 에 들어갈 글로벌 배경 정보. trend 가 없으면 빈 dict 반환
-    (analyzer.py 가 already-empty-safe). process-level TTL 캐시 60초.
+    StrategicAnalyzer prompt 에 들어갈 글로벌 배경 정보. trend 가 없으면 빈 dict 반환
+    (strategic_analyzer.py 가 already-empty-safe). process-level TTL 캐시 60초.
     """
     now = time.monotonic()
     with _trend_cache_lock:
@@ -451,8 +451,8 @@ return AnalysisInputBundle(
 
 1. `IntegrationAgent` 가 `AnalysisInputBundle` 만들 때 자동으로 `metadata["trend_context"]` 채워짐.
 2. `analysis_flow_graph.py:631-653` 의 `_cluster_metadata(bundle, profile_context)` 가 그 `trend_context` 를 자동으로 cluster_metadata 에 포함.
-3. `analyzer.py:227-238` 의 `_cluster_metadata_for_prompt(cluster_metadata)` 가 prompt 변수로 자동 추출.
-4. `_PEER_NEWS_ANALYSIS_PROMPT` (analyzer.py:36-81) 가 `trend_context` 변수를 받아 자연어로 흘려보냄.
+3. `strategic_analyzer.py:227-238` 의 `_cluster_metadata_for_prompt(cluster_metadata)` 가 prompt 변수로 자동 추출.
+4. `_PEER_NEWS_ANALYSIS_PROMPT` (strategic_analyzer.py:36-81) 가 `trend_context` 변수를 받아 자연어로 흘려보냄.
 
 **fetch_latest_trend_context() 호출 빈도 + 캐시 정책**:
 
@@ -734,7 +734,7 @@ class ITTrendAgent:
                 }
                 for det in detections
             ],
-            "trend_context": trend_context_dto.to_dict(),  # TrendContext shape, AnalysisAgent 가 사용
+            "trend_context": trend_context_dto.to_dict(),  # TrendContext shape, StrategicAnalyzer 가 사용
             "snapshots": [s.dict() for s in snapshots],
             "trend_detections": [d.dict() for d in detections],
             "impact_matrix": [c.dict() for c in impact],
@@ -815,7 +815,7 @@ def upsert_global_industry_trends(rows: list[dict]) -> int:
 
 ## 8. 다른 Agent 와의 통합 — wire-up
 
-### 8.1 AnalysisAgent (StrategicAnalyzer) — inject 지점 명시
+### 8.1 StrategicAnalyzer — inject 지점 명시
 
 | 컴포넌트 | line | 동작 |
 |---|---|---|
@@ -823,8 +823,8 @@ def upsert_global_industry_trends(rows: list[dict]) -> int:
 | (수정 1줄) `src/agents/integration_agent.py:143-160` | 154 | `metadata={...}` dict 에 `"trend_context": fetch_latest_trend_context(7)` 추가 |
 | (수정 1줄) `src/agents/integration_agent.py:98-111` | 110 | 동일하게 metadata dict 에 `"trend_context"` 추가 |
 | (변경 없음) `src/pipeline/analysis_flow_graph.py:631-653` `_cluster_metadata` | 635 | 이미 `bundle.metadata.get("trend_context")` 를 읽음 |
-| (변경 없음) `src/analysis/analyzer.py:227-238` `_cluster_metadata_for_prompt` | 238 | 이미 prompt 변수로 추출 |
-| (변경 없음) `src/analysis/analyzer.py:36-81` `_PEER_NEWS_ANALYSIS_PROMPT` | 41/60 | 이미 prompt 안에 `trend_context` 변수 슬롯 |
+| (변경 없음) `src/agents/strategic_analyzer.py:227-238` `_cluster_metadata_for_prompt` | 238 | 이미 prompt 변수로 추출 |
+| (변경 없음) `src/agents/strategic_analyzer.py:36-81` `_PEER_NEWS_ANALYSIS_PROMPT` | 41/60 | 이미 prompt 안에 `trend_context` 변수 슬롯 |
 
 → **신규 함수 1개 + 기존 파일 1개에 2줄 수정** 이 wire-up 의 전부. 변경 risk surface 매우 작음.
 
@@ -1000,7 +1000,7 @@ spec:
 | AX/peer 동향이 글로벌 트렌드와 같은 결로 가는지 비교 기능 있나? | **부분만**. schema (`SKAXImpactCell`, `TrendDetection.leading_companies`) 와 V30 의 `related_peer_ids` 컬럼은 있지만 채우는 로직 0. |
 | 새 agent 필요한가? | **아니오.** `ITTrendAgent` 안에 Phase 3 (peer_alignment) 통합. |
 | 새 DB 테이블 필요한가? | **아니오.** `global_industry_trends.payload` JSONB + `related_peer_ids` 직접 컬럼. |
-| 다른 agent 와 충돌? | 없음 — `analyzer.py` 가 이미 `trend_context` hook 보유. wire-up 만. |
+| 다른 agent 와 충돌? | 없음 — `strategic_analyzer.py` 가 이미 `trend_context` hook 보유. wire-up 만. |
 | 가장 작은 변경 폭? | Step S1~S8 (12~16h). |
 
 ---
@@ -1018,7 +1018,7 @@ spec:
 | SPRi/BCG raw_articles | spri 40 + bcg 53 = 93건 | ✅ Phase 2 보강 가능 |
 | 4 peer card_news 30일 (samsung_sds 87, lg_cns 69, hyundai_autoever 23, posco_dx 14) | 모두 ≥10건 | ✅ Phase 3 카드 매칭 가능 |
 | `card_news.primary_keyword_category` | ax 92 / infra 44 / security 15 / deal 5 / other 23 분포 | ✅ keyword 매칭 가능 |
-| `analyzer.py` 의 `trend_context` hook | line 41/60/238/242 에서 prompt 변수로 받음 | ✅ wire-up 만 |
+| `strategic_analyzer.py` 의 `trend_context` hook | line 41/60/238/242 에서 prompt 변수로 받음 | ✅ wire-up 만 |
 | `analysis_flow_graph.py` 의 `bundle.metadata["trend_context"]` | line 635 에서 읽기 | ✅ wire-up 만 |
 | `global_industry_trends` 테이블 (V29) | 컬럼 / 인덱스 / UNIQUE 모두 설계와 일치 | ✅ |
 | `MixerAnalysisAgent` 의 carding/comparison 패턴 | LLM 호출 / repair / radar 산식 | ✅ Phase 3/5 prompt 의 시발점으로 사용 |

@@ -35,11 +35,11 @@ from typing import Annotated, Any, Callable, TypedDict, cast
 from langgraph.graph import END, StateGraph
 from langgraph.types import RetryPolicy
 
-from src.agents.analysis_agent import AnalysisAgent
 from src.agents.card_news_agent import CardNewsAgent
 from src.agents.evaluator_agent import EvaluatorAgent
 from src.agents.implication_agent import ImplicationAgent
 from src.agents.integration_agent import IntegrationAgent
+from src.agents.strategic_analyzer import StrategicAnalyzer
 from src.analysis.implication import ImplicationGenerator
 from src.analysis.models import (
     AnalysisContext,
@@ -157,7 +157,7 @@ class SupervisorDeps:
         *,
         integration_agent: IntegrationAgent | None = None,
         issue_integrator: IntegrationAgent | None = None,
-        analyzer: AnalysisAgent | None = None,
+        analyzer: StrategicAnalyzer | None = None,
         implication_agent: ImplicationAgent | None = None,
         evaluator: EvaluatorAgent | None = None,
         context_builder: AnalysisContextBuilder | None = None,
@@ -167,7 +167,7 @@ class SupervisorDeps:
     ) -> None:
         self.integration_agent = integration_agent or issue_integrator or IntegrationAgent()
         self.issue_integrator = self.integration_agent
-        self.analyzer = analyzer or AnalysisAgent()
+        self.analyzer = analyzer or StrategicAnalyzer()
         self.implication_agent = implication_agent or ImplicationAgent(
             fallback=implication_fallback
         )

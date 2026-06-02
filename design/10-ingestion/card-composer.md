@@ -38,7 +38,7 @@ class AnalysisPackage:
 
 입력 의미:
 - `integrated_issue`: IntegrationAgent가 만든 통합 이슈
-- `analysis`: AnalysisAgent가 만든 전략 의미 분석
+- `analysis`: StrategicAnalyzer가 만든 전략 의미 분석
 - `implication`: ImplicationAgent가 만든 SK AX 관점 시사점
 - `sources`: 원문 출처
 - `validation`: 분석 패키지 검증 정보
