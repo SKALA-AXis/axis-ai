@@ -24,6 +24,7 @@ _EXPORT_MODULES = {
     "PeerProfileAgent": "src.agents.peer_profile_agent",
     "ReportAgent": "src.agents.report_agent",
     "StrategicAnalyzer": "src.agents.strategic_analyzer",
+    "StrategicInsightAgent": "src.agents.strategic_insight_agent",
 }
 
 __all__ = list(_EXPORT_MODULES)

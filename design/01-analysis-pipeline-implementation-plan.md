@@ -10,6 +10,13 @@
 > 는 multi-agent supervisor pattern 이 아닌 **고정 순서 DAG pipeline** 의 일반 코디네이터 의미.
 > 새 코드에서는 `AnalysisGraphRunner` / `AnalysisFlowState` / `build_analysis_flow_graph` 사용 권장.
 > 기존 `Supervisor*` 이름은 제거하고 `AnalysisGraphRunner` 기준으로 정리한다.
+>
+> **현행 구현 보정 (2026-06-02)**: 본 문서 일부 표와 작업 항목에는 과거 계획인
+> `StrategicAnalyzer → ImplicationAgent` 분리 경로가 남아 있다. 현재 기본 실행 경로는
+> `StrategicInsightAgent` 하나의 LLM 호출이 `analysis`와 `implication` 두 블록을 분리
+> 생성하는 구조다. 기존 `StrategicAnalyzer` / `ImplicationAgent` 는 LLM 실패 또는 legacy
+> 주입 테스트를 위한 fallback/compat 경로로만 유지한다. 최신 topology 는
+> [`00-analysis-pipeline-topology.md`](00-analysis-pipeline-topology.md)를 기준으로 본다.
 
 ---
 
@@ -219,17 +226,15 @@
           ↓
    [build_analysis_context]       # ③ AnalysisContextBuilder — NO LLM (DB+Qdrant), main_company 기준 4-Layer
           ↓
-   [strategic_analyze]            # ④ StrategicAnalyzer (LLM, peer 관점 only)
+   [strategic_insight]            # ④ StrategicInsightAgent (LLM, analysis+implication 분리 출력)
           ↓
-   [implication]                  # ⑤ ImplicationAgent v4.0/v5.0 (LLM, SK AX 관점) ← P0-1 / P3-1 fix
-          ↓
-   [validate]                     # ⑥ 출처 수치 / 단정 표현 / evidence 무결성 + W5-1 metric ← P1-3 fix
+   [validate]                     # ⑤ 출처 수치 / 단정 표현 / evidence 무결성 + W5-1 metric ← P1-3 fix
        ↓             ↓
    pass=true      pass=false
        ↓             ↓
    [assemble]    [human_review]   # human_review_flags 추가 후 종료
        ↓             ↓
-   [card_writer]   (END)          # ⑧ CardNewsAgent.write_card 호출 + save_card_news v2 INSERT (R-2)
+   [card_writer]   (END)          # ⑦ CardNewsAgent.write_card 호출 + save_card_news v2 INSERT (R-2)
        ↓
      (END) → card_news WRITE (v2 schema: peer_company_id / primary_keyword_category /
                                 source_raw_article_ids / evidence_payload /
@@ -244,9 +249,8 @@
 |---|---|---|
 | `issue_integrate` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | 2회 실패 → 빈 IntegratedIssue → `validate` 가 `integrated_issue_valid=false` → human_review |
 | `profile_context` | None (DB only) | `ProfileContextLoader.load` 실패 → legacy `ProfileAgent.build_context` fallback |
-| `build_analysis_context` | None (DB+Qdrant only) | layer 별 query try/except → 빈 AnalysisContext, ImplicationAgent v4.0 사용 |
-| `strategic_analyze` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | 2회 실패 → `is_valid_analysis=false` → human_review |
-| `implication` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | LangGraph 2회 실패 후 ImplicationAgent 내부 try/except → heuristic generator |
+| `build_analysis_context` | None (DB+Qdrant only) | layer 별 query try/except → 빈 AnalysisContext 로 진행 |
+| `strategic_insight` | `RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_attempts=2)` | StrategicInsightAgent LLM 실패 → 기존 StrategicAnalyzer + ImplicationAgent 조합 fallback |
 | `validate` | None (rule-based) | hard fail → human_review |
 | `assemble` | None | — |
 | `card_writer` | `RetryPolicy(initial_interval=0.5, backoff_factor=2.0, max_attempts=2)` | DB transient 실패 시 자동 retry, 2회 실패 시 `card_news_id=None` 반환 |
@@ -254,7 +258,9 @@
 
 구현: `src/pipeline/analysis_flow_graph.py` 의 `_NODE_RETRY_POLICIES` dict + `build_supervisor_graph` 의 `g.add_node(name, fn, retry_policy=...)`.
 
-→ **부분 실패 흡수**: LLM 호출 노드는 LangGraph 가 exponential backoff 로 자동 재시도 후 노드 내부 fallback (heuristic / 빈 결과) 으로 graceful degradation. cluster 전체 손실 방지.
+→ **부분 실패 흡수**: LLM 호출 노드는 LangGraph 가 exponential backoff 로 자동 재시도한다.
+`StrategicInsightAgent` 는 실패 시 기존 `StrategicAnalyzer` + `ImplicationAgent` 조합으로
+fallback 하며, 그래도 유효한 결과가 없으면 `validate` 가 human_review 로 보낸다.
 
 ### 3.2 ProfileContext 2-tier 분리
 
