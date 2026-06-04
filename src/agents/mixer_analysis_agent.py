@@ -514,9 +514,7 @@ class MixerAnalysisAgent:
             ]
         )
         requested_ids = (
-            requested_integrated_issue_ids
-            if requested_integrated_issue_ids
-            else requested_card_ids
+            requested_integrated_issue_ids if requested_integrated_issue_ids else requested_card_ids
         )
         if len(requested_ids) < _MIN_CARDS:
             return _error_response(

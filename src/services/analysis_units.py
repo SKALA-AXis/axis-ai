@@ -495,8 +495,7 @@ def _quality_flags(
     if not integrated_issue_id:
         flags.append(QUALITY_MISSING_INTEGRATED_ISSUE_ID)
     if issue_row and (
-        str(issue_row.get("status") or "active") != "active"
-        or issue_row.get("is_current") is False
+        str(issue_row.get("status") or "active") != "active" or issue_row.get("is_current") is False
     ):
         flags.append(QUALITY_SUPERSEDED_INTEGRATED_ISSUE)
     if not package or not (analysis or implication):
@@ -523,18 +522,14 @@ def _unit_title(unit: AnalysisUnit) -> str:
 
 def _summary_lines(card: dict[str, Any]) -> list[str]:
     return [
-        str(item).strip()
-        for item in _json_list(card.get("summary_lines"))
-        if str(item).strip()
+        str(item).strip() for item in _json_list(card.get("summary_lines")) if str(item).strip()
     ]
 
 
 def _is_missing_v40_storage(exc: Exception) -> bool:
     message = str(exc).lower()
     return (
-        "undefinedcolumn" in message
-        or "undefinedtable" in message
-        or "does not exist" in message
+        "undefinedcolumn" in message or "undefinedtable" in message or "does not exist" in message
     )
 
 

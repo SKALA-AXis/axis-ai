@@ -369,9 +369,7 @@ def _source_rows(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for source in (
-        integrated_issue.get("representative_sources")
-        or integrated_issue.get("sources")
-        or []
+        integrated_issue.get("representative_sources") or integrated_issue.get("sources") or []
     ):
         if isinstance(source, dict):
             rows.append(dict(source))
@@ -503,7 +501,8 @@ def _is_missing_integrated_issue_storage(exc: Exception) -> bool:
     return (
         "undefinedtable" in message
         or "undefinedcolumn" in message
-        or "integrated_issues" in message and "does not exist" in message
+        or "integrated_issues" in message
+        and "does not exist" in message
     )
 
 

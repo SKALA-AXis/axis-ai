@@ -916,11 +916,7 @@ def _briefing_decision_focus(entries: list[dict[str, Any]]) -> str:
             *[entry.get("sk_why") for entry in entries],
             *[entry.get("sk_impact") for entry in entries],
             *[entry.get("market_signal") for entry in entries],
-            *[
-                text
-                for entry in entries
-                for text in _json_list(entry.get("strategic_meaning"))
-            ],
+            *[text for entry in entries for text in _json_list(entry.get("strategic_meaning"))],
         ],
         "입력에서 확인된 고객 평가 기준 변화",
         max_items=2,
@@ -2642,9 +2638,7 @@ def _empty_report(
         },
         "hidden_details": [],
         "requested_card_ids": provenance_base.get("requested_card_ids", []),
-        "requested_integrated_issue_ids": provenance_base.get(
-            "requested_integrated_issue_ids", []
-        ),
+        "requested_integrated_issue_ids": provenance_base.get("requested_integrated_issue_ids", []),
         "confidence": 0.0,
         "provenance": {
             **provenance_base,

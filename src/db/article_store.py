@@ -1288,9 +1288,7 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
                 card.get("id"),
             )
             try:
-                card_id = _execute_v2_without_integrated_issue(
-                    card_id=card["id"], params=params
-                )
+                card_id = _execute_v2_without_integrated_issue(card_id=card["id"], params=params)
             except Exception as legacy_exc:  # noqa: BLE001
                 if not _is_undefined_column_error(legacy_exc):
                     raise
@@ -1322,9 +1320,7 @@ def _execute_v2_insert(*, card_id: str, params: dict[str, Any]) -> Optional[str]
     return None
 
 
-def _execute_v2_without_integrated_issue(
-    *, card_id: str, params: dict[str, Any]
-) -> Optional[str]:
+def _execute_v2_without_integrated_issue(*, card_id: str, params: dict[str, Any]) -> Optional[str]:
     legacy_params = dict(params)
     legacy_params.pop("integrated_issue_id", None)
     with SessionLocal() as db:
