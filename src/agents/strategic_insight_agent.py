@@ -11,7 +11,7 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Sequence
 
 from langchain_openai import ChatOpenAI
 from sqlalchemy import text
@@ -1346,7 +1346,7 @@ def _evidence_snippets_from_issue(integrated_issue: dict[str, Any]) -> list[dict
     return snippets[:20]
 
 
-def _fact_basis_from_evidence_refs(rows: list[Any]) -> list[dict[str, Any]]:
+def _fact_basis_from_evidence_refs(rows: Sequence[Any]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for index, row in enumerate(rows, start=1):
         item = dict(row)
@@ -1367,7 +1367,7 @@ def _fact_basis_from_evidence_refs(rows: list[Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _consolidated_facts_from_evidence_refs(rows: list[Any]) -> list[dict[str, Any]]:
+def _consolidated_facts_from_evidence_refs(rows: Sequence[Any]) -> list[dict[str, Any]]:
     facts: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
