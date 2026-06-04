@@ -186,7 +186,7 @@ def _period_from_report_name(report_name: str) -> tuple[str | None, str | None]:
     month = int(match.group(2))
 
     if "사업보고서" in name:
-        return f"{year}Q4", "annual"
+        return year, "annual"
     if "반기보고서" in name:
         return f"{year}Q2", "half"
     if "분기보고서" in name:
@@ -200,6 +200,9 @@ def _period_parts(period: str | None) -> dict[str, int | None]:
         return {"period_year": None, "period_quarter": None}
     match = re.match(r"(20\d{2})Q([1-4])", period)
     if not match:
+        year_match = re.fullmatch(r"(20\d{2})", period)
+        if year_match:
+            return {"period_year": int(year_match.group(1)), "period_quarter": None}
         return {"period_year": None, "period_quarter": None}
     return {
         "period_year": int(match.group(1)),
@@ -212,6 +215,9 @@ def _shift_period_year(period: str | None, offset: int) -> str | None:
         return None
     match = re.match(r"(20\d{2})(Q[1-4])", period)
     if not match:
+        year_match = re.fullmatch(r"(20\d{2})", period)
+        if year_match:
+            return str(int(year_match.group(1)) + offset)
         return None
     return f"{int(match.group(1)) + offset}{match.group(2)}"
 

@@ -198,6 +198,12 @@ def financial_metrics_from_dart(
     period_year = parser_result.get("period_year") or article["extra"].get("period_year")
     period_quarter = parser_result.get("period_quarter") or article["extra"].get("period_quarter")
     period_type = parser_result.get("period_type") or article["extra"].get("period_type")
+    period, period_year, period_quarter, period_type = _normalize_period_fields(
+        period,
+        period_year,
+        period_quarter,
+        period_type,
+    )
 
     if peer_id == "sk_ax":
         return _metrics_from_candidates(
@@ -278,6 +284,12 @@ def business_signals_from_dart(
     period_year = parser_result.get("period_year") or article["extra"].get("period_year")
     period_quarter = parser_result.get("period_quarter") or article["extra"].get("period_quarter")
     period_type = parser_result.get("period_type") or article["extra"].get("period_type")
+    period, period_year, period_quarter, period_type = _normalize_period_fields(
+        period,
+        period_year,
+        period_quarter,
+        period_type,
+    )
 
     signals: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -490,6 +502,17 @@ def _metrics_from_statement(
             metric_period_type = (
                 value_info.get("period_type") if value_info.get("period") else period_type
             )
+            (
+                metric_period,
+                metric_period_year,
+                metric_period_quarter,
+                metric_period_type,
+            ) = _normalize_period_fields(
+                metric_period,
+                metric_period_year,
+                metric_period_quarter,
+                metric_period_type,
+            )
 
             metrics.append(
                 _metric_row(
@@ -567,16 +590,34 @@ def _metrics_from_candidates(
         value = candidate.get("value_krwbn")
         if metric_name not in _DART_METRIC_LABELS or not isinstance(value, int | float):
             continue
+        metric_period = candidate.get("period") or period
+        metric_period_year = (
+            candidate.get("period_year") if candidate.get("period") else period_year
+        )
+        metric_period_quarter = (
+            candidate.get("period_quarter") if candidate.get("period") else period_quarter
+        )
+        metric_period_type = (
+            candidate.get("period_type") if candidate.get("period") else period_type
+        )
+        metric_period, metric_period_year, metric_period_quarter, metric_period_type = (
+            _normalize_period_fields(
+                metric_period,
+                metric_period_year,
+                metric_period_quarter,
+                metric_period_type,
+            )
+        )
         metrics.append(
             _metric_row(
                 article=article,
                 article_id=article_id,
                 peer_id=peer_id,
-                period=period,
-                period_year=period_year,
-                period_quarter=period_quarter,
-                period_type=period_type,
-                metric_uid=f"dart:{metric_name}:candidate:{index}:{period or 'unknown'}",
+                period=metric_period,
+                period_year=metric_period_year,
+                period_quarter=metric_period_quarter,
+                period_type=metric_period_type,
+                metric_uid=f"dart:{metric_name}:candidate:{index}:{metric_period or 'unknown'}",
                 metric_name=metric_name,
                 metric_label=_DART_METRIC_LABELS[metric_name],
                 metric_scope=_candidate_metric_scope(candidate, peer_id=peer_id),
@@ -935,6 +976,19 @@ def _peer_id(article: dict[str, Any], parser_result: dict[str, Any]) -> str | No
     if isinstance(company, str):
         return company
     return None
+
+
+def _normalize_period_fields(
+    period: Any,
+    period_year: Any,
+    period_quarter: Any,
+    period_type: Any,
+) -> tuple[str | None, Any, Any, Any]:
+    if period_type in {"annual", "year"} and period_year:
+        return str(period_year), period_year, None, period_type
+    if period_type == "half":
+        return str(period) if period else None, period_year, None, period_type
+    return str(period) if period else None, period_year, period_quarter, period_type
 
 
 def _period(article: dict[str, Any], parser_result: dict[str, Any]) -> str | None:

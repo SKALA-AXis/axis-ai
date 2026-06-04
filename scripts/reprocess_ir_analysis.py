@@ -769,7 +769,7 @@ def _select_ir_metric_candidates(
         if metric_name not in _METRIC_SPECS:
             continue
         candidate_period, period_patch = _candidate_period_for_report(candidate, report_period)
-        if report_period and candidate_period and str(candidate_period) != str(report_period):
+        if not _candidate_period_allowed_for_report(candidate_period, report_period):
             continue
         metric_scope = str(candidate.get("metric_scope") or "unknown")
         if metric_scope == "portfolio_company" or metric_scope == "unknown":
@@ -783,7 +783,7 @@ def _select_ir_metric_candidates(
             business_area=business_area,
         )
         scope_key = _metric_scope_key(metric_scope, business_area, candidate.get("entity_name"))
-        key = (metric_name, metric_scope, scope_key)
+        key = (metric_name, metric_scope, scope_key, str(candidate_period or "unknown"))
         enriched = {
             **candidate,
             **period_patch,
@@ -826,6 +826,19 @@ def _candidate_period_for_report(
     report_period: Any,
 ) -> tuple[Any, dict[str, Any]]:
     return candidate.get("period") or report_period, {}
+
+
+def _candidate_period_allowed_for_report(candidate_period: Any, report_period: Any) -> bool:
+    if not report_period or not candidate_period:
+        return True
+    candidate_period_value = str(candidate_period)
+    report_period_value = str(report_period)
+    if candidate_period_value == report_period_value:
+        return True
+
+    annual_match = re.fullmatch(r"(20\d{2})", report_period_value)
+    candidate_year, _candidate_quarter = _quarter_period_parts(candidate_period_value)
+    return bool(annual_match and candidate_year == int(annual_match.group(1)))
 
 
 def _quarter_period_parts(period: Any) -> tuple[int | None, int | None]:

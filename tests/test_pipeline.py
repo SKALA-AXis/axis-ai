@@ -2,15 +2,25 @@
 
 import numpy as np
 
+from scripts.reprocess_news_clusters import _params, _target_where_sql
 from src.preprocessing import dedup
 from src.preprocessing.dedup import (
     _cluster,
     _company_presence_score,
+    _event_bucket,
     _event_signature,
+    _existing_cluster_candidate_window,
+    _rule_prefilter_key,
     _same_issue,
     _should_merge_articles,
 )
 from src.preprocessing.preprocessing import PreprocessingResult
+from src.preprocessing.relevance import (
+    _core_company_role_reject_result,
+    _fast_pass_result,
+    _guard_llm_result,
+    _noise_reject_result,
+)
 
 
 def test_ingestion_state_structure():
@@ -33,6 +43,22 @@ def test_ingestion_state_structure():
         "human_review_flags": [],
     }
     assert state["company"] == ["samsung_sds"]
+
+
+def test_reprocess_news_clusters_supports_published_until_filter():
+    params = _params(
+        ["news"],
+        [],
+        ["RAW"],
+        "2026-05-31T00:00:00+00:00",
+        "2026-06-01T00:00:00+00:00",
+    )
+    where_sql = _target_where_sql()
+
+    assert params["published_since"] == "2026-05-31T00:00:00+00:00"
+    assert params["published_until"] == "2026-06-01T00:00:00+00:00"
+    assert "published_at >= CAST(:published_since AS timestamptz)" in where_sql
+    assert "published_at < CAST(:published_until AS timestamptz)" in where_sql
 
 
 def test_same_issue_does_not_merge_on_customer_name_only():
@@ -122,6 +148,35 @@ def test_cluster_merge_keeps_different_event_buckets_separate_even_with_llm_env(
     assert _should_merge_articles(ax_strategy, market_reaction, 0.97, 0.80) is False
 
 
+def test_dunamu_stake_articles_use_investment_bucket_before_market_reaction():
+    left = {
+        "id": 43264,
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "matched_sectors": ["security", "infra", "deal"],
+        "title": "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 공동 인수",
+        "content": "",
+        "published_at": "2026-05-28T08:52:00+00:00",
+    }
+    right = {
+        "id": 43202,
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "matched_sectors": ["security", "infra", "deal"],
+        "title": (
+            "'오픈AI 협력' 판매 채널 우선하는 삼성SDS-LG CNS·운영 역량 내세워…두나무 지분 투자"
+        ),
+        "content": "",
+        "published_at": "2026-05-28T02:10:00+00:00",
+    }
+
+    assert _event_bucket(left) == "investment_deal"
+    assert _event_bucket(right) == "investment_deal"
+    assert _event_signature(left) == "investment_deal:dunamu"
+    assert _event_signature(right) == "investment_deal:dunamu"
+    assert _should_merge_articles(left, right, 0.80, 0.80) is True
+
+
 def test_event_signature_splits_market_reaction_by_day():
     first_day = {
         "title": "삼성에스디에스 주가 장중 급등",
@@ -165,3 +220,836 @@ def test_cluster_splits_union_bridge_by_event_bucket(monkeypatch):
     cluster_map = _cluster(articles=articles, embeddings=embeddings, threshold=0.8)
 
     assert sorted(len(ids) for ids in cluster_map.values()) == [1, 1, 1]
+
+
+def test_fast_pass_is_limited_to_core_monitoring_companies():
+    result = _fast_pass_result(
+        title="NC AI, 한화오션 자율용접 로봇 AI 두뇌 개발",
+        content="NC AI가 한화오션과 자율용접 로봇 AI 두뇌를 개발했다.",
+        source_type="news",
+        matched_companies=["nc_ai"],
+        matched_sectors=["ax"],
+    )
+
+    assert result is None
+
+
+def test_relevance_rejects_pure_market_price_article():
+    result = _noise_reject_result(
+        title="삼성에스디에스 주가, 6월 4일 장중 261,750원 12.91% 하락",
+        content="삼성에스디에스 주가가 장중 하락했다.",
+        source_type="news",
+        matched_companies=["samsung_sds"],
+        matched_sectors=["other"],
+    )
+
+    assert result is not None
+    assert result["relevance_label"] == "irrelevant"
+
+
+def test_relevance_keeps_event_driven_market_article_for_analysis():
+    result = _noise_reject_result(
+        title="[특징주] 삼성SDS, AI 데이터센터 수혜 기대감에 28%대 급등",
+        content="삼성SDS가 AI 데이터센터와 공공 AI 수혜 기대감에 급등했다.",
+        source_type="news",
+        matched_companies=["samsung_sds"],
+        matched_sectors=["ax"],
+    )
+
+    assert result is None
+
+
+def test_relevance_keeps_external_supplier_contract_for_downstream_ranking():
+    result = _noise_reject_result(
+        title="인스웨이브, LG CNS와 99억원 규모 계약 체결",
+        content="인스웨이브가 LG CNS와 코어뱅킹 현대화 웹단말 전환 계약을 체결했다.",
+        source_type="news",
+        matched_companies=["lg_cns"],
+        matched_sectors=["deal"],
+    )
+
+    assert result is None
+
+
+def test_relevance_keeps_external_partner_agreement_for_downstream_ranking():
+    result = _noise_reject_result(
+        title="NC AI, 포스코DX와 로봇 파운데이션 모델 공동 개발 업무협약 체결",
+        content="NC AI가 포스코DX와 산업현장용 로봇 파운데이션 모델을 공동 개발한다.",
+        source_type="news",
+        matched_companies=["posco_dx"],
+        matched_sectors=["ax"],
+    )
+
+    assert result is None
+
+
+def test_relevance_fast_pass_keeps_peer_customer_robot_poc_news():
+    title = "LG CNS-컬리, 물류센터 휴머노이드 PoC…'피지컬웍스' 현장 검증"
+    content = "LG CNS와 컬리가 물류센터에 휴머노이드 로봇을 도입하고 자동화 실증을 추진한다."
+
+    role_reject = _core_company_role_reject_result(
+        title=title,
+        content=content,
+        source_type="news",
+        matched_companies=["lg_cns"],
+        matched_sectors=["infra", "deal"],
+    )
+    result = _fast_pass_result(
+        title=title,
+        content=content,
+        source_type="news",
+        matched_companies=["lg_cns"],
+        matched_sectors=["infra", "deal"],
+    )
+
+    assert role_reject is None
+    assert result is not None
+    assert result["relevance_label"] == "relevant"
+
+
+def test_relevance_fast_pass_keeps_peer_partner_robot_adoption_news():
+    title = "LG CNS, 컬리 물류센터에 휴머노이드 로봇 도입 맞손"
+    content = "LG CNS가 컬리와 손잡고 물류센터 휴머노이드 로봇 실증과 자동화 협력을 진행한다."
+
+    role_reject = _core_company_role_reject_result(
+        title=title,
+        content=content,
+        source_type="news",
+        matched_companies=["lg_cns"],
+        matched_sectors=["infra", "deal"],
+    )
+    result = _fast_pass_result(
+        title=title,
+        content=content,
+        source_type="news",
+        matched_companies=["lg_cns"],
+        matched_sectors=["infra", "deal"],
+    )
+
+    assert role_reject is None
+    assert result is not None
+    assert result["relevance_label"] == "relevant"
+
+
+def test_relevance_keeps_peer_subject_with_external_counterparty():
+    result = _noise_reject_result(
+        title="포스코DX, NC AI와 손잡고 산업현장용 피지컬AI 개발",
+        content="포스코DX가 NC AI와 로봇 파운데이션 모델을 공동 개발한다.",
+        source_type="news",
+        matched_companies=["posco_dx"],
+        matched_sectors=["ax"],
+    )
+
+    assert result is None
+
+
+def test_cluster_merge_allows_same_business_issue_with_different_titles():
+    left = {
+        "company": ["nc_ai"],
+        "matched_companies": ["nc_ai"],
+        "matched_sectors": ["ax"],
+        "title": "NC AI, 한화오션 자율용접 로봇 AI 두뇌 개발",
+        "content": "NC AI가 한화오션과 자율용접 로봇 AI 두뇌를 개발했다.",
+        "published_at": "2026-06-03T23:52:00+00:00",
+    }
+    right = {
+        "company": ["nc_ai"],
+        "matched_companies": ["nc_ai"],
+        "matched_sectors": ["ax"],
+        "title": "NC AI가 조선소 용접에 AI 두뇌 심는 이유는?",
+        "content": "한화오션 자율용접 로봇에 NC AI 기술을 적용하는 내용이다.",
+        "published_at": "2026-06-03T23:06:00+00:00",
+    }
+
+    assert _should_merge_articles(left, right, 0.83, 0.80) is True
+
+
+def test_cluster_merge_groups_same_contract_articles():
+    left = {
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["deal"],
+        "title": "인스웨이브, LG CNS와 99억원 규모 계약 체결",
+        "content": "코어뱅킹 현대화 웹단말 전환 계약을 체결했다.",
+        "published_at": "2026-06-02T08:20:00+00:00",
+    }
+    right = {
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["deal"],
+        "title": "인스웨이브, LG CNS와 99억 규모 공급 계약",
+        "content": "LG CNS와 코어뱅킹 현대화 웹단말 전환 사업 공급계약을 맺었다.",
+        "published_at": "2026-06-02T05:33:00+00:00",
+    }
+
+    assert _should_merge_articles(left, right, 0.80, 0.80) is True
+
+
+def test_event_driven_contract_market_article_uses_llm_to_merge_with_contract_cluster(
+    monkeypatch,
+):
+    contract = {
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["deal"],
+        "title": "인스웨이브, LG CNS와 99억원 규모 계약 체결",
+        "content": "코어뱅킹 현대화 웹단말 전환 계약을 체결했다.",
+        "published_at": "2026-06-02T08:20:00+00:00",
+    }
+    market = {
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["deal"],
+        "title": "[특징주] 인스웨이브, LG CNS와 98억 규모 웹단말 공급계약",
+        "content": "인스웨이브 주가가 LG CNS 공급계약 소식에 급등했다.",
+        "published_at": "2026-06-02T06:34:00+00:00",
+    }
+
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
+
+    assert _event_bucket(contract) == "contract_deal"
+    assert _event_bucket(market) == "market_reaction"
+    assert _rule_prefilter_key(contract) == _rule_prefilter_key(market)
+    assert _should_merge_articles(contract, market, 0.95, 0.80) is True
+
+
+def test_contract_key_groups_same_deal_with_amount_or_service_title(monkeypatch):
+    amount_title = {
+        "company": ["hyundai_autoever"],
+        "matched_companies": ["hyundai_autoever"],
+        "matched_sectors": ["deal"],
+        "title": "플래티어, 현대오토에버와 21억 6천만 원대 공급계약",
+        "content": "플래티어가 현대오토에버와 인증중고차 플랫폼 운영 계약을 체결했다.",
+        "published_at": "2026-06-01T05:34:00+00:00",
+    }
+    service_title = {
+        "company": ["hyundai_autoever"],
+        "matched_companies": ["hyundai_autoever"],
+        "matched_sectors": ["deal"],
+        "title": "플래티어, 현대오토에버와 CPO 플랫폼 운영 계약",
+        "content": "인증중고차 플랫폼 운영 사업을 장기 운영한다.",
+        "published_at": "2026-06-01T07:34:00+00:00",
+    }
+
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
+
+    assert _rule_prefilter_key(amount_title) == _rule_prefilter_key(service_title)
+    assert _should_merge_articles(amount_title, service_title, 0.82, 0.80) is True
+
+
+def test_logistics_robotics_partner_articles_merge_without_llm(monkeypatch):
+    first = {
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["infra", "deal"],
+        "title": "LG CNS-컬리, 물류센터 휴머노이드 PoC…'피지컬웍스' 현장 검증",
+        "content": "LG CNS와 컬리가 물류센터에 휴머노이드 로봇을 도입하고 자동화 실증을 추진한다.",
+        "published_at": "2026-05-18T06:40:00+00:00",
+    }
+    second = {
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["infra", "deal"],
+        "title": "컬리 물류센터에 휴머노이드 뜬다…LG CNS와 자동화 협력",
+        "content": "LG CNS와 컬리가 휴머노이드 로봇 기반 물류 자동화 협력에 나섰다.",
+        "published_at": "2026-05-18T01:01:00+00:00",
+    }
+
+    def fail_llm(*args, **kwargs):
+        raise AssertionError("LLM judge should not be called for deterministic logistics event")
+
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", fail_llm)
+
+    assert _rule_prefilter_key(first) == _rule_prefilter_key(second)
+    assert _event_signature(first) == _event_signature(second)
+    assert _should_merge_articles(first, second, 0.80, 0.80) is True
+
+
+def test_prefilter_groups_same_day_event_without_company_split():
+    left = {
+        "company": ["nvidia"],
+        "matched_companies": ["nvidia"],
+        "title": "NC AI, 한화오션 자율 용접 로봇 AI 모델 개발",
+        "content": "NC AI와 한화오션의 자율 용접 로봇 AI 모델 개발 기사.",
+        "published_at": "2026-06-04T01:42:00+00:00",
+    }
+    right = {
+        "company": ["nc_ai"],
+        "matched_companies": ["nc_ai"],
+        "title": "NC AI, 한화오션 상선에 자율용접로봇 AI 두뇌 공급",
+        "content": "한화오션 선박에 자율용접로봇 AI 두뇌를 공급한다.",
+        "published_at": "2026-06-04T01:30:00+00:00",
+    }
+
+    assert _rule_prefilter_key(left) == _rule_prefilter_key(right)
+    assert _should_merge_articles(left, right, 0.82, 0.80) is True
+
+
+def test_prefilter_allows_same_ax_event_across_adjacent_dates():
+    may_article = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "title": "포스코DX, NC AI와 ‘산업 현장 로봇’ 지능화 모델 개발",
+        "content": "포스코DX와 NC AI가 로봇 파운데이션 모델을 공동 개발한다.",
+        "published_at": "2026-05-31T04:01:00+00:00",
+    }
+    june_article = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "title": "NC AI, 포스코DX와 로봇 파운데이션 모델 공동 개발 업무협약 체결",
+        "content": "NC AI와 포스코DX가 산업현장용 피지컬AI 기반 로봇 지능화 기술을 공동 개발한다.",
+        "published_at": "2026-06-01T09:00:00+00:00",
+    }
+
+    assert _rule_prefilter_key(may_article) == _rule_prefilter_key(june_article)
+    assert _should_merge_articles(may_article, june_article, 0.82, 0.80) is True
+
+
+def test_prefilter_merges_same_ax_event_with_loose_title_without_llm(monkeypatch):
+    loose_title = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "title": "'로봇의 두뇌' 만든다…NC AI·포스코DX 협력 선언",
+        "content": "NC AI와 포스코DX가 로봇 파운데이션 모델 공동 개발에 협력한다.",
+        "published_at": "2026-05-31T08:22:00+00:00",
+    }
+    foundation_model = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "title": "NC AI, 포스코DX와 로봇 파운데이션 모델 공동 개발 업무협약 체결",
+        "content": "NC AI와 포스코DX가 산업현장용 피지컬AI 기반 로봇 지능화 기술을 공동 개발한다.",
+        "published_at": "2026-06-01T09:00:00+00:00",
+    }
+
+    def fail_llm(*args, **kwargs):
+        raise AssertionError("LLM judge should not be called for deterministic AX event")
+
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", fail_llm)
+
+    assert _rule_prefilter_key(loose_title) == _rule_prefilter_key(foundation_model)
+    assert _event_signature(loose_title) == _event_signature(foundation_model)
+    assert _should_merge_articles(loose_title, foundation_model, 0.82, 0.80) is True
+
+
+def test_existing_cluster_candidate_window_uses_article_published_dates():
+    window = _existing_cluster_candidate_window(
+        [
+            {"published_at": "2026-05-18T01:00:00+00:00"},
+            {"published_at": "2026-05-18T23:20:00+00:00"},
+        ]
+    )
+
+    assert window is not None
+    assert window[0].startswith("2026-05-13T01:00:00+00:00")
+    assert window[1].startswith("2026-05-24T23:20:00+00:00")
+
+
+def test_prefilter_allows_same_cloud_infra_event_across_adjacent_dates():
+    center_award = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "국가 AI컴퓨팅센터, 삼성SDS가 만든다... 올해 3분기 착공",
+        "content": "GPU 1.5만장 규모 국가 AI컴퓨팅센터 구축 사업을 삼성SDS가 맡는다.",
+        "published_at": "2026-05-11T08:33:00+00:00",
+    }
+    center_context = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "'AI 고속도로 심장부' 국가AI컴퓨팅센터, 삼성SDS가 맡는다",
+        "content": "삼성SDS가 국가 AI 컴퓨팅 인프라 구축을 맡는다는 내용이다.",
+        "published_at": "2026-05-11T08:01:00+00:00",
+    }
+
+    assert _rule_prefilter_key(center_award) == _rule_prefilter_key(center_context)
+    assert _should_merge_articles(center_award, center_context, 0.82, 0.80) is True
+
+
+def test_prefilter_groups_ai_center_variants_before_similarity():
+    infrastructure = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "2조5천억원 'AI 고속도로' 시동…정부·삼성SDS 국가 인프라 구축",
+        "content": "삼성SDS가 국가 AI컴퓨팅센터 구축을 맡는다는 내용이다.",
+        "published_at": "2026-05-11T09:06:00+00:00",
+    }
+    center = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "국가 AI컴퓨팅센터, 삼성SDS가 만든다... 올해 3분기 착공",
+        "content": "GPU 1.5만장 규모 국가 AI컴퓨팅센터 구축 사업을 삼성SDS가 맡는다.",
+        "published_at": "2026-05-11T08:33:00+00:00",
+    }
+
+    assert _rule_prefilter_key(infrastructure) == _rule_prefilter_key(center)
+    assert _should_merge_articles(infrastructure, center, 0.82, 0.80) is True
+
+
+def test_prefilter_allows_same_contract_event_across_adjacent_dates():
+    sto_award = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, 예탁결제원 STO 플랫폼 구축 사업 수주",
+        "content": "삼성SDS가 예탁결제원 토큰증권 플랫폼 구축 사업을 수주했다.",
+        "published_at": "2026-05-06T00:53:00+00:00",
+    }
+    sto_context = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, 예탁원 ‘토큰증권 플랫폼’ 수주…디지털 금융 표준 세운다",
+        "content": "예탁원 토큰증권 플랫폼 구축 사업을 삼성SDS가 맡는다.",
+        "published_at": "2026-05-05T23:34:00+00:00",
+    }
+
+    assert _rule_prefilter_key(sto_award) == _rule_prefilter_key(sto_context)
+    assert _should_merge_articles(sto_award, sto_context, 0.82, 0.80) is True
+
+
+def test_prefilter_groups_contract_title_without_company_subject(monkeypatch):
+    sto_award = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, 예탁결제원 STO 플랫폼 구축 사업 수주",
+        "content": "삼성SDS가 예탁결제원 토큰증권 플랫폼 구축 사업을 수주했다.",
+        "published_at": "2026-05-06T00:53:00+00:00",
+    }
+    no_company_subject = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "예탁원 토큰증권 플랫폼, 삼성SDS가 구축한다",
+        "content": "예탁원 토큰증권 플랫폼 구축 사업을 삼성SDS가 맡는다.",
+        "published_at": "2026-05-06T01:19:00+00:00",
+    }
+
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
+
+    assert _rule_prefilter_key(sto_award) == _rule_prefilter_key(no_company_subject)
+    assert _should_merge_articles(sto_award, no_company_subject, 0.82, 0.80) is True
+
+
+def test_robot_partnership_uses_ax_bucket_before_contract_bucket():
+    agreement = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "title": "NC AI, 포스코DX와 로봇 파운데이션 모델 공동 개발 업무협약 체결",
+        "content": "NC AI와 포스코DX가 산업현장용 피지컬AI 기반 로봇 지능화 기술을 공동 개발한다.",
+        "published_at": "2026-06-01T09:00:00+00:00",
+    }
+    development = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "title": "포스코DX-NC AI, '피지컬AI 기반 로봇 지능화 기술' 공동개발",
+        "content": "포스코DX와 NC AI가 로봇 파운데이션 모델을 공동 개발한다.",
+        "published_at": "2026-06-01T05:46:00+00:00",
+    }
+
+    assert _event_bucket(agreement) == "ax_strategy"
+    assert _event_signature(agreement) == "ax_strategy:robot_foundation_model"
+    assert _rule_prefilter_key(agreement) == _rule_prefilter_key(development)
+    assert _should_merge_articles(agreement, development, 0.82, 0.80) is True
+
+
+def test_nc_physical_ai_subissues_do_not_collapse_into_one_cluster():
+    posco_robot = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "title": "NC AI, 포스코DX와 로봇 파운데이션 모델 공동 개발 업무협약 체결",
+        "content": "NC AI와 포스코DX가 산업현장용 피지컬AI 기반 로봇 지능화 기술을 공동 개발한다.",
+        "published_at": "2026-06-01T09:00:00+00:00",
+    }
+    hanwha_welding = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "title": "NC AI, 한화오션 자율용접 로봇 AI 두뇌 개발…피지컬AI 영토 확장",
+        "content": "NC AI가 한화오션 자율용접 로봇 AI 두뇌를 개발한다.",
+        "published_at": "2026-06-04T01:42:00+00:00",
+    }
+    jensen_meeting = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "title": "젠슨 황, 엔씨 김택진 대표 만난다…피지컬 AI 협력 논의 가능성",
+        "content": "젠슨 황과 김택진 대표가 피지컬 AI 협력 가능성을 논의한다.",
+        "published_at": "2026-06-02T08:18:00+00:00",
+    }
+
+    assert _event_signature(posco_robot) == "ax_strategy:robot_foundation_model"
+    assert _event_signature(hanwha_welding) == "ax_strategy:autonomous_welding_robot"
+    assert _event_signature(jensen_meeting) == "ax_strategy:jensen_huang_nc_meeting"
+    assert _rule_prefilter_key(posco_robot) == _rule_prefilter_key(hanwha_welding)
+    assert _should_merge_articles(posco_robot, hanwha_welding, 0.99, 0.80) is False
+    assert _should_merge_articles(posco_robot, jensen_meeting, 0.99, 0.80) is False
+
+
+def test_llm_guard_rejects_peer_mentioned_only_as_background():
+    row = type(
+        "Row",
+        (),
+        {
+            "title": "젠슨 황, 엔씨 김택진 대표 만난다…피지컬 AI 협력 논의 가능성",
+            "content": "과거 포스코DX와 NC AI가 로봇 협력을 발표한 바 있다.",
+            "source_type": "news",
+        },
+    )()
+    result = {
+        "relevance_label": "relevant",
+        "relevance_score": 0.9,
+        "matched_companies": ["posco_dx"],
+        "matched_sectors": ["ax"],
+        "reason": "피지컬 AI 협력 맥락",
+    }
+
+    guarded = _guard_llm_result(row, result)
+
+    assert guarded["relevance_label"] == "irrelevant"
+
+
+def test_core_role_rejects_alumni_personnel_article():
+    result = _noise_reject_result(
+        title="중고나라 LG CNS 출신 CTO 선임, AI로 '사기 거래와의 전쟁' 나선다",
+        content="중고나라가 LG CNS 출신 CTO를 선임하고 AI 전환을 추진한다.",
+        source_type="news",
+        matched_companies=["lg_cns"],
+        matched_sectors=["ax"],
+    )
+    if result is None:
+        from src.preprocessing.relevance import _core_company_role_reject_result
+
+        result = _core_company_role_reject_result(
+            title="중고나라 LG CNS 출신 CTO 선임, AI로 '사기 거래와의 전쟁' 나선다",
+            content="중고나라가 LG CNS 출신 CTO를 선임하고 AI 전환을 추진한다.",
+            source_type="news",
+            matched_companies=["lg_cns"],
+            matched_sectors=["ax"],
+        )
+
+    assert result is not None
+    assert result["relevance_label"] == "irrelevant"
+
+
+def test_relevance_fast_passes_company_market_expansion_title():
+    title = "LG CNS, 북미 제조 AX 시장 공략 본격화 … 중소·중견 제조기업 공장 지능화 지원"
+    content = "LG CNS가 북미 제조 AX 시장을 확대하고 AI 스마트팩토리 솔루션을 지원한다."
+
+    fast_pass = _fast_pass_result(
+        title=title,
+        content=content,
+        source_type="news",
+        matched_companies=["lg_cns"],
+        matched_sectors=["ax"],
+    )
+    reject = _core_company_role_reject_result(
+        title=title,
+        content=content,
+        source_type="news",
+        matched_companies=["lg_cns"],
+        matched_sectors=["ax"],
+    )
+
+    assert fast_pass is not None
+    assert fast_pass["relevance_label"] == "relevant"
+    assert reject is None
+
+
+def test_dedup_merges_company_manufacturing_ax_market_expansion():
+    left = {
+        "id": 38657,
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["ax"],
+        "title": "LG CNS, 북미 제조 AX 시장 공략 본격화 … 중소·중견 제조기업 공장 지능화 지원",
+        "content": "LG CNS가 북미 제조 AX 시장 공략을 확대하고 공장 지능화를 지원한다.",
+        "published_at": "2026-05-20T08:52:00+00:00",
+    }
+    right = {
+        "id": 38665,
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["ax"],
+        "title": "LG CNS, AI 스마트팩토리 앞세워 북미 제조 AX 시장 정조준",
+        "content": "LG CNS가 AI 스마트팩토리 솔루션으로 북미 제조 AX 시장 확대에 나선다.",
+        "published_at": "2026-05-20T08:06:00+00:00",
+    }
+
+    assert _event_bucket(left) == "ax_strategy"
+    assert _event_bucket(right) == "ax_strategy"
+    assert _event_signature(left) == "ax_strategy:manufacturing_ax_market"
+    assert _event_signature(right) == "ax_strategy:manufacturing_ax_market"
+    assert _same_issue(left, right) is True
+    assert _should_merge_articles(left, right, 0.82, 0.80) is True
+
+
+def test_cluster_keeps_manufacturing_ax_market_articles_together_after_split():
+    articles = [
+        {
+            "id": 38657,
+            "company": ["lg_cns"],
+            "matched_companies": ["lg_cns"],
+            "matched_sectors": ["ax"],
+            "title": "LG CNS, 북미 제조 AX 시장 공략 본격화 … 중소·중견 제조기업 공장 지능화 지원",
+            "content": "LG CNS가 북미 제조 AX 시장 공략을 확대하고 공장 지능화를 지원한다.",
+            "published_at": "2026-05-20T08:52:00+00:00",
+        },
+        {
+            "id": 38664,
+            "company": ["lg_cns"],
+            "matched_companies": ["lg_cns"],
+            "matched_sectors": ["ax"],
+            "title": "LG CNS, 북미 제조 AX 시장 확대…중소·중견 제조기업 공장 지능화 지원",
+            "content": "LG CNS가 제조기업 대상 AI 스마트팩토리 솔루션을 확대한다.",
+            "published_at": "2026-05-20T08:12:00+00:00",
+        },
+        {
+            "id": 38665,
+            "company": ["lg_cns"],
+            "matched_companies": ["lg_cns"],
+            "matched_sectors": ["ax"],
+            "title": "LG CNS, AI 스마트팩토리 앞세워 북미 제조 AX 시장 정조준",
+            "content": "LG CNS가 AI 스마트팩토리 솔루션으로 북미 제조 AX 시장 확대에 나선다.",
+            "published_at": "2026-05-20T08:06:00+00:00",
+        },
+        {
+            "id": 38564,
+            "company": ["lg_cns"],
+            "matched_companies": ["lg_cns"],
+            "matched_sectors": ["ax"],
+            "title": "LG CNS, 제조특화 플랫폼 선봬…북미 제조 RX 공략 속도",
+            "content": "LG CNS가 제조특화 플랫폼으로 북미 제조 시장 공략을 강화한다.",
+            "published_at": "2026-05-20T07:16:00+00:00",
+        },
+    ]
+    embeddings = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.99, 0.01, 0.0],
+            [0.98, 0.02, 0.0],
+            [0.97, 0.03, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    cluster_map = _cluster(articles, embeddings, threshold=0.80)
+
+    assert list(cluster_map.values()) == [[38657, 38664, 38665, 38564]]
+
+
+def test_contract_deal_does_not_mix_logistics_robotics_and_smart_infra_lidar():
+    logistics = {
+        "id": 14918,
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["ax"],
+        "title": "LG CNS-컬리, 물류센터 휴머노이드 로봇 도입 맞손",
+        "content": "LG CNS와 컬리가 물류센터 휴머노이드 로봇 실증을 추진한다.",
+        "published_at": "2026-05-18T01:02:00+00:00",
+    }
+    smart_infra = {
+        "id": 29875,
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["infra"],
+        "title": "에스오에스랩, LG CNS와 협약…북미 스마트 인프라 시장 공략 가속",
+        "content": "에스오에스랩과 LG CNS가 라이다 기반 북미 스마트 인프라 시장 공략에 나선다.",
+        "published_at": "2026-05-19T02:22:00+00:00",
+    }
+    embeddings = np.array([[1.0, 0.0], [0.99, 0.01]], dtype=np.float32)
+
+    assert _event_signature(logistics) == "contract_deal:logistics_robotics"
+    assert _event_signature(smart_infra) == "cloud_infra:smart_infra_lidar"
+    assert _should_merge_articles(logistics, smart_infra, 0.99, 0.80) is False
+    assert list(_cluster([logistics, smart_infra], embeddings, threshold=0.80).values()) == [
+        [14918],
+        [29875],
+    ]
+
+
+def test_openai_enterprise_ai_articles_share_signature():
+    left = {
+        "id": 16029,
+        "company": ["sk_ax"],
+        "matched_companies": ["sk_ax"],
+        "matched_sectors": ["ax"],
+        "title": "SK AX, 오픈AI와 협력…엔터프라이즈 AI 사업 확대",
+        "content": "SK AX가 오픈AI와 챗GPT 엔터프라이즈 기반 기업용 AI 사업을 확대한다.",
+        "published_at": "2026-05-14T02:22:00+00:00",
+    }
+    right = {
+        "id": 16017,
+        "company": ["sk_ax"],
+        "matched_companies": ["sk_ax"],
+        "matched_sectors": ["ax"],
+        "title": "SK AX, 오픈AI와 손잡고 기업용 AI 시장 공략",
+        "content": "SK AX가 OpenAI와 협력해 기업용 생성형 AI 시장을 공략한다.",
+        "published_at": "2026-05-14T00:07:00+00:00",
+    }
+
+    assert _event_signature(left) == "ax_strategy:openai_enterprise_ai"
+    assert _event_signature(right) == "ax_strategy:openai_enterprise_ai"
+    assert _should_merge_articles(left, right, 0.84, 0.80) is True
+
+
+def test_same_company_title_fallback_merges_skala_training_variants():
+    left = {
+        "id": 1724,
+        "company": ["sk_ax"],
+        "matched_companies": ["sk_ax"],
+        "matched_sectors": ["ax"],
+        "title": "[산업소식] SK AX, 채용 연계형 AI 교육 프로그램 SKALA 4기 모집",
+        "content": "",
+        "published_at": "2026-05-07T06:00:00+00:00",
+    }
+    right = {
+        "id": 1731,
+        "company": ["sk_ax"],
+        "matched_companies": ["sk_ax"],
+        "matched_sectors": ["ax"],
+        "title": "SK AX, AI교육 ‘스칼라’ 광주·울산으로 확대",
+        "content": "",
+        "published_at": "2026-05-07T05:10:00+00:00",
+    }
+
+    assert _should_merge_articles(left, right, 0.70, 0.80) is True
+
+
+def test_physicalworks_rx_platform_articles_share_signature():
+    left = {
+        "id": 1325,
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["ax"],
+        "title": "LG CNS, 로봇 학습·운영 플랫폼 '피지컬웍스' 공개",
+        "content": "LG CNS가 RX 플랫폼 피지컬웍스를 공개했다.",
+        "published_at": "2026-05-07T01:00:00+00:00",
+    }
+    right = {
+        "id": 1450,
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["ax"],
+        "title": "로봇 현장 안착 수개월→1~2개월로 단축..LG CNS, '피지컬웍스' 공개",
+        "content": "LG CNS가 로봇 학습과 운영을 통합하는 RX 플랫폼을 공개했다.",
+        "published_at": "2026-05-07T10:16:00+00:00",
+    }
+
+    assert _event_signature(left) == "ax_strategy:physicalworks_rx_platform"
+    assert _event_signature(right) == "ax_strategy:physicalworks_rx_platform"
+    assert _should_merge_articles(left, right, 0.83, 0.80) is True
+
+
+def test_nc_posco_robot_ai_title_variants_share_foundation_signature():
+    base = {
+        "id": 44134,
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "matched_sectors": ["ax", "deal"],
+        "title": "NC AI-포스코DX, 로봇 AI 브레인 개발 협력…범용 로봇 지능화 기술 공동 개발",
+        "content": "",
+        "published_at": "2026-05-31T23:30:00+00:00",
+    }
+    variants = [
+        "NC AI·포스코DX, AI 로봇 개발 맞손",
+        "포스코DX-NC AI, '피지컬AI 지능화' 기술 공동 개발",
+        "포스코DX-NC AI, 로봇 AI 개발 협력… 지능화 기술 연구",
+        "‘리니지’ 기술로 로봇 학습한다…NC AI-포스코DX ‘피지컬 AI’ 맞손",
+        "NC AI-포스코DX, 로봇 AI브레인 공동 개발 맞손",
+        "포스코DX·NC AI 산업용 로봇 제어 모델 개발 추진",
+        "NC AI, 포스코DX와 로봇 지능 개발 나서",
+    ]
+
+    assert _event_signature(base) == "ax_strategy:robot_foundation_model"
+    for idx, title in enumerate(variants, start=1):
+        article = {**base, "id": 44134 + idx, "title": title}
+        assert _event_signature(article) == "ax_strategy:robot_foundation_model"
+        assert _should_merge_articles(base, article, 0.80, 0.80) is True
+
+
+def test_national_ai_computing_center_uses_specific_cloud_signature():
+    article = {
+        "id": 933,
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "matched_sectors": ["infra"],
+        "title": "국가 AI컴퓨팅센터 민간참여자로 '삼성SDS 컨소시엄' 확정",
+        "content": "삼성SDS 컨소시엄이 국가 AI 컴퓨팅 센터 사업자로 최종 확정됐다.",
+        "published_at": "2026-05-12T04:30:00+00:00",
+    }
+
+    assert _event_signature(article) == "cloud_infra:national_ai_computing_center"
+
+
+def test_llm_guard_rejects_nc_hanwha_article_with_posco_dx_background():
+    row = type(
+        "Row",
+        (),
+        {
+            "title": "NC AI, 한화오션 자율용접 로봇 AI 두뇌 개발…피지컬AI 영토 확장",
+            "content": "과거 NC AI는 포스코DX와 로봇 파운데이션 모델 협력을 발표했다.",
+            "source_type": "news",
+        },
+    )()
+    result = {
+        "relevance_label": "relevant",
+        "relevance_score": 0.9,
+        "matched_companies": ["posco_dx"],
+        "matched_sectors": ["ax"],
+        "reason": "피지컬 AI 협력 맥락",
+    }
+
+    guarded = _guard_llm_result(row, result)
+
+    assert guarded["relevance_label"] == "irrelevant"
+
+
+def test_relevance_rejects_financial_theme_without_peer_in_title():
+    result = _noise_reject_result(
+        title="증권사들, 코인원·두나무·코빗 찍었다..거래소 지분 확보",
+        content="금융권이 가상자산 거래소 지분 확보에 나섰다.",
+        source_type="news",
+        matched_companies=["samsung_sds"],
+        matched_sectors=["infra", "deal"],
+    )
+
+    assert result is not None
+    assert result["relevance_label"] == "irrelevant"
+
+
+def test_relevance_rejects_vague_stock_reaction_title():
+    result = _noise_reject_result(
+        title="LG씨엔에스 주가, 급등세... 왜?",
+        content="LG씨엔에스 주가가 급등세를 보이고 있다.",
+        source_type="news",
+        matched_companies=["lg_cns"],
+        matched_sectors=["ax"],
+    )
+
+    assert result is not None
+    assert result["relevance_label"] == "irrelevant"
+
+
+def test_relevance_rejects_group_ipo_context_without_peer_in_title():
+    result = _noise_reject_result(
+        title="현대차, '보스턴다이나믹스 카드' 꺼낸다···IPO로 지배구조 개편 실탄",
+        content="현대차그룹이 로보틱스 IPO를 검토한다. 현대오토에버는 관련 계열사로 언급됐다.",
+        source_type="news",
+        matched_companies=["hyundai_autoever"],
+        matched_sectors=["infra", "deal"],
+    )
+
+    assert result is not None
+    assert result["relevance_label"] == "irrelevant"
+
+
+def test_relevance_rejects_nc_stock_promotion_context_without_peer_in_title():
+    result = _noise_reject_result(
+        title="NC AI, 'RFM 레퍼런스'도 없는데 잇단 피지컬AI 협력 채찍질…주가부양",
+        content="NC AI의 피지컬AI 행보를 다루며 과거 포스코DX 협력을 배경으로 언급했다.",
+        source_type="news",
+        matched_companies=["posco_dx"],
+        matched_sectors=["ax", "deal"],
+    )
+
+    assert result is not None
+    assert result["relevance_label"] == "irrelevant"
