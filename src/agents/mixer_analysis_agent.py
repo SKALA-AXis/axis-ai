@@ -26,10 +26,8 @@ import time
 import uuid
 
 from langchain_openai import ChatOpenAI
-from sqlalchemy import text
 
 from src.agents.implication_agent import ImplicationAgent
-from src.db.postgres import SessionLocal
 from src.middleware.analysis_ledger import with_ledger_writeback
 from src.observability.langfuse_client import tracing_config
 from src.services.agent_output_validation import (
@@ -37,6 +35,16 @@ from src.services.agent_output_validation import (
     clip_implication,
     clip_string,
     confidence_in_range,
+)
+from src.services.analysis_units import (
+    AnalysisUnit,
+    analysis_units_from_cards,
+    card_like_from_units,
+    confidence_penalty_for_flags,
+    load_analysis_units_by_card_ids,
+    load_analysis_units_by_integrated_issue_ids,
+    quality_flags_for_units,
+    source_integrated_issue_ids,
 )
 
 log = logging.getLogger(__name__)
@@ -101,7 +109,7 @@ _MIXER_PROMPT = """\
 
 MixerAgent의 목표는 단순 요약이 아닙니다.
 여러 이슈를 함께 보았을 때만 드러나는 공통 흐름, 차이의 축, 판단 기준의 변화,
-그리고 후속 ImplicationAgent가 대응방향을 만들 수 있는 근거를 구조화하세요.
+그리고 결과를 보는 임원이 회사 차원의 대응방향을 결정할 수 있는 근거를 구조화하세요.
 
 ## 입력
 
@@ -188,15 +196,21 @@ MixerAgent의 목표는 단순 요약이 아닙니다.
 
 ## 대응방향 기준
 
-SK AX 관점 대응방향은 후속 ImplicationAgent가 생성합니다.
-MixerAgent는 그 전 단계에서 대응방향이 바로 실행 가능한 문장으로 나올 수 있도록
+결과의 1차 수신자는 Mixer 결과를 보는 임원/의사결정자입니다.
+대응방향은 이 프로그램, 카드 화면, 다음 모니터링 운영 방식이 아니라
+회사가 고객군, 오퍼링, 파트너십, 자원 배분, 리스크 통제 측면에서
+무엇을 바꿔 실행할지여야 합니다.
+MixerAgent는 후속 ImplicationAgent가 회사 차원의 recommended_actions를 만들 수 있도록
 근거와 판단 기준을 구체화합니다.
 recommended_action_basis는 다음 중 하나를 명확히 해야 합니다.
-- 제안 메시지를 어떤 기준으로 바꿔야 하는가
-- 고객 설득에서 어떤 증거를 더 앞세워야 하는가
-- 어떤 수치/일정/운영 지표를 계속 추적해야 하는가
-- 어떤 리스크나 불확실성을 확인해야 하는가
+- 어떤 고객군/산업/업무를 우선 공략군으로 정해야 하는가
+- 어떤 오퍼링/상품 패키지/사업 라인/파트너십의 우선순위를 조정해야 하는가
+- 어떤 투자, 인력, 책임 조직, 거버넌스 결정을 해야 하는가
+- 어떤 리스크, 규제, 수익화 조건을 의사결정 게이트로 둘 것인가
+- 영업/상품화/운영 조직이 어떤 기준으로 행동을 바꿔야 하는가
 - “강화”, “검토”, “모니터링” 같은 포괄어로 끝내지 말고 무엇을 바꾸거나 확인할지 쓰세요.
+- “제안서 첫 장”, “표로 추가”, “다음 모니터링”, “이 프로그램에서 보여준다”처럼
+  산출물/화면/운영 절차 중심 행동을 최종 action으로 쓰지 마세요.
 
 ## 출력 문장 기준
 
@@ -279,24 +293,28 @@ hidden_conclusion:
   사용자-facing 문장으로 설명하세요.
 
 recommended_action_basis:
-- SK AX가 바로 쓸 수 있는 행동을 만들기 위한 근거입니다.
-- 각 문장은 무엇을, 어떤 근거 기준으로, 어떻게 조정해야 하는지 보여야 합니다.
+- SK AX가 회사 차원의 행동을 만들기 위한 근거입니다.
+- 각 문장은 어떤 고객군, 사업 라인, 오퍼링, 파트너십, 자원 배분,
+  리스크 통제 기준을 어떻게 조정해야 하는지 보여야 합니다.
 - 후속 ImplicationAgent가 이 근거를 받아 recommended_actions를 만들 때
   바로 행동 문장으로 바꿀 수 있어야 합니다.
 
 action_details:
-- SK AX가 바로 쓸 수 있는 대응방향입니다.
+- SK AX가 회사 차원에서 바로 실행할 대응방향입니다.
 - action은 실행 문장, why는 왜 그 행동이 필요한지, use_case는 어디에 쓰는지,
   evidence는 어떤 카드 근거에 기대는지로 나누어 쓰세요.
-- 대응방향은 제안 전략, 후속 모니터링, 레퍼런스 구성, 시장 대응 중
-  입력 근거와 가장 맞는 용도를 중심으로 작성하세요.
-- “강화한다”, “검토한다”에서 끝내지 말고, 무엇을 어떤 형식으로 바꾸거나
-  어떤 지표를 추적할지까지 쓰세요.
+- 대응방향은 사업 우선순위, 오퍼링/상품화, 파트너십/시장 대응,
+  리스크/거버넌스, 고객군/영업전략 중 입력 근거와 가장 맞는 용도를 중심으로 작성하세요.
+- “강화한다”, “검토한다”에서 끝내지 말고, 임원이 회사의 자원, 조직,
+  고객군, 상품 패키지, 파트너십, 리스크 게이트를 어떻게 바꿀지까지 쓰세요.
+- 제안서 작성, 대시보드 표시, 다음 모니터링 항목 같은 프로그램 산출물 중심 action은 금지입니다.
 
 ## 수신자 관점
 
-결과를 받는 사람은 여러 카드 중 무엇을 우선 봐야 하는지, 왜 같이 봐야 하는지,
-다음 의사결정에서 어떤 기준을 가져가야 하는지 알고 싶어합니다.
+결과를 받는 사람은 임원입니다.
+임원은 이미 회사 내부 사정과 사업 맥락을 알고 있으므로,
+여러 카드 중 무엇을 우선 봐야 하는지보다 회사의 다음 의사결정에서
+어떤 사업 기준, 고객군, 자원 배분, 파트너십, 리스크 게이트를 가져가야 하는지 알고 싶어합니다.
 따라서 문장은 예쁘기보다 판단 가능해야 합니다.
 
 ## 출력 검증
@@ -345,14 +363,14 @@ action_details:
     "evidence_card_ids": ["CN-...", "CN-..."]
   }},
   "recommended_action_basis": [
-    "후속 시사점 에이전트가 대응방향을 만들 때 사용할 근거 1",
-    "후속 시사점 에이전트가 대응방향을 만들 때 사용할 근거 2"
+    "임원이 회사 차원의 대응방향을 정할 때 사용할 근거 1",
+    "임원이 회사 차원의 대응방향을 정할 때 사용할 근거 2"
   ],
   "action_details": [
     {{
-      "action": "SK AX가 바로 실행할 대응방향 1문장",
+      "action": "SK AX가 회사 차원에서 바로 실행할 대응방향 1문장",
       "why": "이 행동이 필요한 이유 1문장",
-      "use_case": "제안 전략 | 후속 모니터링 | 레퍼런스 구성 | 시장 대응",
+      "use_case": "사업 우선순위 | 오퍼링/상품화 | 시장 대응 | 리스크/거버넌스 | 영업전략",
       "evidence": [
         {{"card_id": "CN-...", "text": "근거 사실"}}
       ],
@@ -436,12 +454,13 @@ _MIXER_REPAIR_PROMPT = """\
   입력이 기술이면 기술, 제품이면 제품, 플랫폼이면 플랫폼으로 유지하세요.
 
 5. 대응방향 근거 검증
-- recommended_action_basis는 후속 ImplicationAgent의 입력입니다.
-- 단순 액션 구호가 아니라, SK AX가 어떤 제안 메시지, 검증 기준, 모니터링 기준,
-  고객 설득 기준을 조정해야 하는지 쓰세요.
+- recommended_action_basis는 임원이 회사 차원의 대응방향을 정하기 위한 입력입니다.
+- 단순 액션 구호가 아니라, SK AX가 어떤 고객군, 오퍼링, 사업 라인, 파트너십,
+  자원 배분, 리스크 통제 기준을 조정해야 하는지 쓰세요.
 - 후속 recommended_actions가 바로 실행 가능한 행동 문장으로 바뀔 수 있을 만큼 구체적으로 쓰세요.
 - action_details는 action, why, use_case, evidence_card_ids를 모두 포함해야 합니다.
-- action은 “무엇을 어떻게 바꾼다/만든다/추적한다/비교한다”가 보여야 합니다.
+- action은 “어떤 사업 판단을 어떻게 바꾼다/정한다/재배분한다/상품화한다”가 보여야 합니다.
+- 제안서 작성, 대시보드 표시, 다음 모니터링 항목 같은 프로그램 산출물 중심 action은 제거하세요.
 - 근거와 연결되지 않는 일반 과제는 제거하세요.
 
 ## 다시 쓰기 기준
@@ -450,8 +469,8 @@ _MIXER_REPAIR_PROMPT = """\
 - common_pattern: 두 개 이상 카드에서 반복되는 움직임과 그 판단 이유
 - comparison_point: 같은 흐름 안의 다른 강조점과 그 판단 이유
 - hidden_conclusion: 여러 개를 같이 봐야 생기는 해석과 그 판단 이유
-- recommended_action_basis: SK AX가 바로 쓸 수 있는 행동을 만들기 위한 구체 근거
-- action_details: 대응방향을 실행 문장, 이유, 활용처, 근거로 분리한 구조
+- recommended_action_basis: 임원이 회사 차원의 대응 행동을 만들기 위한 구체 근거
+- action_details: 회사 대응방향을 실행 문장, 이유, 활용처, 근거로 분리한 구조
 
 ## 출력 형식
 
@@ -468,46 +487,82 @@ class MixerAnalysisAgent:
     @with_ledger_writeback("MixerAnalysisAgent")
     async def analyze(
         self,
-        card_ids: list[str],
+        card_ids: list[str] | None = None,
+        integrated_issue_ids: list[str] | None = None,
         ratios: dict | None = None,
         user_context: str | None = None,
     ) -> dict:
         """N 카드 선택 → 저장된 분석 payload 기반 6축 radar + cross-issue 분석.
 
         Args:
-            card_ids: 프론트에서 선택한 카드 id (2 ≤ N ≤ 20 권장).
+            card_ids: 프론트에서 선택한 카드 id (호환 입력, 2 ≤ N ≤ 20 권장).
+            integrated_issue_ids: canonical integrated_issues.id 입력. card_ids보다 우선.
             ratios: peer / industry / keyword 가중치 (frontend slider 결과).
             user_context: 사용자 자유 입력.
 
         Returns:
             MixerAnalysisOutput dict — design §5 schema.
         """
-        if not card_ids or len(card_ids) < _MIN_CARDS:
+        requested_card_ids = _dedupe_keep_order(
+            [str(card_id).strip() for card_id in card_ids or [] if str(card_id).strip()]
+        )
+        requested_integrated_issue_ids = _dedupe_keep_order(
+            [
+                str(issue_id).strip()
+                for issue_id in integrated_issue_ids or []
+                if str(issue_id).strip()
+            ]
+        )
+        requested_ids = (
+            requested_integrated_issue_ids
+            if requested_integrated_issue_ids
+            else requested_card_ids
+        )
+        if len(requested_ids) < _MIN_CARDS:
             return _error_response(
-                "card_ids 부족",
-                f"mixer 는 최소 {_MIN_CARDS}개 카드 필요 (받음={len(card_ids or [])})",
-                card_ids or [],
+                "분석 단위 부족",
+                f"mixer 는 최소 {_MIN_CARDS}개 분석 단위 필요 (받음={len(requested_ids)})",
+                requested_ids,
+                integrated_issue_ids=requested_integrated_issue_ids,
             )
 
-        if len(card_ids) > _MAX_CARDS:
+        if len(requested_ids) > _MAX_CARDS:
             log.warning(
-                "Mixer | card_ids 너무 많음 — 상위 %d개로 truncate (받음=%d)",
+                "Mixer | 분석 단위가 너무 많음 — 상위 %d개로 truncate (받음=%d)",
                 _MAX_CARDS,
-                len(card_ids),
+                len(requested_ids),
             )
-            card_ids = card_ids[:_MAX_CARDS]
+            if requested_integrated_issue_ids:
+                requested_integrated_issue_ids = requested_integrated_issue_ids[:_MAX_CARDS]
+            else:
+                requested_card_ids = requested_card_ids[:_MAX_CARDS]
+            requested_ids = (
+                requested_integrated_issue_ids
+                if requested_integrated_issue_ids
+                else requested_card_ids
+            )
 
-        cards = _fetch_cards(card_ids)
-        if not cards:
+        if requested_integrated_issue_ids:
+            analysis_units = load_analysis_units_by_integrated_issue_ids(
+                requested_integrated_issue_ids
+            )
+        else:
+            analysis_units = load_analysis_units_by_card_ids(requested_card_ids)
+        if len(analysis_units) < _MIN_CARDS:
             return _error_response(
-                "카드 조회 실패",
-                "DB 에서 card_news row 0건 — id 확인 필요",
-                card_ids,
+                "분석 단위 조회 실패",
+                f"canonical AnalysisUnit 조회 결과 부족 (받음={len(analysis_units)})",
+                requested_ids,
+                integrated_issue_ids=requested_integrated_issue_ids,
             )
 
+        cards = card_like_from_units(analysis_units)
+        source_anchor_ids = [str(card.get("id")) for card in cards if card.get("id")]
         return await self._analyze_cards(
             cards=cards,
-            requested_card_ids=card_ids,
+            requested_card_ids=source_anchor_ids,
+            requested_integrated_issue_ids=requested_integrated_issue_ids,
+            analysis_units=analysis_units,
             ratios=ratios,
             user_context=user_context,
         )
@@ -536,10 +591,15 @@ class MixerAnalysisAgent:
         if len(cards) > _MAX_CARDS:
             cards = cards[:_MAX_CARDS]
             card_ids = [str(card.get("id")) for card in cards if card.get("id")]
+        analysis_units = analysis_units_from_cards(cards)
+        cards = card_like_from_units(analysis_units)
+        card_ids = [str(card.get("id")) for card in cards if card.get("id")]
 
         return await self._analyze_cards(
             cards=cards,
             requested_card_ids=card_ids,
+            requested_integrated_issue_ids=[],
+            analysis_units=analysis_units,
             ratios=ratios,
             user_context=user_context,
         )
@@ -549,6 +609,8 @@ class MixerAnalysisAgent:
         *,
         cards: list[dict],
         requested_card_ids: list[str],
+        requested_integrated_issue_ids: list[str],
+        analysis_units: list[AnalysisUnit],
         ratios: dict | None,
         user_context: str | None,
     ) -> dict:
@@ -575,7 +637,12 @@ class MixerAnalysisAgent:
             )
         except Exception as e:
             log.exception("MixerAnalysisAgent LLM 호출 실패 | error=%s", e)
-            return _error_response("LLM 호출 실패", str(e), requested_card_ids)
+            return _error_response(
+                "LLM 호출 실패",
+                str(e),
+                requested_card_ids,
+                integrated_issue_ids=requested_integrated_issue_ids,
+            )
 
         result = _parse_and_validate(content, cards, requested_card_ids)
         result = _repair_mixer_result_quality(
@@ -583,6 +650,19 @@ class MixerAnalysisAgent:
             cards=cards,
             requested_card_ids=requested_card_ids,
         )
+        source_issue_ids = source_integrated_issue_ids(analysis_units)
+        quality_flags = quality_flags_for_units(analysis_units)
+        if source_issue_ids:
+            result["source_integrated_issue_ids"] = source_issue_ids
+        else:
+            result.setdefault("source_integrated_issue_ids", [])
+        if quality_flags:
+            result["quality_flags"] = quality_flags
+            penalty = confidence_penalty_for_flags(quality_flags)
+            result["confidence"] = round(
+                max(0.0, confidence_in_range(result.get("confidence", 0.0)) - penalty),
+                2,
+            )
         mix_implication = _generate_mix_level_implication(result=result, cards=cards)
         if mix_implication:
             result["mix_implication"] = mix_implication
@@ -595,7 +675,6 @@ class MixerAnalysisAgent:
             if actions:
                 result["recommended_actions"] = actions
                 result["sk_ax_implication"] = clip_implication(" ".join(actions))
-                result["warning"] = _warning_for(result)
         result["radar_axes"] = radar  # 이미 위에서 계산된 값 재사용
         result["mix_id"] = _new_mix_id()
         result.setdefault("provenance", {}).update(
@@ -603,10 +682,17 @@ class MixerAnalysisAgent:
                 "llm_model": _LLM_MODEL,
                 "prompt_version": _PROMPT_VERSION,
                 "source_card_ids": [c["id"] for c in cards],
+                "requested_integrated_issue_ids": requested_integrated_issue_ids,
+                "source_integrated_issue_ids": source_issue_ids,
+                "quality_flags": quality_flags,
                 "ratios": ratios or {},
-                "analysis_basis": "integrated_issue+analysis+implication+profile_context",
+                "analysis_basis": (
+                    "integrated_issues.id -> integrated_issue+analysis+implication+"
+                    "classification+validation"
+                ),
             }
         )
+        result["warning"] = _warning_for(result)
         return result
 
 
@@ -737,43 +823,7 @@ def _format_ratios(ratios: dict | None) -> str:
 
 
 def _fetch_cards(card_ids: list[str]) -> list[dict]:
-    placeholders = ",".join(f":id_{i}" for i in range(len(card_ids)))
-    params = {f"id_{i}": cid for i, cid in enumerate(card_ids)}
-    sql_v2 = (
-        "SELECT id, company, COALESCE(peer_company_id, company) AS peer_id, "
-        "primary_keyword_category, source_raw_article_ids, title, summary_lines, "
-        "event_type, importance, importance_score, implication, sources, "
-        "evidence_payload, validation_pass, validation_sc_score "
-        f"FROM card_news WHERE id IN ({placeholders})"
-    )
-    sql_legacy = (
-        "SELECT id, company, company AS peer_id, title, summary_lines, event_type, "
-        "importance, importance_score, implication, sources, validation_pass, "
-        f"validation_sc_score FROM card_news WHERE id IN ({placeholders})"
-    )
-    try:
-        with SessionLocal() as db:
-            try:
-                rows = db.execute(text(sql_v2), params).mappings().all()
-            except Exception as exc:  # noqa: BLE001
-                if not _is_missing_v2_column(exc):
-                    raise
-                log.info("Mixer v2 컬럼 조회 실패 → legacy card_news 조회 사용")
-                db.rollback()
-                rows = db.execute(text(sql_legacy), params).mappings().all()
-    except Exception as e:
-        log.exception("Mixer DB query 실패 | %s", e)
-        return []
-
-    out: list[dict] = []
-    for r in rows:
-        item = dict(r)
-        item["implication"] = _json_dict(item.get("implication"))
-        item["sources"] = _json_list(item.get("sources"))
-        item["evidence_payload"] = _json_dict(item.get("evidence_payload"))
-        item["source_raw_article_ids"] = _int_list(item.get("source_raw_article_ids"))
-        out.append(item)
-    return out
+    return card_like_from_units(load_analysis_units_by_card_ids(card_ids))
 
 
 def _cards_from_linked_result_items(items: list[dict]) -> list[dict]:
@@ -898,25 +948,35 @@ def _format_analysis_units(cards: list[dict]) -> str:
             else {}
         )
         evidence_links = evidence.get("source_links") or c.get("sources") or []
+        evidence_refs = evidence.get("evidence_refs") or []
         financial_refs = evidence.get("financial_refs") or []
         raw_ids = c.get("source_raw_article_ids") or []
+        integrated_issue_id = (
+            c.get("integrated_issue_id")
+            or evidence.get("integrated_issue_id")
+            or linked_results.get("integrated_issue_id")
+        )
+        quality_flags = c.get("quality_flags") or evidence.get("quality_flags") or []
         skax_payload = _compact_json(skax_impl) or _compact_json(implication_result)
         block = "\n".join(
             [
                 f"[{c['id']}] {c.get('title', '')}",
+                f"- Integrated issue id: {integrated_issue_id or '*없음*'}",
                 f"- Peer: {c.get('peer_id') or c.get('company') or ''}",
                 f"- Sector: {sector}",
                 f"- Event type: {c.get('event_type', '')}",
                 f"- Exposure: {exposure_band} ({_card_score(c):.2f})",
                 f"- Source raw article ids: {raw_ids}",
-                f"- 표시 요약(보조): {summary}",
+                f"- Quality flags: {_compact_json(quality_flags) or '*없음*'}",
                 f"- 통합 이슈: {_compact_json(_compact_integrated_issue(integrated_issue))}",
                 f"- 전략 분석: {_compact_json(_compact_analysis_result(analysis_result))}",
                 f"- Peer 분석: {_compact_json(peer_impl)}",
                 f"- SK AX 시사점/대응: {skax_payload}",
                 f"- Sector/signals: {_compact_json(sector_meta)}",
+                f"- Evidence refs: {_compact_json(evidence_refs[:5])}",
                 f"- 재무/수치 근거: {_compact_json(financial_refs)}",
                 f"- 출처: {_compact_json(evidence_links[:5])}",
+                f"- 표시 요약(최하위 보조): {summary}",
             ]
         )
         blocks.append(block)
@@ -1002,11 +1062,6 @@ def _compact_analysis_result(value: dict) -> dict:
         "risk_factors": value.get("risk_factors", [])[:5],
         "confidence": value.get("confidence"),
     }
-
-
-def _is_missing_v2_column(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return "undefinedcolumn" in message or "does not exist" in message
 
 
 def _valid_card_refs(value: object, allowed_card_ids: set[str]) -> list[str]:
@@ -1111,15 +1166,69 @@ def _needs_action_detail_fallback(details: list[dict]) -> bool:
     if len(details) < 2:
         return True
     return any(
-        not item.get("why") or len(_json_list(item.get("evidence_card_ids"))) < 2
+        not item.get("why")
+        or len(_json_list(item.get("evidence_card_ids"))) < 2
+        or _is_generic_action_text(str(item.get("action") or ""))
         for item in details
     )
+
+
+def _is_generic_action_text(value: str) -> bool:
+    text_value = str(value or "").strip()
+    if not text_value:
+        return True
+    generic_patterns = (
+        "다음 메시지를 배치",
+        "다음 비교 축을 표로 추가",
+        "후속 모니터링 항목을 다음 반복 신호",
+        "제안서 첫 장",
+        "기능 소개",
+        "운영 검증표",
+        "PoC 설계",
+        "후속 모니터링",
+        "뉴스 재요약",
+        "제안 우선순위",
+        "검증표",
+        "이 프로그램",
+        "대시보드",
+        "화면",
+        "강화한다",
+        "검토한다",
+        "모니터링한다",
+    )
+    if any(pattern in text_value for pattern in generic_patterns):
+        return True
+    concrete_markers = (
+        "사업 라인",
+        "고객군",
+        "우선순위",
+        "오퍼링",
+        "파트너십",
+        "투자",
+        "조직",
+        "책임 조직",
+        "영업",
+        "리스크",
+        "거버넌스",
+        "상품화",
+        "패키지",
+        "시장 대응",
+        "의사결정",
+        "자원 배분",
+        "가격",
+        "계약",
+        "레퍼런스",
+        "수익화",
+        "규제",
+    )
+    return not any(marker in text_value for marker in concrete_markers)
 
 
 def _fallback_action_details_from_result(result: dict) -> list[dict]:
     common = _dict_or_empty(result.get("common_pattern"))
     comparison = _dict_or_empty(result.get("comparison_point"))
     hidden = _dict_or_empty(result.get("hidden_conclusion"))
+    action_basis = _json_list(result.get("recommended_action_basis"))
     common_evidence = _json_list(common.get("evidence"))
     comparison_evidence = _json_list(comparison.get("evidence"))
     hidden_evidence = _json_list(hidden.get("evidence"))
@@ -1130,8 +1239,11 @@ def _fallback_action_details_from_result(result: dict) -> list[dict]:
     return [
         {
             "action": clip_implication(
-                "제안 첫 장에 다음 메시지를 배치한다: "
-                f"{hidden.get('finding') or result.get('mix_insight') or '믹스 인사이트'}"
+                "SK AX는 임원 의사결정에서 우선 공략 고객군과 책임 조직을 먼저 정한다. "
+                f"{_brief_action_basis(hidden.get('finding') or action_basis[:1])}"
+                " 이 판단을 기준으로 금융과 공공/교육 등 입력에서 확인된 고객군별 "
+                "사업 우선순위를 나누고, "
+                "각 고객군의 오퍼링 책임 조직과 리스크 승인 권한을 지정한다."
             ),
             "why": clip_string(
                 hidden.get("rationale")
@@ -1141,7 +1253,7 @@ def _fallback_action_details_from_result(result: dict) -> list[dict]:
                 ),
                 260,
             ),
-            "use_case": "제안 전략",
+            "use_case": "사업 우선순위",
             "evidence": hidden_evidence[:3] or common_evidence[:3],
             "evidence_card_ids": _dedupe_keep_order(
                 [str(item) for item in (hidden_refs or common_refs)]
@@ -1149,15 +1261,19 @@ def _fallback_action_details_from_result(result: dict) -> list[dict]:
         },
         {
             "action": clip_implication(
-                "고객 설명 자료에 다음 비교 축을 표로 추가한다: "
-                f"{comparison.get('finding') or '이슈별 강조점 차이'}"
+                "SK AX는 사업 라인별 오퍼링 패키지를 같은 이름의 AX 상품으로 묶지 말고 "
+                "고객 의사결정 기준에 맞춰 분리 상품화한다. "
+                f"{_brief_action_basis(comparison.get('finding') or action_basis[1:2])}"
+                " 이 차이를 기준으로 금융권은 규제·정산·보안 거버넌스 패키지, "
+                "공공/교육은 데이터 비학습·권한 통제·운영 레퍼런스 패키지처럼 "
+                "영업 우선순위와 가격/계약 조건을 다르게 둔다."
             ),
             "why": clip_string(
                 comparison.get("rationale")
                 or "같은 흐름 안에서도 이슈마다 앞세우는 적용 장면과 성과 기준이 다르기 때문이다.",
                 260,
             ),
-            "use_case": "레퍼런스 구성",
+            "use_case": "오퍼링/상품화",
             "evidence": comparison_evidence[:3] or common_evidence[:3],
             "evidence_card_ids": _dedupe_keep_order(
                 [str(item) for item in (comparison_refs or common_refs)]
@@ -1165,22 +1281,36 @@ def _fallback_action_details_from_result(result: dict) -> list[dict]:
         },
         {
             "action": clip_implication(
-                "후속 모니터링 항목을 다음 반복 신호의 실제 적용 사례와 "
-                f"성과 근거로 잡는다: {common.get('finding') or '반복되는 움직임'}"
+                "SK AX는 경영진 리뷰 안건을 정보 공유가 아니라 자원 배분 의사결정으로 격상한다. "
+                f"{_brief_action_basis(common.get('finding') or action_basis[2:3])}"
+                " 이 반복 신호와 연결된 투자 규모, 수주 전환, 규제 일정, 운영 KPI가 확인되면 "
+                "우선 고객군별 전담 인력, 파트너십 후보, 레퍼런스 확보 예산을 재배분한다."
             ),
             "why": clip_string(
                 common.get("rationale")
                 or (
-                    "여러 이슈에서 반복되는 움직임은 "
-                    "다음 카드 조합에서도 계속 확인할 필요가 있기 때문이다."
+                    "여러 이슈에서 반복되는 움직임은 단순 관찰 대상이 아니라 "
+                    "사업 자원 배분 기준으로 반영할 필요가 있기 때문이다."
                 ),
                 260,
             ),
-            "use_case": "후속 모니터링",
+            "use_case": "파트너십/시장 대응",
             "evidence": common_evidence[:3],
             "evidence_card_ids": _dedupe_keep_order([str(item) for item in common_refs])[:6],
         },
     ]
+
+
+def _brief_action_basis(value: object) -> str:
+    if isinstance(value, list):
+        value = " ".join(str(item) for item in value if str(item).strip())
+    text_value = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text_value:
+        return "입력 근거에서 확인된 핵심 변화"
+    brief = clip_string(text_value, 90).strip()
+    if not brief.endswith((".", "!", "?", "…")):
+        brief = f"{brief}."
+    return brief
 
 
 def _normalize_mix_evidence(value: object, allowed_card_ids: set[str]) -> list[dict]:
@@ -1297,10 +1427,17 @@ def _parse_and_validate(
         clip_implication(item) for item in _json_list(data.get("recommended_actions")) if item
     ][:3]
     data["action_details"] = _normalize_action_details(data.get("action_details"), allowed_card_ids)
+    fallback_actions_applied = False
     if _needs_action_detail_fallback(data["action_details"]):
         data["action_details"] = _fallback_action_details_from_result(data)
-    if not data["recommended_actions"]:
-        data["recommended_actions"] = _recommended_actions_from_details(data)
+        fallback_actions_applied = True
+    detail_actions = _recommended_actions_from_details(data)
+    if (
+        fallback_actions_applied
+        or not data["recommended_actions"]
+        or any(_is_generic_action_text(action) for action in data["recommended_actions"])
+    ):
+        data["recommended_actions"] = detail_actions or data["recommended_actions"]
     data["confidence"] = confidence_in_range(data.get("confidence", 0.0))
     data["sources_used"] = _valid_card_refs(
         data.get("sources_used") or [c["id"] for c in cards],
@@ -1697,6 +1834,10 @@ def _warning_for(data: dict) -> str | None:
     confidence = float(data.get("confidence") or 0.0)
     if confidence < 0.6:
         warnings.append("근거 불충분 — 다른 카드 조합 권장 (confidence < 0.6)")
+    provenance = data.get("provenance") if isinstance(data.get("provenance"), dict) else {}
+    quality_flags = _json_list(data.get("quality_flags") or provenance.get("quality_flags"))
+    if quality_flags:
+        warnings.append(f"quality_flags={','.join(str(flag) for flag in quality_flags)}")
     for key in ("common_pattern", "comparison_point", "hidden_conclusion"):
         block = _dict_or_empty(data.get(key))
         if not block.get("finding") or len(_json_list(block.get("evidence_card_ids"))) < 2:
@@ -1711,8 +1852,10 @@ def _error_response(
     detail: str,
     card_ids: list[str],
     confidence: float = 0.0,
+    integrated_issue_ids: list[str] | None = None,
 ) -> dict:
     log.warning("Mixer error | %s | detail=%s | ids=%s", short_reason, detail, card_ids)
+    issue_ids = integrated_issue_ids or []
     return {
         "mix_id": _new_mix_id(),
         "mix_insight": "",
@@ -1747,6 +1890,7 @@ def _error_response(
         "follow_up_questions": [],
         "confidence": confidence,
         "sources_used": card_ids,
+        "source_integrated_issue_ids": issue_ids,
         "peer_ids": [],
         "langfuse_trace_id": None,
         "warning": f"{short_reason} — {detail}",
@@ -1754,6 +1898,8 @@ def _error_response(
             "llm_model": _LLM_MODEL,
             "prompt_version": _PROMPT_VERSION,
             "source_card_ids": card_ids,
+            "source_integrated_issue_ids": issue_ids,
+            "quality_flags": [],
             "error": short_reason,
         },
     }

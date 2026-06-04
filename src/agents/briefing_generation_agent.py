@@ -29,6 +29,14 @@ from sqlalchemy import text  # noqa: E402
 from src.config.env_loader import load_profile  # noqa: E402
 from src.db.briefing_reports import save_briefing_report  # noqa: E402
 from src.db.postgres import SessionLocal  # noqa: E402
+from src.services.analysis_units import (  # noqa: E402
+    QUALITY_SUMMARY_ONLY_FALLBACK,
+    analysis_units_from_cards,
+    card_like_from_units,
+    confidence_penalty_for_flags,
+    quality_flags_for_units,
+    source_integrated_issue_ids,
+)
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +103,7 @@ class BriefingGenerationAgent:
         briefing_type: BriefingType,
         anchor_date: str | date | None = None,
         card_ids: list[str] | None = None,
+        integrated_issue_ids: list[str] | None = None,
         peer_ids: list[str] | None = None,
         sectors: list[str] | None = None,
         title: str | None = None,
@@ -116,6 +125,7 @@ class BriefingGenerationAgent:
 
         load_profile()
         requested_card_ids = _clean_ids(card_ids)
+        requested_integrated_issue_ids = _clean_ids(integrated_issue_ids)
         period = _resolve_period(briefing_type, anchor_date)
         source_mode = (
             "mock_fixture" if use_mock or mock_path or mock_items else "card_news_period_filter"
@@ -126,6 +136,7 @@ class BriefingGenerationAgent:
                 period=period,
                 items=mock_source_items,
                 card_ids=requested_card_ids,
+                integrated_issue_ids=requested_integrated_issue_ids,
                 peer_ids=peer_ids,
                 sectors=sectors,
                 limit=limit,
@@ -135,19 +146,33 @@ class BriefingGenerationAgent:
             selected_cards = _fetch_period_cards(
                 period=period,
                 card_ids=requested_card_ids,
+                integrated_issue_ids=requested_integrated_issue_ids,
                 peer_ids=peer_ids,
                 sectors=sectors,
                 limit=limit,
             )
+        selected_units = analysis_units_from_cards(selected_cards)
+        selected_cards = card_like_from_units(selected_units)
         selected_card_ids = [card["id"] for card in selected_cards]
+        selected_integrated_issue_ids = source_integrated_issue_ids(selected_units)
+        quality_flags = quality_flags_for_units(selected_units)
         excluded_card_ids = [
             card_id for card_id in requested_card_ids if card_id not in set(selected_card_ids)
+        ]
+        excluded_integrated_issue_ids = [
+            issue_id
+            for issue_id in requested_integrated_issue_ids
+            if issue_id not in set(selected_integrated_issue_ids)
         ]
         report_id = _briefing_id(briefing_type, period["date_from"])
         provenance_base = _provenance_base(
             requested_card_ids=requested_card_ids,
+            requested_integrated_issue_ids=requested_integrated_issue_ids,
             selected_card_ids=selected_card_ids,
+            selected_integrated_issue_ids=selected_integrated_issue_ids,
             excluded_card_ids=excluded_card_ids,
+            excluded_integrated_issue_ids=excluded_integrated_issue_ids,
+            quality_flags=quality_flags,
             source_mode=source_mode,
         )
 
@@ -255,6 +280,7 @@ def _fetch_period_cards(
     *,
     period: dict[str, Any],
     card_ids: list[str] | None,
+    integrated_issue_ids: list[str] | None,
     peer_ids: list[str] | None,
     sectors: list[str] | None,
     limit: int,
@@ -276,6 +302,13 @@ def _fetch_period_cards(
     _append_in_filter(
         where,
         params,
+        "cn.integrated_issue_id::text",
+        "integrated_issue_id",
+        integrated_issue_ids,
+    )
+    _append_in_filter(
+        where,
+        params,
         "COALESCE(cn.peer_company_id, cn.company)",
         "peer_id",
         peer_ids,
@@ -291,6 +324,7 @@ def _fetch_period_cards(
             cn.importance_score,
             cn.company,
             COALESCE(cn.peer_company_id, cn.company) AS peer_id,
+            cn.integrated_issue_id,
             cn.primary_keyword_category,
             cn.implication,
             cn.sources,
@@ -351,16 +385,20 @@ def _fetch_mock_period_cards(
     period: dict[str, Any],
     items: list[dict[str, Any]],
     card_ids: list[str] | None,
+    integrated_issue_ids: list[str] | None,
     peer_ids: list[str] | None,
     sectors: list[str] | None,
     limit: int,
 ) -> list[dict[str, Any]]:
     requested = set(card_ids or [])
+    requested_issue_ids = set(integrated_issue_ids or [])
     wanted_peers = {str(peer_id).strip() for peer_id in peer_ids or [] if str(peer_id).strip()}
     cards = [_normalize_mock_item(item) for item in items]
     filtered: list[dict[str, Any]] = []
     for card in cards:
         if requested and card["id"] not in requested:
+            continue
+        if requested_issue_ids and card.get("integrated_issue_id") not in requested_issue_ids:
             continue
         if wanted_peers and card.get("peer_id") not in wanted_peers:
             continue
@@ -397,6 +435,12 @@ def _normalize_mock_item(item: dict[str, Any]) -> dict[str, Any]:
     analysis_package = payload_package or top_package
     if analysis_package:
         evidence_payload["analysis_package"] = analysis_package
+    integrated_issue_id = _first_text(
+        item.get("integrated_issue_id"),
+        evidence_payload.get("integrated_issue_id"),
+        analysis_package.get("integrated_issue_id"),
+        _nested_get(analysis_package, "integrated_issue", "integrated_issue_id"),
+    )
 
     sources = _json_list(item.get("sources"))
     basis_at = _first_source_published_at(sources) or item.get("basis_at") or item.get("created_at")
@@ -414,6 +458,7 @@ def _normalize_mock_item(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": card_id,
         "card_id": card_id,
+        "integrated_issue_id": integrated_issue_id or None,
         "title": str(item.get("title") or ""),
         "summary_lines": _json_list(item.get("summary_lines")),
         "event_type": str(item.get("event_type") or ""),
@@ -460,6 +505,12 @@ def _normalize_card_row(row: dict[str, Any]) -> dict[str, Any]:
     implication = _json_dict(row.get("implication"))
     evidence_payload = _json_dict(row.get("evidence_payload"))
     analysis_package = _analysis_package_from_sources(row, evidence_payload)
+    integrated_issue_id = _first_text(
+        row.get("integrated_issue_id"),
+        evidence_payload.get("integrated_issue_id"),
+        analysis_package.get("integrated_issue_id"),
+        _nested_get(analysis_package, "integrated_issue", "integrated_issue_id"),
+    )
     summary_lines = row.get("summary_lines")
     if isinstance(summary_lines, str):
         summary_lines = [summary_lines]
@@ -483,6 +534,7 @@ def _normalize_card_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": card_id,
         "card_id": card_id,
+        "integrated_issue_id": integrated_issue_id or None,
         "title": str(row.get("title") or ""),
         "summary_lines": [str(item) for item in summary_lines if str(item).strip()],
         "event_type": str(row.get("event_type") or ""),
@@ -525,24 +577,33 @@ def _filter_by_sectors(
 def _provenance_base(
     *,
     requested_card_ids: list[str],
+    requested_integrated_issue_ids: list[str],
     selected_card_ids: list[str],
+    selected_integrated_issue_ids: list[str],
     excluded_card_ids: list[str],
+    excluded_integrated_issue_ids: list[str],
+    quality_flags: list[str],
     source_mode: str,
 ) -> dict[str, Any]:
     provenance = {
         "agent": "BriefingGenerationAgent",
         "prompt_version": _PROMPT_VERSION,
         "source_card_ids": selected_card_ids,
+        "source_integrated_issue_ids": selected_integrated_issue_ids,
         "requested_card_ids": requested_card_ids,
+        "requested_integrated_issue_ids": requested_integrated_issue_ids,
         "selected_card_ids": selected_card_ids,
+        "selected_integrated_issue_ids": selected_integrated_issue_ids,
         "excluded_card_ids": excluded_card_ids,
+        "excluded_integrated_issue_ids": excluded_integrated_issue_ids,
+        "quality_flags": quality_flags,
         "source_mode": source_mode,
         "briefing_analysis_basis": (
-            "card_id -> card_news.evidence_payload.analysis_package "
+            "integrated_issues.id -> card_news.evidence_payload.analysis_package "
             "integrated_issue+analysis+implication+classification+validation"
         ),
     }
-    if excluded_card_ids:
+    if excluded_card_ids or excluded_integrated_issue_ids:
         provenance["exclusion_reason"] = "out_of_period"
     return provenance
 
@@ -554,6 +615,9 @@ def _briefing_basis_from_analysis_packages(
     user_context: str | None,
 ) -> dict[str, Any]:
     card_ids = [card["id"] for card in selected_cards]
+    units = analysis_units_from_cards(selected_cards)
+    integrated_issue_ids = source_integrated_issue_ids(units)
+    quality_flags = quality_flags_for_units(units)
     entries = _analysis_package_entries(selected_cards)
     analysis_summaries = [entry["analysis_summary"] for entry in entries]
     market_signals = [entry["market_signal"] for entry in entries]
@@ -585,6 +649,11 @@ def _briefing_basis_from_analysis_packages(
     confidence = (
         round(sum(confidence_values) / len(confidence_values), 2) if confidence_values else 0.0
     )
+    if quality_flags:
+        confidence = round(
+            max(0.0, confidence - confidence_penalty_for_flags(quality_flags)),
+            2,
+        )
     fallback = f"{period['label']} 기간에 확인된 카드뉴스 기반 브리핑입니다."
     lead_finding = _combine_blocks(
         market_signals or analysis_summaries,
@@ -653,11 +722,15 @@ def _briefing_basis_from_analysis_packages(
         "recommended_actions": recommended_actions,
         "confidence": confidence,
         "sources_used": card_ids,
+        "source_integrated_issue_ids": integrated_issue_ids,
+        "quality_flags": quality_flags,
         "provenance": {
             "prompt_version": _PROMPT_VERSION,
             "source_card_ids": card_ids,
+            "source_integrated_issue_ids": integrated_issue_ids,
+            "quality_flags": quality_flags,
             "analysis_basis": (
-                "card_id -> card_news.evidence_payload.analysis_package "
+                "integrated_issues.id -> card_news.evidence_payload.analysis_package "
                 "integrated_issue+analysis+implication+classification+validation"
             ),
         },
@@ -677,6 +750,9 @@ def _analysis_package_entries(cards: list[dict[str, Any]]) -> list[dict[str, Any
         entries.append(
             {
                 "card_id": card.get("id"),
+                "integrated_issue_id": card.get("integrated_issue_id")
+                or package.get("integrated_issue_id")
+                or integrated.get("integrated_issue_id"),
                 "company_label": _company_label(card),
                 "main_issue": _first_text(integrated.get("main_issue"), card.get("title")),
                 "analysis_summary": _first_text(
@@ -727,7 +803,13 @@ def _basis_evidence(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for entry in entries:
         text_value = _first_text(entry.get("market_signal"), entry.get("analysis_summary"))
         if entry.get("card_id") and text_value:
-            evidence.append({"card_id": entry["card_id"], "text": text_value})
+            evidence.append(
+                {
+                    "card_id": entry["card_id"],
+                    "integrated_issue_id": entry.get("integrated_issue_id"),
+                    "text": text_value,
+                }
+            )
     return evidence
 
 
@@ -792,9 +874,9 @@ def _refine_display_copy_with_llm(
     selected_cards: list[dict[str, Any]],
     llm: Any | None,
 ) -> dict[str, Any]:
-    """analysis_package 기반 payload의 화면 표시문만 LLM으로 정제한다.
+    """AnalysisUnit 기반 payload의 화면 표시문만 LLM으로 정제한다.
 
-    다른 에이전트와 분리하기 위해 이 단계는 card_id별 analysis_package만 입력으로 사용하고,
+    다른 에이전트와 분리하기 위해 이 단계는 card_id별 analysis_unit만 입력으로 사용하고,
     evidence/provenance/hidden_details 같은 추적 필드는 코드가 그대로 보존한다.
     """
 
@@ -846,7 +928,7 @@ def _display_copy_system_prompt() -> str:
             "# Persona Handoff",
             ("당신은 SK AX 임원 브리핑 화면의 수석 에디터이자 근거 검수자입니다."),
             (
-                "당신의 책임은 card_news.evidence_payload.analysis_package에 있는 "
+                "당신의 책임은 analysis_units에 있는 "
                 "통합/분석/시사점/분류/검증 결과만 사용해 화면용 문장을 정제하는 것입니다."
             ),
             "",
@@ -866,10 +948,10 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
     return "\n".join(
         [
             "# Task",
-            "아래 analysis_packages를 근거로 브리핑 화면용 표시문을 작성하세요.",
+            "아래 analysis_units를 근거로 브리핑 화면용 표시문을 작성하세요.",
             (
                 "current_display_structure는 필드 구조만 보여주는 레퍼런스입니다. "
-                "문장 내용은 analysis_packages에서 판단해 새로 작성하세요."
+                "문장 내용은 analysis_units에서 판단해 새로 작성하세요."
             ),
             "",
             "# Output Schema",
@@ -877,14 +959,14 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             "",
             "# Prompt Pattern Stack",
             "- Persona Handoff: 수석 브리핑 에디터로서 근거와 화면 문장을 동시에 검수합니다.",
-            "- Input Flip: analysis_packages의 원문 분석 결과를 화면 문장으로 변환합니다.",
+            "- Input Flip: analysis_units의 원문 분석 결과를 화면 문장으로 변환합니다.",
             "- Constraint Box: 아래 Must/Cannot 제약을 지킵니다.",
             "- Few-Shot: 좋은/나쁜 문장 예시를 스타일 기준으로 삼습니다.",
             "- Self Evaluation: 반환 전 내부적으로만 중복, 근거성, 섹션 적합성을 점검합니다.",
             "",
             "# Input Reference Rules",
             (
-                "- analysis_packages에 있는 integrated_issue, analysis, implication을 "
+                "- analysis_units에 있는 integrated_issue, analysis, implication을 "
                 "Input Flip 레퍼런스로 사용해 화면 문장으로 변환합니다."
             ),
             (
@@ -1017,7 +1099,7 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             "- why_important를 특정 회사의 이익이나 성장 전망만으로 좁히지 않습니다.",
             (
                 "- '두각', '시장 입지 강화', '경쟁 우위 확보'처럼 강한 평가 표현은 "
-                "analysis_package에 같은 의미의 근거가 있을 때만 씁니다."
+                "analysis_units에 같은 의미의 근거가 있을 때만 씁니다."
             ),
             (
                 "- 산업 범위는 근거에 나온 범위를 넘기지 않습니다. 예를 들어 "
@@ -1118,7 +1200,7 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             "- key_change_cards와 interpretation_flow가 같은 내용을 같은 표현으로 반복하지 않는가?",
             "- competitor_move와 전략 시사가 한 회사에만 쏠리지 않는가?",
             "- key_change_cards.description이 입력 카드 중 최소 2개 이상의 대표 신호를 반영하는가?",
-            "- 모든 수치와 회사 표현은 analysis_packages에 근거가 있는가?",
+            "- 모든 수치와 회사 표현은 analysis_units에 근거가 있는가?",
             "- 이 self evaluation 결과는 JSON에 포함하지 마세요.",
             "",
             "# Input",
@@ -1178,8 +1260,8 @@ def _display_copy_revision_prompt(
             "- 근거에 없는 수치, 사건, 인과관계는 추가하지 않습니다.",
             "- JSON 객체 하나만 반환합니다.",
             "",
-            "# Reference Analysis Packages",
-            json.dumps(context.get("analysis_packages") or [], ensure_ascii=False, indent=2),
+            "# Reference Analysis Units",
+            json.dumps(context.get("analysis_units") or [], ensure_ascii=False, indent=2),
             "",
             "# Card Signal Index",
             json.dumps(context.get("card_signal_index") or [], ensure_ascii=False, indent=2),
@@ -1195,6 +1277,20 @@ def _display_copy_quality_issues(
     selected_cards: list[dict[str, Any]],
 ) -> list[str]:
     issues: list[str] = []
+    unit_quality_flags = _dedupe_keep_order(
+        [
+            str(flag)
+            for card in selected_cards
+            for flag in _json_list(card.get("quality_flags"))
+            if str(flag).strip()
+        ]
+    )
+    if QUALITY_SUMMARY_ONLY_FALLBACK in unit_quality_flags:
+        issues.append(
+            "summary_only_fallback 품질 플래그가 있는 분석 단위가 포함되어 있습니다. "
+            "카드 표시 요약이 아니라 integrated_issue, analysis, implication 근거로 "
+            "다시 작성하세요."
+        )
     steps = _json_list(_nested_get(draft, "interpretation_flow", "steps"))
     typed_steps = [step for step in steps if isinstance(step, dict)]
     if len(typed_steps) < 4:
@@ -1211,7 +1307,7 @@ def _display_copy_quality_issues(
     if any(term in text for text in texts for term in strong_terms):
         issues.append(
             "근거보다 강한 평가 표현이 포함되어 있습니다. '두각', '시장 입지', "
-            "'경쟁 우위', '주도', '선도' 같은 표현은 analysis_package에 같은 "
+            "'경쟁 우위', '주도', '선도' 같은 표현은 analysis_units에 같은 "
             "의미의 근거가 없으면 '확인됩니다', '부각되고 있습니다', "
             "'중요성이 커지고 있습니다'처럼 낮춰 쓰세요."
         )
@@ -1445,20 +1541,29 @@ def _display_copy_context(
             "period_label": report.get("period_label"),
         },
         "source_card_ids": report.get("related_card_ids") or [],
+        "source_integrated_issue_ids": report.get("source_integrated_issue_ids") or [],
         "current_display_structure": _display_payload_structure(_frontend_display_payload(report)),
         "card_signal_index": _display_card_signal_index(selected_cards),
-        "analysis_packages": [
-            {
-                "card_id": card.get("id"),
-                "company": card.get("company"),
-                "peer_id": card.get("peer_id"),
-                "company_label": _company_label(card),
-                "title": card.get("title"),
-                "source_raw_article_ids": card.get("source_raw_article_ids") or [],
-                "analysis_package": _compact_analysis_package(_analysis_package(card)),
-            }
-            for card in selected_cards
-        ],
+        "analysis_units": [_compact_analysis_unit_for_display(card) for card in selected_cards],
+    }
+
+
+def _compact_analysis_unit_for_display(card: dict[str, Any]) -> dict[str, Any]:
+    package = _analysis_package(card)
+    evidence_payload = _json_dict(card.get("evidence_payload"))
+    return {
+        "integrated_issue_id": card.get("integrated_issue_id")
+        or evidence_payload.get("integrated_issue_id")
+        or package.get("integrated_issue_id"),
+        "card_id": card.get("card_id") or card.get("id"),
+        "company": card.get("company"),
+        "peer_id": card.get("peer_id"),
+        "company_label": _company_label(card),
+        "title": card.get("title"),
+        "source_raw_article_ids": card.get("source_raw_article_ids") or [],
+        "evidence_refs": _json_list(evidence_payload.get("evidence_refs"))[:8],
+        "quality_flags": _json_list(card.get("quality_flags")),
+        "analysis_package": _compact_analysis_package(package),
     }
 
 
@@ -2311,6 +2416,13 @@ def _build_report(
     provenance_base: dict[str, Any],
 ) -> dict[str, Any]:
     source_card_ids = [card["id"] for card in selected_cards]
+    source_integrated_issue_ids = _json_list(
+        briefing_basis.get("source_integrated_issue_ids")
+        or provenance_base.get("source_integrated_issue_ids")
+    )
+    quality_flags = _json_list(
+        briefing_basis.get("quality_flags") or provenance_base.get("quality_flags")
+    )
     confidence = float(briefing_basis.get("confidence") or 0.0)
     report_title = title or f"{period['label']} 브리핑"
     briefing_lead = _brief_sentences(
@@ -2346,6 +2458,7 @@ def _build_report(
         "briefing_lead": briefing_lead or _briefing_lead(period, key_summary, selected_cards),
         "selected_cards": _public_selected_cards(selected_cards),
         "related_card_ids": source_card_ids,
+        "source_integrated_issue_ids": source_integrated_issue_ids,
         "primary_card_news_id": source_card_ids[0] if source_card_ids else None,
         "primary_peer_company_id": selected_cards[0].get("peer_id") if selected_cards else None,
         "key_change_cards": key_change_cards,
@@ -2358,8 +2471,10 @@ def _build_report(
             "agent": "BriefingGenerationAgent",
             "prompt_version": _PROMPT_VERSION,
             "source_card_ids": source_card_ids,
+            "source_integrated_issue_ids": source_integrated_issue_ids,
+            "quality_flags": quality_flags,
             "briefing_analysis_basis": (
-                "card_id -> card_news.evidence_payload "
+                "integrated_issues.id -> card_news.evidence_payload "
                 "integrated_issue+analysis+implication+classification+validation"
             ),
         },
@@ -2396,6 +2511,7 @@ def _empty_report(
         "briefing_lead": "",
         "selected_cards": [],
         "related_card_ids": [],
+        "source_integrated_issue_ids": [],
         "primary_card_news_id": None,
         "key_change_cards": [],
         "core_change": {"items": []},
@@ -2406,6 +2522,9 @@ def _empty_report(
         },
         "hidden_details": [],
         "requested_card_ids": provenance_base.get("requested_card_ids", []),
+        "requested_integrated_issue_ids": provenance_base.get(
+            "requested_integrated_issue_ids", []
+        ),
         "confidence": 0.0,
         "provenance": {
             **provenance_base,
@@ -3170,6 +3289,7 @@ def _public_selected_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
         {
             "id": card.get("id"),
             "card_id": card.get("id"),
+            "integrated_issue_id": card.get("integrated_issue_id"),
             "company": card.get("company"),
             "peer_id": card.get("peer_id"),
             "company_label": _company_label(card),
@@ -3197,9 +3317,12 @@ def _hidden_details(
         details.append(
             {
                 "card_id": card.get("id"),
+                "integrated_issue_id": card.get("integrated_issue_id")
+                or package.get("integrated_issue_id"),
                 "evidence_card_ids": card.get("evidence_card_ids") or [card.get("id")],
                 "source_raw_article_ids": card.get("source_raw_article_ids") or [],
                 "sources": sources,
+                "quality_flags": _json_list(card.get("quality_flags")),
                 "confidence": _first_text(
                     _nested_get(package, "validation", "sc_score"),
                     _nested_get(package, "analysis", "confidence"),

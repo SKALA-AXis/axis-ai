@@ -127,7 +127,12 @@ def _stub_deps() -> SupervisorDeps:
 def test_supervisor_graph_happy_path_writes_card():
     deps = _stub_deps()
     graph = build_supervisor_graph(deps)
+    issue_id = "11111111-1111-1111-1111-111111111111"
     with (
+        patch(
+            "src.pipeline.analysis_flow_graph.save_integrated_issue",
+            return_value=issue_id,
+        ) as save_integrated_issue,
         patch("src.pipeline.analysis_flow_graph.save_card_news", return_value="CN-OK"),
         patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
     ):
@@ -141,12 +146,15 @@ def test_supervisor_graph_happy_path_writes_card():
         )
     assert result.get("card_news_id") == "CN-OK"
     assert result.get("analysis_package") is not None
+    assert result.get("integrated_issue", {}).get("integrated_issue_id") == issue_id
+    assert result.get("card_news_payload", {}).get("integrated_issue_id") == issue_id
     validation = result.get("validation")
     assert validation is not None
     assert validation.passed is True
     assert validation.metrics is not None
     # R-1: issue_integrate 가 가장 먼저 실행되어야 한다.
     deps.issue_integrator.integrate_input_bundle.assert_called_once()
+    save_integrated_issue.assert_called_once()
     # ProfileContext 는 integrated_issue.main_company (= samsung_sds) 를 받았는지.
     profile_call = deps.profile_context_loader.load.call_args
     assert "samsung_sds" in (profile_call.kwargs.get("companies") or [])
@@ -168,6 +176,10 @@ def test_supervisor_graph_uses_injected_profile_context():
     )
 
     with (
+        patch(
+            "src.pipeline.analysis_flow_graph.save_integrated_issue",
+            return_value="11111111-1111-1111-1111-111111111111",
+        ),
         patch("src.pipeline.analysis_flow_graph.save_card_news", return_value="CN-OK"),
         patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
     ):
@@ -198,6 +210,10 @@ def test_supervisor_graph_routes_human_review_on_fake_numeric():
     deps.issue_integrator.integrate_input_bundle.return_value["key_numbers"] = []
     graph = build_supervisor_graph(deps)
     with (
+        patch(
+            "src.pipeline.analysis_flow_graph.save_integrated_issue",
+            return_value="11111111-1111-1111-1111-111111111111",
+        ),
         patch("src.pipeline.analysis_flow_graph.save_card_news"),
         patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
     ):
