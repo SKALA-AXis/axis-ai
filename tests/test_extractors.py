@@ -74,9 +74,9 @@ def test_dart_financial_metrics_preserve_statement_column_periods() -> None:
     }
     parser_result = {
         "peer_id": "test_peer",
-        "period": "2025Q4",
+        "period": "2025",
         "period_year": 2025,
-        "period_quarter": 4,
+        "period_quarter": None,
         "period_type": "annual",
         "financial_statements": [
             {
@@ -95,9 +95,9 @@ def test_dart_financial_metrics_preserve_statement_column_periods() -> None:
                                 "column_header": "제 41 (당) 기",
                                 "raw": "13,929,868",
                                 "value_krwbn": 139298.68,
-                                "period": "2025Q4",
+                                "period": "2025",
                                 "period_year": 2025,
-                                "period_quarter": 4,
+                                "period_quarter": None,
                                 "period_type": "annual",
                             },
                             {
@@ -105,8 +105,60 @@ def test_dart_financial_metrics_preserve_statement_column_periods() -> None:
                                 "column_header": "제 40 (전) 기",
                                 "raw": "13,828,232",
                                 "value_krwbn": 138282.32,
-                                "period": "2024Q4",
+                                "period": "2024",
                                 "period_year": 2024,
+                                "period_quarter": None,
+                                "period_type": "annual",
+                            },
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+
+    metrics = financial_metrics_from_dart(article, parser_result)
+
+    assert [metric["period"] for metric in metrics] == ["2025", "2024"]
+    assert metrics[1]["period_year"] == 2024
+    assert metrics[1]["period_quarter"] is None
+    assert metrics[1]["value_krwbn"] == 138282.32
+
+
+def test_dart_financial_metrics_normalize_legacy_annual_q4_period() -> None:
+    article = {
+        "id": 10,
+        "title": "사업보고서",
+        "url": "https://example.com/dart",
+        "source_name": "dart",
+        "company": ["test_peer"],
+        "extra": {},
+    }
+    parser_result = {
+        "peer_id": "test_peer",
+        "period": "2025Q4",
+        "period_year": 2025,
+        "period_quarter": 4,
+        "period_type": "annual",
+        "financial_statements": [
+            {
+                "table_index": 3,
+                "title": "연결 포괄손익계산서",
+                "table_type": "income_statement",
+                "statement_scope": "consolidated",
+                "unit": "백만원",
+                "rows": [
+                    {
+                        "metric_key": "operating_profit",
+                        "label": "영업이익",
+                        "values": [
+                            {
+                                "column_index": 1,
+                                "column_header": "제 41 (당) 기",
+                                "raw": "60,400",
+                                "value_krwbn": 604,
+                                "period": "2025Q4",
+                                "period_year": 2025,
                                 "period_quarter": 4,
                                 "period_type": "annual",
                             },
@@ -119,10 +171,11 @@ def test_dart_financial_metrics_preserve_statement_column_periods() -> None:
 
     metrics = financial_metrics_from_dart(article, parser_result)
 
-    assert [metric["period"] for metric in metrics] == ["2025Q4", "2024Q4"]
-    assert metrics[1]["period_year"] == 2024
-    assert metrics[1]["period_quarter"] == 4
-    assert metrics[1]["value_krwbn"] == 138282.32
+    assert metrics[0]["metric_name"] == "operating_profit"
+    assert metrics[0]["period"] == "2025"
+    assert metrics[0]["period_year"] == 2025
+    assert metrics[0]["period_quarter"] is None
+    assert metrics[0]["period_type"] == "annual"
 
 
 def test_dart_financial_metrics_include_segment_candidates_with_statements() -> None:

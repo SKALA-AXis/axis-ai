@@ -718,6 +718,7 @@ def list_existing_news_cluster_candidates(
     company_keys: list[str] | None = None,
     exclude_article_ids: list[int] | None = None,
     lookback_hours: int = 168,
+    published_window: tuple[str, str] | None = None,
     limit: int = 200,
 ) -> list[dict[str, Any]]:
     """최근 뉴스 대표 클러스터 후보를 조회한다.
@@ -729,6 +730,7 @@ def list_existing_news_cluster_candidates(
     limit = max(1, min(limit, 1000))
     company_filter = bool(company_keys)
     exclude_ids = exclude_article_ids or []
+    published_since, published_until = published_window or (None, None)
 
     query = text("""
         SELECT
@@ -770,7 +772,20 @@ def list_existing_news_cluster_candidates(
           AND r.is_representative = true
           AND r.cluster_id IS NOT NULL
           AND r.processing_status IN ('PROCESSED', 'CLASSIFIED')
-          AND r.collected_at >= NOW() - (:lookback_hours * INTERVAL '1 hour')
+          AND (
+              (
+                  :published_since IS NOT NULL
+                  AND r.published_at >= CAST(:published_since AS timestamptz)
+                  AND (
+                      :published_until IS NULL
+                      OR r.published_at < CAST(:published_until AS timestamptz)
+                  )
+              )
+              OR (
+                  :published_since IS NULL
+                  AND r.collected_at >= NOW() - (:lookback_hours * INTERVAL '1 hour')
+              )
+          )
           AND (NOT :company_filter OR r.company ?| :company_keys)
           AND (
               cardinality(CAST(:exclude_article_ids AS bigint[])) = 0
@@ -796,6 +811,8 @@ def list_existing_news_cluster_candidates(
                 "company_keys": company_keys or [""],
                 "exclude_article_ids": exclude_ids,
                 "lookback_hours": lookback_hours,
+                "published_since": published_since,
+                "published_until": published_until,
                 "limit": limit,
             },
         ).fetchall()
@@ -1086,7 +1103,11 @@ def update_cluster(
     cluster_id: int,
     is_representative: bool,
 ) -> None:
-    """cluster_id, is_representative, processing_status를 업데이트한다."""
+    """cluster_id, is_representative를 업데이트한다.
+
+    CLASSIFIED 상태의 기사를 cluster-only로 다시 묶을 때 분류 상태가
+    PROCESSED로 되돌아가지 않도록 기존 CLASSIFIED는 유지한다.
+    """
     status = "PROCESSED"
     with SessionLocal() as db:
         db.execute(
@@ -1094,7 +1115,10 @@ def update_cluster(
                 UPDATE raw_articles
                 SET cluster_id = :cluster_id,
                     is_representative = :is_rep,
-                    processing_status = :status
+                    processing_status = CASE
+                        WHEN processing_status = 'CLASSIFIED' THEN 'CLASSIFIED'
+                        ELSE :status
+                    END
                 WHERE id = :id
             """),
             {

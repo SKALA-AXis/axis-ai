@@ -441,6 +441,10 @@ def _normalize_amount_krwbn(value: str, unit: str) -> float:
 
 
 def _extract_period(text: str) -> str | None:
+    year_match = re.search(r"(20\d{2})\s*년\s*(?:경영\s*)?실적", text or "")
+    if year_match:
+        return year_match.group(1)
+
     for pattern in _PERIOD_PATTERNS:
         match = pattern.search(text or "")
         if not match:
@@ -452,11 +456,6 @@ def _extract_period(text: str) -> str | None:
             return f"20{match.group(1)}Q{match.group(2)}"
 
         return f"{match.group(1)}Q{match.group(2)}"
-
-    year_match = re.search(r"(20\d{2})\s*년\s*(?:경영\s*)?실적", text or "")
-    if year_match:
-        return year_match.group(1)
-
     return None
 
 
@@ -1075,14 +1074,20 @@ def _extract_financial_table_candidates(
         page_text = str(page.get("text") or "")
         lines = [re.sub(r"\s+", " ", line).strip() for line in page_text.splitlines()]
         lines = [line for line in lines if line]
+        lines = _merge_split_operating_margin_lines(lines)
         unit = _table_unit(page_text)
         unit_evidence = _table_unit_evidence(lines)
 
         for header_index, line in enumerate(lines):
             table_title = _nearby_table_title(lines, header_index)
+            table_unit = (
+                _table_unit("\n".join(lines[max(0, header_index - 3) : header_index + 2])) or unit
+            )
             columns = _table_columns_from_header_lines(
                 line,
                 lines[header_index + 1] if header_index + 1 < len(lines) else None,
+                lines[header_index - 1] if header_index > 0 else None,
+                report_period=report_period,
             )
             if header_index + 1 < len(lines):
                 columns.extend(_comparison_columns_from_continuation(lines[header_index + 1]))
@@ -1094,6 +1099,14 @@ def _extract_financial_table_candidates(
             )
             period_columns = [column for column in columns if column.get("period")]
             if len(period_columns) < 2:
+                continue
+            if _looks_like_parent_year_header_only(
+                line,
+                lines[header_index + 1] if header_index + 1 < len(lines) else None,
+                period_columns,
+            ):
+                continue
+            if _has_future_quarter_column(period_columns, report_period):
                 continue
             required_value_count = len(period_columns)
 
@@ -1113,6 +1126,7 @@ def _extract_financial_table_candidates(
             active_amount_metric_parent_label: str | None = None
             active_business_area: str | None = None
             miss_count = 0
+            miss_limit = 8 if required_value_count >= 10 or len(columns) >= 9 else 3
             for row_index, row_line in enumerate(
                 lines[header_index + 1 : header_index + 24], start=1
             ):
@@ -1146,13 +1160,13 @@ def _extract_financial_table_candidates(
                     else:
                         if table_rows:
                             miss_count += 1
-                            if miss_count >= 3:
+                            if miss_count >= miss_limit:
                                 break
                         continue
                 else:
                     if table_rows:
                         miss_count += 1
-                        if miss_count >= 3:
+                        if miss_count >= miss_limit:
                             break
                     continue
 
@@ -1161,23 +1175,23 @@ def _extract_financial_table_candidates(
                 if _row_has_misaligned_leading_comparison_columns(columns, row_values):
                     if table_rows:
                         miss_count += 1
-                        if miss_count >= 3:
+                        if miss_count >= miss_limit:
                             break
                     continue
                 if len(row_values) < required_value_count:
                     if table_rows:
                         miss_count += 1
-                        if miss_count >= 3:
+                        if miss_count >= miss_limit:
                             break
                     continue
 
                 if not _is_valid_table_metric_row(row_label, row_metric):
                     if table_rows:
                         miss_count += 1
-                        if miss_count >= 3:
+                        if miss_count >= miss_limit:
                             break
                     continue
-                display_unit = _table_display_unit(unit=unit, value_kind=value_kind)
+                display_unit = _table_display_unit(unit=table_unit, value_kind=value_kind)
                 row_unit_evidence = _effective_row_unit_evidence(
                     unit_evidence=unit_evidence,
                     row_label=row_label,
@@ -1225,7 +1239,7 @@ def _extract_financial_table_candidates(
                     comparison_type = column.get("comparison_type")
                     candidate_metric_name = metric_name
                     candidate_value_kind = value_kind
-                    candidate_unit = unit
+                    candidate_unit = table_unit
                     period_column = column
                     if comparison_type:
                         if "%" not in str(raw_value):
@@ -1245,7 +1259,7 @@ def _extract_financial_table_candidates(
                             columns=columns,
                             row_values=row_values,
                             current_period=period_column.get("period"),
-                            unit=unit,
+                            unit=table_unit,
                         )
                         if comparison_type
                         else {}
@@ -1335,7 +1349,7 @@ def _extract_financial_table_candidates(
                         "page": page_no,
                         "title": table_title,
                         "context_business_area": table_context_business_area,
-                        "unit": unit,
+                        "unit": table_unit,
                         "unit_evidence": unit_evidence,
                         "columns": columns,
                         "rows": table_rows,
@@ -1343,6 +1357,27 @@ def _extract_financial_table_candidates(
                 )
 
     return candidates, tables
+
+
+def _merge_split_operating_margin_lines(lines: list[str]) -> list[str]:
+    """Merge OCR rows split as `영업` / percentage row / `이익률`."""
+    merged: list[str] = []
+    index = 0
+    while index < len(lines):
+        current = lines[index]
+        next_line = lines[index + 1] if index + 1 < len(lines) else ""
+        next_next = lines[index + 2] if index + 2 < len(lines) else ""
+        if (
+            re.fullmatch(r"영업", current or "")
+            and _row_values_are_percentage(_table_row_values(next_line, 32))
+            and re.fullmatch(r"이익률", next_next or "")
+        ):
+            merged.append(f"영업이익률 {next_line}")
+            index += 3
+            continue
+        merged.append(current)
+        index += 1
+    return merged
 
 
 def _extract_chart_block_candidates(
@@ -1457,7 +1492,26 @@ def _block_center(block: dict[str, Any]) -> tuple[float, float] | None:
     return (x0 + x1) / 2, (y0 + y1) / 2
 
 
-def _table_columns_from_header_lines(line: str, next_line: str | None) -> list[dict[str, Any]]:
+def _table_columns_from_header_lines(
+    line: str,
+    next_line: str | None,
+    prev_line: str | None = None,
+    *,
+    report_period: str | None = None,
+) -> list[dict[str, Any]]:
+    posco_columns = _posco_dx_appendix_statement_columns(prev_line, line, next_line)
+    if posco_columns:
+        return posco_columns
+
+    posco_compact_columns = _posco_dx_compact_statement_columns(
+        prev_line,
+        line,
+        next_line,
+        report_period=report_period,
+    )
+    if posco_compact_columns:
+        return posco_compact_columns
+
     hierarchical = _hierarchical_table_columns(line, next_line)
     if hierarchical:
         return hierarchical
@@ -1586,6 +1640,585 @@ def _hierarchical_table_columns(line: str, next_line: str | None) -> list[dict[s
         columns.append(column)
         last_period_column_by_year[year] = column
 
+    return columns
+
+
+def _looks_like_parent_year_header_only(
+    line: str,
+    next_line: str | None,
+    period_columns: list[dict[str, Any]],
+) -> bool:
+    compact_line = re.sub(r"\s+", "", line or "")
+    if not re.fullmatch(r"(?:20\d{2}년?){2,4}", compact_line):
+        return False
+    next_compact = re.sub(r"\s+", "", next_line or "").lower()
+    if "구분" not in next_compact:
+        return False
+    if len(period_columns) == len(re.findall(r"20\d{2}", line or "")):
+        return True
+    return bool(
+        "yoy" in next_compact
+        or re.search(r"\b[1-4]\s*q\b", next_line or "", flags=re.IGNORECASE)
+        or len(re.findall(r"20\d{2}", next_line or "")) >= 2
+    )
+
+
+def _has_future_quarter_column(
+    period_columns: list[dict[str, Any]],
+    report_period: str | None,
+) -> bool:
+    report_year, report_quarter, report_period_type = _period_parts(report_period)
+    if report_period_type != "quarter" or not report_year or not report_quarter:
+        return False
+
+    for column in period_columns:
+        period_year = column.get("period_year")
+        period_quarter = column.get("period_quarter")
+        period_type = column.get("period_type")
+        if period_type != "quarter":
+            continue
+        if not isinstance(period_year, int) or not isinstance(period_quarter, int):
+            continue
+        if period_year > report_year:
+            return True
+        if period_year == report_year and period_quarter > report_quarter:
+            return True
+    return False
+
+
+def _posco_dx_appendix_statement_columns(
+    prev_line: str | None,
+    line: str,
+    next_line: str | None,
+) -> list[dict[str, Any]]:
+    """Repair POSCO DX appendix headers split across three extracted lines.
+
+    The 1Q26 appendix income statement is extracted as:
+      `2025 2026`
+      `구 분 2023 2024 YoY`
+      `1Q 2Q 3Q 4Q 1Q`
+
+    The intended columns are:
+      2023 annual, 2024 annual, 2025 Q1~Q4, 2025 annual, 2026 Q1, YoY.
+    Without this repair, the generic hierarchical parser maps the same values
+    to impossible periods such as 2026Q2/2026Q3/2026Q4.
+    """
+    prev_years = [
+        _header_year_value(match.group(1))
+        for match in re.finditer(r"\b(20\d{2})\b", prev_line or "")
+    ]
+    base_years = [
+        _header_year_value(match.group(1)) for match in re.finditer(r"\b(20\d{2})\b", line or "")
+    ]
+    quarter_labels = [
+        re.sub(r"\s+", "", match.group(0)).upper()
+        for match in re.finditer(r"\b[1-4]\s*Q\b", next_line or "", flags=re.IGNORECASE)
+    ]
+    if len(quarter_labels) not in {5, 8}:
+        # Some OCR/text extraction paths collapse the sub-period row into the
+        # base header: `구 분 2023 2024 YoY 1Q 2Q 3Q 4Q 1Q`.
+        quarter_labels = [
+            re.sub(r"\s+", "", match.group(0)).upper()
+            for match in re.finditer(r"\b[1-4]\s*Q\b", line or "", flags=re.IGNORECASE)
+        ]
+
+    prev_year_values: list[int] = [year for year in prev_years if isinstance(year, int)]
+    base_year_values: list[int] = [year for year in base_years if isinstance(year, int)]
+    if len(prev_year_values) != 2:
+        return []
+
+    first_detail_year, second_detail_year = prev_year_values
+    if second_detail_year != first_detail_year + 1:
+        return []
+    if not re.search(r"\bYoY\b|전년", line or "", flags=re.IGNORECASE):
+        return []
+
+    if len(base_year_values) == 1 and len(quarter_labels) == 8:
+        return _posco_dx_annual_appendix_statement_columns(
+            base_year=base_year_values[0],
+            first_detail_year=first_detail_year,
+            second_detail_year=second_detail_year,
+            quarter_labels=quarter_labels,
+        )
+
+    if len(base_year_values) != 2 or len(quarter_labels) != 5:
+        return []
+    if base_year_values != [first_detail_year - 2, first_detail_year - 1]:
+        return []
+
+    columns: list[dict[str, Any]] = []
+    for year in base_year_values:
+        columns.append(
+            {
+                "label": f"{year}년 연간",
+                "period": str(year),
+                "period_year": year,
+                "period_quarter": None,
+                "period_type": "year",
+                "parent_year": year,
+            }
+        )
+
+    detail_year_quarters: list[dict[str, Any]] = []
+    for label in quarter_labels[:4]:
+        period, period_year, period_quarter, period_type = _normalize_subperiod(
+            label,
+            first_detail_year,
+        )
+        if not period:
+            return []
+        column = {
+            "label": f"{first_detail_year}년 {label}",
+            "period": period,
+            "period_year": period_year,
+            "period_quarter": period_quarter,
+            "period_type": period_type,
+            "parent_year": first_detail_year,
+        }
+        columns.append(column)
+        detail_year_quarters.append(column)
+
+    columns.append(
+        {
+            "label": f"{first_detail_year}년 연간",
+            "period": str(first_detail_year),
+            "period_year": first_detail_year,
+            "period_quarter": None,
+            "period_type": "year",
+            "parent_year": first_detail_year,
+        }
+    )
+
+    period, period_year, period_quarter, period_type = _normalize_subperiod(
+        quarter_labels[4],
+        second_detail_year,
+    )
+    if not period:
+        return []
+    current_column = {
+        "label": f"{second_detail_year}년 {quarter_labels[4]}",
+        "period": period,
+        "period_year": period_year,
+        "period_quarter": period_quarter,
+        "period_type": period_type,
+        "parent_year": second_detail_year,
+    }
+    columns.append(current_column)
+    columns.append(
+        {
+            "label": "YoY",
+            "comparison_type": "yoy",
+            "parent_year": second_detail_year,
+            "comparison_target_label": current_column.get("label"),
+            "comparison_target_period": current_column.get("period"),
+            "comparison_target_period_year": current_column.get("period_year"),
+            "comparison_target_period_quarter": current_column.get("period_quarter"),
+            "comparison_target_period_type": current_column.get("period_type"),
+        }
+    )
+    return columns
+
+
+def _posco_dx_annual_appendix_statement_columns(
+    *,
+    base_year: int,
+    first_detail_year: int,
+    second_detail_year: int,
+    quarter_labels: list[str],
+) -> list[dict[str, Any]]:
+    """Repair POSCO DX annual appendix statement headers.
+
+    The 2025 annual IR appendix income statement is extracted as:
+      `2024 2025`
+      `구 분 2023 YoY`
+      `1Q 2Q 3Q 4Q 1Q 2Q 3Q 4Q`
+
+    The intended columns are:
+      2023 annual,
+      2024 Q1~Q4, 2024 annual,
+      2025 Q1~Q4, 2025 annual,
+      YoY for the 2025 annual column.
+    """
+    if base_year != first_detail_year - 1:
+        return []
+    if len(quarter_labels) != 8:
+        return []
+
+    columns: list[dict[str, Any]] = [
+        {
+            "label": f"{base_year}년 연간",
+            "period": str(base_year),
+            "period_year": base_year,
+            "period_quarter": None,
+            "period_type": "year",
+            "parent_year": base_year,
+        }
+    ]
+
+    for year, labels in (
+        (first_detail_year, quarter_labels[:4]),
+        (second_detail_year, quarter_labels[4:]),
+    ):
+        for label in labels:
+            period, period_year, period_quarter, period_type = _normalize_subperiod(label, year)
+            if not period:
+                return []
+            columns.append(
+                {
+                    "label": f"{year}년 {label}",
+                    "period": period,
+                    "period_year": period_year,
+                    "period_quarter": period_quarter,
+                    "period_type": period_type,
+                    "parent_year": year,
+                }
+            )
+        columns.append(
+            {
+                "label": f"{year}년 연간",
+                "period": str(year),
+                "period_year": year,
+                "period_quarter": None,
+                "period_type": "year",
+                "parent_year": year,
+            }
+        )
+
+    current_column = columns[-1]
+    columns.append(
+        {
+            "label": "YoY",
+            "comparison_type": "yoy",
+            "parent_year": second_detail_year,
+            "comparison_target_label": current_column.get("label"),
+            "comparison_target_period": current_column.get("period"),
+            "comparison_target_period_year": current_column.get("period_year"),
+            "comparison_target_period_quarter": current_column.get("period_quarter"),
+            "comparison_target_period_type": current_column.get("period_type"),
+        }
+    )
+    return columns
+
+
+def _posco_dx_compact_statement_columns(
+    prev_line: str | None,
+    line: str,
+    next_line: str | None,
+    *,
+    report_period: str | None,
+) -> list[dict[str, Any]]:
+    """Repair POSCO DX compact quarterly/appendix tables.
+
+    Several POSCO DX IR PDFs extract the table header as three separate lines:
+      `2023 2024 2025`
+      `구 분 2022`
+      `1Q 1Q 4Q 1Q QoQ YoY`
+
+    The annual columns are visually present in the PDF but often missing from
+    the OCR subheader line. This helper reconstructs those hidden annual
+    columns so the current quarter values are not shifted into historical
+    annual periods.
+    """
+    if "구" not in (line or "") or "분" not in (line or ""):
+        return []
+
+    report_year, report_quarter, report_period_type = _period_parts(report_period)
+    if report_period_type not in {"quarter", "year"} or not report_year:
+        return []
+
+    header_years = [
+        year
+        for year in (
+            _header_year_value(match.group(1))
+            for match in re.finditer(r"\b(20\d{2}|\d{2})\s*년?\b", prev_line or "")
+        )
+        if isinstance(year, int)
+    ]
+    base_years = [
+        year
+        for year in (
+            _header_year_value(match.group(1))
+            for match in re.finditer(r"\b(20\d{2}|\d{2})\s*년?\b", line or "")
+        )
+        if isinstance(year, int)
+    ]
+    if not header_years:
+        return []
+
+    label_matches = list(
+        re.finditer(
+            r"\b[1-4]\s*Q\b|\b[12]\s*H\b|연간|\bQoQ\b|\bYoY\b",
+            next_line or "",
+            flags=re.IGNORECASE,
+        )
+    )
+    if not label_matches:
+        return []
+
+    labels = [re.sub(r"\s+", "", match.group(0)).upper() for match in label_matches]
+    period_labels = [label for label in labels if not _IR_TABLE_COMPARISON_PATTERN.fullmatch(label)]
+    comparison_labels = [label for label in labels if _IR_TABLE_COMPARISON_PATTERN.fullmatch(label)]
+    if len(header_years) < 2 or not period_labels:
+        return []
+
+    if len(base_years) == 1 and len(header_years) == 3 and len(period_labels) == 4:
+        return _posco_dx_q1_with_hidden_annual_columns(
+            base_year=base_years[0],
+            header_years=header_years,
+            quarter_labels=period_labels,
+            comparison_labels=comparison_labels,
+        )
+
+    if (
+        not base_years
+        and len(header_years) == 3
+        and len(period_labels) == 4
+        and report_quarter == 1
+    ):
+        return _posco_dx_q1_with_hidden_annual_columns(
+            base_year=None,
+            header_years=header_years,
+            quarter_labels=period_labels,
+            comparison_labels=comparison_labels,
+        )
+
+    if not base_years and len(header_years) == 3 and len(period_labels) == 4:
+        current_year = header_years[-1]
+        columns = [
+            _period_column(header_years[0], period_labels[0]),
+            _period_column(header_years[1], period_labels[1]),
+            _period_column(current_year, period_labels[2]),
+            _period_column(current_year, period_labels[3]),
+        ]
+        return _append_comparison_columns(columns, comparison_labels)
+
+    if not base_years and "연간" in period_labels:
+        columns = _posco_dx_annual_interleaved_columns(
+            header_years=header_years,
+            period_labels=period_labels,
+            comparison_labels=comparison_labels,
+        )
+        if columns:
+            return columns
+
+    if not base_years and len(header_years) == 3 and any("H" in label for label in labels):
+        columns = _posco_dx_half_year_columns(
+            header_years=header_years,
+            labels=labels,
+        )
+        if columns:
+            return columns
+
+    if not base_years and len(header_years) == 3:
+        columns = _posco_dx_quarter_history_columns(
+            header_years=header_years,
+            labels=labels,
+        )
+        if columns:
+            return columns
+
+    return []
+
+
+def _posco_dx_q1_with_hidden_annual_columns(
+    *,
+    base_year: int | None,
+    header_years: list[int],
+    quarter_labels: list[str],
+    comparison_labels: list[str],
+) -> list[dict[str, Any]]:
+    if len(header_years) != 3 or len(quarter_labels) != 4:
+        return []
+
+    columns: list[dict[str, Any]] = []
+    if base_year is not None:
+        columns.append(_annual_column(base_year))
+        detail_years = header_years
+    else:
+        first_year, second_year, current_year = header_years
+        columns.extend(
+            [
+                _period_column(first_year, quarter_labels[0]),
+                _annual_column(first_year),
+            ]
+        )
+        detail_years = [second_year, current_year]
+        quarter_labels = quarter_labels[1:]
+
+    if len(detail_years) == 3:
+        first_year, second_year, current_year = detail_years
+        columns.extend(
+            [
+                _period_column(first_year, quarter_labels[0]),
+                _annual_column(first_year),
+                _period_column(second_year, quarter_labels[1]),
+                _period_column(second_year, quarter_labels[2]),
+                _annual_column(second_year),
+                _period_column(current_year, quarter_labels[3]),
+            ]
+        )
+    elif len(detail_years) == 2:
+        previous_year, current_year = detail_years
+        columns.extend(
+            [
+                _period_column(previous_year, quarter_labels[0]),
+                _period_column(previous_year, quarter_labels[1]),
+                _annual_column(previous_year),
+                _period_column(current_year, quarter_labels[2]),
+            ]
+        )
+    else:
+        return []
+
+    return _append_comparison_columns(columns, comparison_labels)
+
+
+def _posco_dx_half_year_columns(
+    *,
+    header_years: list[int],
+    labels: list[str],
+) -> list[dict[str, Any]]:
+    first_comparison = _first_comparison_index(labels)
+    if first_comparison is None:
+        return []
+
+    before = labels[:first_comparison]
+    after_comparisons = labels[first_comparison:]
+    comparison_labels = [
+        label for label in after_comparisons if _IR_TABLE_COMPARISON_PATTERN.fullmatch(label)
+    ]
+    trailing_period_labels = [
+        label for label in after_comparisons if not _IR_TABLE_COMPARISON_PATTERN.fullmatch(label)
+    ]
+    if len(header_years) != 3 or len(before) < 8:
+        return []
+
+    columns: list[dict[str, Any]] = []
+    chunks = [before[:3], before[3:6], before[6:]]
+    for year, chunk in zip(header_years, chunks, strict=True):
+        for label in chunk:
+            columns.append(_period_column(year, label))
+    columns = _append_comparison_columns(columns, comparison_labels)
+    current_year = header_years[-1]
+    for label in trailing_period_labels:
+        columns.append(_period_column(current_year, label))
+    return columns
+
+
+def _posco_dx_annual_interleaved_columns(
+    *,
+    header_years: list[int],
+    period_labels: list[str],
+    comparison_labels: list[str],
+) -> list[dict[str, Any]]:
+    if len(header_years) < 2:
+        return []
+
+    columns: list[dict[str, Any]] = []
+    year_index = 0
+    for label in period_labels:
+        if year_index >= len(header_years):
+            return []
+        year = header_years[year_index]
+        columns.append(_period_column(year, label))
+        if label == "연간" and year_index < len(header_years) - 1:
+            year_index += 1
+
+    return _append_comparison_columns(columns, comparison_labels)
+
+
+def _posco_dx_quarter_history_columns(
+    *,
+    header_years: list[int],
+    labels: list[str],
+) -> list[dict[str, Any]]:
+    first_comparison = _first_comparison_index(labels)
+    if first_comparison is None:
+        period_labels = labels
+        comparison_labels: list[str] = []
+    else:
+        period_labels = labels[:first_comparison]
+        comparison_labels = labels[first_comparison:]
+    if len(header_years) != 3 or len(period_labels) < 7:
+        return []
+
+    columns: list[dict[str, Any]] = []
+    year_index = 0
+    quarter_count_for_year = 0
+    for label in period_labels:
+        if year_index >= len(header_years):
+            return []
+        year = header_years[year_index]
+        columns.append(_period_column(year, label))
+        quarter_count_for_year += 1
+        if quarter_count_for_year == 4 and year_index < len(header_years) - 1:
+            columns.append(_annual_column(year))
+            year_index += 1
+            quarter_count_for_year = 0
+
+    if quarter_count_for_year == 4 and year_index == len(header_years) - 1:
+        columns.append(_annual_column(header_years[year_index]))
+
+    return _append_comparison_columns(columns, comparison_labels)
+
+
+def _first_comparison_index(labels: list[str]) -> int | None:
+    for index, label in enumerate(labels):
+        if _IR_TABLE_COMPARISON_PATTERN.fullmatch(label):
+            return index
+    return None
+
+
+def _annual_column(year: int) -> dict[str, Any]:
+    return {
+        "label": f"{year}년 연간",
+        "period": str(year),
+        "period_year": year,
+        "period_quarter": None,
+        "period_type": "year",
+        "parent_year": year,
+    }
+
+
+def _period_column(year: int, label: str) -> dict[str, Any]:
+    period, period_year, period_quarter, period_type = _normalize_subperiod(label, year)
+    if not period:
+        return {}
+    return {
+        "label": f"{year}년 {label}",
+        "period": period,
+        "period_year": period_year,
+        "period_quarter": period_quarter,
+        "period_type": period_type,
+        "parent_year": year,
+    }
+
+
+def _append_comparison_columns(
+    columns: list[dict[str, Any]],
+    comparison_labels: list[str],
+) -> list[dict[str, Any]]:
+    columns = [column for column in columns if column.get("period")]
+    target = next(
+        (column for column in reversed(columns) if column.get("period_type") == "quarter"),
+        columns[-1] if columns else None,
+    )
+    for label in comparison_labels:
+        comparison_column: dict[str, Any] = {
+            "label": label,
+            "comparison_type": _comparison_column_type(label),
+        }
+        if target:
+            comparison_column.update(
+                {
+                    "comparison_target_label": target.get("label"),
+                    "comparison_target_period": target.get("period"),
+                    "comparison_target_period_year": target.get("period_year"),
+                    "comparison_target_period_quarter": target.get("period_quarter"),
+                    "comparison_target_period_type": target.get("period_type"),
+                }
+            )
+        columns.append(comparison_column)
     return columns
 
 
