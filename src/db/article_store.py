@@ -1170,6 +1170,49 @@ _INSERT_CARD_NEWS_V2 = text("""
         id, company, cluster_id, title, summary_lines,
         event_type, importance, importance_score,
         implication, sources, validation_pass, validation_sc_score,
+        peer_company_id, primary_keyword_category, integrated_issue_id, source_raw_article_ids,
+        keyword_categories, evidence_payload, source_articles,
+        card_schema_version, evaluation_payload
+    ) VALUES (
+        :id, :company, :cluster_id, :title, :summary_lines,
+        :event_type, :importance, :importance_score,
+        CAST(:implication AS jsonb), CAST(:sources AS jsonb),
+        :validation_pass, :validation_sc_score,
+        :peer_company_id, :primary_keyword_category, CAST(:integrated_issue_id AS uuid),
+        CAST(:source_raw_article_ids AS bigint[]),
+        CAST(:keyword_categories AS jsonb),
+        CAST(:evidence_payload AS jsonb),
+        CAST(:source_articles AS jsonb),
+        :card_schema_version,
+        CAST(:evaluation_payload AS jsonb)
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        implication = CAST(:implication AS jsonb),
+        validation_pass = :validation_pass,
+        validation_sc_score = :validation_sc_score,
+        peer_company_id = COALESCE(EXCLUDED.peer_company_id, card_news.peer_company_id),
+        primary_keyword_category = COALESCE(
+            EXCLUDED.primary_keyword_category, card_news.primary_keyword_category
+        ),
+        integrated_issue_id = COALESCE(EXCLUDED.integrated_issue_id, card_news.integrated_issue_id),
+        source_raw_article_ids = COALESCE(
+            EXCLUDED.source_raw_article_ids, card_news.source_raw_article_ids
+        ),
+        keyword_categories = COALESCE(EXCLUDED.keyword_categories, card_news.keyword_categories),
+        evidence_payload = COALESCE(EXCLUDED.evidence_payload, card_news.evidence_payload),
+        source_articles = COALESCE(EXCLUDED.source_articles, card_news.source_articles),
+        card_schema_version = EXCLUDED.card_schema_version,
+        evaluation_payload =
+            COALESCE(card_news.evaluation_payload, '{}'::jsonb)
+            || COALESCE(EXCLUDED.evaluation_payload, '{}'::jsonb)
+    RETURNING id
+""")
+
+_INSERT_CARD_NEWS_V2_WITHOUT_INTEGRATED_ISSUE = text("""
+    INSERT INTO card_news (
+        id, company, cluster_id, title, summary_lines,
+        event_type, importance, importance_score,
+        implication, sources, validation_pass, validation_sc_score,
         peer_company_id, primary_keyword_category, source_raw_article_ids,
         keyword_categories, evidence_payload, source_articles,
         card_schema_version, evaluation_payload
@@ -1262,10 +1305,22 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
             if not _is_undefined_column_error(exc):
                 raise
             log.info(
-                "card_news v2 INSERT 실패 (v33 미적용) → v1 fallback 사용 | id=%s",
+                (
+                    "card_news v2 INSERT 실패 (V40 integrated_issue_id 미적용 가능) "
+                    "→ legacy v2 재시도 | id=%s"
+                ),
                 card.get("id"),
             )
-            card_id = _execute_v1_fallback(card_id=card["id"], params=params)
+            try:
+                card_id = _execute_v2_without_integrated_issue(card_id=card["id"], params=params)
+            except Exception as legacy_exc:  # noqa: BLE001
+                if not _is_undefined_column_error(legacy_exc):
+                    raise
+                log.info(
+                    "card_news legacy v2 INSERT 실패 (v33 미적용) → v1 fallback 사용 | id=%s",
+                    card.get("id"),
+                )
+                card_id = _execute_v1_fallback(card_id=card["id"], params=params)
         if card_id:
             _sync_card_news_articles(
                 card_id=card_id,
@@ -1285,6 +1340,19 @@ def _execute_v2_insert(*, card_id: str, params: dict[str, Any]) -> Optional[str]
         db.commit()
         if row:
             log.info("카드 뉴스 저장 완료 (v2) | id=%s", card_id)
+            return card_id
+    return None
+
+
+def _execute_v2_without_integrated_issue(*, card_id: str, params: dict[str, Any]) -> Optional[str]:
+    legacy_params = dict(params)
+    legacy_params.pop("integrated_issue_id", None)
+    with SessionLocal() as db:
+        result = db.execute(_INSERT_CARD_NEWS_V2_WITHOUT_INTEGRATED_ISSUE, legacy_params)
+        row = result.fetchone()
+        db.commit()
+        if row:
+            log.info("카드 뉴스 저장 완료 (v2 legacy no integrated_issue_id) | id=%s", card_id)
             return card_id
     return None
 
@@ -1351,6 +1419,7 @@ def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
         "validation_sc_score": card.get("validation", {}).get("sc_score", 0.0),
         "peer_company_id": _resolve_peer_company_id(card),
         "primary_keyword_category": card.get("primary_keyword_category") or card.get("sector"),
+        "integrated_issue_id": _resolve_integrated_issue_id(card, evidence_payload),
         "source_raw_article_ids": source_ids,
         "keyword_categories": json.dumps(keyword_categories, ensure_ascii=False),
         "evidence_payload": json.dumps(evidence_payload, ensure_ascii=False),
@@ -1358,6 +1427,22 @@ def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
         "card_schema_version": str(card.get("card_schema_version") or "v2"),
         "evaluation_payload": json.dumps(evaluation_payload, ensure_ascii=False),
     }
+
+
+def _resolve_integrated_issue_id(
+    card: dict[str, Any], evidence_payload: dict[str, Any]
+) -> Optional[str]:
+    for value in (
+        card.get("integrated_issue_id"),
+        evidence_payload.get("integrated_issue_id"),
+        (evidence_payload.get("analysis_package") or {}).get("integrated_issue_id")
+        if isinstance(evidence_payload.get("analysis_package"), dict)
+        else None,
+    ):
+        text_value = str(value or "").strip()
+        if text_value:
+            return text_value
+    return None
 
 
 def _sync_card_news_articles(
