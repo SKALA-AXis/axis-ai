@@ -1848,7 +1848,8 @@ def _warning_for(data: dict) -> str | None:
     confidence = float(data.get("confidence") or 0.0)
     if confidence < 0.6:
         warnings.append("근거 불충분 — 다른 카드 조합 권장 (confidence < 0.6)")
-    provenance = data.get("provenance") if isinstance(data.get("provenance"), dict) else {}
+    provenance_value = data.get("provenance")
+    provenance = provenance_value if isinstance(provenance_value, dict) else {}
     quality_flags = _json_list(data.get("quality_flags") or provenance.get("quality_flags"))
     if quality_flags:
         warnings.append(f"quality_flags={','.join(str(flag) for flag in quality_flags)}")
