@@ -1075,6 +1075,7 @@ def _valid_card_refs(value: object, allowed_card_ids: set[str]) -> list[str]:
 
 def _valid_connections(value: object, allowed_card_ids: set[str]) -> list[dict]:
     connections: list[dict] = []
+    allowed_labels = {"cause", "effect", "similar", "contrast", "reinforce"}
     for item in _json_list(value):
         if not isinstance(item, dict):
             continue
@@ -1090,12 +1091,22 @@ def _valid_connections(value: object, allowed_card_ids: set[str]) -> list[dict]:
         except (TypeError, ValueError):
             weight = 0.0
         connection["weight"] = max(0.0, min(weight, 1.0))
+        if connection.get("label") not in allowed_labels:
+            connection["label"] = "similar"
         connections.append(connection)
     return connections[:20]
 
 
 def _valid_cross_card_findings(value: object, allowed_card_ids: set[str]) -> list[dict]:
     findings: list[dict] = []
+    allowed_pattern_types = {
+        "convergent_strategy",
+        "divergent_strategy",
+        "gap_in_market",
+        "acceleration_signal",
+        "timing_mismatch",
+        "market_baseline",
+    }
     for item in _json_list(value):
         if not isinstance(item, dict):
             continue
@@ -1105,6 +1116,8 @@ def _valid_cross_card_findings(value: object, allowed_card_ids: set[str]) -> lis
         finding = dict(item)
         finding["evidence_card_ids"] = refs
         finding["finding"] = clip_string(finding.get("finding", ""), 120)
+        if finding.get("pattern_type") not in allowed_pattern_types:
+            finding["pattern_type"] = "convergent_strategy"
         findings.append(finding)
     return findings[:5]
 
@@ -1387,11 +1400,14 @@ def _valid_reasoning_trail_refs(value: object, allowed_card_ids: set[str]) -> li
 
 def _valid_reasoning_step_refs(value: object, allowed_card_ids: set[str]) -> list[dict]:
     steps: list[dict] = []
+    allowed_phases = {"per_card", "cross_card", "synthesis"}
     for item in _json_list(value):
         if not isinstance(item, dict):
             continue
         updated = dict(item)
         updated["inputs_used"] = _valid_card_refs(item.get("inputs_used"), allowed_card_ids)
+        if updated.get("phase") not in allowed_phases:
+            updated["phase"] = "synthesis"
         steps.append(updated)
     return steps
 

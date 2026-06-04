@@ -6,7 +6,7 @@ from typing import Any
 
 from src.agents import mixer_analysis_agent as mixer_module
 from src.agents.mixer_analysis_agent import MixerAnalysisAgent
-from src.api.mixer_schemas import MixerAnalysisRequest
+from src.api.mixer_schemas import MixerAnalysisRequest, MixerAnalysisResponse
 from src.services.analysis_units import (
     QUALITY_SUMMARY_ONLY_FALLBACK,
     AnalysisUnit,
@@ -70,6 +70,29 @@ class _FakeLLM:
                         }
                     ],
                     "recommended_actions": ["제안 첫 장에 운영 성과 근거를 배치합니다."],
+                    "connections": [
+                        {
+                            "source_card_id": "CN-1",
+                            "target_card_id": "CN-2",
+                            "label": "unsupported",
+                            "weight": 2,
+                        }
+                    ],
+                    "cross_card_findings": [
+                        {
+                            "finding": "enum 방어 테스트",
+                            "evidence_card_ids": ["CN-1", "CN-2"],
+                            "pattern_type": "unsupported",
+                        }
+                    ],
+                    "reasoning_steps": [
+                        {
+                            "step_idx": 1,
+                            "phase": "unsupported",
+                            "inputs_used": ["CN-1", "CN-2"],
+                            "answer": "enum 방어 테스트",
+                        }
+                    ],
                     "sources_used": ["CN-1", "CN-2"],
                     "confidence": 0.8,
                 },
@@ -148,6 +171,13 @@ def test_mixer_accepts_integrated_issue_ids_and_exposes_sources(monkeypatch):
         for action in result["recommended_actions"]
     )
     assert any(detail["use_case"] == "사업 우선순위" for detail in result["action_details"])
+    response = MixerAnalysisResponse.model_validate(result)
+    assert all(connection.label in {"similar", "contrast"} for connection in response.connections)
+    assert all(
+        finding.pattern_type in {"convergent_strategy", "divergent_strategy", "acceleration_signal"}
+        for finding in response.cross_card_findings
+    )
+    assert response.reasoning_steps[0].phase == "synthesis"
 
 
 def test_mixer_card_ids_are_interpreted_as_analysis_units(monkeypatch):
