@@ -29,6 +29,14 @@ from sqlalchemy import text  # noqa: E402
 from src.config.env_loader import load_profile  # noqa: E402
 from src.db.briefing_reports import save_briefing_report  # noqa: E402
 from src.db.postgres import SessionLocal  # noqa: E402
+from src.services.analysis_units import (  # noqa: E402
+    QUALITY_SUMMARY_ONLY_FALLBACK,
+    analysis_units_from_cards,
+    card_like_from_units,
+    confidence_penalty_for_flags,
+    quality_flags_for_units,
+    source_integrated_issue_ids,
+)
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +103,7 @@ class BriefingGenerationAgent:
         briefing_type: BriefingType,
         anchor_date: str | date | None = None,
         card_ids: list[str] | None = None,
+        integrated_issue_ids: list[str] | None = None,
         peer_ids: list[str] | None = None,
         sectors: list[str] | None = None,
         title: str | None = None,
@@ -116,6 +125,7 @@ class BriefingGenerationAgent:
 
         load_profile()
         requested_card_ids = _clean_ids(card_ids)
+        requested_integrated_issue_ids = _clean_ids(integrated_issue_ids)
         period = _resolve_period(briefing_type, anchor_date)
         source_mode = (
             "mock_fixture" if use_mock or mock_path or mock_items else "card_news_period_filter"
@@ -126,6 +136,7 @@ class BriefingGenerationAgent:
                 period=period,
                 items=mock_source_items,
                 card_ids=requested_card_ids,
+                integrated_issue_ids=requested_integrated_issue_ids,
                 peer_ids=peer_ids,
                 sectors=sectors,
                 limit=limit,
@@ -135,19 +146,33 @@ class BriefingGenerationAgent:
             selected_cards = _fetch_period_cards(
                 period=period,
                 card_ids=requested_card_ids,
+                integrated_issue_ids=requested_integrated_issue_ids,
                 peer_ids=peer_ids,
                 sectors=sectors,
                 limit=limit,
             )
+        selected_units = analysis_units_from_cards(selected_cards)
+        selected_cards = card_like_from_units(selected_units)
         selected_card_ids = [card["id"] for card in selected_cards]
+        selected_integrated_issue_ids = source_integrated_issue_ids(selected_units)
+        quality_flags = quality_flags_for_units(selected_units)
         excluded_card_ids = [
             card_id for card_id in requested_card_ids if card_id not in set(selected_card_ids)
+        ]
+        excluded_integrated_issue_ids = [
+            issue_id
+            for issue_id in requested_integrated_issue_ids
+            if issue_id not in set(selected_integrated_issue_ids)
         ]
         report_id = _briefing_id(briefing_type, period["date_from"])
         provenance_base = _provenance_base(
             requested_card_ids=requested_card_ids,
+            requested_integrated_issue_ids=requested_integrated_issue_ids,
             selected_card_ids=selected_card_ids,
+            selected_integrated_issue_ids=selected_integrated_issue_ids,
             excluded_card_ids=excluded_card_ids,
+            excluded_integrated_issue_ids=excluded_integrated_issue_ids,
+            quality_flags=quality_flags,
             source_mode=source_mode,
         )
 
@@ -255,6 +280,7 @@ def _fetch_period_cards(
     *,
     period: dict[str, Any],
     card_ids: list[str] | None,
+    integrated_issue_ids: list[str] | None,
     peer_ids: list[str] | None,
     sectors: list[str] | None,
     limit: int,
@@ -276,6 +302,13 @@ def _fetch_period_cards(
     _append_in_filter(
         where,
         params,
+        "cn.integrated_issue_id::text",
+        "integrated_issue_id",
+        integrated_issue_ids,
+    )
+    _append_in_filter(
+        where,
+        params,
         "COALESCE(cn.peer_company_id, cn.company)",
         "peer_id",
         peer_ids,
@@ -291,6 +324,7 @@ def _fetch_period_cards(
             cn.importance_score,
             cn.company,
             COALESCE(cn.peer_company_id, cn.company) AS peer_id,
+            cn.integrated_issue_id,
             cn.primary_keyword_category,
             cn.implication,
             cn.sources,
@@ -351,16 +385,20 @@ def _fetch_mock_period_cards(
     period: dict[str, Any],
     items: list[dict[str, Any]],
     card_ids: list[str] | None,
+    integrated_issue_ids: list[str] | None,
     peer_ids: list[str] | None,
     sectors: list[str] | None,
     limit: int,
 ) -> list[dict[str, Any]]:
     requested = set(card_ids or [])
+    requested_issue_ids = set(integrated_issue_ids or [])
     wanted_peers = {str(peer_id).strip() for peer_id in peer_ids or [] if str(peer_id).strip()}
     cards = [_normalize_mock_item(item) for item in items]
     filtered: list[dict[str, Any]] = []
     for card in cards:
         if requested and card["id"] not in requested:
+            continue
+        if requested_issue_ids and card.get("integrated_issue_id") not in requested_issue_ids:
             continue
         if wanted_peers and card.get("peer_id") not in wanted_peers:
             continue
@@ -397,6 +435,12 @@ def _normalize_mock_item(item: dict[str, Any]) -> dict[str, Any]:
     analysis_package = payload_package or top_package
     if analysis_package:
         evidence_payload["analysis_package"] = analysis_package
+    integrated_issue_id = _first_text(
+        item.get("integrated_issue_id"),
+        evidence_payload.get("integrated_issue_id"),
+        analysis_package.get("integrated_issue_id"),
+        _nested_get(analysis_package, "integrated_issue", "integrated_issue_id"),
+    )
 
     sources = _json_list(item.get("sources"))
     basis_at = _first_source_published_at(sources) or item.get("basis_at") or item.get("created_at")
@@ -414,6 +458,7 @@ def _normalize_mock_item(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": card_id,
         "card_id": card_id,
+        "integrated_issue_id": integrated_issue_id or None,
         "title": str(item.get("title") or ""),
         "summary_lines": _json_list(item.get("summary_lines")),
         "event_type": str(item.get("event_type") or ""),
@@ -460,6 +505,12 @@ def _normalize_card_row(row: dict[str, Any]) -> dict[str, Any]:
     implication = _json_dict(row.get("implication"))
     evidence_payload = _json_dict(row.get("evidence_payload"))
     analysis_package = _analysis_package_from_sources(row, evidence_payload)
+    integrated_issue_id = _first_text(
+        row.get("integrated_issue_id"),
+        evidence_payload.get("integrated_issue_id"),
+        analysis_package.get("integrated_issue_id"),
+        _nested_get(analysis_package, "integrated_issue", "integrated_issue_id"),
+    )
     summary_lines = row.get("summary_lines")
     if isinstance(summary_lines, str):
         summary_lines = [summary_lines]
@@ -483,6 +534,7 @@ def _normalize_card_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": card_id,
         "card_id": card_id,
+        "integrated_issue_id": integrated_issue_id or None,
         "title": str(row.get("title") or ""),
         "summary_lines": [str(item) for item in summary_lines if str(item).strip()],
         "event_type": str(row.get("event_type") or ""),
@@ -525,24 +577,33 @@ def _filter_by_sectors(
 def _provenance_base(
     *,
     requested_card_ids: list[str],
+    requested_integrated_issue_ids: list[str],
     selected_card_ids: list[str],
+    selected_integrated_issue_ids: list[str],
     excluded_card_ids: list[str],
+    excluded_integrated_issue_ids: list[str],
+    quality_flags: list[str],
     source_mode: str,
 ) -> dict[str, Any]:
     provenance = {
         "agent": "BriefingGenerationAgent",
         "prompt_version": _PROMPT_VERSION,
         "source_card_ids": selected_card_ids,
+        "source_integrated_issue_ids": selected_integrated_issue_ids,
         "requested_card_ids": requested_card_ids,
+        "requested_integrated_issue_ids": requested_integrated_issue_ids,
         "selected_card_ids": selected_card_ids,
+        "selected_integrated_issue_ids": selected_integrated_issue_ids,
         "excluded_card_ids": excluded_card_ids,
+        "excluded_integrated_issue_ids": excluded_integrated_issue_ids,
+        "quality_flags": quality_flags,
         "source_mode": source_mode,
         "briefing_analysis_basis": (
-            "card_id -> card_news.evidence_payload.analysis_package "
+            "integrated_issues.id -> card_news.evidence_payload.analysis_package "
             "integrated_issue+analysis+implication+classification+validation"
         ),
     }
-    if excluded_card_ids:
+    if excluded_card_ids or excluded_integrated_issue_ids:
         provenance["exclusion_reason"] = "out_of_period"
     return provenance
 
@@ -554,6 +615,9 @@ def _briefing_basis_from_analysis_packages(
     user_context: str | None,
 ) -> dict[str, Any]:
     card_ids = [card["id"] for card in selected_cards]
+    units = analysis_units_from_cards(selected_cards)
+    integrated_issue_ids = source_integrated_issue_ids(units)
+    quality_flags = quality_flags_for_units(units)
     entries = _analysis_package_entries(selected_cards)
     analysis_summaries = [entry["analysis_summary"] for entry in entries]
     market_signals = [entry["market_signal"] for entry in entries]
@@ -585,6 +649,11 @@ def _briefing_basis_from_analysis_packages(
     confidence = (
         round(sum(confidence_values) / len(confidence_values), 2) if confidence_values else 0.0
     )
+    if quality_flags:
+        confidence = round(
+            max(0.0, confidence - confidence_penalty_for_flags(quality_flags)),
+            2,
+        )
     fallback = f"{period['label']} 기간에 확인된 카드뉴스 기반 브리핑입니다."
     lead_finding = _combine_blocks(
         market_signals or analysis_summaries,
@@ -653,11 +722,15 @@ def _briefing_basis_from_analysis_packages(
         "recommended_actions": recommended_actions,
         "confidence": confidence,
         "sources_used": card_ids,
+        "source_integrated_issue_ids": integrated_issue_ids,
+        "quality_flags": quality_flags,
         "provenance": {
             "prompt_version": _PROMPT_VERSION,
             "source_card_ids": card_ids,
+            "source_integrated_issue_ids": integrated_issue_ids,
+            "quality_flags": quality_flags,
             "analysis_basis": (
-                "card_id -> card_news.evidence_payload.analysis_package "
+                "integrated_issues.id -> card_news.evidence_payload.analysis_package "
                 "integrated_issue+analysis+implication+classification+validation"
             ),
         },
@@ -677,6 +750,9 @@ def _analysis_package_entries(cards: list[dict[str, Any]]) -> list[dict[str, Any
         entries.append(
             {
                 "card_id": card.get("id"),
+                "integrated_issue_id": card.get("integrated_issue_id")
+                or package.get("integrated_issue_id")
+                or integrated.get("integrated_issue_id"),
                 "company_label": _company_label(card),
                 "main_issue": _first_text(integrated.get("main_issue"), card.get("title")),
                 "analysis_summary": _first_text(
@@ -727,7 +803,13 @@ def _basis_evidence(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for entry in entries:
         text_value = _first_text(entry.get("market_signal"), entry.get("analysis_summary"))
         if entry.get("card_id") and text_value:
-            evidence.append({"card_id": entry["card_id"], "text": text_value})
+            evidence.append(
+                {
+                    "card_id": entry["card_id"],
+                    "integrated_issue_id": entry.get("integrated_issue_id"),
+                    "text": text_value,
+                }
+            )
     return evidence
 
 
@@ -754,27 +836,136 @@ def _comparison_finding(entries: list[dict[str, Any]]) -> str:
 def _action_details_from_analysis_packages(
     entries: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    details: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for entry in entries:
-        for action in _json_list(entry.get("recommended_actions")):
-            action_text = str(action or "").strip()
-            if not action_text:
-                continue
-            key = re.sub(r"\s+", " ", action_text)
-            if key in seen:
-                continue
-            seen.add(key)
-            details.append(
-                {
-                    "action": action_text,
-                    "why": _first_text(entry.get("sk_why"), entry.get("sk_impact")),
-                    "use_case": _action_use_case(action_text),
-                    "evidence": _basis_evidence([entry]),
-                    "evidence_card_ids": [entry["card_id"]] if entry.get("card_id") else [],
-                }
-            )
-    return details
+    if not entries:
+        return []
+    return _executive_action_details_from_entries(entries)
+
+
+def _executive_action_details_from_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    evidence = _basis_evidence(entries)
+    evidence_card_ids = _front_evidence_card_ids(entries)
+    focus = _briefing_decision_focus(entries)
+    focus_clause = _briefing_clause(focus)
+    customer_scope = _briefing_customer_scope(entries)
+    comparison = _briefing_clause(
+        _comparison_finding(entries)
+        or _combine_blocks(
+            [entry.get("peer_meaning") for entry in entries],
+            "고객군별 의사결정 기준 차이",
+            max_items=2,
+            max_chars=120,
+        )
+    )
+    return [
+        {
+            "action": _clip_text(
+                (
+                    f"SK AX는 {customer_scope} 고객군을 우선 공략 범위로 두고, "
+                    f"{focus_clause}를 기준으로 오퍼링 책임 조직과 "
+                    "리스크 승인 권한을 지정한다."
+                ),
+                max_chars=300,
+            ),
+            "why": _briefing_action_reason(entries, fallback=focus),
+            "use_case": "사업 우선순위",
+            "evidence": evidence,
+            "evidence_card_ids": evidence_card_ids,
+        },
+        {
+            "action": _clip_text(
+                (
+                    "SK AX는 사업 라인별 오퍼링을 하나의 AX 상품으로 묶지 말고 "
+                    f"{comparison}에 맞춰 분리 상품화한다. 고객군별 영업 우선순위, "
+                    "가격/계약 조건, 보안·데이터 거버넌스 기준을 다르게 둔다."
+                ),
+                max_chars=300,
+            ),
+            "why": _briefing_action_reason(
+                entries,
+                fallback="카드별 고객군과 경쟁 신호가 서로 다른 의사결정 기준을 보여준다.",
+            ),
+            "use_case": "오퍼링/상품화",
+            "evidence": evidence,
+            "evidence_card_ids": evidence_card_ids,
+        },
+        {
+            "action": _clip_text(
+                (
+                    "SK AX는 브리핑 안건을 정보 공유가 아니라 자원 배분 의사결정으로 다룬다. "
+                    f"{focus_clause}와 연결된 수주 전환, 규제 일정, 운영 KPI가 확인되면 "
+                    "전담 인력, 파트너십 후보, 레퍼런스 확보 예산을 재배분한다."
+                ),
+                max_chars=300,
+            ),
+            "why": _combine_blocks(
+                [entry.get("market_signal") for entry in entries],
+                "기간 내 반복 신호를 사업 자원 배분 기준으로 반영할 필요가 있다.",
+                max_items=2,
+                max_chars=240,
+            ),
+            "use_case": "자원 배분/시장 대응",
+            "evidence": evidence,
+            "evidence_card_ids": evidence_card_ids,
+        },
+    ]
+
+
+def _briefing_decision_focus(entries: list[dict[str, Any]]) -> str:
+    return _combine_blocks(
+        [
+            *[entry.get("sk_why") for entry in entries],
+            *[entry.get("sk_impact") for entry in entries],
+            *[entry.get("market_signal") for entry in entries],
+            *[text for entry in entries for text in _json_list(entry.get("strategic_meaning"))],
+        ],
+        "입력에서 확인된 고객 평가 기준 변화",
+        max_items=2,
+        max_chars=140,
+    )
+
+
+def _briefing_action_reason(entries: list[dict[str, Any]], *, fallback: str) -> str:
+    return _combine_blocks(
+        [
+            *[entry.get("sk_why") for entry in entries],
+            *[entry.get("sk_impact") for entry in entries],
+            *[entry.get("analysis_summary") for entry in entries],
+        ],
+        fallback,
+        max_items=2,
+        max_chars=240,
+    )
+
+
+def _briefing_customer_scope(entries: list[dict[str, Any]]) -> str:
+    text_value = " ".join(
+        str(value or "")
+        for entry in entries
+        for value in (
+            entry.get("main_issue"),
+            entry.get("analysis_summary"),
+            entry.get("market_signal"),
+            entry.get("sk_why"),
+            entry.get("sk_impact"),
+            " ".join(str(item) for item in _json_list(entry.get("strategic_meaning"))),
+        )
+    )
+    scopes: list[str] = []
+    if any(token in text_value for token in ("금융", "토큰증권", "디지털자산", "결제", "정산")):
+        scopes.append("금융")
+    if any(token in text_value for token in ("공공", "행정", "부처", "교육", "학교", "기관")):
+        scopes.append("공공/교육")
+    if any(token in text_value for token in ("제조", "공장", "설비", "물류", "로봇")):
+        scopes.append("제조/운영")
+    if any(token in text_value for token in ("보안", "데이터 통제", "프라이빗", "거버넌스")):
+        scopes.append("보안·데이터 통제")
+    scope = _join_korean(_dedupe_keep_order(scopes[:3]))
+    return scope or "입력에서 확인된"
+
+
+def _briefing_clause(value: object) -> str:
+    text_value = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text_value.rstrip(".。!！?？")
 
 
 def _safe_float(value: object, *, default: float) -> float:
@@ -792,9 +983,9 @@ def _refine_display_copy_with_llm(
     selected_cards: list[dict[str, Any]],
     llm: Any | None,
 ) -> dict[str, Any]:
-    """analysis_package 기반 payload의 화면 표시문만 LLM으로 정제한다.
+    """AnalysisUnit 기반 payload의 화면 표시문만 LLM으로 정제한다.
 
-    다른 에이전트와 분리하기 위해 이 단계는 card_id별 analysis_package만 입력으로 사용하고,
+    다른 에이전트와 분리하기 위해 이 단계는 card_id별 analysis_unit만 입력으로 사용하고,
     evidence/provenance/hidden_details 같은 추적 필드는 코드가 그대로 보존한다.
     """
 
@@ -846,7 +1037,7 @@ def _display_copy_system_prompt() -> str:
             "# Persona Handoff",
             ("당신은 SK AX 임원 브리핑 화면의 수석 에디터이자 근거 검수자입니다."),
             (
-                "당신의 책임은 card_news.evidence_payload.analysis_package에 있는 "
+                "당신의 책임은 analysis_units에 있는 "
                 "통합/분석/시사점/분류/검증 결과만 사용해 화면용 문장을 정제하는 것입니다."
             ),
             "",
@@ -866,10 +1057,10 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
     return "\n".join(
         [
             "# Task",
-            "아래 analysis_packages를 근거로 브리핑 화면용 표시문을 작성하세요.",
+            "아래 analysis_units를 근거로 브리핑 화면용 표시문을 작성하세요.",
             (
                 "current_display_structure는 필드 구조만 보여주는 레퍼런스입니다. "
-                "문장 내용은 analysis_packages에서 판단해 새로 작성하세요."
+                "문장 내용은 analysis_units에서 판단해 새로 작성하세요."
             ),
             "",
             "# Output Schema",
@@ -877,14 +1068,14 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             "",
             "# Prompt Pattern Stack",
             "- Persona Handoff: 수석 브리핑 에디터로서 근거와 화면 문장을 동시에 검수합니다.",
-            "- Input Flip: analysis_packages의 원문 분석 결과를 화면 문장으로 변환합니다.",
+            "- Input Flip: analysis_units의 원문 분석 결과를 화면 문장으로 변환합니다.",
             "- Constraint Box: 아래 Must/Cannot 제약을 지킵니다.",
             "- Few-Shot: 좋은/나쁜 문장 예시를 스타일 기준으로 삼습니다.",
             "- Self Evaluation: 반환 전 내부적으로만 중복, 근거성, 섹션 적합성을 점검합니다.",
             "",
             "# Input Reference Rules",
             (
-                "- analysis_packages에 있는 integrated_issue, analysis, implication을 "
+                "- analysis_units에 있는 integrated_issue, analysis, implication을 "
                 "Input Flip 레퍼런스로 사용해 화면 문장으로 변환합니다."
             ),
             (
@@ -940,7 +1131,7 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             ),
             (
                 "- why_important는 '중요합니다'로 끝나는 평가가 아니라 고객 평가, "
-                "제안 메시지, 모니터링 기준 중 무엇을 바꿔야 하는지까지 말합니다."
+                "오퍼링, 책임 조직, 자원 배분, 리스크 게이트 중 무엇을 바꿔야 하는지까지 말합니다."
             ),
             ("- 카드가 2개 이상이면 한 회사나 한 카드의 설명으로 전체 결론을 대체하지 않습니다."),
             (
@@ -985,7 +1176,7 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             "- 관찰된 변화: 실제로 무엇이 확인됐나?",
             "- 평가축의 이동: 고객/시장 판단 기준은 무엇으로 이동하나?",
             "- 경쟁 구도 영향: 경쟁사 메시지와 경쟁 방식은 어떻게 달라지나?",
-            "- 전략 시사: SK AX는 제안/레퍼런스/운영 설계를 어떻게 바꿔야 하나?",
+            "- 전략 시사: SK AX는 고객군, 오퍼링, 책임 조직, 자원 배분을 어떻게 바꿔야 하나?",
             "",
             "# Constraint Box: Cannot",
             "- market_reading 키를 생성하지 않습니다.",
@@ -1017,7 +1208,7 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             "- why_important를 특정 회사의 이익이나 성장 전망만으로 좁히지 않습니다.",
             (
                 "- '두각', '시장 입지 강화', '경쟁 우위 확보'처럼 강한 평가 표현은 "
-                "analysis_package에 같은 의미의 근거가 있을 때만 씁니다."
+                "analysis_units에 같은 의미의 근거가 있을 때만 씁니다."
             ),
             (
                 "- 산업 범위는 근거에 나온 범위를 넘기지 않습니다. 예를 들어 "
@@ -1036,7 +1227,8 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             ),
             (
                 "- 전략 시사: skax_implication.why_important, potential_impact, "
-                "recommended_actions를 사용해 SK AX가 무엇을 다르게 해야 하는지 씁니다."
+                "recommended_actions를 참고하되, 최종 문장은 임원이 실행할 회사 차원의 "
+                "고객군/오퍼링/자원 배분 결정으로 씁니다."
             ),
             "",
             "# Lens Selection",
@@ -1047,7 +1239,11 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             "- 관찰된 변화 후보: 반복 신호, 새 수요, 숫자/규모 신호, 사업 역할 변화",
             "- 평가축의 이동 후보: 보안/통제, 운영 가능성, 성과 검증, 비용/리스크",
             "- 경쟁 구도 영향 후보: 메시지 재구성, 패키지화, 레퍼런스 경쟁, 성장 논리",
-            "- 전략 시사 후보: 제안 첫 장, 운영 시나리오, 데이터 거버넌스, 레퍼런스 재정렬",
+            "- 전략 시사 후보: 고객군 우선순위, 오퍼링 상품화, 책임 조직, 자원 배분, 리스크 게이트",
+            (
+                "- 전략 시사에는 제안서 작성, PoC 운영, 다음 모니터링 항목, 화면 표시 같은 "
+                "프로그램 산출물 중심 행동을 쓰지 않습니다."
+            ),
             (
                 "후보에 맞지 않는 더 중요한 근거가 있으면 후보 밖 렌즈를 선택해도 됩니다. "
                 "단, title과 description은 선택한 렌즈에 정확히 맞아야 합니다."
@@ -1118,7 +1314,7 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             "- key_change_cards와 interpretation_flow가 같은 내용을 같은 표현으로 반복하지 않는가?",
             "- competitor_move와 전략 시사가 한 회사에만 쏠리지 않는가?",
             "- key_change_cards.description이 입력 카드 중 최소 2개 이상의 대표 신호를 반영하는가?",
-            "- 모든 수치와 회사 표현은 analysis_packages에 근거가 있는가?",
+            "- 모든 수치와 회사 표현은 analysis_units에 근거가 있는가?",
             "- 이 self evaluation 결과는 JSON에 포함하지 마세요.",
             "",
             "# Input",
@@ -1178,8 +1374,8 @@ def _display_copy_revision_prompt(
             "- 근거에 없는 수치, 사건, 인과관계는 추가하지 않습니다.",
             "- JSON 객체 하나만 반환합니다.",
             "",
-            "# Reference Analysis Packages",
-            json.dumps(context.get("analysis_packages") or [], ensure_ascii=False, indent=2),
+            "# Reference Analysis Units",
+            json.dumps(context.get("analysis_units") or [], ensure_ascii=False, indent=2),
             "",
             "# Card Signal Index",
             json.dumps(context.get("card_signal_index") or [], ensure_ascii=False, indent=2),
@@ -1195,6 +1391,20 @@ def _display_copy_quality_issues(
     selected_cards: list[dict[str, Any]],
 ) -> list[str]:
     issues: list[str] = []
+    unit_quality_flags = _dedupe_keep_order(
+        [
+            str(flag)
+            for card in selected_cards
+            for flag in _json_list(card.get("quality_flags"))
+            if str(flag).strip()
+        ]
+    )
+    if QUALITY_SUMMARY_ONLY_FALLBACK in unit_quality_flags:
+        issues.append(
+            "summary_only_fallback 품질 플래그가 있는 분석 단위가 포함되어 있습니다. "
+            "카드 표시 요약이 아니라 integrated_issue, analysis, implication 근거로 "
+            "다시 작성하세요."
+        )
     steps = _json_list(_nested_get(draft, "interpretation_flow", "steps"))
     typed_steps = [step for step in steps if isinstance(step, dict)]
     if len(typed_steps) < 4:
@@ -1211,7 +1421,7 @@ def _display_copy_quality_issues(
     if any(term in text for text in texts for term in strong_terms):
         issues.append(
             "근거보다 강한 평가 표현이 포함되어 있습니다. '두각', '시장 입지', "
-            "'경쟁 우위', '주도', '선도' 같은 표현은 analysis_package에 같은 "
+            "'경쟁 우위', '주도', '선도' 같은 표현은 analysis_units에 같은 "
             "의미의 근거가 없으면 '확인됩니다', '부각되고 있습니다', "
             "'중요성이 커지고 있습니다'처럼 낮춰 쓰세요."
         )
@@ -1230,7 +1440,7 @@ def _display_copy_quality_issues(
         issues.append(
             "화면 문장에 이유 없는 중요도/성과 표현이 포함되어 있습니다. "
             "'중요성이 커지고 있습니다', '강조하고 있습니다', '경쟁력을 강화하고 있습니다' "
-            "같은 표현은 실제 근거와 고객 평가 변화, 제안 변화, 경쟁 방식 변화로 "
+            "같은 표현은 실제 근거와 고객 평가 변화, 오퍼링 변화, 경쟁 방식 변화로 "
             "구체화하세요."
         )
     for item in _display_copy_visible_items(draft):
@@ -1251,7 +1461,7 @@ def _display_copy_quality_issues(
         ):
             issues.append(
                 "why_important가 title/description을 반복하거나 추상적으로 끝납니다. "
-                "고객 평가, 제안 우선순위, 후속 모니터링 중 무엇이 바뀌는지 "
+                "고객 평가, 오퍼링 우선순위, 책임 조직, 자원 배분 중 무엇이 바뀌는지 "
                 "구체적으로 쓰세요."
             )
             break
@@ -1445,20 +1655,29 @@ def _display_copy_context(
             "period_label": report.get("period_label"),
         },
         "source_card_ids": report.get("related_card_ids") or [],
+        "source_integrated_issue_ids": report.get("source_integrated_issue_ids") or [],
         "current_display_structure": _display_payload_structure(_frontend_display_payload(report)),
         "card_signal_index": _display_card_signal_index(selected_cards),
-        "analysis_packages": [
-            {
-                "card_id": card.get("id"),
-                "company": card.get("company"),
-                "peer_id": card.get("peer_id"),
-                "company_label": _company_label(card),
-                "title": card.get("title"),
-                "source_raw_article_ids": card.get("source_raw_article_ids") or [],
-                "analysis_package": _compact_analysis_package(_analysis_package(card)),
-            }
-            for card in selected_cards
-        ],
+        "analysis_units": [_compact_analysis_unit_for_display(card) for card in selected_cards],
+    }
+
+
+def _compact_analysis_unit_for_display(card: dict[str, Any]) -> dict[str, Any]:
+    package = _analysis_package(card)
+    evidence_payload = _json_dict(card.get("evidence_payload"))
+    return {
+        "integrated_issue_id": card.get("integrated_issue_id")
+        or evidence_payload.get("integrated_issue_id")
+        or package.get("integrated_issue_id"),
+        "card_id": card.get("card_id") or card.get("id"),
+        "company": card.get("company"),
+        "peer_id": card.get("peer_id"),
+        "company_label": _company_label(card),
+        "title": card.get("title"),
+        "source_raw_article_ids": card.get("source_raw_article_ids") or [],
+        "evidence_refs": _json_list(evidence_payload.get("evidence_refs"))[:8],
+        "quality_flags": _json_list(card.get("quality_flags")),
+        "analysis_package": _compact_analysis_package(package),
     }
 
 
@@ -1827,8 +2046,9 @@ def _sk_ax_description_from_title(title: str) -> str:
     if any(token in normalized for token in ("성과", "KPI", "수치", "지표")):
         return (
             "고객은 기능 도입 자체보다 도입 후 장애, 통제, 생산성 문제가 "
-            "얼마나 줄어드는지를 먼저 확인하려 합니다. 따라서 제안에는 적용 현장, "
-            "측정 지표, 안정화 기준을 함께 제시해 운영 성과를 판단할 수 있게 해야 합니다."
+            "얼마나 줄어드는지를 먼저 확인하려 합니다. 따라서 임원 의사결정에서는 "
+            "적용 현장, 측정 지표, 안정화 기준을 사업 우선순위와 책임 조직 기준으로 "
+            "함께 묶어야 합니다."
         )
     if any(token in normalized for token in ("레퍼런스", "사례")):
         return (
@@ -1838,7 +2058,8 @@ def _sk_ax_description_from_title(title: str) -> str:
     if any(token in normalized for token in ("보안", "데이터 통제", "프라이빗")):
         return (
             "고객이 외부 모델 활용보다 데이터 통제와 책임 범위를 먼저 확인할 수 있으므로, "
-            "구축 방식과 운영 거버넌스를 제안 초반에 함께 제시해야 합니다."
+            "구축 방식과 운영 거버넌스를 오퍼링 필수 조건과 리스크 승인 기준으로 "
+            "함께 정해야 합니다."
         )
     if any(token in normalized for token in ("운영 시나리오", "운영 패키지", "통합")):
         return (
@@ -1846,8 +2067,8 @@ def _sk_ax_description_from_title(title: str) -> str:
             "리스크 감소 방식, 성과 확인 지점을 더 빠르게 판단할 수 있습니다."
         )
     return (
-        "이 시사점은 기술 설명을 실행 계획으로 바꾸는 부분이므로, 고객 문제, "
-        "적용 범위, 기대 효과를 한 번에 확인할 수 있게 제안 문장을 구성해야 합니다."
+        "이 시사점은 기술 설명을 회사 행동으로 바꾸는 부분이므로, 고객군, "
+        "적용 범위, 책임 조직, 기대 효과를 한 번에 판단할 수 있게 결정 기준을 정해야 합니다."
     )
 
 
@@ -1869,20 +2090,20 @@ def _grounded_sk_ax_description(
         return (
             f"{basis} 이 근거는 고객의 관심이 기능 보유 여부보다 도입 후 "
             "운영 불확실성을 얼마나 낮출 수 있는지로 옮겨가고 있음을 보여줍니다. "
-            "그래서 제안 초반에는 기능 목록보다 줄일 운영 문제, 책임 범위, "
-            "성과 측정 기준을 먼저 제시해야 합니다."
+            "그래서 임원 의사결정에서는 기능 목록보다 줄일 운영 문제, 책임 범위, "
+            "성과 측정 기준을 오퍼링 조건으로 먼저 확정해야 합니다."
         )
     if any(token in normalized for token in ("운영 시나리오", "운영 설계", "제안서 메시지")):
         return (
             f"{basis} 이 신호는 고객이 단일 기능보다 도입 후 운영 흐름과 "
-            "책임 범위를 함께 판단한다는 뜻입니다. 따라서 제안서는 기술 항목을 "
-            "나열하기보다 데이터 수집, 이상 감지, 현장 적용, 성과 확인까지 "
-            "이어지는 운영 시나리오로 구성해야 합니다."
+            "책임 범위를 함께 판단한다는 뜻입니다. 따라서 SK AX는 기술 항목을 "
+            "나열하기보다 데이터 수집, 이상 감지, 현장 적용, 성과 확인 책임을 "
+            "오퍼링과 책임 조직에 함께 배정해야 합니다."
         )
     if any(token in normalized for token in ("프라이빗", "보안", "데이터 통제")):
         return (
-            f"{basis} 따라서 제안서 앞단에서 데이터 통제 방식, 책임 범위, "
-            "운영 거버넌스를 함께 설명해야 고객이 도입 리스크를 판단할 수 있습니다."
+            f"{basis} 따라서 데이터 통제 방식, 책임 범위, 운영 거버넌스를 "
+            "리스크 승인 게이트로 정해야 고객이 도입 리스크를 판단할 수 있습니다."
         )
     if any(token in normalized for token in ("성과 수치", "KPI", "지표", "적용 현장")):
         return (
@@ -1898,9 +2119,8 @@ def _grounded_sk_ax_description(
         )
     if actions:
         return (
-            f"{basis} 이 근거를 제안 문장으로 옮길 때는 기능명보다 고객의 "
-            "운영 판단에 필요한 적용 범위, 책임 구조, 성과 확인 방식을 먼저 "
-            "드러내야 합니다."
+            f"{basis} 이 근거를 회사 행동으로 옮길 때는 기능명보다 고객의 "
+            "운영 판단에 필요한 적용 범위, 책임 구조, 성과 확인 방식을 먼저 정해야 합니다."
         )
     return basis
 
@@ -2311,6 +2531,13 @@ def _build_report(
     provenance_base: dict[str, Any],
 ) -> dict[str, Any]:
     source_card_ids = [card["id"] for card in selected_cards]
+    source_integrated_issue_ids = _json_list(
+        briefing_basis.get("source_integrated_issue_ids")
+        or provenance_base.get("source_integrated_issue_ids")
+    )
+    quality_flags = _json_list(
+        briefing_basis.get("quality_flags") or provenance_base.get("quality_flags")
+    )
     confidence = float(briefing_basis.get("confidence") or 0.0)
     report_title = title or f"{period['label']} 브리핑"
     briefing_lead = _brief_sentences(
@@ -2346,20 +2573,24 @@ def _build_report(
         "briefing_lead": briefing_lead or _briefing_lead(period, key_summary, selected_cards),
         "selected_cards": _public_selected_cards(selected_cards),
         "related_card_ids": source_card_ids,
+        "source_integrated_issue_ids": source_integrated_issue_ids,
         "primary_card_news_id": source_card_ids[0] if source_card_ids else None,
         "primary_peer_company_id": selected_cards[0].get("peer_id") if selected_cards else None,
         "key_change_cards": key_change_cards,
         "core_change": {"items": copy.deepcopy(key_change_cards)},
         "interpretation_flow": _interpretation_flow_payload(briefing_basis, selected_cards),
         "hidden_details": hidden_details,
+        "briefing_basis": briefing_basis,
         "confidence": confidence,
         "provenance": {
             **provenance_base,
             "agent": "BriefingGenerationAgent",
             "prompt_version": _PROMPT_VERSION,
             "source_card_ids": source_card_ids,
+            "source_integrated_issue_ids": source_integrated_issue_ids,
+            "quality_flags": quality_flags,
             "briefing_analysis_basis": (
-                "card_id -> card_news.evidence_payload "
+                "integrated_issues.id -> card_news.evidence_payload "
                 "integrated_issue+analysis+implication+classification+validation"
             ),
         },
@@ -2396,6 +2627,7 @@ def _empty_report(
         "briefing_lead": "",
         "selected_cards": [],
         "related_card_ids": [],
+        "source_integrated_issue_ids": [],
         "primary_card_news_id": None,
         "key_change_cards": [],
         "core_change": {"items": []},
@@ -2406,6 +2638,7 @@ def _empty_report(
         },
         "hidden_details": [],
         "requested_card_ids": provenance_base.get("requested_card_ids", []),
+        "requested_integrated_issue_ids": provenance_base.get("requested_integrated_issue_ids", []),
         "confidence": 0.0,
         "provenance": {
             **provenance_base,
@@ -2856,19 +3089,19 @@ def _competitor_move_flow_summary(entries: list[dict[str, Any]]) -> str:
 def _cross_card_importance_sentence(entries: list[dict[str, Any]]) -> str:
     if len(entries) >= 2:
         return (
-            "따라서 제안에서는 기능 설명보다 고객이 평가할 운영 성과, "
-            "리스크 감소, 실행 근거를 먼저 보여줘야 합니다."
+            "따라서 임원 의사결정에서는 기능 설명보다 고객이 평가할 운영 성과, "
+            "리스크 감소, 실행 근거를 사업 우선순위 기준으로 먼저 봐야 합니다."
         )
-    return "이 변화는 후속 카드에서 수요 확산 여부와 실제 성과 근거를 계속 확인해야 합니다."
+    return "이 변화는 수요 확산 여부와 실제 성과 근거에 따라 자원 배분을 조정해야 합니다."
 
 
 def _competitor_importance_sentence(entries: list[dict[str, Any]]) -> str:
     if len(entries) >= 2:
         return (
             "따라서 경쟁사 메시지가 실제 수주, 고객 사례, 성과 지표로 "
-            "이어지는지까지 제안 전략에서 함께 봐야 합니다."
+            "이어지는지까지 오퍼링과 시장 대응 우선순위에서 함께 봐야 합니다."
         )
-    return "이 움직임은 같은 방향의 경쟁 신호가 반복될 때 제안 우선순위를 바꿀 수 있습니다."
+    return "이 움직임은 같은 방향의 경쟁 신호가 반복될 때 고객군 우선순위를 바꿀 수 있습니다."
 
 
 def _strip_terminal_punctuation(value: str) -> str:
@@ -3170,6 +3403,7 @@ def _public_selected_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
         {
             "id": card.get("id"),
             "card_id": card.get("id"),
+            "integrated_issue_id": card.get("integrated_issue_id"),
             "company": card.get("company"),
             "peer_id": card.get("peer_id"),
             "company_label": _company_label(card),
@@ -3197,9 +3431,12 @@ def _hidden_details(
         details.append(
             {
                 "card_id": card.get("id"),
+                "integrated_issue_id": card.get("integrated_issue_id")
+                or package.get("integrated_issue_id"),
                 "evidence_card_ids": card.get("evidence_card_ids") or [card.get("id")],
                 "source_raw_article_ids": card.get("source_raw_article_ids") or [],
                 "sources": sources,
+                "quality_flags": _json_list(card.get("quality_flags")),
                 "confidence": _first_text(
                     _nested_get(package, "validation", "sc_score"),
                     _nested_get(package, "analysis", "confidence"),
@@ -3674,7 +3911,7 @@ def _grounded_front_sk_ax_view(result: dict[str, Any]) -> list[dict[str, Any]]:
         items.append(
             {
                 "seq": len(items) + 1,
-                "title": "제조 AX 제안은 운영 시나리오부터 보여줘야 합니다.",
+                "title": "제조 AX는 운영 책임과 성과 기준을 먼저 정해야 합니다.",
                 "description": _front_robot_skax_description(robot_entry),
                 "evidence_card_ids": _entry_evidence_card_ids(robot_entry),
             }
@@ -3683,7 +3920,7 @@ def _grounded_front_sk_ax_view(result: dict[str, Any]) -> list[dict[str, Any]]:
         items.append(
             {
                 "seq": len(items) + 1,
-                "title": "프라이빗 AI 제안은 데이터 통제 방식과 책임 범위를 먼저 설명해야 합니다.",
+                "title": "프라이빗 AI는 데이터 통제 책임과 리스크 게이트를 먼저 정해야 합니다.",
                 "description": _front_private_ai_skax_description(private_entry),
                 "evidence_card_ids": _entry_evidence_card_ids(private_entry),
             }
@@ -4089,7 +4326,7 @@ def _front_polite_sentence(value: str) -> str:
 def _front_competitor_move_importance(entries: list[dict[str, Any]]) -> str:
     return (
         "따라서 SK AX는 경쟁사 메시지가 실제 수주, 고객 사례, 운영 성과 지표로 "
-        "이어지는지 확인하면서 제안 메시지의 우선순위를 조정해야 합니다."
+        "이어지는지 확인하면서 고객군, 오퍼링, 자원 배분 우선순위를 조정해야 합니다."
     )
 
 
@@ -4102,6 +4339,8 @@ def _front_generic_sk_ax_items(
     seen_titles: set[str] = set()
     for entry in entries:
         for action in _json_list(entry.get("recommended_actions")):
+            if _is_program_artifact_action(action):
+                continue
             title = _front_action_title(action)
             if not title or title in seen_titles:
                 continue
@@ -4117,6 +4356,22 @@ def _front_generic_sk_ax_items(
             if len(items) >= _MAX_SKAX_ITEMS:
                 return items
     return items
+
+
+def _is_program_artifact_action(value: object) -> bool:
+    text_value = str(value or "")
+    return any(
+        token in text_value
+        for token in (
+            "제안서",
+            "제안 첫 장",
+            "PoC",
+            "후속 모니터링",
+            "모니터링 항목",
+            "대시보드",
+            "화면",
+        )
+    )
 
 
 def _front_action_title(action: object) -> str:
@@ -4141,8 +4396,8 @@ def _front_action_description(entry: dict[str, Any]) -> str:
         basis,
         reason,
         (
-            "따라서 SK AX는 이 근거를 기능 설명이 아니라 고객 문제, 실행 범위, "
-            "성과 확인 방식으로 바꿔 제안 메시지에 반영해야 합니다."
+            "따라서 SK AX는 이 근거를 기능 설명이 아니라 고객군, 실행 범위, "
+            "책임 조직, 성과 확인 기준을 정하는 의사결정으로 반영해야 합니다."
         ),
     )
 
@@ -4200,7 +4455,7 @@ def _front_competition_impact_description(entries: list[dict[str, Any]]) -> str:
 
 
 def _front_strategy_implication_title(entries: list[dict[str, Any]]) -> str:
-    return "SK AX 제안은 운영 책임과 성과 검증 기준을 먼저 보여줘야 합니다."
+    return "SK AX는 운영 책임과 성과 검증 기준을 의사결정 게이트로 둬야 합니다."
 
 
 def _front_strategy_implication_description(entries: list[dict[str, Any]]) -> str:
@@ -4210,8 +4465,8 @@ def _front_strategy_implication_description(entries: list[dict[str, Any]]) -> st
             "도입 후 누가 책임지고 어떤 성과 기준으로 안착시킬지를 먼저 보게 됩니다."
         ),
         (
-            "따라서 제안 첫 장에서는 기능 목록보다 운영 리스크를 어떻게 줄이고, "
-            "어떤 책임 범위와 성과 기준으로 안착을 검증할지 먼저 제시해야 합니다."
+            "따라서 기능 목록보다 운영 리스크를 어떻게 줄이고, 어떤 책임 범위와 "
+            "성과 기준으로 안착을 검증할지 임원 의사결정 게이트로 먼저 정해야 합니다."
         ),
     )
 
@@ -4252,9 +4507,9 @@ def _front_robot_skax_description(entry: dict[str, Any]) -> str:
     signal = _front_signal_name(entry, tokens=_ROBOT_OPS_TOKENS)
     return (
         f"{company}의 {signal} 신호는 고객이 단일 기능보다 도입 후 운영 흐름을 "
-        "함께 본다는 점을 보여줍니다. 따라서 제안서는 로봇·설비 데이터 수집, "
-        "이상 감지, 현장 SW 연동, 성과 확인까지 이어지는 운영 시나리오로 "
-        "구성해야 합니다."
+        "함께 본다는 점을 보여줍니다. 따라서 SK AX는 로봇·설비 데이터 수집, "
+        "이상 감지, 현장 SW 연동, 성과 확인 책임을 오퍼링과 책임 조직에 함께 "
+        "배정해야 합니다."
     )
 
 
@@ -4264,9 +4519,9 @@ def _front_private_ai_skax_description(entry: dict[str, Any]) -> str:
     phrase = _front_company_signal_phrase(company, signal)
     return (
         f"{phrase} 신호는 고객이 AI 기능보다 데이터 통제 방식과 "
-        "운영 책임을 먼저 확인한다는 뜻입니다. 따라서 제안서 앞단에서 데이터 "
-        "보관 위치, 접근 권한, 책임 범위, 운영 거버넌스를 함께 설명해야 "
-        "도입 리스크를 판단할 수 있습니다."
+        "운영 책임을 먼저 확인한다는 뜻입니다. 따라서 데이터 보관 위치, 접근 권한, "
+        "책임 범위, 운영 거버넌스를 오퍼링 필수 조건과 리스크 승인 기준으로 "
+        "함께 정해야 합니다."
     )
 
 
@@ -4618,10 +4873,10 @@ def _grounded_interpretation_description(
             (
                 f"{strategy_basis}{_subject_particle(strategy_basis)} 전략 시사의 근거가 됩니다."
                 if strategy_basis
-                else "이 단계는 앞선 관찰과 평가축 이동을 SK AX의 제안 방식으로 옮기는 결론입니다."
+                else "이 단계는 앞선 관찰과 평가축 이동을 SK AX의 회사 대응으로 옮기는 결론입니다."
             ),
             (
-                "따라서 제안 메시지는 기술 기능 중심에서 운영 리스크, "
+                "따라서 의사결정 기준은 기술 기능 중심에서 운영 리스크, "
                 "책임 범위, 성과 검증 기준 중심으로 옮겨야 합니다."
             ),
         )

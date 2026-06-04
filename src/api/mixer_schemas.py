@@ -10,23 +10,34 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class MixerAnalysisRequest(BaseModel):
     """``POST /mixer/analyze`` 요청 body.
 
     Args:
-        card_ids: 분석 대상 카드 id 목록 (2 ≤ N ≤ 20).
+        card_ids: 분석 대상 카드 id 목록 (2 ≤ N ≤ 20). 호환 입력.
+        integrated_issue_ids: canonical 분석 단위 id 목록 (2 ≤ N ≤ 20 권장).
         ratios: peer / industry / keyword 비율 (frontend Mixer UI 슬라이더 결과).
         user_context: 사용자 자유 입력 컨텍스트.
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    card_ids: list[str] = Field(..., min_length=1, description="카드 id 목록 (2~20 권장)")
+    card_ids: Optional[list[str]] = Field(default=None, description="카드 id 목록 (2~20 권장)")
+    integrated_issue_ids: Optional[list[str]] = Field(
+        default=None,
+        description="integrated_issues.id 목록 (card_ids보다 우선)",
+    )
     ratios: Optional[dict[str, Any]] = Field(default=None)
     user_context: Optional[str] = Field(default=None)
+
+    @model_validator(mode="after")
+    def require_analysis_ids(self) -> "MixerAnalysisRequest":
+        if not (self.integrated_issue_ids or self.card_ids):
+            raise ValueError("integrated_issue_ids 또는 card_ids 중 하나는 필요합니다.")
+        return self
 
 
 class RadarAxis(BaseModel):
@@ -154,6 +165,7 @@ class MixerAnalysisResponse(BaseModel):
     confidence: float = 0.0
 
     sources_used: list[str] = Field(default_factory=list)
+    source_integrated_issue_ids: list[str] = Field(default_factory=list)
     peer_ids: list[str] = Field(default_factory=list)
 
     provenance: dict[str, Any] = Field(default_factory=dict)
