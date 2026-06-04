@@ -170,7 +170,7 @@ def _spend_today_usd() -> float:
 
 
 def _llm_judge_card(row: dict[str, Any]) -> dict[str, Any]:
-    from src.agents.llm_judge_prompts import (
+    from src.evaluators.llm_judge_prompts import (
         JUDGE_MODEL,
         JUDGE_PROMPT_VERSION,
         JUDGE_SYSTEM_PROMPT,
@@ -249,7 +249,7 @@ def _llm_judge_card(row: dict[str, Any]) -> dict[str, Any]:
 def _make_judge_llm() -> Any:
     from langchain_openai import ChatOpenAI
 
-    from src.agents.llm_judge_prompts import JUDGE_MODEL
+    from src.evaluators.llm_judge_prompts import JUDGE_MODEL
 
     return ChatOpenAI(
         model=JUDGE_MODEL,

@@ -35,8 +35,6 @@ from typing import Annotated, Any, Callable, TypedDict, cast
 from langgraph.graph import END, StateGraph
 from langgraph.types import RetryPolicy
 
-from src.agents.card_news_agent import CardNewsAgent
-from src.agents.evaluator_agent import EvaluatorAgent
 from src.agents.implication_agent import ImplicationAgent
 from src.agents.integration_agent import IntegrationAgent
 from src.agents.strategic_analyzer import StrategicAnalyzer
@@ -53,7 +51,9 @@ from src.analysis.models import (
     ProfileContext,
     ValidationReport,
 )
+from src.composers.card_news_composer import CardNewsComposer
 from src.db.article_store import save_card_news, save_pipeline_log
+from src.evaluators.evaluator import Evaluator
 from src.services.agent_output_validation import confidence_in_range
 from src.services.analysis_context_builder import AnalysisContextBuilder
 from src.services.profile_context_loader import ProfileContextLoader
@@ -161,11 +161,10 @@ class SupervisorDeps:
         analyzer: StrategicAnalyzer | None = None,
         implication_agent: ImplicationAgent | None = None,
         strategic_insight_agent: StrategicInsightAgent | Any | None = None,
-        evaluator: EvaluatorAgent | None = None,
+        evaluator: Evaluator | None = None,
         context_builder: AnalysisContextBuilder | None = None,
         profile_context_loader: ProfileContextLoader | None = None,
-        card_news_agent: CardNewsAgent | None = None,
-        card_news_composer: Any | None = None,
+        card_news_composer: CardNewsComposer | Any | None = None,
         implication_fallback: ImplicationGenerator | None = None,
     ) -> None:
         legacy_agents_supplied = analyzer is not None or implication_agent is not None
@@ -183,10 +182,10 @@ class SupervisorDeps:
                 fallback_implication_agent=self.implication_agent,
             )
         )
-        self.evaluator = evaluator or EvaluatorAgent()
+        self.evaluator = evaluator or Evaluator()
         self.context_builder = context_builder or AnalysisContextBuilder()
         self.profile_context_loader = profile_context_loader or ProfileContextLoader()
-        self.card_news_agent = card_news_agent or card_news_composer or CardNewsAgent()
+        self.card_news_composer = card_news_composer or CardNewsComposer()
 
 
 class _LegacyStrategicInsightAdapter:
@@ -368,7 +367,7 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         pkg = state.get("analysis_package")
         if pkg is None:
             return cast(SupervisorState, {**state, "card_news_id": None})
-        card = deps.card_news_agent.generate_from_analysis_package(
+        card = deps.card_news_composer.generate_from_analysis_package(
             pkg,
             classification=state.get("classification") or {},
         )

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -27,8 +28,10 @@ if str(ROOT) not in sys.path:
 
 from src.config.env_loader import load_profile  # noqa: E402
 from src.db.postgres import SessionLocal  # noqa: E402
+from src.preprocessing.classification import ClusterClassifier  # noqa: E402
 from src.preprocessing.dedup import ArticleDeduplicator  # noqa: E402
 from src.preprocessing.preprocessing import PreprocessingService  # noqa: E402
+from src.preprocessing.relevance import RelevanceEvaluator  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -113,6 +116,16 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--enable-relevance-llm",
+        action="store_true",
+        help="관련성 판단에서 LLM batch 보조를 켠다. 클러스터링 LLM judge와는 무관.",
+    )
+    parser.add_argument(
+        "--enable-classifier-llm",
+        action="store_true",
+        help="클러스터 분류에서 LLM 보조를 켠다. 기본은 비활성.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="대상 row 수만 출력하고 DB를 수정하지 않음.",
@@ -122,6 +135,11 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    if args.enable_relevance_llm:
+        os.environ.setdefault("ENABLE_RELEVANCE_LLM", "true")
+    if args.enable_classifier_llm:
+        os.environ.setdefault("ENABLE_OPENAI_CALLS", "true")
+
     profile = load_profile(args.env)
     source_types = _normalize_source_types(args.source_type)
     statuses = _normalize_statuses(args.status, include_skipped=args.include_skipped)
@@ -192,6 +210,8 @@ def main() -> None:
         published_since=published_since,
         limit=max(1, args.limit),
         max_batches=max(0, args.max_batches),
+        enable_relevance_llm=bool(args.enable_relevance_llm),
+        enable_classifier_llm=bool(args.enable_classifier_llm),
     )
 
 
@@ -292,8 +312,13 @@ def _run_batches(
     published_since: str | None,
     limit: int,
     max_batches: int,
+    enable_relevance_llm: bool,
+    enable_classifier_llm: bool,
 ) -> None:
-    service = PreprocessingService()
+    service = PreprocessingService(
+        relevance_evaluator=RelevanceEvaluator(enable_llm=enable_relevance_llm),
+        classifier=ClusterClassifier(enable_llm=enable_classifier_llm),
+    )
     total_raw = 0
     total_relevant = 0
     total_clusters = 0
