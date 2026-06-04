@@ -184,12 +184,8 @@ def test_strategic_insight_agent_returns_separated_blocks():
     assert result["implication"]["implication_scope"] == "peer_and_skax"
     assert result["implication"]["peer_implication"]["company_id"] == "samsung_sds"
     # Only fact_ids present in IntegratedIssue are kept, with referenced facts augmented.
-    assert "article:456:title" in result["implication"]["peer_implication"][
-        "sourced_evidence_ids"
-    ]
-    assert "not-in-input" not in result["implication"]["peer_implication"][
-        "sourced_evidence_ids"
-    ]
+    assert "article:456:title" in result["implication"]["peer_implication"]["sourced_evidence_ids"]
+    assert "not-in-input" not in result["implication"]["peer_implication"]["sourced_evidence_ids"]
     # Only business lines from the supplied SK AX profile candidates are kept.
     assert result["implication"]["skax_implication"]["business_line_mapping"] == [
         "공공AX",
@@ -375,6 +371,7 @@ def test_strategic_insight_agent_concretizes_generic_recommended_actions():
                 "recommended_actions": [
                     "제안서에 데이터 보호와 보안성 강조",
                     "공공 및 교육 부문에서의 PoC 레퍼런스 강화",
+                    "운영 모델에서 데이터 보관 위치와 운영 책임 범위를 강화합니다.",
                 ],
                 "business_line_mapping": ["공공AX"],
             },
@@ -405,18 +402,17 @@ def test_strategic_insight_agent_concretizes_generic_recommended_actions():
 
     actions = result["implication"]["skax_implication"]["recommended_actions"]
     assert actions == [
-        "제안서에 데이터 보호와 보안성의 기준, 책임 범위, 검증 항목을 명시합니다.",
+        "제안서에 데이터 보호와 보안성 강조에 대해 적용 범위, 책임 범위, 검증 기준을 구체화합니다.",
         (
-            "공공 및 교육 부문에서의 PoC 레퍼런스를 검증 항목, 적용 범위, "
-            "운영 결과 중심으로 정리합니다."
+            "공공 및 교육 부문에서의 PoC 레퍼런스 강화에 대해 적용 범위, "
+            "책임 범위, 검증 기준을 구체화합니다."
         ),
+        "운영 모델에서 데이터 보관 위치와 운영 책임 범위를 강화합니다.",
     ]
-    assert "article:456:knou_poc" in result["implication"]["peer_implication"][
-        "sourced_evidence_ids"
-    ]
-    assert "article:457:onai" in result["implication"]["peer_implication"][
-        "sourced_evidence_ids"
-    ]
+    assert (
+        "article:456:knou_poc" in result["implication"]["peer_implication"]["sourced_evidence_ids"]
+    )
+    assert "article:457:onai" in result["implication"]["peer_implication"]["sourced_evidence_ids"]
 
 
 def test_strategic_insight_agent_uses_legacy_fallback_on_malformed_llm_output():
@@ -469,12 +465,16 @@ def test_strategic_insight_agent_with_mock_issue_and_common_db_profile():
     classification = payload["classification"]
     sectors = classification.get("sectors") or [classification.get("sector")]
 
-    profile_context = ProfileContextLoader().load(
-        companies=_companies_from_integrated_issue(integrated_issue),
-        sectors=[sector for sector in sectors if sector],
-        event_type=classification.get("event_type"),
-        strict=True,
-    ).to_dict()
+    profile_context = (
+        ProfileContextLoader()
+        .load(
+            companies=_companies_from_integrated_issue(integrated_issue),
+            sectors=[sector for sector in sectors if sector],
+            event_type=classification.get("event_type"),
+            strict=True,
+        )
+        .to_dict()
+    )
     assert profile_context["peer_profiles"]
     peer_profile = profile_context["peer_profiles"].get(integrated_issue["main_company"]) or {}
     assert any(
@@ -529,7 +529,4 @@ def test_strategic_insight_agent_with_mock_issue_and_common_db_profile():
     _assert_strategic_insight_schema(result)
     assert result["analysis"]["is_valid_analysis"] is True
     assert result["implication"]["is_valid_implication"] is True
-    assert (
-        result["implication"]["provenance"]["generator"]
-        == "StrategicInsightAgent"
-    )
+    assert result["implication"]["provenance"]["generator"] == "StrategicInsightAgent"

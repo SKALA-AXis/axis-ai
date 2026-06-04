@@ -29,19 +29,6 @@ _LLM_MAX_COMPLETION_TOKENS = 2600
 _IMPACT_LEVELS = {"high", "medium", "low"}
 _RISK_OR_OPPORTUNITY = {"risk", "opportunity", "neutral"}
 _EVIDENCE_LABELS = {"sufficient", "moderate", "insufficient"}
-_BROAD_ACTION_TERMS = ("강조", "강화", "확대", "개발", "구축", "수립")
-_ACTION_VERBS = (
-    "명시",
-    "정의",
-    "포함",
-    "설계",
-    "정리",
-    "검증",
-    "제시",
-    "반영",
-    "분리",
-    "작성",
-)
 
 
 SYSTEM_PROMPT = """\
@@ -766,35 +753,23 @@ def _concretize_recommended_action(
     text = str(action or "").strip()
     if not text or not _is_generic_action(text):
         return text
-    focus = _action_focus(text) or _evidence_focus(integrated_issue)
-    if "PoC" in text and "레퍼런스" in text:
-        return f"{focus}를 검증 항목, 적용 범위, 운영 결과 중심으로 정리합니다."
-    if "PoC" in text:
-        return f"PoC 설계에 {focus}의 검증 항목과 성과 기준을 포함합니다."
-    if "레퍼런스" in text:
-        return f"{focus}를 적용 범위, 운영 결과, 검증 기준 중심의 레퍼런스로 정리합니다."
-    if "제안서" in text:
-        return f"제안서에 {focus}의 기준, 책임 범위, 검증 항목을 명시합니다."
-    return f"{text}할 때 {focus}의 실행 범위와 검증 기준을 함께 정의합니다."
+    if _is_too_short_action(text):
+        focus = _evidence_focus(integrated_issue)
+        return f"{focus}의 적용 범위, 책임 범위, 검증 기준을 구체화합니다."
+    return f"{text.rstrip('.')}에 대해 적용 범위, 책임 범위, 검증 기준을 구체화합니다."
 
 
 def _is_generic_action(text: str) -> bool:
-    if not any(term in text for term in _BROAD_ACTION_TERMS):
-        return False
-    if not any(artifact in text for artifact in ("제안서", "PoC", "레퍼런스")):
-        return True
-    return not any(verb in text for verb in _ACTION_VERBS)
+    text = text.strip()
+    return _is_too_short_action(text) or not _is_complete_action_sentence(text)
 
 
-def _action_focus(text: str) -> str:
-    focus = re.sub(r"^(제안서에|제안서에서|PoC 단계에서|PoC에서)\s*", "", text).strip()
-    focus = re.sub(
-        r"(을|를)?\s*(강조|강화|확대|개발|구축|수립)(해야 합니다|합니다|한다|)$",
-        "",
-        focus,
-    )
-    focus = focus.strip(" .")
-    return focus or ""
+def _is_too_short_action(text: str) -> bool:
+    return len(re.sub(r"\s+", "", text)) < 12
+
+
+def _is_complete_action_sentence(text: str) -> bool:
+    return bool(re.search(r"(합니다|해야 합니다|할 필요가 있습니다|십시오|세요|한다)\.?$", text))
 
 
 def _evidence_focus(integrated_issue: dict[str, Any]) -> str:
