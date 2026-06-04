@@ -1,386 +1,2175 @@
 {
-  "input_bundle": {
-    "bundle_id": "news:456",
-    "cluster_id": "456",
-    "source_type": "news",
-    "companies": ["samsung_sds"],
-    "sectors": ["ax", "cloud", "security"],
-    "event_type": "partnership",
-    "items": [
-      {
-        "id": 456,
-        "title": "삼성SDS, OpenAI와 협력 강화 '챗GPT 에듀'로 교육기관 대상 안전한 AI 활용 환경 제공",
-        "publisher": "삼성SDS",
-        "published_at": "2026-06-01T00:00:00Z"
-      },
-      {
-        "id": 457,
-        "title": "삼성SDS, 브리티웍스로 온AI 모바일 서비스 지원한다",
-        "publisher": "삼성SDS",
-        "published_at": "2026-06-01T01:00:00Z"
-      }
+  "dry_run_type": "integration_agent_news_cluster",
+  "dry_run_created_at": "2026-06-02T17:22:50.675011",
+  "llm_status": "executed_with_env_file_key",
+  "cluster_id": 43682,
+  "representative_id": 43682,
+  "article_count": 24,
+  "article_ids": [
+    43682,
+    43904,
+    43451,
+    43332,
+    43264,
+    43242,
+    43226,
+    43185,
+    43202,
+    43153,
+    43157,
+    43158,
+    43100,
+    43106,
+    43107,
+    43112,
+    43111,
+    43115,
+    43118,
+    43124,
+    43130,
+    43066,
+    43074,
+    43085
+  ],
+  "target_companies": [
+    "samsung_sds"
+  ],
+  "classification": {
+    "cluster_id": 43682,
+    "representative_id": 43682,
+    "company": "samsung_sds",
+    "companies": [
+      "samsung_sds"
     ],
-    "facts": [
-      {
-        "fact_id": "article:456:title",
-        "fact": "삼성SDS는 OpenAI와의 협력을 강화하며 챗GPT 에듀 상품 판매 권한을 추가 확보했다."
-      },
-      {
-        "fact_id": "article:456:privacy",
-        "fact": "챗GPT 에듀는 사용자의 대화와 응답이 AI 학습 데이터에 활용되지 않도록 설계되어 데이터 프라이버시와 보안성을 강화했다."
-      },
-      {
-        "fact_id": "article:457:onai",
-        "fact": "브리티웍스는 행정안전부 온AI 모바일 서비스와 연계된 공식 협업 도구로 선정됐다."
-      }
+    "sector": "security",
+    "sectors": [
+      "security",
+      "infra",
+      "deal",
+      "ax"
     ],
-    "evidence_snippets": [
-      {
-        "article_id": 456,
-        "text": "챗GPT 에듀는 학교, 출판사 등 교육관련 기관을 대상으로 제공되는 서비스로, 사용자가 서비스 내에서 주고받는 대화와 응답이 AI 학습 데이터에 활용되지 않도록 설계되어 데이터 프라이버시와 보안을 강화한 것이 특징이다."
-      },
-      {
-        "article_id": 456,
-        "text": "삼성SDS는 9만여 명의 학생·교수·교직원을 보유한 국립 한국방송통신대학교에 챗GPT 에듀 서비스를 제공하기 위해 개념증명(PoC)을 진행중이다."
-      },
-      {
-        "article_id": 457,
-        "text": "브리티웍스는 부처 간 유연한 협업 환경 제공, AI 기반 업무 활용성, 보안성 측면에서 높은 평가를 받고 있다."
-      }
-    ],
-    "sources": [
-      {
-        "article_id": 456,
-        "title": "삼성SDS, OpenAI와 협력 강화 '챗GPT 에듀'로 교육기관 대상 안전한 AI 활용 환경 제공",
-        "url": "https://example.com/news/456",
-        "source_name": "삼성SDS 뉴스룸",
-        "published_at": "2026-06-01T00:00:00Z"
-      },
-      {
-        "article_id": 457,
-        "title": "삼성SDS, 브리티웍스로 온AI 모바일 서비스 지원한다",
-        "url": "https://example.com/news/457",
-        "source_name": "삼성SDS 뉴스룸",
-        "published_at": "2026-06-01T01:00:00Z"
-      }
-    ],
-    "metadata": {
-      "representative_id": 456,
-      "cluster_article_ids": [456, 457],
-      "classification": {
-        "sector": "ax",
-        "sectors": ["ax", "cloud", "security"],
-        "event_type": "partnership",
-        "importance": "high",
-        "importance_score": 0.86
-      },
-      "created_at": "2026-06-01T02:00:00Z"
+    "event_type": "general_update",
+    "importance": "high",
+    "importance_score": 1.0,
+    "exposure_band": "high",
+    "exposure_score": 1.0,
+    "signals": {
+      "cluster_size": 24,
+      "source": "analysis_pipeline",
+      "representative_id": 43682
     }
   },
-  "classification": {
-    "sector": "ax",
-    "sectors": ["ax", "cloud", "security"],
-    "event_type": "partnership",
-    "importance": "high",
-    "importance_score": 0.86
-  },
+  "article_overview": [
+    {
+      "id": 43682,
+      "title": "[이슈] 삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 인수…디지털자산...",
+      "source_name": "naver_news",
+      "publisher": "폴리뉴스 Polinews",
+      "published_at": "2026-05-29T06:16:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": true,
+      "processing_status": "PROCESSED",
+      "importance_score": 1.0,
+      "relevance_score": 0.82
+    },
+    {
+      "id": 43904,
+      "title": "삼성證, 삼성SDS·삼성카드와 두나무 지분 4% 취득 결정...디지털자산 사...",
+      "source_name": "naver_news",
+      "publisher": "베타뉴스",
+      "published_at": "2026-05-29T09:08:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43451,
+      "title": "삼성증권·삼성SDS·삼성카드 등 3사, 두나무 지분 4% 인수…디지털자산...",
+      "source_name": "naver_news",
+      "publisher": "워크투데이",
+      "published_at": "2026-05-28T12:14:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.82
+    },
+    {
+      "id": 43332,
+      "title": "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 품는다",
+      "source_name": "naver_news",
+      "publisher": "데일리한국",
+      "published_at": "2026-05-28T07:50:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43264,
+      "title": "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 공동 인수",
+      "source_name": "naver_news",
+      "publisher": "PRESS9",
+      "published_at": "2026-05-28T05:52:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.82
+    },
+    {
+      "id": 43242,
+      "title": "삼성SDS, 두나무에 1532억 베팅…디지털자산 사업 시동",
+      "source_name": "naver_news",
+      "publisher": "한국금융신문",
+      "published_at": "2026-05-28T04:28:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43226,
+      "title": "삼성SDS·증권·카드, 두나무 지분 4% 취득…6128억원 투자",
+      "source_name": "naver_news",
+      "publisher": "아이티비즈",
+      "published_at": "2026-05-28T03:04:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43185,
+      "title": "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 취득…전략적 지분 투자 ...",
+      "source_name": "naver_news",
+      "publisher": "백세시대",
+      "published_at": "2026-05-28T02:34:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43202,
+      "title": "삼성SDS·증권·카드 등 삼성 3社 두나무에 6128억 지분 투자",
+      "source_name": "naver_news",
+      "publisher": "와이드경제",
+      "published_at": "2026-05-28T02:10:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43153,
+      "title": "삼성SDS, 두나무 지분 투자…디지털금융 인프라 사업 강화",
+      "source_name": "naver_news",
+      "publisher": "SR타임스",
+      "published_at": "2026-05-28T01:38:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.82
+    },
+    {
+      "id": 43157,
+      "title": "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 인수…디지털자산 시장 선...",
+      "source_name": "naver_news",
+      "publisher": "투데이e코노믹",
+      "published_at": "2026-05-28T01:32:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "ax",
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.82
+    },
+    {
+      "id": 43158,
+      "title": "삼성증권-삼성SDS-삼성카드, 두나무 지분 4% 인수…디지털자산 사업 확...",
+      "source_name": "naver_news",
+      "publisher": "테크월드",
+      "published_at": "2026-05-28T01:30:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.82
+    },
+    {
+      "id": 43100,
+      "title": "삼성SDS, 스테이블코인발 新시장 채비...두나무에 1500억 베팅",
+      "source_name": "naver_news",
+      "publisher": "테크M",
+      "published_at": "2026-05-28T00:56:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43106,
+      "title": "삼성증권+삼성SDS+삼성카드, 디지털자산거래소 두나무 지분 4% 매입한다",
+      "source_name": "naver_news",
+      "publisher": "인더뉴스(iN THE NEWS)",
+      "published_at": "2026-05-28T00:46:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43107,
+      "title": "삼성SDS·증권·카드, 두나무에 6128억 지분 투자…디지털자산 시장 공략...",
+      "source_name": "naver_news",
+      "publisher": "민주신문",
+      "published_at": "2026-05-28T00:42:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.82
+    },
+    {
+      "id": 43112,
+      "title": "삼성SDS, 두나무에 1532억원 지분 투자…\"디지털자산 사업 확대\"",
+      "source_name": "naver_news",
+      "publisher": "뉴스1",
+      "published_at": "2026-05-28T00:39:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43111,
+      "title": "삼성증권·삼성에스디에스·삼성카드, 두나무 지분 4.0% 취득",
+      "source_name": "naver_news",
+      "publisher": "디지털데일리",
+      "published_at": "2026-05-28T00:39:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43115,
+      "title": "삼성SDS, 디지털자산 사업 확대…두나무에 1532억원 지분 투자",
+      "source_name": "naver_news",
+      "publisher": "파이낸셜뉴스",
+      "published_at": "2026-05-28T00:35:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43118,
+      "title": "[유미's 픽] 삼성SDS, AI 이어 디지털자산 승부수…두나무에 1532억원 베...",
+      "source_name": "naver_news",
+      "publisher": "ZD넷 코리아",
+      "published_at": "2026-05-28T00:31:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43124,
+      "title": "삼성SDS·증권·카드, '두나무' 지분 4% 인수…'디지털 자산 생태계' 선...",
+      "source_name": "naver_news",
+      "publisher": "뉴시안",
+      "published_at": "2026-05-28T00:22:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43130,
+      "title": "삼성SDS, 두나무에 1천532억 원 지분 투자…1% 확보",
+      "source_name": "naver_news",
+      "publisher": "SBS Biz",
+      "published_at": "2026-05-28T00:13:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.82
+    },
+    {
+      "id": 43066,
+      "title": "삼성SDS·증권·카드 등 삼성 3社 두나무에 6128억 지분 투자",
+      "source_name": "naver_news",
+      "publisher": "뉴시스",
+      "published_at": "2026-05-27T23:29:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43074,
+      "title": "[Invest]삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 취득 결의",
+      "source_name": "naver_news",
+      "publisher": "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 취득 결의",
+      "published_at": "2026-05-27T23:16:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    },
+    {
+      "id": 43085,
+      "title": "삼성증권·삼성에스디에스·삼성카드, 두나무 지분 4% 취득⋯“신규 사...",
+      "source_name": "naver_news",
+      "publisher": "ETODAY",
+      "published_at": "2026-05-27T23:04:00+00:00",
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal"
+      ],
+      "is_representative": false,
+      "processing_status": "PROCESSED",
+      "importance_score": null,
+      "relevance_score": 0.62
+    }
+  ],
   "integrated_issue": {
+    "cluster_id": 43682,
+    "representative_id": 43682,
+    "source_article_ids": [
+      43682,
+      43904,
+      43451,
+      43332,
+      43264,
+      43242,
+      43226,
+      43185,
+      43202,
+      43153,
+      43157,
+      43158,
+      43100,
+      43106,
+      43107,
+      43112,
+      43111,
+      43115,
+      43118,
+      43124,
+      43130,
+      43066,
+      43074,
+      43085
+    ],
+    "cluster_article_ids": [
+      43682,
+      43904,
+      43451,
+      43332,
+      43264,
+      43242,
+      43226,
+      43185,
+      43202,
+      43153,
+      43157,
+      43158,
+      43100,
+      43106,
+      43107,
+      43112,
+      43111,
+      43115,
+      43118,
+      43124,
+      43130,
+      43066,
+      43074,
+      43085
+    ],
+    "analyzed_article_ids": [
+      43682,
+      43904,
+      43451,
+      43332,
+      43264,
+      43242,
+      43226,
+      43185,
+      43202,
+      43153,
+      43157,
+      43158,
+      43100,
+      43106,
+      43107,
+      43112,
+      43111,
+      43115,
+      43118,
+      43124,
+      43130,
+      43066,
+      43074,
+      43085
+    ],
+    "summary_scope": "peer_company_fact_only",
+    "excluded_company_tiers": [
+      "self"
+    ],
+    "target_peer_companies": [
+      "samsung_sds"
+    ],
+    "cluster_fact_intelligence": {
+      "common_facts": [
+        {
+          "fact": "삼성SDS가 두나무에 1532억원을 투자했다.",
+          "source_article_ids": [
+            43112,
+            43115,
+            43118
+          ],
+          "evidence_texts": [
+            "삼성SDS, 두나무에 1532억원 지분 투자…\"디지털자산 사업 확대\"",
+            "삼성SDS, 디지털자산 사업 확대…두나무에 1532억원 지분 투자",
+            "[유미's 픽] 삼성SDS, AI 이어 디지털자산 승부수…두나무에 1532억원 베..."
+          ],
+          "activity_types": [
+            "investment"
+          ],
+          "numbers_and_dates": [
+            "1532억원"
+          ],
+          "customers_or_industries": [
+            "디지털자산"
+          ],
+          "products_or_services": [],
+          "fact_types": [
+            "numeric_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 3
+        }
+      ],
+      "unique_facts": [
+        {
+          "fact": "삼성SDS는 한국예탁결제원의 '토큰증권 플랫폼 운영 구축' 사업을 수주했다.",
+          "source_article_ids": [
+            43066
+          ],
+          "evidence_count": 1,
+          "evidence_texts": [
+            "특히 한국예탁결제원의 2024년 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업에 이어, 최근 정식 시스템 전환을 위한 '토큰증권 플랫폼 운영 구축' 사업까지 연이어 수주하며"
+          ],
+          "fact_type": "general_fact",
+          "summary_role": "main_event",
+          "importance_reason": "사업 수주로 인한 디지털자산 시장 생태계 구축과 사업 역량 확보"
+        },
+        {
+          "fact": "삼성증권, 삼성SDS, 삼성카드는 두나무 지분 4%를 총 6128억원에 취득하기로 결의했다.",
+          "source_article_ids": [
+            43682
+          ],
+          "evidence_texts": [
+            "29일 금융감독원 전자공시시스템에 따르면 삼성증권, 삼성SDS, 삼성카드는 이날 각각 이사회를 열고 카카오 계열사가 보유한 두나무 지분 4.0%를 총 6128억원에 취득하기로 결의했다."
+          ],
+          "activity_types": [
+            "investment"
+          ],
+          "numbers_and_dates": [
+            "4%",
+            "6128억원"
+          ],
+          "customers_or_industries": [],
+          "products_or_services": [],
+          "fact_types": [
+            "general_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        },
+        {
+          "fact": "삼성증권, 삼성SDS, 삼성카드는 두나무 지분 4%를 6128억원에 취득하기로 했다.",
+          "source_article_ids": [
+            43904
+          ],
+          "evidence_texts": [
+            "28일 삼성증권은 삼성SDS·삼성카드와 함께 두나무 지분 4%(139만주)를 6128억원에 취득하기로 했다고 밝혔다."
+          ],
+          "activity_types": [
+            "investment"
+          ],
+          "numbers_and_dates": [
+            "4%",
+            "6128억원",
+            "139만주"
+          ],
+          "customers_or_industries": [],
+          "products_or_services": [],
+          "fact_types": [
+            "general_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        },
+        {
+          "fact": "삼성증권, 삼성SDS, 삼성카드는 두나무 지분 4%를 6128억원에 취득하기로 결의했다.",
+          "source_article_ids": [
+            43264
+          ],
+          "evidence_texts": [
+            "28일 업계에 따르면 삼성증권(2%), 삼성SDS(1%), 삼성카드(1%) 등 3사는 이사회를 열고 카카오인베스트먼트 등 카카오 계열사들이 보유한 두나무 구주 139만주를 총 6128억원에 취득하기로 결의했다."
+          ],
+          "activity_types": [
+            "investment"
+          ],
+          "numbers_and_dates": [
+            "4%",
+            "6128억원",
+            "139만주"
+          ],
+          "customers_or_industries": [],
+          "products_or_services": [],
+          "fact_types": [
+            "general_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        },
+        {
+          "fact": "삼성SDS, 삼성증권, 삼성카드는 두나무 지분 4%를 6128억원에 취득하기로 했다.",
+          "source_article_ids": [
+            43226
+          ],
+          "evidence_texts": [
+            "삼성SDS·증권·카드, 두나무 지분 4% 취득…6128억원 투자"
+          ],
+          "activity_types": [
+            "investment"
+          ],
+          "numbers_and_dates": [
+            "4%",
+            "6128억원"
+          ],
+          "customers_or_industries": [],
+          "products_or_services": [],
+          "fact_types": [
+            "general_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        },
+        {
+          "fact": "삼성증권, 삼성SDS, 삼성카드는 두나무 지분 4%를 취득하기로 했다.",
+          "source_article_ids": [
+            43185
+          ],
+          "evidence_texts": [
+            "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 취득…전략적 지분 투자 ..."
+          ],
+          "activity_types": [
+            "investment"
+          ],
+          "numbers_and_dates": [
+            "4%"
+          ],
+          "customers_or_industries": [],
+          "products_or_services": [],
+          "fact_types": [
+            "general_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        },
+        {
+          "fact": "삼성증권, 삼성SDS, 삼성카드가 두나무 지분 4%를 인수했다.",
+          "source_article_ids": [
+            43157
+          ],
+          "evidence_texts": [
+            "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 인수…디지털자산 시장 선..."
+          ],
+          "activity_types": [
+            "investment"
+          ],
+          "numbers_and_dates": [
+            "4%"
+          ],
+          "customers_or_industries": [
+            "디지털자산"
+          ],
+          "products_or_services": [],
+          "fact_types": [
+            "numeric_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        },
+        {
+          "fact": "삼성SDS는 2024년 한국예탁결제원의 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업을 수주했다.",
+          "source_article_ids": [
+            43100
+          ],
+          "evidence_texts": [
+            "삼성SDS는 2024년 한국예탁결제원 '토큰증권 기능분석 컨설팅' 사업과 2025 '테스트베드 플랫폼 구축' 사업을 수주했다"
+          ],
+          "activity_types": [
+            "contract"
+          ],
+          "numbers_and_dates": [
+            "2024년",
+            "2025년"
+          ],
+          "customers_or_industries": [
+            "한국예탁결제원"
+          ],
+          "products_or_services": [
+            "토큰증권 기능분석 컨설팅",
+            "테스트베드 플랫폼 구축"
+          ],
+          "fact_types": [
+            "numeric_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        },
+        {
+          "fact": "삼성증권, 삼성SDS, 삼성카드가 두나무 지분 4%를 매입했다.",
+          "source_article_ids": [
+            43106
+          ],
+          "evidence_texts": [
+            "삼성증권+삼성SDS+삼성카드, 디지털자산거래소 두나무 지분 4% 매입한다"
+          ],
+          "activity_types": [
+            "investment"
+          ],
+          "numbers_and_dates": [
+            "4%"
+          ],
+          "customers_or_industries": [
+            "디지털자산"
+          ],
+          "products_or_services": [],
+          "fact_types": [
+            "numeric_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        },
+        {
+          "fact": "삼성SDS는 한국예탁결제원의 2024년 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업을 수행했다.",
+          "source_article_ids": [
+            43107
+          ],
+          "evidence_texts": [
+            "삼성SDS는 한국예탁결제원의 2024년 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업을 수행한 데 이어 최근에는 '토큰증권 플랫폼 운영 구축' 사업까지 연이어 수주했다"
+          ],
+          "activity_types": [
+            "contract"
+          ],
+          "numbers_and_dates": [
+            "2024년",
+            "2025년"
+          ],
+          "customers_or_industries": [
+            "한국예탁결제원"
+          ],
+          "products_or_services": [
+            "토큰증권 기능분석 컨설팅",
+            "테스트베드 플랫폼 구축"
+          ],
+          "fact_types": [
+            "numeric_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        },
+        {
+          "fact": "삼성증권, 삼성에스디에스, 삼성카드가 두나무 지분 4.0%를 취득했다.",
+          "source_article_ids": [
+            43111
+          ],
+          "evidence_texts": [
+            "삼성증권·삼성에스디에스·삼성카드, 두나무 지분 4.0% 취득"
+          ],
+          "activity_types": [
+            "investment"
+          ],
+          "numbers_and_dates": [
+            "4.0%"
+          ],
+          "customers_or_industries": [
+            "디지털자산"
+          ],
+          "products_or_services": [],
+          "fact_types": [
+            "numeric_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        },
+        {
+          "fact": "삼성SDS, 삼성증권, 삼성카드가 두나무 지분 4%를 인수했다.",
+          "source_article_ids": [
+            43124
+          ],
+          "evidence_texts": [
+            "삼성SDS·증권·카드, '두나무' 지분 4% 인수…'디지털 자산 생태계' 선..."
+          ],
+          "activity_types": [
+            "investment"
+          ],
+          "numbers_and_dates": [
+            "4%"
+          ],
+          "customers_or_industries": [
+            "디지털자산"
+          ],
+          "products_or_services": [],
+          "fact_types": [
+            "numeric_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        },
+        {
+          "fact": "삼성SDS가 두나무에 1천532억 원을 투자하여 1%의 지분을 확보했다.",
+          "source_article_ids": [
+            43130
+          ],
+          "evidence_texts": [
+            "삼성SDS, 두나무에 1천532억 원 지분 투자…1% 확보"
+          ],
+          "activity_types": [
+            "investment"
+          ],
+          "numbers_and_dates": [
+            "1천532억 원",
+            "1%"
+          ],
+          "customers_or_industries": [
+            "두나무"
+          ],
+          "products_or_services": [],
+          "fact_types": [
+            "numeric_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        },
+        {
+          "fact": "삼성증권, 삼성SDS, 삼성카드는 두나무 지분 4%를 취득하기로 결의했다.",
+          "source_article_ids": [
+            43074
+          ],
+          "evidence_texts": [
+            "[Invest]삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 취득 결의"
+          ],
+          "activity_types": [
+            "investment"
+          ],
+          "numbers_and_dates": [
+            "4%"
+          ],
+          "customers_or_industries": [
+            "두나무"
+          ],
+          "products_or_services": [],
+          "fact_types": [
+            "numeric_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        },
+        {
+          "fact": "삼성증권, 삼성에스디에스, 삼성카드는 두나무 지분 4%를 6128억 원에 취득하기로 결의했다.",
+          "source_article_ids": [
+            43085
+          ],
+          "evidence_texts": [
+            "삼성증권·삼성에스디에스·삼성카드는 28일 카카오 계열사가 보유한 두나무 지분 4.0%(증권 2.0%, SDS 1.0%, 카드 1.0%)에 해당하는 주식 139만 주를 6128억원에 취득한다고 결의했다"
+          ],
+          "activity_types": [
+            "investment"
+          ],
+          "numbers_and_dates": [
+            "4%",
+            "6128억 원"
+          ],
+          "customers_or_industries": [
+            "두나무"
+          ],
+          "products_or_services": [],
+          "fact_types": [
+            "numeric_fact"
+          ],
+          "summary_roles": [
+            "main_event"
+          ],
+          "evidence_count": 1,
+          "importance_reason": "단일 기사에만 있지만 수치/일정/고객/서비스/후속 단계 정보가 포함됨"
+        }
+      ],
+      "uncertain_facts": [
+        {
+          "fact": "향후 원화 스테이블코인이 도입될 경우, 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 서비스를 구현할 계획이다.",
+          "source_article_ids": [
+            43451
+          ],
+          "evidence_count": 1,
+          "evidence_texts": [
+            "향후 원화 스테이블코인이 도입될 경우, 삼성금융 통합 플랫폼 ‘모니모(monimo)’를 중심으로 디지털자산 기반 결제 서비스를 구현하는 등 유통 생태계 구축에 나설 계획이다."
+          ],
+          "fact_type": "uncertain_fact",
+          "summary_role": "uncertainty_detail",
+          "caution": "계획 단계로 확정된 사실이 아님"
+        },
+        {
+          "fact": "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다.",
+          "source_article_ids": [
+            43157
+          ],
+          "evidence_count": 1,
+          "evidence_texts": [
+            "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다"
+          ],
+          "fact_type": "uncertain_fact",
+          "summary_role": "uncertainty_detail",
+          "caution": "계획 및 가능성에 대한 언급으로 확정된 사실이 아님"
+        },
+        {
+          "fact": "삼성카드는 향후 원화 스테이블코인 도입 가능성에 대비해 삼성금융 통합 플랫폼 ‘모니모’ 등에서 디지털자산 기반 결제 서비스를 지원하는 방향의 협력을 검토하고 있다.",
+          "source_article_ids": [
+            43158
+          ],
+          "evidence_count": 1,
+          "evidence_texts": [
+            "삼성카드는 향후 원화 스테이블코인 도입 가능성에 대비해 삼성금융 통합 플랫폼 ‘모니모’ 등에서 디지털자산 기반 결제 서비스를 지원하는 방향의 협력을 검토하고 있다"
+          ],
+          "fact_type": "uncertain_fact",
+          "summary_role": "uncertainty_detail",
+          "caution": "계획 및 가능성에 대한 언급으로 확정된 사실이 아님"
+        },
+        {
+          "fact": "향후 원화 스테이블코인 등 디지털자산의 범주가 확대될 수 있다.",
+          "source_article_ids": [
+            43074
+          ],
+          "evidence_count": 1,
+          "evidence_texts": [
+            "향후 원화 스테이블코인 등 디지털자산의 범주가 확대되고, 이에 따라 거래소의 사업영역도 더욱 확장될 수 있다는 점을 감안했다는 설명이다"
+          ],
+          "fact_type": "uncertain_fact",
+          "summary_role": "uncertainty_detail",
+          "caution": "확정된 사실이 아닌 가능성에 대한 설명"
+        }
+      ],
+      "conflict_notes": [],
+      "numbers_and_dates": [
+        "1532억원",
+        "4%",
+        "6128억원",
+        "139만주",
+        "2024년",
+        "2025년",
+        "4.0%",
+        "1천532억 원",
+        "1%",
+        "6128억 원"
+      ],
+      "customers_or_industries": [
+        "디지털자산",
+        "한국예탁결제원",
+        "두나무"
+      ],
+      "products_or_services": [
+        "토큰증권 기능분석 컨설팅",
+        "테스트베드 플랫폼 구축"
+      ],
+      "activity_types": [
+        "investment",
+        "contract"
+      ]
+    },
+    "extracted_facts": [
+      {
+        "fact_id": "c43682_a43682_f1",
+        "article_id": 43682,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "29일 금융감독원 전자공시시스템에 따르면 삼성증권, 삼성SDS, 삼성카드는 이날 각각 이사회를 열고 카카오 계열사가 보유한 두나무 지분 4.0%를 총 6128억원에 취득하기로 결의했다.",
+        "normalized_fact": "삼성증권, 삼성SDS, 삼성카드는 두나무 지분 4%를 총 6128억원에 취득하기로 결의했다.",
+        "entities": [],
+        "numbers": [
+          "4%",
+          "6128억원",
+          "29일",
+          "4.0%"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43904_f1",
+        "article_id": 43904,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "28일 삼성증권은 삼성SDS·삼성카드와 함께 두나무 지분 4%(139만주)를 6128억원에 취득하기로 했다고 밝혔다.",
+        "normalized_fact": "삼성증권, 삼성SDS, 삼성카드는 두나무 지분 4%를 6128억원에 취득하기로 했다.",
+        "entities": [],
+        "numbers": [
+          "4%",
+          "6128억원",
+          "139만주",
+          "28일",
+          "139"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43451_f1",
+        "article_id": 43451,
+        "fact_type": "general_fact",
+        "summary_role": "application_case",
+        "role_priority": 4,
+        "evidence_text": "삼성SDS는 자사의 IT 서비스, 인공지능(AI), 클라우드, 보안 및 데이터 관리 역량에 두나무의 블록체인 운영 노하우를 결합해 블록체인 소프트웨어 경쟁력을 강화할 계획이다.",
+        "normalized_fact": "삼성SDS는 두나무의 블록체인 운영 노하우를 결합해 블록체인 소프트웨어 경쟁력을 강화할 계획이다.",
+        "entities": [
+          "블록체인 소프트웨어"
+        ],
+        "numbers": [],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43451_f2",
+        "article_id": 43451,
+        "fact_type": "uncertain_fact",
+        "summary_role": "uncertainty_detail",
+        "role_priority": 8,
+        "evidence_text": "향후 원화 스테이블코인이 도입될 경우, 삼성금융 통합 플랫폼 ‘모니모(monimo)’를 중심으로 디지털자산 기반 결제 서비스를 구현하는 등 유통 생태계 구축에 나설 계획이다.",
+        "normalized_fact": "향후 원화 스테이블코인이 도입될 경우, 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 서비스를 구현할 계획이다.",
+        "entities": [],
+        "numbers": [],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "medium"
+      },
+      {
+        "fact_id": "c43682_a43332_f1",
+        "article_id": 43332,
+        "fact_type": "general_fact",
+        "summary_role": "application_case",
+        "role_priority": 4,
+        "evidence_text": "삼성SDS는 기존에 보유한 우수한 IT 서비스, AI, 클라우드, 보안, 데이터 관리 기술 역량에 두나무의 블록체인 운영 노하우를 접목해 블록체인 소프트웨어 경쟁력을 높이고, 향후 국내 금융사를 대상으로 한 차세대 디지털금융 인프라 사업을 강화할 계획이다.",
+        "normalized_fact": "삼성SDS는 두나무의 블록체인 운영 노하우를 접목해 블록체인 소프트웨어 경쟁력을 높일 계획이다.",
+        "entities": [
+          "블록체인 소프트웨어",
+          "국내 금융사"
+        ],
+        "numbers": [],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43264_f1",
+        "article_id": 43264,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "28일 업계에 따르면 삼성증권(2%), 삼성SDS(1%), 삼성카드(1%) 등 3사는 이사회를 열고 카카오인베스트먼트 등 카카오 계열사들이 보유한 두나무 구주 139만주를 총 6128억원에 취득하기로 결의했다.",
+        "normalized_fact": "삼성증권, 삼성SDS, 삼성카드는 두나무 지분 4%를 6128억원에 취득하기로 결의했다.",
+        "entities": [],
+        "numbers": [
+          "4%",
+          "6128억원",
+          "139만주",
+          "28일",
+          "2%",
+          "1%",
+          "3",
+          "139"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43242_f1",
+        "article_id": 43242,
+        "fact_type": "general_fact",
+        "summary_role": "application_case",
+        "role_priority": 4,
+        "evidence_text": "삼성SDS는 이번 전략적 투자를 통해 기존에 보유한 IT 서비스, AI, 보안, 데이터 관리 기술 역량에 두나무의 블록체인 운영 노하우를 접목할 계획이다.",
+        "normalized_fact": "삼성SDS는 두나무의 블록체인 운영 노하우를 접목할 계획이다.",
+        "entities": [
+          "블록체인 소프트웨어"
+        ],
+        "numbers": [],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43226_f1",
+        "article_id": 43226,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "삼성SDS·증권·카드, 두나무 지분 4% 취득…6128억원 투자",
+        "normalized_fact": "삼성SDS, 삼성증권, 삼성카드는 두나무 지분 4%를 6128억원에 취득하기로 했다.",
+        "entities": [],
+        "numbers": [
+          "4%",
+          "6128억원"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43185_f1",
+        "article_id": 43185,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 취득…전략적 지분 투자 ...",
+        "normalized_fact": "삼성증권, 삼성SDS, 삼성카드는 두나무 지분 4%를 취득하기로 했다.",
+        "entities": [],
+        "numbers": [
+          "4%"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43202_f1",
+        "article_id": 43202,
+        "fact_type": "general_fact",
+        "summary_role": "application_case",
+        "role_priority": 4,
+        "evidence_text": "삼성SDS는 기존에 보유한 IT 서비스, 인공지능(AI), 클라우드, 보안, 데이터 관리 기술 역량에 두나무의 블록체인 운영 노하우를 접목해 블록체인 소프트웨어 경쟁력을 끌어올린다는 방침이다.",
+        "normalized_fact": "삼성SDS는 두나무의 블록체인 운영 노하우를 접목해 블록체인 소프트웨어 경쟁력을 끌어올릴 방침이다.",
+        "entities": [
+          "블록체인 소프트웨어"
+        ],
+        "numbers": [],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43153_f1",
+        "article_id": 43153,
+        "fact_type": "general_fact",
+        "summary_role": "application_case",
+        "role_priority": 4,
+        "evidence_text": "삼성SDS는 이번 투자로 두나무의 블록체인 운영 노하우를 자사 정보기술(IT) 서비스 역량과 접목할 계획이다.",
+        "normalized_fact": "삼성SDS는 두나무의 블록체인 운영 노하우를 자사 정보기술(IT) 서비스 역량과 접목할 계획이다.",
+        "entities": [
+          "블록체인 소프트웨어"
+        ],
+        "numbers": [],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43157_f1",
+        "article_id": 43157,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 인수…디지털자산 시장 선...",
+        "normalized_fact": "삼성증권, 삼성SDS, 삼성카드가 두나무 지분 4%를 인수했다.",
+        "entities": [
+          "디지털자산"
+        ],
+        "numbers": [
+          "4%"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43157_f2",
+        "article_id": 43157,
+        "fact_type": "uncertain_fact",
+        "summary_role": "uncertainty_detail",
+        "role_priority": 8,
+        "evidence_text": "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다",
+        "normalized_fact": "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다.",
+        "entities": [],
+        "numbers": [],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "medium"
+      },
+      {
+        "fact_id": "c43682_a43158_f1",
+        "article_id": 43158,
+        "fact_type": "general_fact",
+        "summary_role": "application_case",
+        "role_priority": 4,
+        "evidence_text": "삼성SDS는 자사의 AI·클라우드·보안·데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다는 전략이다",
+        "normalized_fact": "삼성SDS는 자사의 AI, 클라우드, 보안, 데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다.",
+        "entities": [
+          "디지털 금융 인프라",
+          "금융권"
+        ],
+        "numbers": [],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43158_f2",
+        "article_id": 43158,
+        "fact_type": "uncertain_fact",
+        "summary_role": "uncertainty_detail",
+        "role_priority": 8,
+        "evidence_text": "삼성카드는 향후 원화 스테이블코인 도입 가능성에 대비해 삼성금융 통합 플랫폼 ‘모니모’ 등에서 디지털자산 기반 결제 서비스를 지원하는 방향의 협력을 검토하고 있다",
+        "normalized_fact": "삼성카드는 향후 원화 스테이블코인 도입 가능성에 대비해 삼성금융 통합 플랫폼 ‘모니모’ 등에서 디지털자산 기반 결제 서비스를 지원하는 방향의 협력을 검토하고 있는 것으로 설명됐다.",
+        "entities": [],
+        "numbers": [],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "medium"
+      },
+      {
+        "fact_id": "c43682_a43100_f1",
+        "article_id": 43100,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "삼성SDS는 2024년 한국예탁결제원 '토큰증권 기능분석 컨설팅' 사업과 2025 '테스트베드 플랫폼 구축' 사업을 수주했다",
+        "normalized_fact": "삼성SDS는 2024년 한국예탁결제원의 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업을 수주했다.",
+        "entities": [
+          "토큰증권 기능분석 컨설팅",
+          "테스트베드 플랫폼 구축",
+          "한국예탁결제원"
+        ],
+        "numbers": [
+          "2024년",
+          "2025년",
+          "2025"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43106_f1",
+        "article_id": 43106,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "삼성증권+삼성SDS+삼성카드, 디지털자산거래소 두나무 지분 4% 매입한다",
+        "normalized_fact": "삼성증권, 삼성SDS, 삼성카드가 두나무 지분 4%를 매입했다.",
+        "entities": [
+          "디지털자산"
+        ],
+        "numbers": [
+          "4%"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43107_f1",
+        "article_id": 43107,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "삼성SDS는 한국예탁결제원의 2024년 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업을 수행한 데 이어 최근에는 '토큰증권 플랫폼 운영 구축' 사업까지 연이어 수주했다",
+        "normalized_fact": "삼성SDS는 한국예탁결제원의 2024년 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업을 수행했다.",
+        "entities": [
+          "토큰증권 기능분석 컨설팅",
+          "테스트베드 플랫폼 구축",
+          "한국예탁결제원"
+        ],
+        "numbers": [
+          "2024년",
+          "2025년"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43112_f1",
+        "article_id": 43112,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "삼성SDS, 두나무에 1532억원 지분 투자…\"디지털자산 사업 확대\"",
+        "normalized_fact": "삼성SDS가 두나무에 1532억원을 투자했다.",
+        "entities": [
+          "디지털자산"
+        ],
+        "numbers": [
+          "1532억원"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43111_f1",
+        "article_id": 43111,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "삼성증권·삼성에스디에스·삼성카드, 두나무 지분 4.0% 취득",
+        "normalized_fact": "삼성증권, 삼성에스디에스, 삼성카드가 두나무 지분 4.0%를 취득했다.",
+        "entities": [
+          "디지털자산"
+        ],
+        "numbers": [
+          "4.0%"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43115_f1",
+        "article_id": 43115,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "삼성SDS, 디지털자산 사업 확대…두나무에 1532억원 지분 투자",
+        "normalized_fact": "삼성SDS가 두나무에 1532억원을 투자했다.",
+        "entities": [
+          "디지털자산"
+        ],
+        "numbers": [
+          "1532억원"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43118_f1",
+        "article_id": 43118,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "[유미's 픽] 삼성SDS, AI 이어 디지털자산 승부수…두나무에 1532억원 베...",
+        "normalized_fact": "삼성SDS가 두나무에 1532억원을 투자했다.",
+        "entities": [
+          "디지털자산"
+        ],
+        "numbers": [
+          "1532억원"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43124_f1",
+        "article_id": 43124,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "삼성SDS·증권·카드, '두나무' 지분 4% 인수…'디지털 자산 생태계' 선...",
+        "normalized_fact": "삼성SDS, 삼성증권, 삼성카드가 두나무 지분 4%를 인수했다.",
+        "entities": [
+          "디지털자산"
+        ],
+        "numbers": [
+          "4%"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43130_f1",
+        "article_id": 43130,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "삼성SDS, 두나무에 1천532억 원 지분 투자…1% 확보",
+        "normalized_fact": "삼성SDS가 두나무에 1천532억 원을 투자하여 1%의 지분을 확보했다.",
+        "entities": [
+          "두나무"
+        ],
+        "numbers": [
+          "1천532억 원",
+          "1%",
+          "1",
+          "532"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43066_f1",
+        "article_id": 43066,
+        "fact_type": "general_fact",
+        "summary_role": "application_case",
+        "role_priority": 4,
+        "evidence_text": "삼성SDS는 기존에 보유한 IT 서비스, 인공지능(AI), 클라우드, 보안, 데이터 관리 기술 역량에 두나무의 블록체인 운영 노하우를 접목해 블록체인 소프트웨어 경쟁력을 끌어올린다는 방침이다",
+        "normalized_fact": "삼성SDS는 두나무의 블록체인 운영 노하우를 접목해 블록체인 소프트웨어 경쟁력을 강화할 계획이다.",
+        "entities": [
+          "블록체인 소프트웨어",
+          "두나무"
+        ],
+        "numbers": [],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43066_f2",
+        "article_id": 43066,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "특히 한국예탁결제원의 2024년 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업에 이어, 최근 정식 시스템 전환을 위한 '토큰증권 플랫폼 운영 구축' 사업까지 연이어 수주하며",
+        "normalized_fact": "삼성SDS는 한국예탁결제원의 '토큰증권 플랫폼 운영 구축' 사업을 수주했다.",
+        "entities": [],
+        "numbers": [
+          "2024년",
+          "2025년"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "medium"
+      },
+      {
+        "fact_id": "c43682_a43074_f1",
+        "article_id": 43074,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "[Invest]삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 취득 결의",
+        "normalized_fact": "삼성증권, 삼성SDS, 삼성카드는 두나무 지분 4%를 취득하기로 결의했다.",
+        "entities": [
+          "두나무"
+        ],
+        "numbers": [
+          "4%"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      },
+      {
+        "fact_id": "c43682_a43074_f2",
+        "article_id": 43074,
+        "fact_type": "uncertain_fact",
+        "summary_role": "uncertainty_detail",
+        "role_priority": 8,
+        "evidence_text": "향후 원화 스테이블코인 등 디지털자산의 범주가 확대되고, 이에 따라 거래소의 사업영역도 더욱 확장될 수 있다는 점을 감안했다는 설명이다",
+        "normalized_fact": "향후 원화 스테이블코인 등 디지털자산의 범주가 확대될 수 있는 것으로 설명됐다.",
+        "entities": [],
+        "numbers": [],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "medium"
+      },
+      {
+        "fact_id": "c43682_a43085_f1",
+        "article_id": 43085,
+        "fact_type": "general_fact",
+        "summary_role": "main_event",
+        "role_priority": 1,
+        "evidence_text": "삼성증권·삼성에스디에스·삼성카드는 28일 카카오 계열사가 보유한 두나무 지분 4.0%(증권 2.0%, SDS 1.0%, 카드 1.0%)에 해당하는 주식 139만 주를 6128억원에 취득한다고 결의했다",
+        "normalized_fact": "삼성증권, 삼성에스디에스, 삼성카드는 두나무 지분 4%를 6128억 원에 취득하기로 결의했다.",
+        "entities": [
+          "두나무"
+        ],
+        "numbers": [
+          "4%",
+          "6128억 원",
+          "28일",
+          "4.0%",
+          "2.0%",
+          "1.0%",
+          "139",
+          "6128억원"
+        ],
+        "dates": [],
+        "event_verbs": [],
+        "confidence": "high"
+      }
+    ],
+    "selected_fact_ids": {
+      "1": [
+        "c43682_a43100_f1"
+      ],
+      "2": [
+        "c43682_a43158_f1"
+      ],
+      "3": [
+        "c43682_a43157_f2"
+      ]
+    },
+    "coverage": {
+      "cluster_article_count": 24,
+      "analyzed_article_count": 24,
+      "coverage_ratio": 1.0,
+      "coverage_warning": ""
+    },
+    "model": "gpt-4o",
     "is_valid_summary": true,
-    "summary_scope": "integrated_issue",
-    "issue_component": "IntegrationAgent",
-    "integration_input": "analysis_input_bundle",
-    "bundle_id": "news:456",
-    "cluster_id": 456,
-    "representative_id": 456,
-    "issue_source_type": "news",
-    "source_article_ids": [456, 457],
-    "cluster_article_ids": [456, 457],
-    "analyzed_article_ids": [456, 457],
     "main_company": "samsung_sds",
-    "mentioned_peer_companies": ["samsung_sds"],
-    "cluster_event_type": "partnership",
-    "headline": "삼성SDS, OpenAI 협력과 공공 온AI 적용으로 기업·공공 AX 운영 기반 확대",
-    "main_event": "삼성SDS는 OpenAI 협력을 통해 챗GPT 에듀 판매 권한을 추가 확보하고, 브리티웍스를 행정안전부 온AI 모바일 서비스와 연계된 공식 협업 도구로 공급한다.",
-    "main_issue": "삼성SDS의 생성형 AI 협력 확대와 보안·운영 기반 AX 확산",
-    "one_line_summary": "삼성SDS는 교육기관 대상 챗GPT 에듀와 공공 온AI 협업 도구를 통해 보안·데이터 통제 기반의 AX 적용 범위를 넓히고 있다.",
-    "integrated_text": "삼성SDS는 OpenAI와의 협력을 강화하며 교육기관 대상 챗GPT 에듀 상품 판매 권한을 추가 확보했다. 챗GPT 에듀는 사용자의 대화와 응답이 AI 학습 데이터에 활용되지 않도록 설계되어 데이터 프라이버시와 보안성을 강화한 서비스로 설명됐다. 삼성SDS는 9만여 명의 학생·교수·교직원을 보유한 국립 한국방송통신대학교에 챗GPT 에듀 서비스를 제공하기 위해 개념증명(PoC)을 진행하고 있다. 별도 기사에서는 삼성SDS의 브리티웍스가 행정안전부 온AI 모바일 서비스와 연계된 공식 협업 도구로 선정됐고, 부처 간 협업 환경과 AI 기반 업무 활용성, 보안성 측면에서 평가를 받았다고 언급됐다. 두 기사는 삼성SDS의 AX 메시지가 단순 생성형 AI 기능 판매보다 데이터 보호, 보안 운영, 공공·교육 현장 적용, 클라우드 기반 운영 지원으로 확장되고 있음을 보여준다.",
+    "mentioned_peer_companies": [
+      "samsung_sds"
+    ],
+    "cluster_event_type": "contract",
+    "headline": "삼성SDS, 한국예탁결제원과의 주요 사업 수주",
+    "one_line_summary": "삼성SDS는 한국예탁결제원의 '토큰증권 기능분석 컨설팅'과 '테스트베드 플랫폼 구축' 사업을 수주했다.",
     "fact_summary": [
-      "삼성SDS는 OpenAI와의 협력을 강화하며 챗GPT 에듀 상품 판매 권한을 추가 확보했다.",
-      "챗GPT 에듀는 사용자의 대화와 응답이 AI 학습 데이터에 활용되지 않도록 설계되어 데이터 프라이버시와 보안성을 강화한 서비스로 설명됐다.",
-      "삼성SDS는 9만여 명의 학생·교수·교직원을 보유한 국립 한국방송통신대학교에 챗GPT 에듀 서비스를 제공하기 위해 개념증명(PoC)을 진행하고 있다.",
-      "삼성SDS의 브리티웍스는 행정안전부 온AI 모바일 서비스와 연계된 공식 협업 도구로 선정됐다.",
-      "브리티웍스는 부처 간 협업 환경 제공, AI 기반 업무 활용성, 보안성 측면에서 높은 평가를 받았다고 언급됐다."
+      "삼성SDS는 2024년 한국예탁결제원의 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업을 수주했다.",
+      "기사에서는 자사의 AI, 클라우드, 보안, 데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다 사실이 확인됐다.",
+      "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다."
     ],
-    "consolidated_facts": [
+    "summary_lines_with_fact_ids": [
       {
-        "fact_id": "article:456:title",
-        "fact": "삼성SDS는 OpenAI와의 협력을 강화하며 챗GPT 에듀 상품 판매 권한을 추가 확보했다.",
-        "source_article_ids": [456],
-        "evidence_texts": [
-          "삼성SDS가 '챗GPT 에듀' 상품 판매 권한을 추가로 확보하며 OpenAI와의 협력을 한층 강화한다."
-        ],
-        "source_type": "news",
-        "fact_type": "reported_fact"
+        "line_index": 1,
+        "text": "삼성SDS는 2024년 한국예탁결제원의 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업을 수주했다.",
+        "fact_ids": [
+          "c43682_a43100_f1"
+        ]
       },
       {
-        "fact_id": "article:456:privacy",
-        "fact": "챗GPT 에듀는 사용자의 대화와 응답이 AI 학습 데이터에 활용되지 않도록 설계되어 데이터 프라이버시와 보안성을 강화했다.",
-        "source_article_ids": [456],
-        "evidence_texts": [
-          "사용자가 서비스 내에서 주고받는 대화와 응답이 AI 학습 데이터에 활용되지 않도록 설계되어 데이터 프라이버시와 보안을 강화한 것이 특징이다."
-        ],
-        "source_type": "news",
-        "fact_type": "reported_fact"
+        "line_index": 2,
+        "text": "기사에서는 자사의 AI, 클라우드, 보안, 데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다 사실이 확인됐다.",
+        "fact_ids": [
+          "c43682_a43158_f1"
+        ]
       },
       {
-        "fact_id": "article:456:knou_poc",
-        "fact": "삼성SDS는 9만여 명의 학생·교수·교직원을 보유한 국립 한국방송통신대학교에 챗GPT 에듀 서비스를 제공하기 위해 PoC를 진행하고 있다.",
-        "source_article_ids": [456],
-        "evidence_texts": [
-          "삼성SDS는 9만여 명의 학생·교수·교직원을 보유한 국립 한국방송통신대학교에 챗GPT 에듀 서비스를 제공하기 위해 개념증명(PoC)을 진행중이다."
-        ],
-        "source_type": "news",
-        "fact_type": "numeric_fact"
-      },
-      {
-        "fact_id": "article:456:enterprise_ax",
-        "fact": "삼성SDS는 AI 컨설팅, 개발·운영, 클라우드·보안을 아우르는 원팀 지원체계를 기반으로 엔드투엔드 AX 체계를 구축하고 있다고 설명했다.",
-        "source_article_ids": [456],
-        "evidence_texts": [
-          "삼성SDS는 AI 컨설팅, 개발·운영, 클라우드·보안을 아우르는 '원팀(One-Team)' 지원체계를 기반으로 엔드투엔드(End-to-End) AX 체계를 구축하고 있다."
-        ],
-        "source_type": "news",
-        "fact_type": "reported_fact"
-      },
-      {
-        "fact_id": "article:457:onai",
-        "fact": "삼성SDS의 브리티웍스는 행정안전부 온AI 모바일 서비스와 연계된 공식 협업 도구로 선정됐다.",
-        "source_article_ids": [457],
-        "evidence_texts": [
-          "브리티웍스가 공식 협업도구로 채택됐으며, 온AI 모바일 서비스와 연계해 공무원들이 장소에 구애받지 않고 업무를 수행할 수 있는 환경을 제공한다."
-        ],
-        "source_type": "news",
-        "fact_type": "reported_fact"
-      },
-      {
-        "fact_id": "article:457:security",
-        "fact": "브리티웍스는 부처 간 협업 환경 제공, AI 기반 업무 활용성, 보안성 측면에서 높은 평가를 받았다.",
-        "source_article_ids": [457],
-        "evidence_texts": [
-          "브리티웍스는 부처 간 유연한 협업 환경 제공, AI 기반 업무 활용성, 보안성 측면에서 높은 평가를 받고 있다."
-        ],
-        "source_type": "news",
-        "fact_type": "reported_fact"
+        "line_index": 3,
+        "text": "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다.",
+        "fact_ids": [
+          "c43682_a43157_f2"
+        ]
       }
     ],
-    "key_numbers": [
-      {
-        "article_id": 456,
-        "metric_name": "target_user_base",
-        "metric_label": "한국방송통신대학교 학생·교수·교직원 규모",
-        "value": 90000,
-        "unit": "명",
-        "period": "2026",
-        "evidence_text": "삼성SDS는 9만여 명의 학생·교수·교직원을 보유한 국립 한국방송통신대학교에 챗GPT 에듀 서비스를 제공하기 위해 개념증명(PoC)을 진행중이다."
-      },
-      {
-        "article_id": 457,
-        "metric_name": "central_government_usage",
-        "metric_label": "브리티웍스 드라이브 활용 중앙부처·위원회 수",
-        "value": 70,
-        "unit": "여 개 기관",
-        "period": "2026",
-        "evidence_text": "현재 70여 개 중앙부처와 위원회에서 브리티웍스 드라이브를 활용해 행정 지식을 체계적으로 관리하고 있다."
-      }
-    ],
-    "business_signals": [
-      {
-        "article_id": 456,
-        "business_area": "Enterprise AI",
-        "signal_type": "partner_expansion",
-        "sentiment": "positive",
-        "summary": "OpenAI 협력 범위를 교육기관 대상 챗GPT 에듀로 확대했다.",
-        "evidence_text": "삼성SDS가 '챗GPT 에듀' 상품 판매 권한을 추가로 확보하며 OpenAI와의 협력을 한층 강화한다.",
-        "confidence": 0.86
-      },
-      {
-        "article_id": 456,
-        "business_area": "Security AI",
-        "signal_type": "customer_requirement",
-        "sentiment": "positive",
-        "summary": "교육기관 AI 도입에서 데이터 프라이버시와 보안성이 핵심 요구로 제시됐다.",
-        "evidence_text": "사용자가 서비스 내에서 주고받는 대화와 응답이 AI 학습 데이터에 활용되지 않도록 설계되어 데이터 프라이버시와 보안을 강화한 것이 특징이다.",
-        "confidence": 0.84
-      },
-      {
-        "article_id": 456,
-        "business_area": "AX Delivery",
-        "signal_type": "operating_model",
-        "sentiment": "positive",
-        "summary": "AI 컨설팅, 개발·운영, 클라우드·보안을 묶은 엔드투엔드 AX 지원체계를 강조했다.",
-        "evidence_text": "AI 컨설팅, 개발·운영, 클라우드·보안을 아우르는 '원팀(One-Team)' 지원체계를 기반으로 엔드투엔드(End-to-End) AX 체계를 구축하고 있다.",
-        "confidence": 0.82
-      },
-      {
-        "article_id": 457,
-        "business_area": "Public AX",
-        "signal_type": "reference_expansion",
-        "sentiment": "positive",
-        "summary": "공공 업무환경에서 AI 협업 도구의 현장 적용 레퍼런스를 확보했다.",
-        "evidence_text": "브리티웍스가 공식 협업도구로 채택됐으며, 온AI 모바일 서비스와 연계해 공무원들이 장소에 구애받지 않고 업무를 수행할 수 있는 환경을 제공한다.",
-        "confidence": 0.83
-      }
-    ],
-    "representative_sources": [
-      {
-        "article_id": 456,
-        "title": "삼성SDS, OpenAI와 협력 강화 '챗GPT 에듀'로 교육기관 대상 안전한 AI 활용 환경 제공",
-        "url": "https://example.com/news/456",
-        "source_name": "삼성SDS 뉴스룸",
-        "published_at": "2026-06-01T00:00:00Z"
-      },
-      {
-        "article_id": 457,
-        "title": "삼성SDS, 브리티웍스로 온AI 모바일 서비스 지원한다",
-        "url": "https://example.com/news/457",
-        "source_name": "삼성SDS 뉴스룸",
-        "published_at": "2026-06-01T01:00:00Z"
-      }
-    ],
+    "main_event": "삼성SDS는 한국예탁결제원의 '토큰증권 기능분석 컨설팅'과 '테스트베드 플랫폼 구축' 사업을 수주했다.",
+    "confidence": 0.9,
+    "reason": "선택된 fact_id에 기반하여 정확한 요약을 제공함.",
     "fact_basis": [
       {
+        "summary_sentence_index": 1,
         "summary_line_index": 1,
-        "source_article_ids": [456],
-        "fact_ids": ["article:456:title"],
-        "evidence_text": "삼성SDS가 '챗GPT 에듀' 상품 판매 권한을 추가로 확보하며 OpenAI와의 협력을 한층 강화한다.",
-        "evidence_texts": [
-          "삼성SDS가 '챗GPT 에듀' 상품 판매 권한을 추가로 확보하며 OpenAI와의 협력을 한층 강화한다."
+        "fact": "삼성SDS는 2024년 한국예탁결제원의 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업을 수주했다.",
+        "source_article_ids": [
+          43100
         ],
-        "evidence_type": "reported_fact"
+        "fact_ids": [
+          "c43682_a43100_f1"
+        ],
+        "evidence_count": 1,
+        "evidence_type": "reported_fact",
+        "evidence_texts": [
+          "삼성SDS는 2024년 한국예탁결제원 '토큰증권 기능분석 컨설팅' 사업과 2025 '테스트베드 플랫폼 구축' 사업을 수주했다"
+        ],
+        "evidence_text": "삼성SDS는 2024년 한국예탁결제원 '토큰증권 기능분석 컨설팅' 사업과 2025 '테스트베드 플랫폼 구축' 사업을 수주했다"
       },
       {
+        "summary_sentence_index": 2,
         "summary_line_index": 2,
-        "source_article_ids": [456],
-        "fact_ids": ["article:456:privacy"],
-        "evidence_text": "사용자가 서비스 내에서 주고받는 대화와 응답이 AI 학습 데이터에 활용되지 않도록 설계되어 데이터 프라이버시와 보안을 강화한 것이 특징이다.",
-        "evidence_texts": [
-          "사용자가 서비스 내에서 주고받는 대화와 응답이 AI 학습 데이터에 활용되지 않도록 설계되어 데이터 프라이버시와 보안을 강화한 것이 특징이다."
+        "fact": "기사에서는 자사의 AI, 클라우드, 보안, 데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다 사실이 확인됐다.",
+        "source_article_ids": [
+          43158
         ],
-        "evidence_type": "reported_fact"
+        "fact_ids": [
+          "c43682_a43158_f1"
+        ],
+        "evidence_count": 1,
+        "evidence_type": "reported_fact",
+        "evidence_texts": [
+          "삼성SDS는 자사의 AI·클라우드·보안·데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다는 전략이다"
+        ],
+        "evidence_text": "삼성SDS는 자사의 AI·클라우드·보안·데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다는 전략이다"
       },
       {
+        "summary_sentence_index": 3,
         "summary_line_index": 3,
-        "source_article_ids": [456],
-        "fact_ids": ["article:456:knou_poc"],
-        "evidence_text": "삼성SDS는 9만여 명의 학생·교수·교직원을 보유한 국립 한국방송통신대학교에 챗GPT 에듀 서비스를 제공하기 위해 개념증명(PoC)을 진행중이다.",
-        "evidence_texts": [
-          "삼성SDS는 9만여 명의 학생·교수·교직원을 보유한 국립 한국방송통신대학교에 챗GPT 에듀 서비스를 제공하기 위해 개념증명(PoC)을 진행중이다."
+        "fact": "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다.",
+        "source_article_ids": [
+          43157
         ],
-        "evidence_type": "numeric_fact"
-      },
-      {
-        "summary_line_index": 4,
-        "source_article_ids": [456],
-        "fact_ids": ["article:456:enterprise_ax"],
-        "evidence_text": "삼성SDS는 AI 컨설팅, 개발·운영, 클라우드·보안을 아우르는 '원팀(One-Team)' 지원체계를 기반으로 엔드투엔드(End-to-End) AX 체계를 구축하고 있다.",
-        "evidence_texts": [
-          "삼성SDS는 AI 컨설팅, 개발·운영, 클라우드·보안을 아우르는 '원팀(One-Team)' 지원체계를 기반으로 엔드투엔드(End-to-End) AX 체계를 구축하고 있다."
+        "fact_ids": [
+          "c43682_a43157_f2"
         ],
-        "evidence_type": "reported_fact"
-      },
-      {
-        "summary_line_index": 5,
-        "source_article_ids": [457],
-        "fact_ids": ["article:457:onai"],
-        "evidence_text": "브리티웍스가 공식 협업도구로 채택됐으며, 온AI 모바일 서비스와 연계해 공무원들이 장소에 구애받지 않고 업무를 수행할 수 있는 환경을 제공한다.",
+        "evidence_count": 1,
+        "evidence_type": "uncertain_fact",
         "evidence_texts": [
-          "브리티웍스가 공식 협업도구로 채택됐으며, 온AI 모바일 서비스와 연계해 공무원들이 장소에 구애받지 않고 업무를 수행할 수 있는 환경을 제공한다."
+          "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다"
         ],
-        "evidence_type": "reported_fact"
-      },
-      {
-        "summary_line_index": 6,
-        "source_article_ids": [457],
-        "fact_ids": ["article:457:security"],
-        "evidence_text": "브리티웍스는 부처 간 유연한 협업 환경 제공, AI 기반 업무 활용성, 보안성 측면에서 높은 평가를 받고 있다.",
-        "evidence_texts": [
-          "브리티웍스는 부처 간 유연한 협업 환경 제공, AI 기반 업무 활용성, 보안성 측면에서 높은 평가를 받고 있다."
-        ],
-        "evidence_type": "reported_fact"
+        "evidence_text": "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다"
       }
     ],
-    "missing_or_uncertain_points": [
+    "repair_actions": [
+      "company_name_repetition_detected",
+      "summary_line_2_subject_replaced",
+      "subject_predicate_consistency_normalized",
+      "company_name_repetition_reduced"
+    ],
+    "integration_schema_version": "integrated-issue-v1.0",
+    "prompt_version": "integration-v1.0",
+    "issue_component": "IntegrationAgent",
+    "integration_component": "IntegrationAgent",
+    "integration_input": "analysis_input_bundle",
+    "bundle_id": "news:43682",
+    "issue_source_type": "news",
+    "main_issue": "삼성SDS, 한국예탁결제원과의 주요 사업 수주",
+    "integrated_article": {
+      "title": "삼성SDS, 한국예탁결제원과의 주요 사업 수주",
+      "lead": "삼성SDS는 한국예탁결제원의 '토큰증권 기능분석 컨설팅'과 '테스트베드 플랫폼 구축' 사업을 수주했다.",
+      "body_summary_lines": [
+        "삼성SDS는 2024년 한국예탁결제원의 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업을 수주했다.",
+        "기사에서는 자사의 AI, 클라우드, 보안, 데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다 사실이 확인됐다.",
+        "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다."
+      ],
+      "key_facts": [
+        {
+          "fact": "삼성SDS는 2024년 한국예탁결제원의 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업을 수주했다.",
+          "source_article_ids": [
+            43100
+          ],
+          "fact_ids": [
+            "c43682_a43100_f1"
+          ],
+          "evidence_text": "삼성SDS는 2024년 한국예탁결제원 '토큰증권 기능분석 컨설팅' 사업과 2025 '테스트베드 플랫폼 구축' 사업을 수주했다",
+          "fact_type": "reported_fact"
+        },
+        {
+          "fact": "기사에서는 자사의 AI, 클라우드, 보안, 데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다 사실이 확인됐다.",
+          "source_article_ids": [
+            43158
+          ],
+          "fact_ids": [
+            "c43682_a43158_f1"
+          ],
+          "evidence_text": "삼성SDS는 자사의 AI·클라우드·보안·데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다는 전략이다",
+          "fact_type": "reported_fact"
+        },
+        {
+          "fact": "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다.",
+          "source_article_ids": [
+            43157
+          ],
+          "fact_ids": [
+            "c43682_a43157_f2"
+          ],
+          "evidence_text": "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다",
+          "fact_type": "uncertain_fact"
+        }
+      ],
+      "fact_basis": [
+        {
+          "summary_sentence_index": 1,
+          "summary_line_index": 1,
+          "fact": "삼성SDS는 2024년 한국예탁결제원의 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업을 수주했다.",
+          "source_article_ids": [
+            43100
+          ],
+          "fact_ids": [
+            "c43682_a43100_f1"
+          ],
+          "evidence_count": 1,
+          "evidence_type": "reported_fact",
+          "evidence_texts": [
+            "삼성SDS는 2024년 한국예탁결제원 '토큰증권 기능분석 컨설팅' 사업과 2025 '테스트베드 플랫폼 구축' 사업을 수주했다"
+          ],
+          "evidence_text": "삼성SDS는 2024년 한국예탁결제원 '토큰증권 기능분석 컨설팅' 사업과 2025 '테스트베드 플랫폼 구축' 사업을 수주했다"
+        },
+        {
+          "summary_sentence_index": 2,
+          "summary_line_index": 2,
+          "fact": "기사에서는 자사의 AI, 클라우드, 보안, 데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다 사실이 확인됐다.",
+          "source_article_ids": [
+            43158
+          ],
+          "fact_ids": [
+            "c43682_a43158_f1"
+          ],
+          "evidence_count": 1,
+          "evidence_type": "reported_fact",
+          "evidence_texts": [
+            "삼성SDS는 자사의 AI·클라우드·보안·데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다는 전략이다"
+          ],
+          "evidence_text": "삼성SDS는 자사의 AI·클라우드·보안·데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다는 전략이다"
+        },
+        {
+          "summary_sentence_index": 3,
+          "summary_line_index": 3,
+          "fact": "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다.",
+          "source_article_ids": [
+            43157
+          ],
+          "fact_ids": [
+            "c43682_a43157_f2"
+          ],
+          "evidence_count": 1,
+          "evidence_type": "uncertain_fact",
+          "evidence_texts": [
+            "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다"
+          ],
+          "evidence_text": "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다"
+        }
+      ],
+      "source_article_ids": [
+        43682,
+        43904,
+        43451,
+        43332,
+        43264,
+        43242,
+        43226,
+        43185,
+        43202,
+        43153,
+        43157,
+        43158,
+        43100,
+        43106,
+        43107,
+        43112,
+        43111,
+        43115,
+        43118,
+        43124,
+        43130,
+        43066,
+        43074,
+        43085
+      ],
+      "representative_sources": [
+        {
+          "article_id": 43682,
+          "title": "[이슈] 삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 인수…디지털자산...",
+          "url": "https://www.polinews.co.kr/news/articleView.html?idxno=732554",
+          "source_name": "naver_news",
+          "source_type": "news",
+          "published_at": "2026-05-29T06:16:00+00:00",
+          "collected_at": "2026-05-29T07:00:02.440836+00:00"
+        },
+        {
+          "article_id": 43904,
+          "title": "삼성證, 삼성SDS·삼성카드와 두나무 지분 4% 취득 결정...디지털자산 사...",
+          "url": "https://www.betanews.net/article/view/beta202605290047",
+          "source_name": "naver_news",
+          "source_type": "news",
+          "published_at": "2026-05-29T09:08:00+00:00",
+          "collected_at": "2026-05-29T10:00:04.652379+00:00"
+        },
+        {
+          "article_id": 43451,
+          "title": "삼성증권·삼성SDS·삼성카드 등 3사, 두나무 지분 4% 인수…디지털자산...",
+          "url": "http://www.worktoday.co.kr/news/articleView.html?idxno=85064",
+          "source_name": "naver_news",
+          "source_type": "news",
+          "published_at": "2026-05-28T12:14:00+00:00",
+          "collected_at": "2026-05-28T13:00:01.331262+00:00"
+        },
+        {
+          "article_id": 43332,
+          "title": "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 품는다",
+          "url": "https://daily.hankooki.com/news/articleView.html?idxno=1371591",
+          "source_name": "naver_news",
+          "source_type": "news",
+          "published_at": "2026-05-28T07:50:00+00:00",
+          "collected_at": "2026-05-28T08:00:01.435291+00:00"
+        },
+        {
+          "article_id": 43264,
+          "title": "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 공동 인수",
+          "url": "http://www.press9.kr/news/articleView.html?idxno=77175",
+          "source_name": "naver_news",
+          "source_type": "news",
+          "published_at": "2026-05-28T05:52:00+00:00",
+          "collected_at": "2026-05-28T06:00:01.332818+00:00"
+        }
+      ]
+    },
+    "integrated_text": "삼성SDS는 한국예탁결제원의 '토큰증권 기능분석 컨설팅'과 '테스트베드 플랫폼 구축' 사업을 수주했다.",
+    "consolidated_facts": [
       {
-        "point": "챗GPT 에듀 판매 권한 확대가 실제 매출로 이어지는 규모",
-        "reason": "기사에는 PoC와 협의 계획은 있으나 계약 금액이나 매출 기여도는 공개되지 않았다."
+        "fact": "삼성SDS는 2024년 한국예탁결제원의 '토큰증권 기능분석 컨설팅' 사업과 2025년 '테스트베드 플랫폼 구축' 사업을 수주했다."
       },
       {
-        "point": "온AI 모바일 서비스 연계 이후 정량적 업무 효율 개선 수치",
-        "reason": "기사에는 공식 협업 도구 선정과 보안·활용성 평가는 있으나 실제 운영 KPI는 제시되지 않았다."
+        "fact": "기사에서는 자사의 AI, 클라우드, 보안, 데이터 관리 기술과 두나무의 블록체인 운영 역량을 결합해 금융권 대상 차세대 디지털 금융 인프라 사업 경쟁력을 높인다 사실이 확인됐다."
+      },
+      {
+        "fact": "향후 원화 스테이블코인 도입 시 삼성금융 통합 플랫폼 ‘모니모’를 중심으로 디지털자산 기반 결제 지원 서비스를 마련하고, 두나무와 협업해 새로운 유통 생태계 구축 가능성을 검토한다는 구상이다."
       }
     ],
-    "confidence": 0.82,
-    "reason": "두 대표 기사 모두 삼성SDS의 생성형 AI 협력과 공공·교육 현장 적용을 다루며, 보안·데이터 통제·운영 지원 신호가 fact_basis와 business_signals에 반복적으로 확인된다.",
+    "key_numbers": [],
+    "business_signals": [],
+    "representative_sources": [
+      {
+        "article_id": 43682,
+        "title": "[이슈] 삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 인수…디지털자산...",
+        "url": "https://www.polinews.co.kr/news/articleView.html?idxno=732554",
+        "source_name": "naver_news",
+        "source_type": "news",
+        "published_at": "2026-05-29T06:16:00+00:00",
+        "collected_at": "2026-05-29T07:00:02.440836+00:00"
+      },
+      {
+        "article_id": 43904,
+        "title": "삼성證, 삼성SDS·삼성카드와 두나무 지분 4% 취득 결정...디지털자산 사...",
+        "url": "https://www.betanews.net/article/view/beta202605290047",
+        "source_name": "naver_news",
+        "source_type": "news",
+        "published_at": "2026-05-29T09:08:00+00:00",
+        "collected_at": "2026-05-29T10:00:04.652379+00:00"
+      },
+      {
+        "article_id": 43451,
+        "title": "삼성증권·삼성SDS·삼성카드 등 3사, 두나무 지분 4% 인수…디지털자산...",
+        "url": "http://www.worktoday.co.kr/news/articleView.html?idxno=85064",
+        "source_name": "naver_news",
+        "source_type": "news",
+        "published_at": "2026-05-28T12:14:00+00:00",
+        "collected_at": "2026-05-28T13:00:01.331262+00:00"
+      },
+      {
+        "article_id": 43332,
+        "title": "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 품는다",
+        "url": "https://daily.hankooki.com/news/articleView.html?idxno=1371591",
+        "source_name": "naver_news",
+        "source_type": "news",
+        "published_at": "2026-05-28T07:50:00+00:00",
+        "collected_at": "2026-05-28T08:00:01.435291+00:00"
+      },
+      {
+        "article_id": 43264,
+        "title": "삼성증권·삼성SDS·삼성카드, 두나무 지분 4% 공동 인수",
+        "url": "http://www.press9.kr/news/articleView.html?idxno=77175",
+        "source_name": "naver_news",
+        "source_type": "news",
+        "published_at": "2026-05-28T05:52:00+00:00",
+        "collected_at": "2026-05-28T06:00:01.332818+00:00"
+      }
+    ],
+    "missing_or_uncertain_points": [],
     "input_bundle_ref": {
-      "bundle_id": "news:456",
-      "cluster_id": "456",
+      "bundle_id": "news:43682",
+      "cluster_id": "43682",
       "source_type": "news",
-      "source_count": 2
-    }
-  },
-  "profile_context": {
-    "skax_profile": {
-      "company_id": "sk_ax",
-      "company_name_ko": "SK AX",
-      "business_lines": ["공공AX", "보안AX", "AI 운영"],
-      "strategic_focus": ["기업용 AI 전환", "클라우드 운영", "산업별 AX"]
+      "source_count": 24
     },
-    "peer_profiles": {
-      "samsung_sds": {
-        "peer_id": "samsung_sds",
-        "company_id": "samsung_sds",
-        "company_name_ko": "삼성SDS",
-        "one_liner": "클라우드, AI, 물류, IT 서비스 중심의 글로벌 IT 서비스 기업",
-        "core_capabilities": ["클라우드", "AI", "SI", "보안", "공공 IT"]
-      }
+    "input_contract_validation": {
+      "pass": true,
+      "source_type": "news",
+      "item_count": 24,
+      "raw_article_ids": [
+        43682,
+        43904,
+        43451,
+        43332,
+        43264,
+        43242,
+        43226,
+        43185,
+        43202,
+        43153,
+        43157,
+        43158,
+        43100,
+        43106,
+        43107,
+        43112,
+        43111,
+        43115,
+        43118,
+        43124,
+        43130,
+        43066,
+        43074,
+        43085
+      ],
+      "representative_id": 43682,
+      "cluster_article_ids": [
+        43682,
+        43904,
+        43451,
+        43332,
+        43264,
+        43242,
+        43226,
+        43185,
+        43202,
+        43153,
+        43157,
+        43158,
+        43100,
+        43106,
+        43107,
+        43112,
+        43111,
+        43115,
+        43118,
+        43124,
+        43130,
+        43066,
+        43074,
+        43085
+      ],
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal",
+        "ax"
+      ],
+      "business_signal_count": 0,
+      "financial_metric_count": 0,
+      "parser_output_count": 0,
+      "missing_fields": [],
+      "warnings": []
     },
-    "sector_context": {
-      "selected_sector_ids": ["ax", "cloud", "security"]
-    }
-  },
-  "analysis_context": {
-    "peer_event_timeline_recent": [
-      {
-        "peer_id": "samsung_sds",
-        "event_type": "partnership",
-        "title": "OpenAI 협력 기반 생성형 AI 상품 확대",
-        "source_card_id": "CN-MOCK-456"
-      }
-    ],
-    "sector_pulse_recent": [
-      {
-        "sector": "ax",
-        "summary": "기업용 생성형 AI 도입에서 데이터 통제, 보안, 운영 지원 범위가 제안 경쟁의 핵심 평가 요소로 부각된다."
-      }
-    ],
-    "financial_trend": {},
-    "event_chain_candidates": [],
-    "similar_cards_rag": [
-      {
-        "card_id": "CN-SIMILAR-AX-001",
-        "summary": "기업용 AI 도입 사례에서 기능 공급보다 운영 책임과 데이터 보호 요구가 함께 강조됐다."
-      }
-    ],
-    "evidence_density_per_peer": {
-      "samsung_sds": {
-        "source_count": 2,
-        "fact_count": 6,
-        "business_signal_count": 4
-      }
+    "preprocessing_outputs": {
+      "raw_article_ids": [
+        43682,
+        43904,
+        43451,
+        43332,
+        43264,
+        43242,
+        43226,
+        43185,
+        43202,
+        43153,
+        43157,
+        43158,
+        43100,
+        43106,
+        43107,
+        43112,
+        43111,
+        43115,
+        43118,
+        43124,
+        43130,
+        43066,
+        43074,
+        43085
+      ],
+      "representative_id": 43682,
+      "cluster_article_ids": [
+        43682,
+        43904,
+        43451,
+        43332,
+        43264,
+        43242,
+        43226,
+        43185,
+        43202,
+        43153,
+        43157,
+        43158,
+        43100,
+        43106,
+        43107,
+        43112,
+        43111,
+        43115,
+        43118,
+        43124,
+        43130,
+        43066,
+        43074,
+        43085
+      ],
+      "matched_companies": [
+        "samsung_sds"
+      ],
+      "matched_sectors": [
+        "security",
+        "infra",
+        "deal",
+        "ax"
+      ],
+      "classification": {
+        "cluster_id": 43682,
+        "representative_id": 43682,
+        "company": "samsung_sds",
+        "companies": [
+          "samsung_sds"
+        ],
+        "sector": "security",
+        "sectors": [
+          "security",
+          "infra",
+          "deal",
+          "ax"
+        ],
+        "event_type": "general_update",
+        "importance": "high",
+        "importance_score": 1.0,
+        "exposure_band": "high",
+        "exposure_score": 1.0,
+        "signals": {
+          "cluster_size": 24,
+          "source": "analysis_pipeline",
+          "representative_id": 43682
+        }
+      },
+      "business_signal_count": 0,
+      "financial_metric_count": 0,
+      "parser_output_count": 0
     },
-    "provenance": {
-      "builder": "mock_fixture",
-      "note": "StrategicInsightAgent 통합 목업 검증용 context"
+    "downstream_usage": {
+      "card_news": "title/summary_lines/fact_basis/source_article_ids",
+      "mixer": "integrated_issue+analysis+implication in evidence_payload",
+      "briefing": "card_news.evidence_payload.analysis_package.integrated_issue"
+    },
+    "integration_validation": {
+      "pass": true,
+      "schema_version": "integrated-issue-v1.0",
+      "prompt_version": "integration-v1.0",
+      "missing_required_fields": [],
+      "missing_fact_basis_line_indexes": [],
+      "source_article_ids_count": 24,
+      "warnings": []
     }
   }
 }
