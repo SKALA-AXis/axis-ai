@@ -49,7 +49,11 @@ class AnalysisPipelineRunner:
         """뉴스 클러스터 하나를 분석하고 카드뉴스 payload를 만든다."""
         article_ids = cluster_article_ids or list_cluster_article_ids(cluster_id)
         if representative_id is not None and representative_id not in article_ids:
-            article_ids.insert(0, representative_id)
+            return _empty_pipeline_result(
+                reason="representative article not in cluster",
+                cluster_id=cluster_id,
+                representative_id=representative_id,
+            )
         articles = _load_articles(article_ids)
         if not articles:
             return _empty_pipeline_result(
@@ -142,6 +146,12 @@ class AnalysisPipelineRunner:
         )
         card_news = state.get("card_news_payload") or {}
         saved_card_id = state.get("card_news_id")
+        validation = state.get("validation")
+        validation_payload = (
+            validation.to_dict()
+            if validation is not None
+            else (analysis_package.get("validation") if analysis_package else {})
+        )
         if save_card and card_news and not saved_card_id:
             saved_card_id = save_card_news(card_news)
         return {
@@ -150,10 +160,14 @@ class AnalysisPipelineRunner:
             "representative_id": representative_id,
             "classification": effective_classification,
             "analysis_package": analysis_package,
+            "integrated_issue": state.get("integrated_issue") or {},
+            "analysis": state.get("analysis") or {},
+            "implication": state.get("implication") or {},
             "card_news": card_news,
             "saved_card_id": saved_card_id,
             "human_review_flags": list(state.get("human_review_flags") or []),
-            "validation": (analysis_package.get("validation") if analysis_package else {}),
+            "validation": validation_payload,
+            "errors": list(state.get("errors") or []),
         }
 
     def run_input_bundle(
@@ -178,6 +192,12 @@ class AnalysisPipelineRunner:
         )
         card_news = state.get("card_news_payload") or {}
         saved_card_id = state.get("card_news_id")
+        validation = state.get("validation")
+        validation_payload = (
+            validation.to_dict()
+            if validation is not None
+            else (analysis_package.get("validation") if analysis_package else {})
+        )
         if save_card and card_news and not saved_card_id:
             saved_card_id = save_card_news(card_news)
         return {
@@ -185,9 +205,14 @@ class AnalysisPipelineRunner:
             "cluster_id": input_bundle.cluster_id,
             "classification": effective_classification,
             "analysis_package": analysis_package,
+            "integrated_issue": state.get("integrated_issue") or {},
+            "analysis": state.get("analysis") or {},
+            "implication": state.get("implication") or {},
             "card_news": card_news,
             "saved_card_id": saved_card_id,
             "human_review_flags": list(state.get("human_review_flags") or []),
+            "validation": validation_payload,
+            "errors": list(state.get("errors") or []),
         }
 
     def build_card_news(
@@ -282,7 +307,10 @@ def _structured_rows(*, table: str, raw_article_ids: list[int]) -> list[dict[str
                 {"raw_article_ids": raw_article_ids},
             ).fetchall()
     except Exception as exc:
-        log.warning("structured rows 조회 실패 | table=%s error=%s", table, exc)
+        if _is_missing_relation(exc, table):
+            log.info("structured rows 테이블 없음, 빈 컨텍스트로 진행 | table=%s", table)
+        else:
+            log.warning("structured rows 조회 실패 | table=%s error=%s", table, exc)
         return []
     return [dict(row._mapping) for row in rows]
 
@@ -470,6 +498,11 @@ def _safe_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _is_missing_relation(exc: Exception, relation_name: str) -> bool:
+    text_value = str(exc)
+    return "UndefinedTable" in text_value and relation_name in text_value
 
 
 def _empty_pipeline_result(

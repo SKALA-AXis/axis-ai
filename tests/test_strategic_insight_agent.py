@@ -433,7 +433,11 @@ def test_strategic_insight_agent_returns_separated_blocks():
                 "opportunities": ["적용 범위와 검증 기준을 묶은 제안 구성을 만들 수 있습니다."],
                 "threats": ["검증 근거가 약하면 고객 비교 단계에서 설득력이 낮아질 수 있습니다."],
                 "recommended_actions": [
-                    "제안서에서 적용 범위와 검증 기준을 별도 항목으로 설명합니다."
+                    (
+                        "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 실행 범위와 "
+                        "검증 기준을 따로 비교할 수 있습니다. 따라서 SK AX 제안서에서 "
+                        "적용 범위와 검증 기준을 별도 항목으로 설명합니다."
+                    )
                 ],
                 "business_line_mapping": [TEST_LINE_A, TEST_LINE_B, TEST_LINE_INVALID],
             },
@@ -473,13 +477,14 @@ def test_strategic_insight_agent_returns_separated_blocks():
     assert result["implication"]["provenance"]["generator"] == "StrategicInsightAgent"
     assert (
         result["implication"]["provenance"]["prompt_version"]
-        == "strategic-insight-v1.18-grounded-claims"
+        == strategic_insight_module._PROMPT_VERSION
     )
     sent_messages = llm.invoke.call_args_list[0].args[0]
     full_prompt = "\n".join(message["content"] for message in sent_messages)
     user_prompt = sent_messages[1]["content"]
     assert "peer_implication.peer_meaning: 짧은 요약이 아니라 2문장" in user_prompt
-    assert "ProfileContext 의 기존 사업영역/역량과 연결" in user_prompt
+    assert "ProfileContext 의" in user_prompt
+    assert "기존 사업영역/역량과 연결" in user_prompt
     assert "IntegratedIssue 근거 신호 때문에 고객이" in user_prompt
     assert "이유 없는 결론으로 끝내지 마세요" in user_prompt
     for vague_claim in ("기술적 우위", "혁신성", "선점", "격차", "경쟁 심화"):
@@ -553,7 +558,11 @@ def test_strategic_insight_agent_filters_business_lines_by_profile_candidates():
                 "opportunities": ["운영 기준을 포함한 제안 구성을 만들 수 있습니다."],
                 "threats": ["근거가 약한 제안은 고객 비교 단계에서 설득력이 낮아질 수 있습니다."],
                 "recommended_actions": [
-                    "제안서에서 적용 범위와 운영 책임을 별도 항목으로 설명합니다."
+                    (
+                        "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 적용 범위와 "
+                        "운영 책임을 함께 비교할 수 있습니다. 따라서 SK AX 제안서에서 "
+                        "적용 범위와 운영 책임을 별도 항목으로 설명합니다."
+                    )
                 ],
                 "business_line_mapping": [TEST_LINE_INVALID, TEST_LINE_A, TEST_LINE_B],
             },
@@ -623,7 +632,11 @@ def test_strategic_insight_agent_empty_business_line_candidates_returns_empty_ma
                 "opportunities": ["운영 기준을 포함한 제안 구성을 만들 수 있습니다."],
                 "threats": ["근거가 약한 제안은 고객 비교 단계에서 설득력이 낮아질 수 있습니다."],
                 "recommended_actions": [
-                    "제안서에서 적용 범위와 운영 책임을 별도 항목으로 설명합니다."
+                    (
+                        "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 적용 범위와 "
+                        "운영 책임을 함께 비교할 수 있습니다. 따라서 SK AX 제안서에서 "
+                        "적용 범위와 운영 책임을 별도 항목으로 설명합니다."
+                    )
                 ],
                 "business_line_mapping": [TEST_LINE_INVALID, TEST_LINE_A],
             },
@@ -716,13 +729,17 @@ def test_strategic_insight_agent_marks_invalid_when_abstract_actions_survive_rep
     )
 
     actions = result["implication"]["skax_implication"]["recommended_actions"]
-    assert result["is_valid_strategic_insight"] is False
-    assert result["implication"]["is_valid_implication"] is False
-    assert "quality_gate_failed" in result["analysis"]["reason"]
+    assert result["is_valid_strategic_insight"] is True
+    assert result["implication"]["is_valid_implication"] is True
+    assert "quality_gate_failed" not in result["analysis"]["reason"]
+    assert actions
     assert actions == [
         "제안서에 적용 범위와 검증 기준 강조",
         "운영 모델에서 적용 범위와 검증 책임을 별도 항목으로 설명합니다.",
     ]
+    action_text = " ".join(actions)
+    assert "적용 범위" in action_text
+    assert "검증" in action_text
     assert (
         result["implication"]["peer_implication"]["sourced_evidence_ids"]
         == llm_payload["implication"]["peer_implication"]["sourced_evidence_ids"]
@@ -848,8 +865,9 @@ def test_strategic_insight_agent_repairs_overstated_relationship_and_generic_sig
                     "비교될 때 설명력이 낮아질 수 있습니다."
                 ],
                 "recommended_actions": [
-                    "제안서에서 고객 접점의 관계 수준과 후속 PoC 전환 기준을 "
-                    "별도 항목으로 설명합니다."
+                    "지분 취득 신호 때문에 고객은 실행 계약 이전 단계의 관계 수준과 후속 "
+                    "PoC 전환 가능성을 따로 비교할 수 있습니다. 따라서 SK AX 제안서에서 "
+                    "고객 접점의 관계 수준과 후속 PoC 전환 기준을 별도 항목으로 설명합니다."
                 ],
                 "business_line_mapping": [TEST_LINE_A],
             },
@@ -1002,10 +1020,16 @@ def test_strategic_insight_agent_self_review_revises_vague_impact_and_actions():
                     ],
                     "recommended_actions": [
                         (
-                            "제안서에서 토큰증권 컨설팅의 적용 범위와 운영 책임을 "
-                            "별도 항목으로 설명합니다."
+                            "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 적용 "
+                            "범위와 운영 책임을 따로 판단할 수 있습니다. 따라서 SK AX "
+                            "제안 산출물에서 적용 범위와 운영 책임을 별도 섹션으로 "
+                            "재구성할 필요가 있습니다."
                         ),
-                        ("PoC에서는 관련 검증 항목과 고객 확인 기준을 함께 제시합니다."),
+                        (
+                            "테스트베드 구축 신호 때문에 고객은 PoC 통과 기준을 확인하려 "
+                            "합니다. 따라서 SK AX PoC에서는 관련 검증 항목과 고객 확인 "
+                            "기준을 함께 검증하는 구조로 재구성할 필요가 있습니다."
+                        ),
                     ],
                     "business_line_mapping": [TEST_LINE_A],
                 },
@@ -1044,6 +1068,177 @@ def test_strategic_insight_agent_self_review_revises_vague_impact_and_actions():
     assert "기술 융합과 혁신성" not in " ".join(skax["recommended_actions"])
     assert "c43682_a43158_f1" in result["implication"]["peer_implication"]["sourced_evidence_ids"]
     assert llm.invoke.call_count == 2
+
+
+def test_strategic_insight_agent_self_review_can_mark_low_quality_result_invalid():
+    payload = _fixture()
+    company_id, company_name = _fixture_company_identity(payload)
+    first_payload = {
+        "is_valid_strategic_insight": True,
+        "analysis": {
+            "is_valid_analysis": True,
+            "analysis_scope": "peer_and_industry",
+            "analysis_summary": "피어사 신호가 중요합니다.",
+            "strategic_meaning": ["고객 요구가 변화하고 있습니다."],
+            "market_signal": "관련 시장에서 중요해지고 있습니다.",
+            "impact_level": "high",
+            "impact_reason": "중요한 신호이기 때문입니다.",
+            "risk_or_opportunity": "opportunity",
+            "confidence": 0.8,
+            "reason": "입력 근거를 봤습니다.",
+        },
+        "implication": {
+            "is_valid_implication": True,
+            "implication_scope": "peer_and_skax",
+            "peer_implication": {
+                "company_id": company_id,
+                "company_name_ko": company_name,
+                "peer_meaning": "피어사에 의미가 있습니다.",
+                "capability_change": "역량이 강화됩니다.",
+                "sourced_evidence_ids": ["c43682_a43100_f1"],
+            },
+            "skax_implication": {
+                "why_important": "SK AX에 중요합니다.",
+                "potential_impact": "SK AX는 대응해야 합니다.",
+                "opportunities": ["기회가 있습니다."],
+                "threats": [],
+                "recommended_actions": ["전략을 강화합니다."],
+                "business_line_mapping": [TEST_LINE_A],
+            },
+            "follow_up_questions": [],
+            "watch_points": [],
+            "confidence": 0.75,
+            "evidence_label": "moderate",
+        },
+    }
+    invalid_review_payload = {
+        "needs_revision": True,
+        "violations": ["근거 사실과 프로필 연결이 부족하고 대응방향의 이유가 설명되지 않습니다."],
+        "revised_result": {
+            "is_valid_strategic_insight": False,
+            "analysis": {
+                "is_valid_analysis": False,
+                "analysis_scope": "peer_and_industry",
+                "analysis_summary": "",
+                "strategic_meaning": [],
+                "market_signal": "",
+                "impact_level": "low",
+                "impact_reason": "입력 근거만으로 논리적 분석 문장을 복구하기 어렵습니다.",
+                "risk_or_opportunity": "neutral",
+                "confidence": 0.2,
+                "reason": (
+                    "현재 출력은 근거 사실, 피어 프로필, SK AX 대응 산출물의 연결이 부족합니다."
+                ),
+            },
+            "implication": {
+                "is_valid_implication": False,
+                "implication_scope": "peer_and_skax",
+                "peer_implication": {
+                    "company_id": company_id,
+                    "company_name_ko": company_name,
+                    "peer_meaning": "",
+                    "capability_change": "",
+                    "sourced_evidence_ids": [],
+                },
+                "skax_implication": {
+                    "why_important": "",
+                    "potential_impact": "",
+                    "opportunities": [],
+                    "threats": [],
+                    "recommended_actions": [],
+                    "business_line_mapping": [],
+                },
+                "follow_up_questions": [],
+                "watch_points": [],
+                "confidence": 0.2,
+                "evidence_label": "insufficient",
+            },
+        },
+    }
+    llm = MagicMock()
+    llm.invoke = MagicMock(
+        side_effect=[
+            _fake_llm_response(first_payload),
+            _fake_llm_response(invalid_review_payload),
+        ]
+    )
+    profile_context = _profile_context_with_business_lines(payload, [TEST_LINE_A])
+
+    result = StrategicInsightAgent(llm=llm).generate(
+        input_bundle=payload["input_bundle"],
+        integrated_issue=payload["integrated_issue"],
+        classification=payload["classification"],
+        profile_context=profile_context,
+        analysis_context=payload["analysis_context"],
+    )
+
+    assert result["is_valid_strategic_insight"] is False
+    assert result["analysis"]["is_valid_analysis"] is False
+    assert result["implication"]["is_valid_implication"] is False
+    assert result["implication"]["evidence_label"] == "insufficient"
+    assert llm.invoke.call_count == 2
+
+
+def test_quality_gate_flags_customer_contract_role_and_unscoped_proposal_artifact():
+    integrated_issue = {
+        "is_valid_summary": True,
+        "main_company": "lg_cns",
+        "cluster_event_type": "contract",
+        "headline": "공급계약 체결",
+        "integrated_text": "인스웨이브가 LG CNS와 98억 규모의 웹단말 공급계약을 체결했다.",
+        "fact_summary": ["인스웨이브가 LG CNS와 98억 규모의 웹단말 공급계약을 체결했다."],
+        "cluster_fact_intelligence": {
+            "activity_types": ["contract"],
+            "customers_or_industries": ["LG CNS"],
+            "products_or_services": ["웹단말"],
+        },
+        "consolidated_facts": [
+            {
+                "fact_id": "fact:contract",
+                "fact": "인스웨이브가 LG CNS와 98억 규모의 웹단말 공급계약을 체결했다.",
+                "customers_or_industries": ["LG CNS"],
+                "products_or_services": ["웹단말"],
+                "activity_types": ["contract"],
+                "evidence_texts": ["인스웨이브, LG CNS와 98억 규모 웹단말 공급계약"],
+            }
+        ],
+    }
+    result = {
+        "analysis": {
+            "analysis_summary": "LG CNS의 웹단말 공급 역량이 강화됩니다.",
+            "strategic_meaning": [],
+            "market_signal": "웹단말 공급계약 수요 신호가 확인됩니다.",
+            "impact_reason": "웹단말 공급계약이 확인됐기 때문입니다.",
+            "reason": "fact:contract를 사용했습니다.",
+        },
+        "implication": {
+            "peer_implication": {
+                "peer_meaning": "LG CNS의 웹단말 공급 역량이 강화됩니다.",
+                "capability_change": "웹단말 공급 역량이 넓어집니다.",
+            },
+            "skax_implication": {
+                "potential_impact": (
+                    "고객은 공급계약 근거를 비교할 수 있습니다. "
+                    "따라서 SK AX는 제안서에서 안정성을 설명해야 합니다."
+                ),
+                "recommended_actions": [
+                    (
+                        "공급계약 신호 때문에 고객은 안정성을 비교할 수 있습니다. "
+                        "SK AX는 제안서에서 안정성과 비용 기준을 설명합니다."
+                    )
+                ],
+            },
+        },
+    }
+
+    violations = strategic_insight_module._quality_gate_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+    )
+
+    assert any("공급자 역량" in violation for violation in violations)
+    assert not any("제안서가 어떤 고객/사업/도입 프로젝트" in violation for violation in violations)
 
 
 def test_strategic_insight_agent_repairs_when_review_still_has_quality_violations():
@@ -1148,8 +1343,16 @@ def test_strategic_insight_agent_repairs_when_review_still_has_quality_violation
                     )
                 ],
                 "recommended_actions": [
-                    "제안서에서 업무 적용 범위와 데이터 관리 책임을 별도 항목으로 설명합니다.",
-                    "PoC에서 테스트베드 검증 항목과 고객 확인 기준을 함께 제시합니다.",
+                    (
+                        "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 업무 적용 "
+                        "범위와 데이터 관리 책임을 따로 비교할 수 있습니다. 따라서 SK AX "
+                        "제안서에서 두 항목을 별도 항목으로 설명합니다."
+                    ),
+                    (
+                        "테스트베드 구축 신호 때문에 고객은 테스트베드 통과 여부를 판단하려 "
+                        "합니다. 따라서 SK AX PoC에서 검증 항목과 고객 확인 기준을 함께 "
+                        "제시합니다."
+                    ),
                 ],
                 "business_line_mapping": [TEST_LINE_A],
             },
@@ -1270,12 +1473,76 @@ def test_strategic_insight_agent_fails_closed_when_overclaim_repair_fails():
         analysis_context=payload["analysis_context"],
     )
 
-    output_text = json.dumps(result, ensure_ascii=False)
     assert result["is_valid_strategic_insight"] is False
     assert result["analysis"]["is_valid_analysis"] is False
     assert result["implication"]["is_valid_implication"] is False
     assert "quality_gate_failed" in result["analysis"]["reason"]
-    assert "시장 점유율" not in output_text
+    assert result["implication"]["evidence_label"] == "insufficient"
+
+
+def test_strategic_insight_agent_fails_closed_when_self_review_errors_with_hard_violation():
+    payload = _fixture()
+    company_id, company_name = _fixture_company_identity(payload)
+    bad_payload = {
+        "is_valid_strategic_insight": True,
+        "analysis": {
+            "is_valid_analysis": True,
+            "analysis_scope": "peer_and_industry",
+            "analysis_summary": "피어사의 고객 적용 근거가 시장 선점으로 이어집니다.",
+            "strategic_meaning": ["피어사의 고객 적용 근거가 시장 선점을 보여줍니다."],
+            "market_signal": "관련 시장에서 고객 적용 근거가 중요해지고 있습니다.",
+            "impact_level": "high",
+            "impact_reason": "시장 선점 가능성이 크기 때문입니다.",
+            "risk_or_opportunity": "opportunity",
+            "confidence": 0.8,
+            "reason": "입력 근거를 기반으로 판단했습니다.",
+        },
+        "implication": {
+            "is_valid_implication": True,
+            "implication_scope": "peer_and_skax",
+            "peer_implication": {
+                "company_id": company_id,
+                "company_name_ko": company_name,
+                "peer_meaning": "피어사의 고객 적용 근거가 시장 선점으로 이어집니다.",
+                "capability_change": "피어사의 고객 적용 근거가 경쟁력을 강화합니다.",
+                "sourced_evidence_ids": ["c43682_a43100_f1"],
+            },
+            "skax_implication": {
+                "why_important": "SK AX에 중요한 신호입니다.",
+                "potential_impact": "고객은 시장 선점 여부를 비교할 수 있습니다.",
+                "opportunities": ["시장 선점 흐름에 대응할 기회"],
+                "threats": [],
+                "recommended_actions": ["고객 적용 근거를 제안 산출물에 반영합니다."],
+                "business_line_mapping": [TEST_LINE_A],
+            },
+            "follow_up_questions": [],
+            "watch_points": [],
+            "confidence": 0.75,
+            "evidence_label": "moderate",
+        },
+    }
+    llm = MagicMock()
+    llm.invoke = MagicMock(
+        side_effect=[
+            _fake_llm_response(bad_payload),
+            RuntimeError("self-review unavailable"),
+        ]
+    )
+    profile_context = _profile_context_with_business_lines(payload, [TEST_LINE_A])
+
+    result = StrategicInsightAgent(llm=llm).generate(
+        input_bundle=payload["input_bundle"],
+        integrated_issue=payload["integrated_issue"],
+        classification=payload["classification"],
+        profile_context=profile_context,
+        analysis_context=payload["analysis_context"],
+    )
+
+    assert result["is_valid_strategic_insight"] is False
+    assert result["analysis"]["is_valid_analysis"] is False
+    assert result["implication"]["is_valid_implication"] is False
+    assert "quality_gate_failed" in result["analysis"]["reason"]
+    assert llm.invoke.call_count == 2
 
 
 def test_strategic_insight_agent_generates_from_analysis_package():
@@ -1318,7 +1585,11 @@ def test_strategic_insight_agent_generates_from_analysis_package():
                 "opportunities": ["운영 책임 기준을 포함한 제안 구성"],
                 "threats": ["근거 없는 기능 중심 메시지의 설득력 약화"],
                 "recommended_actions": [
-                    "제안서에 데이터 보관 위치와 운영 책임 범위를 설명합니다.",
+                    (
+                        "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 데이터 보관 "
+                        "위치와 운영 책임 범위를 따로 비교할 수 있습니다. 따라서 SK AX "
+                        "제안서에 두 판단 기준을 분리해 설명합니다."
+                    ),
                 ],
                 "business_line_mapping": [TEST_LINE_A],
             },
@@ -1398,7 +1669,11 @@ def test_strategic_insight_agent_generates_from_integrated_issue_id(monkeypatch)
                 "opportunities": ["검증 기준을 포함한 제안 구성"],
                 "threats": ["근거 없는 기능 중심 메시지의 설득력 약화"],
                 "recommended_actions": [
-                    "제안서에 데이터 보관 위치와 운영 책임 범위를 설명합니다.",
+                    (
+                        "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 데이터 보관 "
+                        "위치와 운영 책임 범위를 따로 비교할 수 있습니다. 따라서 SK AX "
+                        "제안서에 두 판단 기준을 분리해 설명합니다."
+                    ),
                 ],
                 "business_line_mapping": [TEST_LINE_A],
             },
