@@ -494,8 +494,9 @@ async def analyze_mixer_stream(request: MixerAnalysisRequest) -> StreamingRespon
                     item = await asyncio.wait_for(queue.get(), timeout=_MIXER_SSE_HEARTBEAT_SEC)
                 except asyncio.TimeoutError:
                     # 무이벤트 구간(메인+repair LLM, 수십 초)에 keepalive 핑.
-                    # 주석(": ")은 백엔드 SSE 디코더가 버리므로 data 이벤트로 보내야
-                    # 백엔드→ingress→브라우저 전 구간이 살아있어 nginx/ALB idle timeout(기본 60s)을 피한다.
+                    # 주석(": ")은 백엔드 SSE 디코더가 버리므로 data 이벤트로 보낸다.
+                    # 그래야 백엔드→ingress→브라우저 전 구간이 살아
+                    # nginx/ALB idle timeout(기본 60s)을 피한다.
                     # 프론트는 stage/result/error 만 처리하므로 ping 은 무시된다.
                     yield f"data: {json.dumps({'type': 'ping'})}\n\n"
                     continue

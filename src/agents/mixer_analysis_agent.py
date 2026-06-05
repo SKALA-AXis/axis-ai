@@ -80,6 +80,8 @@ def _emit_progress(progress: "ProgressFn | None", stage: str) -> None:
         progress(stage, _PROGRESS_STAGES.get(stage, stage), index, _PROGRESS_TOTAL)
     except Exception:
         log.debug("mixer progress 콜백 실패 (무시)", exc_info=True)
+
+
 _LEGACY_RESULT_GROUP_KEY = "analysis_" + "pack" + "age"
 _LINKED_RESULT_KEYS = (
     "integrated_issue",
@@ -1699,7 +1701,8 @@ def _build_follow_up_questions(result: dict, cards: list[dict]) -> list[str]:
         )
     if str(comparison.get("finding") or "").strip():
         questions.append(
-            f"{peer_phrase}의 서로 다른 접근 중 SK AX의 우선 공략 고객군에 먼저 유효한 쪽은 어디인가?"
+            f"{peer_phrase}의 서로 다른 접근 중 "
+            "SK AX의 우선 공략 고객군에 먼저 유효한 쪽은 어디인가?"
         )
     if _json_list(result.get("recommended_action_basis")) or _json_list(
         result.get("recommended_actions")
