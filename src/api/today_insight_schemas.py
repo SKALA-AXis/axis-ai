@@ -47,8 +47,7 @@ class TodayInsightGenerateRequest(BaseModel):
     cache_only: bool = Field(
         default=False,
         description=(
-            "저장된 결과만 반환한다. 캐시가 없으면 생성하지 않고 "
-            "scheduled pending 상태를 반환."
+            "저장된 결과만 반환한다. 캐시가 없으면 생성하지 않고 scheduled pending 상태를 반환."
         ),
     )
     preload_model: bool = Field(

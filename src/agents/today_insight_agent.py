@@ -423,9 +423,7 @@ def _fetch_recent_cards(
     if clean_exclude_ids:
         placeholders = ", ".join(f":exclude_{idx}" for idx in range(len(clean_exclude_ids)))
         exclude_clause = f"AND id NOT IN ({placeholders})"
-        params.update(
-            {f"exclude_{idx}": card_id for idx, card_id in enumerate(clean_exclude_ids)}
-        )
+        params.update({f"exclude_{idx}": card_id for idx, card_id in enumerate(clean_exclude_ids)})
 
     try:
         with SessionLocal() as db:
@@ -595,15 +593,13 @@ def _scheduled_cache_pending_result(anchor_date: date) -> dict[str, Any]:
                         {
                             "stage": "관찰",
                             "detail": (
-                                "today_insight_reports 캐시를 조회했지만 "
-                                "오늘 결과가 없습니다."
+                                "today_insight_reports 캐시를 조회했지만 오늘 결과가 없습니다."
                             ),
                         },
                         {
                             "stage": "판단",
                             "detail": (
-                                "홈 조회에서는 신규 생성하지 않고 "
-                                "08:10 스케줄 결과를 기다립니다."
+                                "홈 조회에서는 신규 생성하지 않고 08:10 스케줄 결과를 기다립니다."
                             ),
                         },
                     ],
@@ -626,8 +622,7 @@ def _scheduled_cache_pending_result(anchor_date: date) -> dict[str, Any]:
                         {
                             "stage": "판단",
                             "detail": (
-                                "스케줄 실패 시 운영 로그와 axis-ai 연결 상태를 "
-                                "확인해야 합니다."
+                                "스케줄 실패 시 운영 로그와 axis-ai 연결 상태를 확인해야 합니다."
                             ),
                         },
                     ],
@@ -660,8 +655,7 @@ def _scheduled_cache_pending_result(anchor_date: date) -> dict[str, Any]:
             "response_direction": [
                 {
                     "action": (
-                        "08:10 스케줄러가 today_insight_reports에 결과를 "
-                        "저장했는지 확인합니다."
+                        "08:10 스케줄러가 today_insight_reports에 결과를 저장했는지 확인합니다."
                     ),
                     "decision_owner": "플랫폼 운영",
                     "time_horizon": "오전",
@@ -1089,12 +1083,16 @@ def _fallback_signals(context: dict[str, Any]) -> list[dict[str, Any]]:
     headline = (
         str(first.get("headline") or first.get("one_line_summary") or "")
         if first
-        else str(first_card.get("title") or "") if first_card else ""
+        else str(first_card.get("title") or "")
+        if first_card
+        else ""
     )
     company = (
         _company_label(str(first.get("main_company") or ""))
         if first
-        else _company_label(str(first_card.get("peer_id") or "")) if first_card else "Peer"
+        else _company_label(str(first_card.get("peer_id") or ""))
+        if first_card
+        else "Peer"
     )
     stats = context.get("change_stats") or {}
     top_axis = _top_axis_from_stats(stats) or "AX"
