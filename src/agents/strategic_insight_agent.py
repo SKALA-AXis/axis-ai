@@ -4214,7 +4214,8 @@ def _profile_relevance_hint_text(
         if not isinstance(item, dict):
             continue
         parts.append(str(item.get("title") or ""))
-        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        metadata_raw = item.get("metadata")
+        metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
         parts.append(str(metadata.get("subtitle") or ""))
         parts.append(str(item.get("content") or "")[:700])
 
