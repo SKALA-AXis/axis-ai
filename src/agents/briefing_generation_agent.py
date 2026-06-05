@@ -3907,7 +3907,9 @@ def _section_bullets_from_basis(briefing_basis: dict[str, Any]) -> list[str]:
 
 
 def _briefing_trends_summary(trends: list[dict[str, Any]]) -> str:
-    reasons = [str(item.get("reason") or "").strip() for item in trends if item.get("reason")]
+    reasons: list[object] = [
+        str(item.get("reason") or "").strip() for item in trends if item.get("reason")
+    ]
     return _combine_blocks(
         reasons,
         "통합 이슈 근거 기준으로 우선순위를 나눠 정리했습니다.",
