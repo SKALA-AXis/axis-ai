@@ -1651,10 +1651,12 @@ def _build_reasoning_steps(result: dict, cards: list[dict]) -> list[dict]:
 
     # cross_card — 공통 흐름 + 차이
     cross_answer = " / ".join(
-        x for x in [common.get("finding"), comparison.get("finding")] if str(x or "").strip()
+        str(x) for x in [common.get("finding"), comparison.get("finding")] if str(x or "").strip()
     )
     cross_concl = " ".join(
-        x for x in [common.get("rationale"), comparison.get("rationale")] if str(x or "").strip()
+        str(x)
+        for x in [common.get("rationale"), comparison.get("rationale")]
+        if str(x or "").strip()
     )
     cross_inputs = _dedupe_keep_order(
         [
