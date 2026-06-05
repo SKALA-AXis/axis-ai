@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from src.api.briefing_schemas import BriefingGenerateRequest, BriefingGenerateResponse
 from src.api.global_trends_schemas import GlobalTrendsRequest, GlobalTrendsResponse
@@ -33,6 +34,8 @@ from src.schemas import (
 log = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
 SCHEDULED_PREPROCESS_LIMIT = 5000
+# Mixer SSE keepalive 주기(초) — nginx/ALB idle timeout(기본 60s)보다 충분히 짧게.
+_MIXER_SSE_HEARTBEAT_SEC = 10
 
 
 @asynccontextmanager
@@ -459,6 +462,83 @@ async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
         user_context=request.user_context,
     )
     return MixerAnalysisResponse.model_validate(result)
+
+
+@app.post("/mixer/analyze/stream")
+async def analyze_mixer_stream(request: MixerAnalysisRequest) -> StreamingResponse:
+    """MixerAnalysis SSE — 실행 중 실제 단계(prepare/analyze/synthesize/finalize)를
+    실시간 emit 한 뒤 최종 결과를 보낸다.
+
+    이벤트(SSE ``data:`` 한 줄당 JSON 1건):
+      - ``{"type":"stage","stage","label","index","total"}`` — 단계 진입 시
+      - ``{"type":"result","data":{...MixerAnalysisOutput...}}`` — 분석 완료
+      - ``{"type":"error","message":"..."}`` — 실패
+
+    구현 메모: MixerAnalysisAgent 의 LLM 호출은 동기(``.invoke``)라 이벤트 루프를
+    막는다. 따라서 분석은 별도 스레드에서 실행하고, progress 콜백은
+    ``call_soon_threadsafe`` 로 메인 루프의 asyncio.Queue 에 흘려 SSE 제너레이터가
+    실시간으로 drain 한다.
+    """
+    from src.agents.mixer_analysis_agent import MixerAnalysisAgent
+
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def progress(stage: str, label: str, index: int, total: int) -> None:
+        loop.call_soon_threadsafe(
+            queue.put_nowait,
+            {"type": "stage", "stage": stage, "label": label, "index": index, "total": total},
+        )
+
+    def run_blocking() -> dict:
+        # analyze 는 async 지만 내부 호출이 모두 동기라 새 루프에서 안전하게 실행.
+        return asyncio.run(
+            MixerAnalysisAgent().analyze(
+                card_ids=request.card_ids,
+                integrated_issue_ids=request.integrated_issue_ids,
+                ratios=request.ratios,
+                user_context=request.user_context,
+                progress=progress,
+            )
+        )
+
+    async def worker() -> None:
+        try:
+            result = await asyncio.to_thread(run_blocking)
+            payload = MixerAnalysisResponse.model_validate(result).model_dump(mode="json")
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "result", "data": payload})
+        except Exception as e:  # noqa: BLE001 — 모든 실패를 SSE error 로 전달
+            log.warning("Mixer stream 실패: %s", e)
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(e)})
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    async def event_gen():
+        task = asyncio.create_task(worker())
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=_MIXER_SSE_HEARTBEAT_SEC)
+                except asyncio.TimeoutError:
+                    # 무이벤트 구간(메인+repair LLM, 수십 초)에 keepalive 핑.
+                    # 주석(": ")은 백엔드 SSE 디코더가 버리므로 data 이벤트로 보낸다.
+                    # 그래야 백엔드→ingress→브라우저 전 구간이 살아
+                    # nginx/ALB idle timeout(기본 60s)을 피한다.
+                    # 프론트는 stage/result/error 만 처리하므로 ping 은 무시된다.
+                    yield f"data: {json.dumps({'type': 'ping'})}\n\n"
+                    continue
+                if item is None:
+                    break
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/global/trends/run", response_model=GlobalTrendsResponse)

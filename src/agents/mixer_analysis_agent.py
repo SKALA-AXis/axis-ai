@@ -24,6 +24,7 @@ import os
 import re
 import time
 import uuid
+from typing import Callable
 
 from langchain_openai import ChatOpenAI
 
@@ -53,6 +54,34 @@ _LLM_MODEL = "gpt-4o"
 _PROMPT_VERSION = "mixer-v3.1-linked-results-insight"
 _MAX_CARDS = int(os.getenv("MIXER_MAX_CARDS", "20"))
 _MIN_CARDS = 2
+
+# 믹서 실행 단계 — SSE progress 용. 에이전트가 실제로 넘는 단계 경계만 emit 한다
+# (prepare: 카드/이슈 로드, analyze: 메인 LLM, synthesize: 대응방향 LLM, finalize: 추론 정리).
+ProgressFn = Callable[[str, str, int, int], None]
+_PROGRESS_STAGES: dict[str, str] = {
+    "prepare": "선택한 카드와 통합 이슈를 불러오는 중",
+    "analyze": "카드들의 공통 패턴·비교 포인트·숨은 결론을 분석하는 중",
+    "synthesize": "SK AX 관점의 대응 방향을 도출하는 중",
+    "finalize": "추론 흐름과 근거 카드를 정리하는 중",
+}
+_PROGRESS_ORDER: list[str] = ["prepare", "analyze", "synthesize", "finalize"]
+_PROGRESS_TOTAL = len(_PROGRESS_ORDER)
+
+
+def _emit_progress(progress: "ProgressFn | None", stage: str) -> None:
+    """단계 경계에서 progress 콜백 호출 (None 이면 no-op, 예외는 분석을 막지 않음)."""
+    if progress is None:
+        return
+    try:
+        index = _PROGRESS_ORDER.index(stage)
+    except ValueError:
+        index = 0
+    try:
+        progress(stage, _PROGRESS_STAGES.get(stage, stage), index, _PROGRESS_TOTAL)
+    except Exception:
+        log.debug("mixer progress 콜백 실패 (무시)", exc_info=True)
+
+
 _LEGACY_RESULT_GROUP_KEY = "analysis_" + "pack" + "age"
 _LINKED_RESULT_KEYS = (
     "integrated_issue",
@@ -491,6 +520,7 @@ class MixerAnalysisAgent:
         integrated_issue_ids: list[str] | None = None,
         ratios: dict | None = None,
         user_context: str | None = None,
+        progress: "ProgressFn | None" = None,
     ) -> dict:
         """N 카드 선택 → 저장된 분석 payload 기반 6축 radar + cross-issue 분석.
 
@@ -540,6 +570,7 @@ class MixerAnalysisAgent:
                 else requested_card_ids
             )
 
+        _emit_progress(progress, "prepare")
         if requested_integrated_issue_ids:
             analysis_units = load_analysis_units_by_integrated_issue_ids(
                 requested_integrated_issue_ids
@@ -563,6 +594,7 @@ class MixerAnalysisAgent:
             analysis_units=analysis_units,
             ratios=ratios,
             user_context=user_context,
+            progress=progress,
         )
 
     async def analyze_items(
@@ -570,6 +602,7 @@ class MixerAnalysisAgent:
         items: list[dict],
         ratios: dict | None = None,
         user_context: str | None = None,
+        progress: "ProgressFn | None" = None,
     ) -> dict:
         """로컬 목업/테스트용 linked result 묶음 → 믹스 인사이트 생성.
 
@@ -600,6 +633,7 @@ class MixerAnalysisAgent:
             analysis_units=analysis_units,
             ratios=ratios,
             user_context=user_context,
+            progress=progress,
         )
 
     async def _analyze_cards(
@@ -611,6 +645,7 @@ class MixerAnalysisAgent:
         analysis_units: list[AnalysisUnit],
         ratios: dict | None,
         user_context: str | None,
+        progress: "ProgressFn | None" = None,
     ) -> dict:
         # 6축 radar 미리 계산 — LLM input 으로 anchor 제공 (v2)
         radar = _compute_radar(cards)
@@ -621,6 +656,7 @@ class MixerAnalysisAgent:
             .replace("{user_context}", (user_context or "").strip() or "*없음*")
         )
 
+        _emit_progress(progress, "analyze")
         try:
             response = _get_llm().invoke(
                 prompt,
@@ -661,6 +697,7 @@ class MixerAnalysisAgent:
                 max(0.0, confidence_in_range(result.get("confidence", 0.0)) - penalty),
                 2,
             )
+        _emit_progress(progress, "synthesize")
         mix_implication = _generate_mix_level_implication(result=result, cards=cards)
         if mix_implication:
             result["mix_implication"] = mix_implication
@@ -690,6 +727,12 @@ class MixerAnalysisAgent:
                 ),
             }
         )
+        # 추론 흐름(trail) / 단계별 CoT(steps) / 후속 질문 — repair 이후 최종 blocks 기반으로
+        # 결정적 구성 (추가 LLM 호출 없음). card_ids / integrated_issue_ids 양 경로 모두 채워짐.
+        _emit_progress(progress, "finalize")
+        result["reasoning_trail"] = _build_reasoning_trail(result, cards)
+        result["reasoning_steps"] = _build_reasoning_steps(result, cards)
+        result["follow_up_questions"] = _build_follow_up_questions(result, cards)
         result["warning"] = _warning_for(result)
         return result
 
@@ -1506,6 +1549,170 @@ def _parse_and_validate(
     data["langfuse_trace_id"] = _get_langfuse_trace_id()
     data["warning"] = _warning_for(data)
     return data
+
+
+def _card_one_liner(card: dict) -> str:
+    """카드 1장의 핵심을 한 문장으로 추출 — per_card 추론 단계 입력."""
+    linked = _linked_results_from_card(card)
+    analysis = _component(linked, "analysis")
+    integrated = _component(linked, "integrated_issue")
+    candidates: list[object] = [
+        analysis.get("strategic_meaning"),
+        analysis.get("market_signal"),
+        integrated.get("main_issue"),
+    ]
+    summary_lines = card.get("summary_lines") or []
+    if isinstance(summary_lines, str):
+        try:
+            summary_lines = json.loads(summary_lines)
+        except json.JSONDecodeError:
+            summary_lines = [summary_lines]
+    if isinstance(summary_lines, list):
+        candidates.extend(summary_lines)
+    candidates.append(card.get("title"))
+    for cand in candidates:
+        if cand and str(cand).strip():
+            return clip_string(str(cand).strip(), 160)
+    return ""
+
+
+def _build_reasoning_trail(result: dict, cards: list[dict]) -> list[dict]:
+    """blocks → per-step 요약 trail (결정적). LLM 호출 없이 근거 기반으로 구성."""
+    common = _dict_or_empty(result.get("common_pattern"))
+    comparison = _dict_or_empty(result.get("comparison_point"))
+    hidden = _dict_or_empty(result.get("hidden_conclusion"))
+    mix_insight = result.get("mix_insight") or result.get("insight") or ""
+    all_ids = [str(c["id"]) for c in cards if c.get("id")]
+    trail: list[dict] = []
+
+    def add(label: str, one_liner: object, refs: list[str]) -> None:
+        text = str(one_liner or "").strip()
+        if not text:
+            return
+        trail.append(
+            {
+                "seq": len(trail) + 1,
+                "label": label,
+                "one_liner": clip_string(text, 160),
+                "evidence_refs": refs or all_ids,
+                "langfuse_observation_id": None,
+            }
+        )
+
+    add("공통 패턴", common.get("finding"), _json_list(common.get("evidence_card_ids")))
+    add("비교 포인트", comparison.get("finding"), _json_list(comparison.get("evidence_card_ids")))
+    add("숨은 결론", hidden.get("finding"), _json_list(hidden.get("evidence_card_ids")))
+    add("믹스 인사이트", mix_insight, all_ids)
+    return trail
+
+
+def _build_reasoning_steps(result: dict, cards: list[dict]) -> list[dict]:
+    """per_card → cross_card → synthesis 3-phase CoT (결정적, 근거 기반)."""
+    common = _dict_or_empty(result.get("common_pattern"))
+    comparison = _dict_or_empty(result.get("comparison_point"))
+    hidden = _dict_or_empty(result.get("hidden_conclusion"))
+    mix_insight = result.get("mix_insight") or result.get("insight") or ""
+    all_ids = [str(c["id"]) for c in cards if c.get("id")]
+    confidence = round(confidence_in_range(result.get("confidence", 0.0)), 2)
+    steps: list[dict] = []
+
+    def push(phase: str, question: str, inputs_used: list[str], answer: str, concl: str) -> None:
+        if not str(answer or "").strip():
+            return
+        steps.append(
+            {
+                "step_idx": len(steps),
+                "phase": phase,
+                "question": question,
+                "inputs_used": inputs_used or all_ids,
+                "answer": clip_string(str(answer).strip(), 220),
+                "intermediate_conclusion": clip_string(str(concl or "").strip(), 220),
+                "confidence": confidence,
+                "langfuse_observation_id": None,
+            }
+        )
+
+    # per_card — 카드별 핵심 관찰
+    for c in cards:
+        cid = str(c.get("id") or "")
+        if not cid:
+            continue
+        one_liner = _card_one_liner(c)
+        if not one_liner:
+            continue
+        peer = str(c.get("company") or c.get("peer_id") or "").strip()
+        push(
+            "per_card",
+            f"[{peer or cid}] 이 카드는 무엇을 말하는가?",
+            [cid],
+            one_liner,
+            "",
+        )
+
+    # cross_card — 공통 흐름 + 차이
+    cross_answer = " / ".join(
+        str(x) for x in [common.get("finding"), comparison.get("finding")] if str(x or "").strip()
+    )
+    cross_concl = " ".join(
+        str(x)
+        for x in [common.get("rationale"), comparison.get("rationale")]
+        if str(x or "").strip()
+    )
+    cross_inputs = _dedupe_keep_order(
+        [
+            *_json_list(common.get("evidence_card_ids")),
+            *_json_list(comparison.get("evidence_card_ids")),
+        ]
+    )
+    push(
+        "cross_card",
+        "여러 카드를 함께 보면 어떤 공통 흐름과 차이가 보이는가?",
+        cross_inputs,
+        cross_answer,
+        cross_concl,
+    )
+
+    # synthesis — 숨은 결론 → 믹스 인사이트
+    push(
+        "synthesis",
+        "함께 봐야 보이는 판단 기준의 변화는 무엇인가?",
+        _json_list(hidden.get("evidence_card_ids")),
+        hidden.get("finding") or mix_insight,
+        hidden.get("rationale") or "",
+    )
+    return steps
+
+
+def _build_follow_up_questions(result: dict, cards: list[dict]) -> list[str]:
+    """믹스 결과 근거로 임원이 이어서 볼 질문을 결정적으로 생성."""
+    comparison = _dict_or_empty(result.get("comparison_point"))
+    hidden = _dict_or_empty(result.get("hidden_conclusion"))
+    peers = _dedupe_keep_order(
+        [
+            str(c.get("company") or c.get("peer_id") or "").strip()
+            for c in cards
+            if str(c.get("company") or c.get("peer_id") or "").strip()
+        ]
+    )
+    peer_phrase = "와 ".join(peers[:3]) if peers else "선택한 Peer"
+    questions: list[str] = []
+    if str(hidden.get("finding") or "").strip():
+        questions.append(
+            f"‘{clip_string(str(hidden['finding']).strip(), 70)}’ 신호가 일시적 언급인지 "
+            "반복되는 시장 신호인지 확인하려면 어떤 후속 카드를 추적해야 하는가?"
+        )
+    if str(comparison.get("finding") or "").strip():
+        questions.append(
+            f"{peer_phrase}의 서로 다른 접근 중 "
+            "SK AX의 우선 공략 고객군에 먼저 유효한 쪽은 어디인가?"
+        )
+    if _json_list(result.get("recommended_action_basis")) or _json_list(
+        result.get("recommended_actions")
+    ):
+        questions.append(
+            "제안된 대응방향을 실행하려면 어떤 자원·파트너십·책임 조직을 먼저 확보해야 하는가?"
+        )
+    return _dedupe_keep_order([q for q in questions if q.strip()])[:3]
 
 
 def _repair_mixer_result_quality(
