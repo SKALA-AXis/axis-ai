@@ -27,7 +27,7 @@ _DEFAULT_COVER_IMAGE_URL = "/png.png"
 _DEFAULT_COVER_IMAGE_ALT = "카드뉴스 대표 이미지"
 _SUMMARY_LINE_MIN = 3
 _SUMMARY_LINE_MAX = 5
-_CARD_DETAIL_MAX = 5
+_CARD_DETAIL_MAX = 3
 
 _FRONTEND_PEER_IDS = {
     "samsung_sds",
@@ -290,6 +290,7 @@ class CardNewsComposer:
             card["frontend_implication"] = _frontend_implication_from_result(
                 implication_result,
                 fallback=card.get("frontend_implication"),
+                analysis=package.get("analysis") or {},
             )
         else:
             # ImplicationAgent 결과 없음/무효 → analysis 기반 frontend fallback 유지.
@@ -799,6 +800,7 @@ def _frontend_implication_from_result(
     implication: dict[str, Any],
     *,
     fallback: dict[str, Any] | None = None,
+    analysis: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """v4.0 schema 인식 — peer_implication / skax_implication dict 의 핵심 필드 추출.
 
@@ -806,6 +808,7 @@ def _frontend_implication_from_result(
     가 frontend 에 보내는 표면 schema 와 일치.
     """
     fallback = fallback or {}
+    analysis = analysis or {}
     skax = implication.get("skax_implication") or {}
     peer = implication.get("peer_implication") or {}
 
@@ -821,6 +824,8 @@ def _frontend_implication_from_result(
     peer_implications = _bounded_detail_items(
         peer.get("peer_meaning") if isinstance(peer, dict) else None,
         peer.get("capability_change") if isinstance(peer, dict) else None,
+        analysis.get("market_signal") if isinstance(analysis, dict) else None,
+        analysis.get("strategic_meaning") if isinstance(analysis, dict) else None,
     )
     if not peer_implications:
         peer_implications = _bounded_detail_items(fallback.get("key_implications"))
@@ -950,7 +955,7 @@ def _is_near_duplicate_detail(text: str, existing_lines: list[str]) -> bool:
         if not other:
             continue
         overlap = len(tokens & other) / max(1, min(len(tokens), len(other)))
-        if overlap >= 0.8:
+        if overlap >= 0.6:
             return True
     return False
 
