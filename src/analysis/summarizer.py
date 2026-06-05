@@ -47,6 +47,8 @@ _FACT_EXTRACTION_BATCH_SIZE = 10
 _FACT_EXTRACTION_MAX_TOKENS = _env_int("FACT_EXTRACTION_MAX_TOKENS", 3000)
 _SUMMARY_MAX_TOKENS = _env_int("SUMMARY_MAX_TOKENS", 1500)
 _VALIDATION_MAX_TOKENS = _env_int("VALIDATION_MAX_TOKENS", 1200)
+_SUMMARY_LINE_MIN = 3
+_SUMMARY_LINE_MAX = 5
 _ARTICLE_CONTENT_CHARS = _env_int("NEWS_SUMMARY_ARTICLE_CONTENT_CHARS", 2400)
 _COMPACT_ARTICLE_CONTENT_CHARS = _env_int("NEWS_SUMMARY_COMPACT_ARTICLE_CONTENT_CHARS", 1200)
 _FULL_TEXT_ARTICLE_LIMIT = _env_int("NEWS_SUMMARY_FULL_TEXT_ARTICLE_LIMIT", 3)
@@ -140,6 +142,10 @@ _ARTICLE_FACT_EXTRACTION_PROMPT = """\
 3. 수주, 계약, 협약, 출시, 실적, 주가, 증권 리포트 평가, 투자, 채용, 조직개편,
    리스크, 규제, 기술 업데이트, 고객 규모, 사업 규모, 일정, 후속 본사업,
    예정·계획 정보처럼 뉴스 사실 요약에 필요한 사실을 우선하세요.
+   계약/수주 기사에서는 계약 상대방, 정확한 사업명·프로젝트명, 계약 금액,
+   계약 기간, 최근 매출 대비 비율, 전환·구축 대상 시스템/업무 범위를 우선 추출하세요.
+   "코어뱅킹 현대화 웹단말 전환 사업"처럼 업무·시스템 범위가 들어간 명칭을
+   "웹단말 공급"처럼 단순 납품으로 축약하지 마세요.
 4. 피어사의 일반적 정체성, 기존 포지셔닝, 누구나 알 수 있는 배경 설명은 핵심 사실로 쓰지 마세요.
    기사에서 새로 확인되는 역할, 사건, 범위, 수치, 일정, 시설, 고객, 적용 업무를 우선하세요.
 5. 여러 기사에 반복되는 문장이라도 각 기사에서 확인한 사실로 기록하세요.
@@ -204,35 +210,40 @@ _FACT_ID_SUMMARY_PROMPT = """\
 
 목적:
 - 요약 문장을 먼저 만들고 나중에 근거를 찾지 않습니다.
-- selected_facts_by_line에 제공된 fact_id와 normalized_fact만 사용해 3문장 요약을 만듭니다.
+- selected_facts_by_line에 제공된 fact_id와 normalized_fact만 사용해 3~5문장 요약을 만듭니다.
 - 시사점, 대응방향, 전략 해석, 회사 프로필 참조는 금지합니다.
 
 공통 규칙:
-1. summary_lines는 정확히 3개입니다.
+1. summary_lines는 최소 3개, 최대 5개입니다. 입력 근거가 충분할 때만 4~5번째 문장을 추가하세요.
 2. 각 문장은 반드시 fact_ids를 1개 이상 포함해야 합니다.
 3. fact_ids는 입력 selected_facts_by_line에 있는 값만 사용하세요.
 4. summary line은 연결된 fact_ids의 normalized_fact/evidence_text에서 확인되는 사실만 사용하세요.
 5. 기사에 없는 제품명, 서비스명, 고객명, 수치, 날짜, 원인은 만들지 마세요.
 6. 수치나 날짜를 쓰려면 연결된 fact의 evidence_text에 같은 수치나 날짜가 있어야 합니다.
 7. uncertain_fact를 사용하는 문장은 확정 표현을 피하고 "소개됐다", "언급됐다", "제시됐다", "설명됐다"처럼 원문 수위를 유지하세요.
-8. 세 문장은 같은 내용을 반복하지 말고 서로 다른 역할을 가져야 합니다.
+8. 요약 문장은 같은 내용을 반복하지 말고 서로 다른 역할을 가져야 합니다.
 9. 특정 기사 키워드를 규칙처럼 추가하지 말고, 제품명/서비스명/플랫폼명/프로젝트명/이벤트명/기술명 같은 정보 유형을 기준으로 작성하세요.
-10. 같은 회사명으로 시작하는 문장은 최대 1개만 두세요. 2문장과 3문장은 의미가 분명하면 제품명/플랫폼명/서비스명/해당 기술/기사에서는 등으로 이어가세요.
-11. fact에 구체 수치·개수·기간·범위·장소·현장이 있으면 특히 3문장에 우선 반영하되, 연결된 fact evidence_text에서 검증되는 경우에만 쓰세요.
+10. 같은 회사명으로 시작하는 문장은 최대 1개만 두세요. 이후 문장은 의미가 분명하면 제품명/플랫폼명/서비스명/해당 기술/기사에서는 등으로 이어가세요.
+11. fact에 구체 수치·개수·기간·범위·장소·현장이 있으면 3~5문장에 우선 반영하되, 연결된 fact evidence_text에서 검증되는 경우에만 쓰세요.
 12. 주어와 서술어의 의미 관계를 맞추세요. 회사/기관 주어는 행동·발표·공개를, 제품/서비스/플랫폼/기술 주어는 기능·역할·적용 범위를, 기사/보도/자료 주어는 소개·설명·언급처럼 전달 행위를 서술하세요.
+13. 계약/수주 요약에서는 정확한 사업명·프로젝트명과 계약 금액을 가능하면 1문장에 보존하세요.
+    2문장은 단순 공급 여부보다 고객 업무/시스템 전환 범위를 보존하세요.
+    계약 기간, 최근 매출 대비 비율, 후속 단계가 별도 fact로 있으면 3~5문장에 우선 반영하세요.
 
 문장별 역할:
 - 1문장: 핵심 사건·상태·평가
 - 2문장: 연결된 제품·서비스·플랫폼·기술·업무·고객·산업 영역
 - 3문장: 시연·적용 사례·수치·범위·일정·후속 단계·시장 반응·불확실성 중 가장 구체적인 사실
+- 4문장: 별도 근거가 있을 때만 추가되는 보강 사실·고객/산업 범위·운영 단계
+- 5문장: 별도 근거가 있을 때만 추가되는 수치·기간·후속 단계·불확실성
 
 event_type별 fact 선택 의도:
-- launch: 1문장 출시/공개/선보임, 2문장 제품·플랫폼 기능, 3문장 시연·적용 사례·수치·후속 단계
-- technology_update/general_update: 1문장 기술 확장/변화, 2문장 연결 업무·산업·운영 구조, 3문장 적용 방향·현장 투입·시연·불확실성
-- contract: 1문장 수주/계약/사업자 선정, 2문장 고객/시스템/업무 영역, 3문장 규모/기간/후속 단계
-- earnings: 1문장 실적 변화, 2문장 연결 사업/원인, 3문장 수치/기간
-- stock_market: 1문장 주가/시장 반응, 2문장 기사에서 제시한 배경, 3문장 등락률/거래량/전망
-- risk: 1문장 리스크 발생, 2문장 연결 시스템/고객/업무, 3문장 피해 범위/대응/불확실성
+- launch: 출시/공개/선보임, 제품·플랫폼 기능, 시연·적용 사례·수치·후속 단계
+- technology_update/general_update: 기술 확장/변화, 연결 업무·산업·운영 구조, 적용 방향·현장 투입·시연·불확실성
+- contract: 수주/계약/사업자 선정, 고객/시스템/업무 영역, 규모/기간/후속 단계
+- earnings: 실적 변화, 연결 사업/원인, 수치/기간
+- stock_market: 주가/시장 반응, 기사에서 제시한 배경, 등락률/거래량/전망
+- risk: 리스크 발생, 연결 시스템/고객/업무, 피해 범위/대응/불확실성
 
 입력:
 main_company:
@@ -272,6 +283,16 @@ all_available_facts:
     {{
       "line_index": 3,
       "text": "3문장",
+      "fact_ids": []
+    }},
+    {{
+      "line_index": 4,
+      "text": "4문장",
+      "fact_ids": []
+    }},
+    {{
+      "line_index": 5,
+      "text": "5문장",
       "fact_ids": []
     }}
   ],
@@ -1342,6 +1363,23 @@ def _build_extracted_facts(
                 confidence="medium",
             )
 
+    for article in articles:
+        article_id = _safe_int(article.get("id") or article.get("raw_article_id"))
+        if article_id <= 0:
+            continue
+        for fact in _contract_detail_facts_from_article(article):
+            add_fact(
+                article_id=article_id,
+                raw_fact=fact["fact"],
+                evidence_text=fact["evidence_text"],
+                fact_type=fact["fact_type"],
+                summary_role=fact["summary_role"],
+                numbers=fact.get("numbers"),
+                entities=fact.get("entities"),
+                activity_type="contract",
+                confidence="high",
+            )
+
     if len(facts) < 3:
         _add_article_fallback_facts(
             facts=facts,
@@ -1352,6 +1390,154 @@ def _build_extracted_facts(
         )
 
     return facts
+
+
+def _contract_detail_facts_from_article(article: dict[str, Any]) -> list[dict[str, Any]]:
+    """계약/수주 기사에서 사업명, 금액, 기간, 매출 대비 비율을 보강 추출한다.
+
+    LLM 추출이 계약 범위를 "공급" 정도로 약화할 때를 막기 위한 일반 보조 규칙이다.
+    특정 회사나 사업명을 박지 않고, 기사 문장에 이미 있는 계약 관련 문장만 사용한다.
+    """
+    title = str(article.get("title") or "").strip()
+    body = " ".join(
+        str(article.get(key) or "").strip()
+        for key in ("content", "body", "summary", "description")
+        if str(article.get(key) or "").strip()
+    )
+    text = normalize_korean_spacing(f"{title}. {body}")
+    if not re.search(r"계약|수주|공급\s*계약|공급계약", text):
+        return []
+
+    sentences = _contract_candidate_sentences(text)
+    facts: list[dict[str, Any]] = []
+
+    main_sentence = _first_sentence_matching(
+        sentences,
+        include=(r"계약|수주|공급\s*계약|공급계약", r"억|원|규모|사업|프로젝트|전환|구축|공급"),
+    )
+    if main_sentence:
+        facts.append(
+            {
+                "fact": _contract_fact_sentence(main_sentence),
+                "evidence_text": main_sentence,
+                "fact_type": "general_fact",
+                "summary_role": "main_event",
+                "numbers": _number_tokens(main_sentence),
+                "entities": _contract_entities(main_sentence),
+            }
+        )
+
+    scope_sentence = _first_sentence_matching(
+        sentences,
+        include=(r"사업|프로젝트|전환|구축|공급|시스템|단말|플랫폼|업무",),
+        exclude=[main_sentence] if main_sentence else None,
+    )
+    if scope_sentence:
+        facts.append(
+            {
+                "fact": _scope_fact_sentence(scope_sentence),
+                "evidence_text": scope_sentence,
+                "fact_type": "application_fact",
+                "summary_role": "service_function",
+                "numbers": _number_tokens(scope_sentence),
+                "entities": _contract_entities(scope_sentence),
+            }
+        )
+
+    period_sentence = _first_sentence_matching(
+        sentences,
+        include=(r"계약\s*기간|기간은|20\d{2}년\s*\d{1,2}월\s*\d{1,2}일",),
+    )
+    if period_sentence:
+        facts.append(
+            {
+                "fact": _ensure_sentence(period_sentence),
+                "evidence_text": period_sentence,
+                "fact_type": "numeric_fact",
+                "summary_role": "numeric_effect",
+                "numbers": [*_number_tokens(period_sentence), *_date_tokens(period_sentence)],
+                "entities": _contract_entities(period_sentence),
+            }
+        )
+
+    ratio_sentence = _first_sentence_matching(
+        sentences,
+        include=(r"최근\s*매출|매출액\s*대비|매출\s*대비|%",),
+    )
+    if ratio_sentence:
+        facts.append(
+            {
+                "fact": _ensure_sentence(ratio_sentence),
+                "evidence_text": ratio_sentence,
+                "fact_type": "numeric_fact",
+                "summary_role": "numeric_effect",
+                "numbers": _number_tokens(ratio_sentence),
+                "entities": _contract_entities(ratio_sentence),
+            }
+        )
+
+    return _dedupe_contract_facts(facts)
+
+
+def _contract_candidate_sentences(text: str) -> list[str]:
+    cleaned = normalize_korean_spacing(text)
+    parts = [
+        re.sub(r"\s+", " ", item).strip(" -·")
+        for item in re.split(r"(?<=[.!?。！？])\s+|(?<=다)\.\s*|(?<=다)\s+", cleaned)
+        if re.sub(r"\s+", " ", item).strip(" -·")
+    ]
+    return [item if item.endswith((".", "다")) else _ensure_sentence(item) for item in parts]
+
+
+def _first_sentence_matching(
+    sentences: list[str],
+    *,
+    include: tuple[str, ...],
+    exclude: list[str | None] | None = None,
+) -> str:
+    excluded = {re.sub(r"\s+", "", str(item or "")) for item in (exclude or []) if item}
+    for sentence in sentences:
+        key = re.sub(r"\s+", "", sentence)
+        if key in excluded:
+            continue
+        if all(re.search(pattern, sentence) for pattern in include):
+            return sentence
+    return ""
+
+
+def _contract_fact_sentence(sentence: str) -> str:
+    return _ensure_sentence(sentence)
+
+
+def _scope_fact_sentence(sentence: str) -> str:
+    return _ensure_sentence(sentence)
+
+
+def _contract_entities(sentence: str) -> list[str]:
+    entities = re.findall(
+        r"[가-힣A-Za-z0-9&·+_-]{2,}(?:\s+[가-힣A-Za-z0-9&·+_-]{2,}){0,5}"
+        r"(?:사업|프로젝트|계약|시스템|플랫폼|단말|서비스|솔루션|업무|인프라)",
+        sentence,
+    )
+    return _dedupe_keep_order([re.sub(r"\s+", " ", item).strip() for item in entities])
+
+
+def _dedupe_contract_facts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for fact in facts:
+        key = re.sub(r"[\s.。!?！？,，]+", "", str(fact.get("fact") or ""))
+        if key and key not in seen:
+            result.append(fact)
+            seen.add(key)
+    return result
+
+
+def _ensure_sentence(text: str) -> str:
+    sentence = str(text or "").strip()
+    if not sentence:
+        return ""
+    return sentence if sentence.endswith((".", "。", "!", "?", "！", "？")) else f"{sentence}."
 
 
 def _is_duplicate_extracted_fact(
@@ -1511,57 +1697,71 @@ def _select_fact_ids_for_summary_lines(
         return [fact_id]
 
     preferences = _line_summary_role_preferences(cluster_event_type)
+    desired_count = min(_SUMMARY_LINE_MAX, max(_SUMMARY_LINE_MIN, len(available)))
     return {
-        "1": choose(1, preferences[0]),
-        "2": choose(2, preferences[1]),
-        "3": choose(3, preferences[2]),
+        str(index): choose(index, preferences[min(index - 1, len(preferences) - 1)])
+        for index in range(1, desired_count + 1)
     }
 
 
 def _line_summary_role_preferences(
     event_type: str,
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+) -> tuple[tuple[str, ...], ...]:
     event_type = _normalize_event_type(event_type)
     if event_type == "launch":
         return (
             ("main_event",),
             ("product_definition", "service_function"),
             ("application_case", "numeric_effect", "uncertainty_detail"),
+            ("application_case", "service_function", "numeric_effect"),
+            ("uncertainty_detail", "numeric_effect", "market_reaction"),
         )
     if event_type in {"technology_update", "general_update", "unknown"}:
         return (
             ("main_event",),
             ("service_function", "product_definition", "application_case"),
             ("uncertainty_detail", "application_case", "numeric_effect"),
+            ("application_case", "service_function", "numeric_effect"),
+            ("uncertainty_detail", "risk_detail", "market_reaction"),
         )
     if event_type == "contract":
         return (
             ("main_event",),
             ("service_function", "product_definition", "application_case"),
             ("numeric_effect", "uncertainty_detail"),
+            ("application_case", "service_function", "numeric_effect"),
+            ("uncertainty_detail", "risk_detail", "market_reaction"),
         )
     if event_type == "earnings":
         return (
             ("main_event", "numeric_effect"),
             ("service_function", "product_definition"),
             ("numeric_effect", "uncertainty_detail"),
+            ("market_reaction", "numeric_effect"),
+            ("uncertainty_detail", "risk_detail"),
         )
     if event_type == "stock_market":
         return (
             ("market_reaction", "main_event"),
             ("service_function", "product_definition"),
             ("numeric_effect", "market_reaction", "uncertainty_detail"),
+            ("market_reaction", "risk_detail"),
+            ("uncertainty_detail", "numeric_effect"),
         )
     if event_type == "risk":
         return (
             ("risk_detail", "main_event"),
             ("service_function", "product_definition", "application_case"),
             ("risk_detail", "uncertainty_detail", "numeric_effect"),
+            ("application_case", "risk_detail"),
+            ("uncertainty_detail", "market_reaction"),
         )
     return (
         ("main_event",),
         ("product_definition", "service_function", "application_case"),
         ("numeric_effect", "application_case", "uncertainty_detail"),
+        ("application_case", "service_function", "market_reaction"),
+        ("uncertainty_detail", "risk_detail", "numeric_effect"),
     )
 
 
@@ -1698,13 +1898,18 @@ def _normalize_fact_id_summary_result(
         line_items = [
             {"line_index": index, "text": text, "fact_ids": []}
             for index, text in enumerate(
-                _normalize_string_list(data.get("fact_summary"))[:3], start=1
+                _normalize_string_list(data.get("fact_summary"))[:_SUMMARY_LINE_MAX], start=1
             )
         ]
-    line_items = _ensure_three_fact_summary_lines(line_items, extracted_facts)
+    line_items = _ensure_fact_summary_lines(line_items, extracted_facts)
     fact_summary = [str(item.get("text") or "").strip() for item in line_items]
+    is_valid_summary = (
+        bool(data.get("is_valid_summary", True))
+        and _SUMMARY_LINE_MIN <= len(fact_summary) <= _SUMMARY_LINE_MAX
+        and all(fact_summary)
+    )
     result = {
-        "is_valid_summary": bool(data.get("is_valid_summary", True)) and len(fact_summary) == 3,
+        "is_valid_summary": is_valid_summary,
         "main_company": main_company,
         "mentioned_peer_companies": mentioned or [main_company],
         "cluster_event_type": _normalize_event_type(
@@ -1739,26 +1944,32 @@ def _normalize_summary_line_items(value: Any) -> list[dict[str, Any]]:
             index = fallback_index
             text = normalize_korean_spacing(item)
             fact_ids = []
-        if 1 <= index <= 3 and text:
+        if 1 <= index <= _SUMMARY_LINE_MAX and text:
             lines.append({"line_index": index, "text": text, "fact_ids": fact_ids})
     by_index: dict[int, dict[str, Any]] = {}
     for item in lines:
         by_index[_safe_int(item.get("line_index"))] = item
-    return [by_index[index] for index in (1, 2, 3) if index in by_index]
+    return [by_index[index] for index in range(1, _SUMMARY_LINE_MAX + 1) if index in by_index]
 
 
-def _ensure_three_fact_summary_lines(
+def _ensure_fact_summary_lines(
     line_items: list[dict[str, Any]],
     extracted_facts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     fact_by_id = {str(fact.get("fact_id")): fact for fact in extracted_facts}
+    line_items = [
+        item for item in line_items if 1 <= _safe_int(item.get("line_index")) <= _SUMMARY_LINE_MAX
+    ]
+    desired_count = len(line_items)
+    if desired_count <= 0:
+        desired_count = min(_SUMMARY_LINE_MAX, max(_SUMMARY_LINE_MIN, len(extracted_facts)))
     result: dict[int, dict[str, Any]] = {
         _safe_int(item.get("line_index")): item
         for item in line_items
-        if _safe_int(item.get("line_index")) in {1, 2, 3}
+        if 1 <= _safe_int(item.get("line_index")) <= _SUMMARY_LINE_MAX
     }
     unused_facts = [fact for fact in extracted_facts if str(fact.get("fact_id"))]
-    for index in (1, 2, 3):
+    for index in range(1, desired_count + 1):
         item = result.get(index)
         if item and item.get("fact_ids"):
             item["fact_ids"] = [fact_id for fact_id in item["fact_ids"] if fact_id in fact_by_id]
@@ -1773,7 +1984,7 @@ def _ensure_three_fact_summary_lines(
             "text": _fact_text_for_summary_line(fact),
             "fact_ids": [str(fact.get("fact_id"))],
         }
-    return [result[index] for index in (1, 2, 3)]
+    return [result[index] for index in range(1, desired_count + 1)]
 
 
 def _fact_basis_from_summary_line_fact_ids(
@@ -1860,7 +2071,8 @@ def _fallback_fact_id_summary(
         extracted_facts=extracted_facts,
         cluster_event_type=cluster_event_type,
     )
-    for index in (1, 2, 3):
+    desired_count = min(_SUMMARY_LINE_MAX, max(_SUMMARY_LINE_MIN, len(extracted_facts)))
+    for index in range(1, desired_count + 1):
         ids = [
             fact_id for fact_id in selected_fact_ids.get(str(index), []) if fact_id in fact_by_id
         ]
@@ -1923,7 +2135,7 @@ def _validate_fact_id_summary(
     fact_by_id = {str(fact.get("fact_id")): fact for fact in extracted_facts}
     lines = [
         normalize_korean_spacing(line)
-        for line in _normalize_string_list(result.get("fact_summary"))[:3]
+        for line in _normalize_string_list(result.get("fact_summary"))[:_SUMMARY_LINE_MAX]
     ]
     result["fact_summary"] = lines
     line_items = _normalize_summary_line_items(result.get("summary_lines_with_fact_ids"))
@@ -1932,7 +2144,7 @@ def _validate_fact_id_summary(
             {"line_index": index, "text": line, "fact_ids": []}
             for index, line in enumerate(lines, start=1)
         ]
-    line_items = _ensure_three_fact_summary_lines(line_items, extracted_facts)
+    line_items = _ensure_fact_summary_lines(line_items, extracted_facts)
     for item in line_items:
         index = _safe_int(item.get("line_index"))
         if 1 <= index <= len(lines):
@@ -1942,13 +2154,20 @@ def _validate_fact_id_summary(
 
     warnings: list[str] = []
     actions: list[str] = []
-    if len(lines) != 3 or any(not line for line in lines):
-        warnings.append("summary_lines가 정확히 3개가 아님")
+    if not (_SUMMARY_LINE_MIN <= len(lines) <= _SUMMARY_LINE_MAX) or any(
+        not line for line in lines
+    ):
+        warnings.append("summary_lines가 3~5개 범위를 벗어남")
     basis_indexes = {
         _safe_int(item.get("summary_line_index", item.get("summary_sentence_index")))
         for item in result.get("fact_basis", [])
     }
-    missing_indexes = [index for index in (1, 2, 3) if index not in basis_indexes]
+    expected_indexes = [
+        _safe_int(item.get("line_index"))
+        for item in line_items
+        if _safe_int(item.get("line_index")) > 0
+    ]
+    missing_indexes = [index for index in expected_indexes if index not in basis_indexes]
     if missing_indexes:
         warnings.append(f"fact_basis 누락 summary_line_index: {missing_indexes}")
     for item in line_items:
@@ -1961,7 +2180,18 @@ def _validate_fact_id_summary(
             warnings.append(f"{index}번 문장에 존재하지 않는 fact_id: {invalid_ids}")
     for index, line in enumerate(lines, start=1):
         related_facts = _facts_for_line(index, line_items, fact_by_id)
-        related_evidence = " ".join(str(fact.get("evidence_text") or "") for fact in related_facts)
+        related_evidence = " ".join(
+            " ".join(
+                [
+                    str(fact.get("fact") or ""),
+                    str(fact.get("evidence_text") or ""),
+                    " ".join(_normalize_string_list(fact.get("evidence_texts"))),
+                    " ".join(_normalize_string_list(fact.get("numbers_and_dates"))),
+                    " ".join(_normalize_string_list(fact.get("numbers"))),
+                ]
+            )
+            for fact in related_facts
+        )
         missing_numbers = [
             number
             for number in _number_tokens(line)
@@ -1976,7 +2206,7 @@ def _validate_fact_id_summary(
         line_items = _sync_summary_line_item_texts(line_items, cleaned_lines)
 
     reduced_lines, repetition_actions = normalize_subject_predicate_consistency(
-        lines=_normalize_string_list(result.get("fact_summary"))[:3],
+        lines=_normalize_string_list(result.get("fact_summary"))[:_SUMMARY_LINE_MAX],
         line_items=line_items,
         fact_by_id=fact_by_id,
         main_company=main_company,
@@ -1989,14 +2219,14 @@ def _validate_fact_id_summary(
         actions.extend(repetition_actions)
 
     company_start_count = _company_name_start_count(
-        _normalize_string_list(result.get("fact_summary"))[:3],
+        _normalize_string_list(result.get("fact_summary"))[:_SUMMARY_LINE_MAX],
         main_company,
     )
     if company_start_count >= 2:
         warnings.append(f"company_name_start_count={company_start_count}")
         actions.append("company_name_repetition_detected")
-    if company_start_count == 3:
-        warnings.append("summary_lines 3문장이 모두 company_name으로 시작함")
+    if lines and company_start_count == len(lines):
+        warnings.append("summary_lines 모든 문장이 company_name으로 시작함")
 
     bad_korean = [line for line in result["fact_summary"] if _has_bad_korean_join(line)]
     if bad_korean:
@@ -2256,7 +2486,7 @@ def _selected_facts_by_line(
             for fact_id in selected_fact_ids.get(str(index), [])
             if fact_id in fact_by_id
         ]
-        for index in (1, 2, 3)
+        for index in range(1, _SUMMARY_LINE_MAX + 1)
     }
 
 
