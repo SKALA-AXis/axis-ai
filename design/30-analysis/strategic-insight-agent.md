@@ -119,7 +119,7 @@ IntegrationAgent
 → StrategicInsightAgent
 → validate
 → AnalysisPackage
-→ CardNewsAgent
+→ CardNewsComposer
 ```
 
 기존 `StrategicAnalyzer`와 `ImplicationAgent`는 LLM 실패 또는 legacy 테스트 주입 시의

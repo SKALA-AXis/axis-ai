@@ -20,6 +20,7 @@ class BriefingGenerateRequest(BaseModel):
         anchor_date: 기간 계산 기준 날짜. daily 는 해당 일, weekly 는 포함 주,
             monthly 는 포함 월로 계산한다. ``YYYY-MM`` 문자열도 월간 anchor 로 허용한다.
         card_ids: 직접 선택한 카드 id. 들어와도 기간 밖 카드는 제외된다.
+        integrated_issue_ids: 직접 선택한 integrated issue id. 들어와도 기간 밖 항목은 제외된다.
         peer_ids: 경쟁사 필터.
         sectors: 섹터 필터.
         requested_by_user_id: 요청 사용자 id.
@@ -36,6 +37,7 @@ class BriefingGenerateRequest(BaseModel):
     briefing_type: Literal["daily", "weekly", "monthly"] = Field(default="daily")
     anchor_date: Optional[str] = Field(default=None)
     card_ids: Optional[list[str]] = Field(default=None)
+    integrated_issue_ids: Optional[list[str]] = Field(default=None)
     peer_ids: Optional[list[str]] = Field(default=None)
     sectors: Optional[list[str]] = Field(default=None)
     requested_by_user_id: Optional[int] = Field(default=None)
@@ -63,13 +65,26 @@ class BriefingGenerateResponse(BaseModel):
     date_from: Any = None
     date_to: Any = None
     period_label: str = ""
+    created_at: Any = None
     status: str = ""
     briefing_lead: str = ""
     key_summary: str = ""
+    source_card_ids: list[str] = Field(default_factory=list)
+    executive_summary: str = ""
+    immediate_trends: list[dict[str, Any]] = Field(default_factory=list)
+    watch_trends: list[dict[str, Any]] = Field(default_factory=list)
+    sections: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_summary: list[str] = Field(default_factory=list)
+    dailySnapshot: dict[str, Any] = Field(default_factory=dict)  # noqa: N815
+    weeklySnapshot: dict[str, Any] = Field(default_factory=dict)  # noqa: N815
+    evidenceSources: list[str] = Field(default_factory=list)  # noqa: N815
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    frontend_briefings: dict[str, Any] = Field(default_factory=dict)
     selected_cards: list[dict[str, Any]] = Field(default_factory=list)
     key_change_cards: list[dict[str, Any]] = Field(default_factory=list)
     interpretation_flow: dict[str, Any] = Field(default_factory=dict)
     related_card_ids: list[str] = Field(default_factory=list)
+    source_integrated_issue_ids: list[str] = Field(default_factory=list)
     primary_card_news_id: Optional[str] = None
     hidden_details: list[dict[str, Any]] = Field(default_factory=list)
     briefing_basis: dict[str, Any] = Field(default_factory=dict)

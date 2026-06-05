@@ -35,8 +35,6 @@ from typing import Annotated, Any, Callable, TypedDict, cast
 from langgraph.graph import END, StateGraph
 from langgraph.types import RetryPolicy
 
-from src.agents.card_news_agent import CardNewsAgent
-from src.agents.evaluator_agent import EvaluatorAgent
 from src.agents.implication_agent import ImplicationAgent
 from src.agents.integration_agent import IntegrationAgent
 from src.agents.strategic_analyzer import StrategicAnalyzer
@@ -53,7 +51,10 @@ from src.analysis.models import (
     ProfileContext,
     ValidationReport,
 )
+from src.composers.card_news_composer import CardNewsComposer
 from src.db.article_store import save_card_news, save_pipeline_log
+from src.db.integrated_issues import save_integrated_issue
+from src.evaluators.evaluator import Evaluator
 from src.services.agent_output_validation import confidence_in_range
 from src.services.analysis_context_builder import AnalysisContextBuilder
 from src.services.profile_context_loader import ProfileContextLoader
@@ -161,11 +162,10 @@ class SupervisorDeps:
         analyzer: StrategicAnalyzer | None = None,
         implication_agent: ImplicationAgent | None = None,
         strategic_insight_agent: StrategicInsightAgent | Any | None = None,
-        evaluator: EvaluatorAgent | None = None,
+        evaluator: Evaluator | None = None,
         context_builder: AnalysisContextBuilder | None = None,
         profile_context_loader: ProfileContextLoader | None = None,
-        card_news_agent: CardNewsAgent | None = None,
-        card_news_composer: Any | None = None,
+        card_news_composer: CardNewsComposer | Any | None = None,
         implication_fallback: ImplicationGenerator | None = None,
     ) -> None:
         legacy_agents_supplied = analyzer is not None or implication_agent is not None
@@ -183,10 +183,10 @@ class SupervisorDeps:
                 fallback_implication_agent=self.implication_agent,
             )
         )
-        self.evaluator = evaluator or EvaluatorAgent()
+        self.evaluator = evaluator or Evaluator()
         self.context_builder = context_builder or AnalysisContextBuilder()
         self.profile_context_loader = profile_context_loader or ProfileContextLoader()
-        self.card_news_agent = card_news_agent or card_news_composer or CardNewsAgent()
+        self.card_news_composer = card_news_composer or CardNewsComposer()
 
 
 class _LegacyStrategicInsightAdapter:
@@ -350,25 +350,44 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
     def assemble_node(state: SupervisorState) -> SupervisorState:
         bundle = state["input_bundle"]
         validation = state.get("validation")
+        integrated_issue = dict(state.get("integrated_issue") or {})
+        evidence_payload = _evidence_payload_from_state(
+            {**state, "integrated_issue": integrated_issue}
+        )
+        integrated_issue_id = save_integrated_issue(integrated_issue, input_bundle=bundle)
+        if integrated_issue_id:
+            integrated_issue["integrated_issue_id"] = integrated_issue_id
+            evidence_payload["integrated_issue_id"] = integrated_issue_id
+            evidence_payload["integrated_issue_storage"] = "available"
+            evidence_payload["analysis_package"]["integrated_issue_id"] = integrated_issue_id
+            evidence_payload["analysis_package"]["integrated_issue"] = integrated_issue
+        else:
+            evidence_payload["integrated_issue_storage"] = "unavailable"
+            provenance = evidence_payload.setdefault("provenance", {})
+            if isinstance(provenance, dict):
+                provenance["integrated_issue_storage"] = "unavailable"
         package = AnalysisPackage(
             bundle_id=bundle.bundle_id,
             input_bundle=bundle,
-            integrated_issue=state.get("integrated_issue") or {},
+            integrated_issue=integrated_issue,
             analysis=state.get("analysis") or {},
             implication=state.get("implication") or {},
             sources=list(bundle.sources or []),
             validation=validation.to_dict() if validation is not None else {},
-            evidence_payload=_evidence_payload_from_state(state),
+            evidence_payload=evidence_payload,
             classification=state.get("classification") or {},
         )
-        return cast(SupervisorState, {**state, "analysis_package": package})
+        return cast(
+            SupervisorState,
+            {**state, "integrated_issue": integrated_issue, "analysis_package": package},
+        )
 
     @_logged_step("card_writer")
     def card_writer_node(state: SupervisorState) -> SupervisorState:
         pkg = state.get("analysis_package")
         if pkg is None:
             return cast(SupervisorState, {**state, "card_news_id": None})
-        card = deps.card_news_agent.generate_from_analysis_package(
+        card = deps.card_news_composer.generate_from_analysis_package(
             pkg,
             classification=state.get("classification") or {},
         )
@@ -405,7 +424,17 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
             card["source_raw_article_ids"] = ids
         # evidence_payload — supervisor 가 만든 in-memory payload.
         if not card.get("evidence_payload"):
-            card["evidence_payload"] = _evidence_payload_from_state(state)
+            package_payload = getattr(pkg, "evidence_payload", None)
+            card["evidence_payload"] = (
+                dict(package_payload)
+                if isinstance(package_payload, dict) and package_payload
+                else _evidence_payload_from_state(state)
+            )
+        integrated_issue_id = _nested_get(card.get("evidence_payload"), "integrated_issue_id")
+        if not integrated_issue_id:
+            integrated_issue_id = _nested_get(state.get("integrated_issue"), "integrated_issue_id")
+        if integrated_issue_id and not card.get("integrated_issue_id"):
+            card["integrated_issue_id"] = str(integrated_issue_id)
         # W5-1 rule-based metric.
         validation = state.get("validation")
         if validation is not None and validation.metrics is not None:
@@ -642,6 +671,15 @@ def _stringify(value: Any) -> str:
     if isinstance(value, dict):
         return " ".join(_stringify(v) for v in value.values())
     return str(value)
+
+
+def _nested_get(value: object, *keys: str) -> object:
+    current = value
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
 
 
 def _evidence_payload_from_state(state: SupervisorState) -> dict[str, Any]:

@@ -169,10 +169,14 @@ async def generate_briefing(request: BriefingGenerateRequest) -> BriefingGenerat
     from src.agents.briefing_generation_agent import BriefingGenerationAgent
 
     log.info(
-        "Briefing 요청 | type=%s anchor=%s cards=%d peers=%d sectors=%d save=%s",
+        (
+            "Briefing 요청 | type=%s anchor=%s cards=%d integrated_issues=%d "
+            "peers=%d sectors=%d save=%s"
+        ),
         request.briefing_type,
         request.anchor_date,
         len(request.card_ids or []),
+        len(request.integrated_issue_ids or []),
         len(request.peer_ids or []),
         len(request.sectors or []),
         request.save,
@@ -182,6 +186,7 @@ async def generate_briefing(request: BriefingGenerateRequest) -> BriefingGenerat
             briefing_type=request.briefing_type,
             anchor_date=request.anchor_date,
             card_ids=request.card_ids,
+            integrated_issue_ids=request.integrated_issue_ids,
             peer_ids=request.peer_ids,
             sectors=request.sectors,
             requested_by_user_id=request.requested_by_user_id,
@@ -415,9 +420,14 @@ async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
     """
     from src.agents.mixer_analysis_agent import MixerAnalysisAgent
 
-    log.info("Mixer 요청 | card_ids=%s", request.card_ids)
+    log.info(
+        "Mixer 요청 | card_ids=%s integrated_issue_ids=%s",
+        request.card_ids,
+        request.integrated_issue_ids,
+    )
     result = await MixerAnalysisAgent().analyze(
         card_ids=request.card_ids,
+        integrated_issue_ids=request.integrated_issue_ids,
         ratios=request.ratios,
         user_context=request.user_context,
     )

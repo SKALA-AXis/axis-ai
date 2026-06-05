@@ -55,6 +55,7 @@ _LOAD_SQL = text("""
       )
       AND (:collected_since IS NULL OR ra.collected_at >= CAST(:collected_since AS timestamptz))
       AND (:published_since IS NULL OR ra.published_at >= CAST(:published_since AS timestamptz))
+      AND (:published_until IS NULL OR ra.published_at < CAST(:published_until AS timestamptz))
       AND (
           :crawl_run_id IS NULL
           OR EXISTS (
@@ -137,6 +138,7 @@ class PreprocessingService:
         trigger_type: str = "manual",
         collected_since: str | None = None,
         published_since: str | None = None,
+        published_until: str | None = None,
         crawl_run_id: str | None = None,
         limit: int = 500,
     ) -> PreprocessingResult:
@@ -174,6 +176,7 @@ class PreprocessingService:
                 limit=limit,
                 collected_since=collected_since,
                 published_since=published_since,
+                published_until=published_until,
                 crawl_run_id=crawl_run_id,
             ),
             company=result["company"],
@@ -254,6 +257,7 @@ class PreprocessingService:
         limit: int = 500,
         collected_since: str | None = None,
         published_since: str | None = None,
+        published_until: str | None = None,
         crawl_run_id: str | None = None,
     ) -> list[int]:
         """처리 대기 중인 RAW article id를 DB에서 조회한다."""
@@ -275,6 +279,7 @@ class PreprocessingService:
                     "no_source_filter": len(source_type_filter) == 0,
                     "collected_since": collected_since,
                     "published_since": published_since,
+                    "published_until": published_until,
                     "crawl_run_id": crawl_run_id,
                     "limit": limit,
                 },
@@ -284,11 +289,12 @@ class PreprocessingService:
         log.info(
             (
                 "RAW 기사 로드 | company=%s collected_since=%s "
-                "published_since=%s crawl_run_id=%s count=%d"
+                "published_since=%s published_until=%s crawl_run_id=%s count=%d"
             ),
             company_filter,
             collected_since,
             published_since,
+            published_until,
             crawl_run_id,
             len(ids),
         )

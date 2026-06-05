@@ -718,6 +718,7 @@ def list_existing_news_cluster_candidates(
     company_keys: list[str] | None = None,
     exclude_article_ids: list[int] | None = None,
     lookback_hours: int = 168,
+    published_window: tuple[str, str] | None = None,
     limit: int = 200,
 ) -> list[dict[str, Any]]:
     """최근 뉴스 대표 클러스터 후보를 조회한다.
@@ -729,6 +730,7 @@ def list_existing_news_cluster_candidates(
     limit = max(1, min(limit, 1000))
     company_filter = bool(company_keys)
     exclude_ids = exclude_article_ids or []
+    published_since, published_until = published_window or (None, None)
 
     query = text("""
         SELECT
@@ -770,7 +772,20 @@ def list_existing_news_cluster_candidates(
           AND r.is_representative = true
           AND r.cluster_id IS NOT NULL
           AND r.processing_status IN ('PROCESSED', 'CLASSIFIED')
-          AND r.collected_at >= NOW() - (:lookback_hours * INTERVAL '1 hour')
+          AND (
+              (
+                  :published_since IS NOT NULL
+                  AND r.published_at >= CAST(:published_since AS timestamptz)
+                  AND (
+                      :published_until IS NULL
+                      OR r.published_at < CAST(:published_until AS timestamptz)
+                  )
+              )
+              OR (
+                  :published_since IS NULL
+                  AND r.collected_at >= NOW() - (:lookback_hours * INTERVAL '1 hour')
+              )
+          )
           AND (NOT :company_filter OR r.company ?| :company_keys)
           AND (
               cardinality(CAST(:exclude_article_ids AS bigint[])) = 0
@@ -796,6 +811,8 @@ def list_existing_news_cluster_candidates(
                 "company_keys": company_keys or [""],
                 "exclude_article_ids": exclude_ids,
                 "lookback_hours": lookback_hours,
+                "published_since": published_since,
+                "published_until": published_until,
                 "limit": limit,
             },
         ).fetchall()
@@ -1086,7 +1103,11 @@ def update_cluster(
     cluster_id: int,
     is_representative: bool,
 ) -> None:
-    """cluster_id, is_representative, processing_status를 업데이트한다."""
+    """cluster_id, is_representative를 업데이트한다.
+
+    CLASSIFIED 상태의 기사를 cluster-only로 다시 묶을 때 분류 상태가
+    PROCESSED로 되돌아가지 않도록 기존 CLASSIFIED는 유지한다.
+    """
     status = "PROCESSED"
     with SessionLocal() as db:
         db.execute(
@@ -1094,7 +1115,10 @@ def update_cluster(
                 UPDATE raw_articles
                 SET cluster_id = :cluster_id,
                     is_representative = :is_rep,
-                    processing_status = :status
+                    processing_status = CASE
+                        WHEN processing_status = 'CLASSIFIED' THEN 'CLASSIFIED'
+                        ELSE :status
+                    END
                 WHERE id = :id
             """),
             {
@@ -1142,6 +1166,49 @@ def update_classification(
 # `source_raw_article_ids` / `evidence_payload` / `card_schema_version` /
 # `evaluation_payload`) 을 INSERT 시점에 한 번에 채운다.
 _INSERT_CARD_NEWS_V2 = text("""
+    INSERT INTO card_news (
+        id, company, cluster_id, title, summary_lines,
+        event_type, importance, importance_score,
+        implication, sources, validation_pass, validation_sc_score,
+        peer_company_id, primary_keyword_category, integrated_issue_id, source_raw_article_ids,
+        keyword_categories, evidence_payload, source_articles,
+        card_schema_version, evaluation_payload
+    ) VALUES (
+        :id, :company, :cluster_id, :title, :summary_lines,
+        :event_type, :importance, :importance_score,
+        CAST(:implication AS jsonb), CAST(:sources AS jsonb),
+        :validation_pass, :validation_sc_score,
+        :peer_company_id, :primary_keyword_category, CAST(:integrated_issue_id AS uuid),
+        CAST(:source_raw_article_ids AS bigint[]),
+        CAST(:keyword_categories AS jsonb),
+        CAST(:evidence_payload AS jsonb),
+        CAST(:source_articles AS jsonb),
+        :card_schema_version,
+        CAST(:evaluation_payload AS jsonb)
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        implication = CAST(:implication AS jsonb),
+        validation_pass = :validation_pass,
+        validation_sc_score = :validation_sc_score,
+        peer_company_id = COALESCE(EXCLUDED.peer_company_id, card_news.peer_company_id),
+        primary_keyword_category = COALESCE(
+            EXCLUDED.primary_keyword_category, card_news.primary_keyword_category
+        ),
+        integrated_issue_id = COALESCE(EXCLUDED.integrated_issue_id, card_news.integrated_issue_id),
+        source_raw_article_ids = COALESCE(
+            EXCLUDED.source_raw_article_ids, card_news.source_raw_article_ids
+        ),
+        keyword_categories = COALESCE(EXCLUDED.keyword_categories, card_news.keyword_categories),
+        evidence_payload = COALESCE(EXCLUDED.evidence_payload, card_news.evidence_payload),
+        source_articles = COALESCE(EXCLUDED.source_articles, card_news.source_articles),
+        card_schema_version = EXCLUDED.card_schema_version,
+        evaluation_payload =
+            COALESCE(card_news.evaluation_payload, '{}'::jsonb)
+            || COALESCE(EXCLUDED.evaluation_payload, '{}'::jsonb)
+    RETURNING id
+""")
+
+_INSERT_CARD_NEWS_V2_WITHOUT_INTEGRATED_ISSUE = text("""
     INSERT INTO card_news (
         id, company, cluster_id, title, summary_lines,
         event_type, importance, importance_score,
@@ -1238,10 +1305,22 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
             if not _is_undefined_column_error(exc):
                 raise
             log.info(
-                "card_news v2 INSERT 실패 (v33 미적용) → v1 fallback 사용 | id=%s",
+                (
+                    "card_news v2 INSERT 실패 (V40 integrated_issue_id 미적용 가능) "
+                    "→ legacy v2 재시도 | id=%s"
+                ),
                 card.get("id"),
             )
-            card_id = _execute_v1_fallback(card_id=card["id"], params=params)
+            try:
+                card_id = _execute_v2_without_integrated_issue(card_id=card["id"], params=params)
+            except Exception as legacy_exc:  # noqa: BLE001
+                if not _is_undefined_column_error(legacy_exc):
+                    raise
+                log.info(
+                    "card_news legacy v2 INSERT 실패 (v33 미적용) → v1 fallback 사용 | id=%s",
+                    card.get("id"),
+                )
+                card_id = _execute_v1_fallback(card_id=card["id"], params=params)
         if card_id:
             _sync_card_news_articles(
                 card_id=card_id,
@@ -1261,6 +1340,19 @@ def _execute_v2_insert(*, card_id: str, params: dict[str, Any]) -> Optional[str]
         db.commit()
         if row:
             log.info("카드 뉴스 저장 완료 (v2) | id=%s", card_id)
+            return card_id
+    return None
+
+
+def _execute_v2_without_integrated_issue(*, card_id: str, params: dict[str, Any]) -> Optional[str]:
+    legacy_params = dict(params)
+    legacy_params.pop("integrated_issue_id", None)
+    with SessionLocal() as db:
+        result = db.execute(_INSERT_CARD_NEWS_V2_WITHOUT_INTEGRATED_ISSUE, legacy_params)
+        row = result.fetchone()
+        db.commit()
+        if row:
+            log.info("카드 뉴스 저장 완료 (v2 legacy no integrated_issue_id) | id=%s", card_id)
             return card_id
     return None
 
@@ -1327,6 +1419,7 @@ def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
         "validation_sc_score": card.get("validation", {}).get("sc_score", 0.0),
         "peer_company_id": _resolve_peer_company_id(card),
         "primary_keyword_category": card.get("primary_keyword_category") or card.get("sector"),
+        "integrated_issue_id": _resolve_integrated_issue_id(card, evidence_payload),
         "source_raw_article_ids": source_ids,
         "keyword_categories": json.dumps(keyword_categories, ensure_ascii=False),
         "evidence_payload": json.dumps(evidence_payload, ensure_ascii=False),
@@ -1334,6 +1427,22 @@ def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
         "card_schema_version": str(card.get("card_schema_version") or "v2"),
         "evaluation_payload": json.dumps(evaluation_payload, ensure_ascii=False),
     }
+
+
+def _resolve_integrated_issue_id(
+    card: dict[str, Any], evidence_payload: dict[str, Any]
+) -> Optional[str]:
+    for value in (
+        card.get("integrated_issue_id"),
+        evidence_payload.get("integrated_issue_id"),
+        (evidence_payload.get("analysis_package") or {}).get("integrated_issue_id")
+        if isinstance(evidence_payload.get("analysis_package"), dict)
+        else None,
+    ):
+        text_value = str(value or "").strip()
+        if text_value:
+            return text_value
+    return None
 
 
 def _sync_card_news_articles(

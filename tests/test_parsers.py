@@ -1337,6 +1337,326 @@ def test_ir_parser_repairs_scrambled_posco_dx_hierarchical_header() -> None:
     assert revenue[0]["value_krwbn"] == 2729
 
 
+def test_ir_parser_repairs_posco_dx_appendix_income_statement_header() -> None:
+    article = RawArticle(
+        url="https://example.com/posco-dx-ir-1q26.pdf",
+        title="포스코DX 2026년 1분기 IR",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 4, 30),
+        peer_id="posco_dx",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2026, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 3,
+                    "blocks": [
+                        {"text": "’26.1Q 경영실적 종합"},
+                        {
+                            "text": (
+                                "’26 년 1Q 연결수주 2,671 억원(YoY +31.0%), "
+                                "매출 2,415 억원(YoY △18.6%)기록"
+                            )
+                        },
+                        {"text": "영업이익’25.4Q 일시적자에서’26.1Q 흑자전환"},
+                        {"text": "영업이익률 △84.0%"},
+                        {"text": "’25.1Q ’25.2Q ’25.3Q ’25.4Q ’26.1Q"},
+                        {"text": "매출 △18.6%"},
+                        {"text": "2,968 2,729 2,671 2,608 2,447 2,415"},
+                    ],
+                },
+                {
+                    "page": 7,
+                    "blocks": [
+                        {"text": "01. 경영실적 ┃ 02. 사업부문별 실적"},
+                        {"text": "[별첨] 연결재무제표 _손익"},
+                        {"text": "(단위: 억원)"},
+                        {"text": "2025 2026"},
+                        {"text": "구 분 2023 2024 YoY"},
+                        {"text": "1Q 2Q 3Q 4Q 1Q"},
+                        {"text": "매 출 14,859 14,733 2,968 2,729 2,447 2,608 10,752 2,415 △18.6%"},
+                        {"text": "영업이익 1,106 1,090 229 171 217 △12 604 37 △84.0%"},
+                        {"text": "영업이익률 7.4% 7.4% 7.7% 6.3% 8.9% △0.5% 5.6% 1.5% △6.2%p"},
+                        {"text": "당기순이익 921 886 217 144 175 △10 526 40 △81.5%"},
+                    ],
+                },
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    op_candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("type") == "operating_profit"
+    ]
+
+    assert parsed["period"] == "2026Q1"
+    assert parsed["operating_profit_krwbn"] == 37
+    assert not any(candidate.get("value_krwbn") == 26.1 for candidate in op_candidates)
+    assert next(c for c in op_candidates if c["period"] == "2025Q4")["value_krwbn"] == -12
+    assert next(c for c in op_candidates if c["period"] == "2025")["value_krwbn"] == 604
+    assert next(c for c in op_candidates if c["period"] == "2026Q1")["value_krwbn"] == 37
+
+
+def test_ir_parser_repairs_posco_dx_annual_appendix_income_statement_header() -> None:
+    article = RawArticle(
+        url="https://example.com/posco-dx-ir-2025.pdf",
+        title="포스코DX 2025년 경영실적",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2026, 1, 29),
+        peer_id="posco_dx",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2025, "quarter": 4},
+            "pdf_page_blocks": [
+                {
+                    "page": 8,
+                    "blocks": [
+                        {"text": "01. 경영실적 ┃ 02. 사업부문별 실적"},
+                        {"text": "[별첨] 연결재무제표 _손익"},
+                        {"text": "(단위: 억원)"},
+                        {"text": "2024 2025"},
+                        {"text": "구 분 2023 YoY"},
+                        {"text": "1Q 2Q 3Q 4Q 1Q 2Q 3Q 4Q"},
+                        {
+                            "text": "매 출 14,859 4,401 3,530 3,186 3,616 14,733 "
+                            "2,968 2,729 2,447 2,608 10,752 △27.0%"
+                        },
+                        {
+                            "text": "영업이익 1,106 352 243 263 232 1,090 "
+                            "229 171 217 △12 6,04 △44.6%"
+                        },
+                        {
+                            "text": "영업이익률 7.4% 8.0% 6.9% 8.3% 6.4% 7.4% "
+                            "7.7% 6.3% 8.9% △0.5% 5.6% △1.8%p"
+                        },
+                        {"text": "당기순이익 921 257 204 217 208 886 217 144 175 △10 526 △40.6%"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("metric_scope") == "company_total"
+    ]
+    op_candidates = [
+        candidate for candidate in candidates if candidate.get("type") == "operating_profit"
+    ]
+    revenue_candidates = [
+        candidate for candidate in candidates if candidate.get("type") == "revenue_total"
+    ]
+    margin_candidates = [
+        candidate for candidate in candidates if candidate.get("type") == "operating_margin"
+    ]
+    net_income_candidates = [
+        candidate for candidate in candidates if candidate.get("type") == "net_income"
+    ]
+
+    assert parsed["period"] == "2025"
+    assert next(c for c in revenue_candidates if c["period"] == "2025Q4")["value_krwbn"] == 2608
+    assert next(c for c in revenue_candidates if c["period"] == "2025")["value_krwbn"] == 10752
+    assert next(c for c in op_candidates if c["period"] == "2025Q4")["value_krwbn"] == -12
+    assert next(c for c in op_candidates if c["period"] == "2025")["value_krwbn"] == 604
+    assert next(c for c in margin_candidates if c["period"] == "2025Q4")["value_pct"] == -0.5
+    assert next(c for c in margin_candidates if c["period"] == "2025")["value_pct"] == 5.6
+    assert next(c for c in net_income_candidates if c["period"] == "2025Q4")["value_krwbn"] == -10
+    assert next(c for c in net_income_candidates if c["period"] == "2025")["value_krwbn"] == 526
+
+
+def test_ir_parser_repairs_posco_dx_hidden_annual_q1_header() -> None:
+    article = RawArticle(
+        url="https://example.com/posco-dx-ir-1q25.pdf",
+        title="포스코DX 2025년 1분기 IR",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2025, 5, 1),
+        peer_id="posco_dx",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2025, "quarter": 1},
+            "pdf_page_blocks": [
+                {
+                    "page": 9,
+                    "blocks": [
+                        {"text": "[별첨] 연결재무제표_손익"},
+                        {"text": "(단위: 억원)"},
+                        {"text": "2023 2024 2025"},
+                        {"text": "구 분 2022"},
+                        {"text": "1Q 1Q 4Q 1Q QoQ YoY"},
+                        {
+                            "text": (
+                                "매 출 11,527 4,066 14,859 4,401 3,616 14,733 2,968 △17.9% △32.6%"
+                            )
+                        },
+                        {"text": "영업이익 647 299 1,106 352 232 1,090 229 △1.3% △35.0%"},
+                        {"text": "영업이익률 5.6% 7.4% 7.4% 8.0% 6.4% 7.4% 7.7% +1.3%p △0.3%p"},
+                        {"text": "당기순이익 459 256 921 257 208 886 217 +4.2% △15.8%"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("metric_scope") == "company_total"
+        and candidate.get("period") == "2025Q1"
+    ]
+
+    assert parsed["period"] == "2025Q1"
+    assert next(c for c in candidates if c["type"] == "revenue_total")["value_krwbn"] == 2968
+    assert next(c for c in candidates if c["type"] == "operating_profit")["value_krwbn"] == 229
+    assert next(c for c in candidates if c["type"] == "operating_margin")["value_pct"] == 7.7
+    assert next(c for c in candidates if c["type"] == "net_income")["value_krwbn"] == 217
+
+
+def test_ir_parser_repairs_posco_dx_compact_quarter_header() -> None:
+    article = RawArticle(
+        url="https://example.com/posco-dx-ir-3q24.pdf",
+        title="포스코DX 2024년 3분기 IR",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2024, 11, 1),
+        peer_id="posco_dx",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2024, "quarter": 3},
+            "pdf_page_blocks": [
+                {
+                    "page": 3,
+                    "blocks": [
+                        {"text": "2022 2023 2024"},
+                        {"text": "구 분(억원)"},
+                        {"text": "3Q 3Q 2Q 3Q QoQ YoY"},
+                        {"text": "매 출 2,395 3,545 3,530 3,186 △9.8% △10.1%"},
+                        {"text": "영업이익 170 322 243 263 +8.0% △18.3%"},
+                        {"text": "영업이익률 7.1% 9.1% 6.9% 8.3% +1.4%p △0.8%p"},
+                        {"text": "당기순이익 149 263 204 217 6.3% △17.5%"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("metric_scope") == "company_total"
+        and candidate.get("period") == "2024Q3"
+    ]
+
+    assert parsed["period"] == "2024Q3"
+    assert next(c for c in candidates if c["type"] == "revenue_total")["value_krwbn"] == 3186
+    assert next(c for c in candidates if c["type"] == "operating_profit")["value_krwbn"] == 263
+    assert next(c for c in candidates if c["type"] == "operating_margin")["value_pct"] == 8.3
+    assert next(c for c in candidates if c["type"] == "net_income")["value_krwbn"] == 217
+
+
+def test_ir_parser_prefers_annual_result_title_over_download_date() -> None:
+    article = RawArticle(
+        url="https://example.com/posco-dx-ir-2024.pdf",
+        title="2024년 경영실적 출처 포스코DX 2024년 경영실적 다운로드 2025.02.03",
+        content="[PAGE 1]\n2024.12.04\n2024년 경영실적",
+        source_name="ir_pdf",
+        published_at=datetime(2025, 2, 3),
+        peer_id="posco_dx",
+        source_type="ir",
+        content_type="pdf",
+    )
+
+    parsed = IRParser().parse_article(article)
+
+    assert parsed["period"] == "2024"
+
+
+def test_ir_parser_repairs_posco_dx_full_year_quarter_history_header() -> None:
+    article = RawArticle(
+        url="https://example.com/posco-dx-ir-2023.pdf",
+        title="포스코DX 2023년 경영실적",
+        content="",
+        source_name="ir_pdf",
+        published_at=datetime(2024, 1, 31),
+        peer_id="posco_dx",
+        source_type="ir",
+        content_type="pdf",
+        extra={
+            "date_info": {"year": 2023},
+            "pdf_page_blocks": [
+                {
+                    "page": 14,
+                    "blocks": [
+                        {"text": "[별첨] 연결재무제표_손익"},
+                        {"text": "(단위: 억원)"},
+                        {"text": "2021 년 2022 년 2023 년"},
+                        {"text": "구 분"},
+                        {"text": "1Q 2Q 3Q 4Q 1Q 2Q 3Q 4Q 1Q 2Q 3Q 4Q"},
+                        {
+                            "text": (
+                                "매 출 1,917 1,856 2,140 2,779 8,693 2,329 "
+                                "2,381 2,395 4,422 11,527 4,066 3,691 "
+                                "3,545 3,557 14,859"
+                            )
+                        },
+                        {
+                            "text": (
+                                "영업이익 -136 -212 -127 279 -195 180 145 170 "
+                                "153 647 299 343 322 141 1,106"
+                            )
+                        },
+                        {"text": "영업"},
+                        {
+                            "text": (
+                                "-7.1%-11.4% -5.9% 10.0% -2.2% 7.7% 6.1% "
+                                "7.1% 3.5% 5.6% 7.4% 9.3% 9.1% 4.0% 7.4%"
+                            )
+                        },
+                        {"text": "이익률"},
+                        {
+                            "text": (
+                                "당기순이익 -140 -92 -92 186 -139 152 124 149 "
+                                "36 459 256 283 263 119 921"
+                            )
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+
+    parsed = IRParser().parse_article(article)
+    candidates = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate.get("source") == "ir_table_matrix"
+        and candidate.get("metric_scope") == "company_total"
+        and candidate.get("period") == "2023"
+    ]
+
+    assert parsed["period"] == "2023"
+    assert next(c for c in candidates if c["type"] == "revenue_total")["value_krwbn"] == 14859
+    assert next(c for c in candidates if c["type"] == "operating_profit")["value_krwbn"] == 1106
+    assert next(c for c in candidates if c["type"] == "operating_margin")["value_pct"] == 7.4
+    assert next(c for c in candidates if c["type"] == "net_income")["value_krwbn"] == 921
+
+
 def test_ir_parser_marks_business_segment_metrics() -> None:
     article = RawArticle(
         url="https://example.com/ir.pdf",
@@ -2095,8 +2415,9 @@ def test_dart_parser_parses_dart_statement_table_amounts() -> None:
 
     parsed = DartParser().parse_article(article)
 
-    assert parsed["period"] == "2025Q4"
+    assert parsed["period"] == "2025"
     assert parsed["period_type"] == "annual"
+    assert parsed["period_quarter"] is None
     assert parsed["revenue_total_krwbn"] == 139298.68497711
     assert parsed["operating_profit_krwbn"] == 9571.02744609
 
@@ -2195,8 +2516,8 @@ def test_dart_parser_classifies_and_normalizes_financial_statement_tables() -> N
     rows_by_metric = {row["metric_key"]: row for row in statement["rows"]}
     assert rows_by_metric["revenue_total"]["current_value_krwbn"] == 139298.68
     assert [value["period"] for value in rows_by_metric["revenue_total"]["values"]] == [
-        "2025Q4",
-        "2024Q4",
+        "2025",
+        "2024",
     ]
     assert rows_by_metric["revenue_total"]["values"][1]["is_historical"] is True
     assert rows_by_metric["operating_profit"]["current_value_krwbn"] == 9571.02
@@ -2414,7 +2735,7 @@ def test_dart_parser_enriches_topic_chunks_for_agent_analysis() -> None:
 
     chunk = parsed["document_chunks"][0]
     assert chunk["peer_id"] == "test_peer"
-    assert chunk["period"] == "2025Q4"
+    assert chunk["period"] == "2025"
     assert chunk["rcept_no"] == "20260310000003"
     assert "생성형 AI" in chunk["matched_keywords"]
     assert any(
