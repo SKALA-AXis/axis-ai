@@ -47,9 +47,7 @@ BriefingType = Literal["daily", "weekly", "monthly"]
 
 KST = ZoneInfo("Asia/Seoul")
 _PROMPT_VERSION = "briefing-generation-v0.3-period-briefing"
-_BRIEFING_SYNTHESIS_PROMPT_VERSION = (
-    "briefing-synthesis-v0.4-integrated-issue-frontend-contract"
-)
+_BRIEFING_SYNTHESIS_PROMPT_VERSION = "briefing-synthesis-v0.4-integrated-issue-frontend-contract"
 _DISPLAY_COPY_PROMPT_VERSION = "briefing-display-copy-v0.24-patterned-llm-guarded"
 _LLM_MODEL = os.getenv("BRIEFING_LLM_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o"
 _DEFAULT_LIMIT = 20
@@ -694,10 +692,9 @@ def _analysis_package_from_integrated_issue_row(
 ) -> dict[str, Any]:
     anchor_evidence = _json_dict(row.get("anchor_evidence_payload"))
     legacy_package = _json_dict(anchor_evidence.get("analysis_package"))
-    classification = (
-        _json_dict(legacy_package.get("classification"))
-        or _classification_from_integrated_issue_row(row, integrated_issue=integrated_issue)
-    )
+    classification = _json_dict(
+        legacy_package.get("classification")
+    ) or _classification_from_integrated_issue_row(row, integrated_issue=integrated_issue)
     analysis = _json_dict(legacy_package.get("analysis")) or _analysis_from_integrated_issue(
         row,
         integrated_issue=integrated_issue,
@@ -1624,9 +1621,7 @@ def _refine_briefing_basis_with_llm(
         except Exception as exc:  # pragma: no cover - external API safety net
             log.warning("Briefing basis synthesis revision failed | error=%s", exc)
         else:
-            revised = _parse_json_object(
-                getattr(revision_response, "content", revision_response)
-            )
+            revised = _parse_json_object(getattr(revision_response, "content", revision_response))
             if revised:
                 parsed = revised
         remaining_issues = _briefing_synthesis_quality_issues(parsed, selected_cards)
