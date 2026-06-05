@@ -14,6 +14,10 @@ from src.api.global_trends_schemas import GlobalTrendsRequest, GlobalTrendsRespo
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
 from src.api.link_verification_schemas import LinkVerificationRequest, LinkVerificationResponse
 from src.api.mixer_schemas import MixerAnalysisRequest, MixerAnalysisResponse
+from src.api.today_insight_schemas import (
+    TodayInsightGenerateRequest,
+    TodayInsightGenerateResponse,
+)
 from src.schemas import (
     BriefingContent,
     BriefingRequest,
@@ -386,6 +390,29 @@ async def gen_search(request: GenSearchRequest):
         sc_passed=False,
         sc_score=0.0,
     )
+
+
+@app.post("/today-insight/generate", response_model=TodayInsightGenerateResponse)
+async def generate_today_insight(
+    request: TodayInsightGenerateRequest,
+) -> TodayInsightGenerateResponse:
+    """Home dashboard Today's Insight 생성.
+
+    integrated_issues + card_news + profile context + prior today_insight_reports
+    JSON memory 를 묶어 오늘 달라진 점, 주요 신호, 관찰 포인트, 다음 판단, 근거와
+    출처를 UI-ready schema 로 반환한다.
+    """
+    from src.agents.today_insight_agent import TodayInsightAgent
+
+    log.info(
+        "TodayInsight 요청 | anchor=%s window=%s force=%s save=%s",
+        request.anchor_date,
+        request.window_days,
+        request.force_refresh,
+        request.save,
+    )
+    result = await TodayInsightAgent().generate(request)
+    return TodayInsightGenerateResponse.model_validate(result)
 
 
 @app.post("/insight/generate", response_model=InsightGenerateResponse)
