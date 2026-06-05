@@ -167,8 +167,7 @@ def test_mixer_accepts_integrated_issue_ids_and_exposes_sources(monkeypatch):
     assert all("모니터링" not in action for action in result["recommended_actions"])
     assert all(action.startswith("SK AX") for action in result["recommended_actions"])
     assert any(
-        "고객군" in action and "책임 조직" in action
-        for action in result["recommended_actions"]
+        "고객군" in action and "책임 조직" in action for action in result["recommended_actions"]
     )
     assert any(detail["use_case"] == "사업 우선순위" for detail in result["action_details"])
     response = MixerAnalysisResponse.model_validate(result)
@@ -177,7 +176,10 @@ def test_mixer_accepts_integrated_issue_ids_and_exposes_sources(monkeypatch):
         finding.pattern_type in {"convergent_strategy", "divergent_strategy", "acceleration_signal"}
         for finding in response.cross_card_findings
     )
-    assert response.reasoning_steps[0].phase == "synthesis"
+    reasoning_phases = [step.phase for step in response.reasoning_steps]
+    assert reasoning_phases[0] == "per_card"
+    assert "cross_card" in reasoning_phases
+    assert reasoning_phases[-1] == "synthesis"
 
 
 def test_mixer_card_ids_are_interpreted_as_analysis_units(monkeypatch):
