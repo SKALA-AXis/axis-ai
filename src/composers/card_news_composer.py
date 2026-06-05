@@ -25,6 +25,9 @@ _PROMPT_VERSION = "card-news-v1.0"
 _CARD_PROMPT_VERSION = "card-news-v1.0"
 _DEFAULT_COVER_IMAGE_URL = "/png.png"
 _DEFAULT_COVER_IMAGE_ALT = "카드뉴스 대표 이미지"
+_SUMMARY_LINE_MIN = 3
+_SUMMARY_LINE_MAX = 5
+_CARD_DETAIL_MAX = 5
 
 _FRONTEND_PEER_IDS = {
     "samsung_sds",
@@ -99,7 +102,7 @@ _ISSUE_CARD_PROMPT = """\
 
 ## 작성 규칙
 - 제목: 핵심 사실을 담은 한 문장 (40자 이내)
-- 3줄 요약: 반드시 3줄, 각 줄은 "1.", "2.", "3."으로 시작
+- 요약: 최소 3줄, 최대 5줄. 각 줄은 "1.", "2."처럼 순번으로 시작
 - 출처 목록: 사용한 기사의 title, source_name, url 포함
 
 ## 이벤트 타입 (하나만 선택, 가장 두드러진 성격 기준)
@@ -116,7 +119,7 @@ _ISSUE_CARD_PROMPT = """\
 다음 JSON 형식으로만 응답하세요 (추가 텍스트 금지):
 {{
   "title": "이슈 제목",
-  "summary_lines": ["1. ...", "2. ...", "3. ..."],
+  "summary_lines": ["1. ...", "2. ...", "3. ...", "4. ...", "5. ..."],
   "event_type": "tech",
   "sources": [
     {{"index": 1, "title": "...", "source_name": "...", "url": "...", "credibility_score": 0.0}}
@@ -521,7 +524,7 @@ def _attach_card_news_schema_fields(card: dict[str, Any]) -> None:
 def _numbered_summary_lines(value: Any) -> list[str]:
     lines = [str(item).strip() for item in _list_value(value) if str(item).strip()]
     numbered: list[str] = []
-    for index, line in enumerate(lines[:3], start=1):
+    for index, line in enumerate(lines[:_SUMMARY_LINE_MAX], start=1):
         prefix = f"{index}."
         numbered.append(line if line.startswith(prefix) else f"{prefix} {line}")
     return numbered
@@ -603,30 +606,87 @@ def _card_news_id(cluster_id: int | None, created_at: str) -> str:
 
 
 def _plain_summary_lines(summary: dict[str, Any]) -> list[str]:
-    lines = _list_string(summary.get("fact_summary"))[:3]
+    lines = _list_string(summary.get("fact_summary"))[:_SUMMARY_LINE_MAX]
     if lines:
-        return [_strip_number_prefix(line) for line in lines]
-    lines = _list_string(summary.get("summary_lines"))[:3]
+        return _display_summary_lines(lines, summary)
+    lines = _list_string(summary.get("summary_lines"))[:_SUMMARY_LINE_MAX]
     if lines:
-        return [_strip_number_prefix(line) for line in lines]
+        return _display_summary_lines(lines, summary)
     facts = [
         str(fact.get("fact") or "").strip()
         for fact in _list_dicts(summary.get("consolidated_facts"))
         if str(fact.get("fact") or "").strip()
-    ][:3]
+    ][:_SUMMARY_LINE_MAX]
     if facts:
-        return facts
+        return _display_summary_lines(facts, summary)
     integrated_text = str(summary.get("integrated_text") or "").strip()
     if integrated_text:
         split_lines = [
             item.strip()
             for item in re.split(r"(?<=[.!?。！？])\s+|(?<=다)\.\s*", integrated_text)
             if item.strip()
-        ][:3]
+        ][:_SUMMARY_LINE_MAX]
         if split_lines:
-            return split_lines
+            return _display_summary_lines(split_lines, summary)
     one_line = str(summary.get("one_line_summary") or "").strip()
-    return [one_line] if one_line else []
+    return _display_summary_lines([one_line], summary) if one_line else []
+
+
+def _display_summary_lines(lines: list[str], summary: dict[str, Any]) -> list[str]:
+    key_numbers = _key_number_display_map(summary)
+    cleaned: list[str] = []
+    for line in lines[:_SUMMARY_LINE_MAX]:
+        text = _summary_line_for_display(_strip_number_prefix(line), key_numbers)
+        if text and text not in cleaned:
+            cleaned.append(text)
+    return cleaned
+
+
+def _summary_line_for_display(line: str, key_numbers: dict[str, str]) -> str:
+    text = re.sub(r"\s+", " ", str(line or "")).strip()
+    if not text:
+        return ""
+    if text in key_numbers:
+        return key_numbers[text]
+    metric_match = re.fullmatch(
+        r"(?P<label>[가-힣A-Za-z&·/\s]+?)\s+(?P<value>-?\d+(?:\.\d+)?)",
+        text,
+    )
+    if metric_match:
+        label = re.sub(r"\s+", " ", metric_match.group("label")).strip()
+        value = _format_numeric_text(metric_match.group("value"))
+        lookup_key = f"{label} {metric_match.group('value')}"
+        if lookup_key in key_numbers:
+            return key_numbers[lookup_key]
+        if re.search(r"\b(YoY|QoQ)\b|증감|성장률|이익률|마진", label, re.IGNORECASE):
+            return f"{label} {value}%"
+        return f"{label} {value}"
+    return text
+
+
+def _key_number_display_map(summary: dict[str, Any]) -> dict[str, str]:
+    display: dict[str, str] = {}
+    for item in _list_dicts(summary.get("key_numbers")):
+        label = str(item.get("metric_label") or item.get("metric_name") or "").strip()
+        raw_value = str(item.get("value") or "").strip()
+        if not label or not raw_value:
+            continue
+        value = _format_numeric_text(raw_value)
+        unit = str(item.get("unit") or "").strip()
+        text = f"{label} {value}{unit}" if unit and not value.endswith(unit) else f"{label} {value}"
+        display[f"{label} {raw_value}"] = text
+        display[f"{label} {value}"] = text
+    return display
+
+
+def _format_numeric_text(value: str) -> str:
+    try:
+        number = float(str(value).replace(",", ""))
+    except ValueError:
+        return str(value)
+    if number.is_integer():
+        return f"{int(number):,}"
+    return f"{number:,.1f}".rstrip("0").rstrip(".")
 
 
 def _strip_number_prefix(value: str) -> str:
@@ -714,10 +774,18 @@ def mark_near_duplicate_card_candidates(cards: list[dict[str, Any]]) -> list[dic
 
 
 def _frontend_implication(analysis: dict[str, Any]) -> dict[str, Any]:
+    key_implications = _bounded_detail_lines(
+        [
+            analysis.get("analysis_summary"),
+            analysis.get("impact_reason"),
+            *(_list_string(analysis.get("strategic_meaning"))),
+        ]
+    )
     return {
         "why_important": str(analysis.get("analysis_summary") or "").strip(),
         "potential_impact": str(analysis.get("impact_reason") or "").strip(),
         "follow_up_questions": [],
+        "key_implications": key_implications,
         "suggested_actions": [],
         "confidence": _optional_float(analysis.get("confidence")),
     }
@@ -750,13 +818,24 @@ def _frontend_implication_from_result(
         skax.get("potential_impact") if isinstance(skax, dict) else None,
         fallback.get("potential_impact"),
     )
-    follow_up = _list_string(
-        implication.get("follow_up_questions") or implication.get("watch_points")
-    ) or _list_string(fallback.get("follow_up_questions"))
-    suggested_actions = (
-        _list_string(skax.get("recommended_actions") if isinstance(skax, dict) else None)
-        or _list_string(implication.get("recommended_actions"))
-        or _list_string(fallback.get("suggested_actions"))
+    peer_implications = _bounded_detail_items(
+        peer.get("peer_meaning") if isinstance(peer, dict) else None,
+        peer.get("capability_change") if isinstance(peer, dict) else None,
+    )
+    if not peer_implications:
+        peer_implications = _bounded_detail_items(fallback.get("key_implications"))
+    response_directions = _bounded_detail_items(
+        skax.get("recommended_actions") if isinstance(skax, dict) else None,
+        implication.get("recommended_actions"),
+        fallback.get("suggested_actions"),
+    )
+    follow_up = (
+        _bounded_detail_lines(implication.get("follow_up_questions"))
+        or _bounded_detail_lines(implication.get("watch_points"))
+        or _bounded_detail_lines(fallback.get("follow_up_questions"))
+    )
+    suggested_actions = response_directions or _actionize_detail_lines(
+        implication.get("watch_points"), implication.get("follow_up_questions")
     )
     confidence = (
         _optional_float(implication.get("confidence"))
@@ -766,6 +845,10 @@ def _frontend_implication_from_result(
     payload: dict[str, Any] = {
         "why_important": why_important,
         "potential_impact": potential_impact,
+        "key_implications": peer_implications,
+        "peer_implications": peer_implications,
+        "skax_implications": _bounded_detail_items(why_important, potential_impact),
+        "response_directions": suggested_actions,
         "follow_up_questions": follow_up,
         "suggested_actions": suggested_actions,
         "confidence": confidence,
@@ -821,6 +904,120 @@ def _first_text(*values: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _bounded_detail_lines(*values: Any) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for text in _detail_line_candidates(value):
+            key = _detail_line_key(text)
+            if text and key and key not in seen and not _is_near_duplicate_detail(text, lines):
+                lines.append(text)
+                seen.add(key)
+            if len(lines) >= _CARD_DETAIL_MAX:
+                return lines
+    return lines[:_CARD_DETAIL_MAX]
+
+
+def _bounded_detail_items(*values: Any) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for text in _list_string(value):
+            line = re.sub(r"\s+", " ", text).strip()
+            key = _detail_line_key(line)
+            if line and key and key not in seen and not _is_near_duplicate_detail(line, lines):
+                lines.append(line)
+                seen.add(key)
+            if len(lines) >= _CARD_DETAIL_MAX:
+                return lines
+    return lines[:_CARD_DETAIL_MAX]
+
+
+def _detail_line_key(text: str) -> str:
+    key = re.sub(r"[\s.。!?！？,，]+", "", str(text or "")).strip()
+    key = re.sub(r"(합니다|해야합니다|있습니다|됩니다|입니다)$", "", key)
+    return key
+
+
+def _is_near_duplicate_detail(text: str, existing_lines: list[str]) -> bool:
+    tokens = set(re.findall(r"[가-힣A-Za-z0-9&·+_-]{2,}", text or ""))
+    if not tokens:
+        return False
+    for line in existing_lines:
+        other = set(re.findall(r"[가-힣A-Za-z0-9&·+_-]{2,}", line or ""))
+        if not other:
+            continue
+        overlap = len(tokens & other) / max(1, min(len(tokens), len(other)))
+        if overlap >= 0.8:
+            return True
+    return False
+
+
+def _detail_line_candidates(value: Any) -> list[str]:
+    candidates: list[str] = []
+    for item in _list_string(value):
+        split_items = [
+            re.sub(r"\s+", " ", part).strip()
+            for part in re.split(r"(?<=[.!?。！？])\s+|(?<=다)\.\s*", item)
+            if part.strip()
+        ]
+        candidates.extend(split_items or [re.sub(r"\s+", " ", item).strip()])
+    return candidates
+
+
+def _actionize_detail_lines(*values: Any) -> list[str]:
+    actions: list[str] = []
+    for text in _bounded_detail_lines(*values):
+        stripped = text.rstrip(".。!?！？ ").strip()
+        if not stripped:
+            continue
+        if _looks_like_action(stripped):
+            action = stripped
+        elif text.strip().endswith(("?", "？")):
+            action = f"{stripped}를 확인합니다"
+        else:
+            action = _follow_up_action_from_statement(stripped)
+        if not action.endswith((".", "。")):
+            action += "."
+        actions.append(action)
+    return actions
+
+
+def _follow_up_action_from_statement(text: str) -> str:
+    subject = _statement_to_check_subject(text)
+    if subject.endswith(("는지", "인지", "한지", "할지")):
+        return f"후속 검토에서 {subject} 확인합니다"
+    return f"후속 검토에서 {subject} 여부를 확인합니다"
+
+
+def _statement_to_check_subject(text: str) -> str:
+    subject = text.rstrip(".。!?！？ ").strip()
+    replacements = (
+        (r"할\s*수\s*있습니다$", "할 수 있는지"),
+        (r"될\s*수\s*있습니다$", "될 수 있는지"),
+        (r"가능성이\s*있습니다$", "가능성이 있는지"),
+        (r"필요가\s*있습니다$", "필요한지"),
+        (r"해야\s*합니다$", "해야 하는지"),
+        (r"합니다$", "하는지"),
+        (r"있습니다$", "있는지"),
+        (r"입니다$", "인지"),
+    )
+    for pattern, replacement in replacements:
+        updated = re.sub(pattern, replacement, subject)
+        if updated != subject:
+            return updated
+    return subject
+
+
+def _looks_like_action(text: str) -> bool:
+    return bool(
+        re.search(
+            r"제안|검토|확인|설명|분리|검증|제시|반영|정리|설계|작성|구성|관리|추적|비교",
+            text,
+        )
+    )
 
 
 def _rich_sources(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -965,7 +1162,7 @@ def _slides(
         {
             "order": 1,
             "title": title,
-            "body": "\n".join(summary_lines[:3]) or None,
+            "body": "\n".join(summary_lines[:_SUMMARY_LINE_MAX]) or None,
             "image_url": cover_image,
             "image_alt": cover_alt,
             "evidence_source_indexes": _source_indexes(sources),
@@ -1049,6 +1246,7 @@ def _validation_pass(summary: dict[str, Any], analysis: dict[str, Any]) -> bool:
     return (
         bool(summary.get("is_valid_summary", True))
         and not bool(summary.get("fact_extraction_failed"))
+        and _summary_line_count_valid(summary)
         and not _missing_fact_basis_line_indexes(summary)
     ) and bool(analysis.get("is_valid_analysis", True))
 
@@ -1061,6 +1259,8 @@ def _validation_missing(summary: dict[str, Any], analysis: dict[str, Any]) -> li
             "fact_basis missing for summary_line_index: "
             + ", ".join(str(index) for index in missing_indexes)
         )
+    if not _summary_line_count_valid(summary):
+        missing.append("summary_lines must contain 3~5 lines")
     if not bool(summary.get("is_valid_summary", True)):
         missing.append("summary is invalid")
     if bool(summary.get("fact_extraction_failed")):
@@ -1072,9 +1272,9 @@ def _validation_missing(summary: dict[str, Any], analysis: dict[str, Any]) -> li
 
 def _missing_fact_basis_line_indexes(summary: dict[str, Any]) -> list[int]:
     lines = _plain_summary_lines(summary)
-    if len(lines) != 3:
+    if not _SUMMARY_LINE_MIN <= len(lines) <= _SUMMARY_LINE_MAX:
         return []
-    expected = {1, 2, 3}
+    expected = set(range(1, len(lines) + 1))
     present: set[int] = set()
     for item in summary.get("fact_basis", []) or []:
         if not isinstance(item, dict):
@@ -1083,6 +1283,10 @@ def _missing_fact_basis_line_indexes(summary: dict[str, Any]) -> list[int]:
         if index in expected and _list_string(item.get("source_article_ids")):
             present.add(index)
     return sorted(expected - present)
+
+
+def _summary_line_count_valid(summary: dict[str, Any]) -> bool:
+    return _SUMMARY_LINE_MIN <= len(_plain_summary_lines(summary)) <= _SUMMARY_LINE_MAX
 
 
 def _validation_sc_score(

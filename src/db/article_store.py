@@ -398,36 +398,66 @@ def get_articles_by_ids(ids: list[int]) -> list[dict[str, Any]]:
     """raw_articles 테이블에서 ID 목록으로 기사를 조회한다."""
     if not ids:
         return []
+    query = text("""
+        SELECT raw_articles.id, raw_articles.company, raw_articles.title,
+               raw_articles.content, raw_articles.url,
+               raw_articles.source_type, raw_articles.content_type,
+               raw_articles.publisher, raw_articles.language,
+               raw_articles.cluster_id, raw_articles.is_representative,
+               raw_articles.processing_status,
+               raw_articles.importance_score, raw_articles.importance_level,
+               raw_articles.relevance_score, raw_articles.relevance_label,
+               raw_articles.relevance_reason,
+               raw_articles.matched_companies, raw_articles.matched_sectors,
+               raw_articles.matched_sector_details,
+               raw_articles.source_name, raw_articles.published_at,
+               raw_articles.collected_at,
+               raw_articles.metadata,
+               COALESCE(pr.raw_result, '{}'::jsonb) AS parser_result,
+               COALESCE(pr.financial_record, '{}'::jsonb) AS financial_record,
+               COALESCE(pr.warnings, '[]'::jsonb) AS parser_warnings
+        FROM raw_articles
+        LEFT JOIN raw_article_parse_results pr
+            ON pr.raw_article_id = raw_articles.id
+        WHERE raw_articles.id = ANY(:ids)
+        ORDER BY raw_articles.published_at DESC NULLS LAST,
+                 raw_articles.collected_at DESC NULLS LAST,
+                 raw_articles.id DESC
+    """)
+    fallback_query = text("""
+        SELECT raw_articles.id, raw_articles.company, raw_articles.title,
+               raw_articles.content, raw_articles.url,
+               raw_articles.source_type, raw_articles.content_type,
+               raw_articles.publisher, raw_articles.language,
+               raw_articles.cluster_id, raw_articles.is_representative,
+               raw_articles.processing_status,
+               raw_articles.importance_score, raw_articles.importance_level,
+               raw_articles.relevance_score, raw_articles.relevance_label,
+               raw_articles.relevance_reason,
+               raw_articles.matched_companies, raw_articles.matched_sectors,
+               '{}'::jsonb AS matched_sector_details,
+               raw_articles.source_name, raw_articles.published_at,
+               raw_articles.collected_at,
+               raw_articles.metadata,
+               COALESCE(pr.raw_result, '{}'::jsonb) AS parser_result,
+               COALESCE(pr.financial_record, '{}'::jsonb) AS financial_record,
+               COALESCE(pr.warnings, '[]'::jsonb) AS parser_warnings
+        FROM raw_articles
+        LEFT JOIN raw_article_parse_results pr
+            ON pr.raw_article_id = raw_articles.id
+        WHERE raw_articles.id = ANY(:ids)
+        ORDER BY raw_articles.published_at DESC NULLS LAST,
+                 raw_articles.collected_at DESC NULLS LAST,
+                 raw_articles.id DESC
+    """)
     with SessionLocal() as db:
-        rows = db.execute(
-            text("""
-                SELECT raw_articles.id, raw_articles.company, raw_articles.title,
-                       raw_articles.content, raw_articles.url,
-                       raw_articles.source_type, raw_articles.content_type,
-                       raw_articles.publisher, raw_articles.language,
-                       raw_articles.cluster_id, raw_articles.is_representative,
-                       raw_articles.processing_status,
-                       raw_articles.importance_score, raw_articles.importance_level,
-                       raw_articles.relevance_score, raw_articles.relevance_label,
-                       raw_articles.relevance_reason,
-                       raw_articles.matched_companies, raw_articles.matched_sectors,
-                       raw_articles.matched_sector_details,
-                       raw_articles.source_name, raw_articles.published_at,
-                       raw_articles.collected_at,
-                       raw_articles.metadata,
-                       COALESCE(pr.raw_result, '{}'::jsonb) AS parser_result,
-                       COALESCE(pr.financial_record, '{}'::jsonb) AS financial_record,
-                       COALESCE(pr.warnings, '[]'::jsonb) AS parser_warnings
-                FROM raw_articles
-                LEFT JOIN raw_article_parse_results pr
-                    ON pr.raw_article_id = raw_articles.id
-                WHERE raw_articles.id = ANY(:ids)
-                ORDER BY raw_articles.published_at DESC NULLS LAST,
-                         raw_articles.collected_at DESC NULLS LAST,
-                         raw_articles.id DESC
-            """),
-            {"ids": ids},
-        ).fetchall()
+        try:
+            rows = db.execute(query, {"ids": ids}).fetchall()
+        except Exception as exc:
+            if not _is_missing_column(exc, "matched_sector_details"):
+                raise
+            db.rollback()
+            rows = db.execute(fallback_query, {"ids": ids}).fetchall()
     return [dict(row._mapping) for row in rows]
 
 
@@ -803,19 +833,94 @@ def list_existing_news_cluster_candidates(
             r.id DESC
         LIMIT :limit
     """)
+    fallback_query = text("""
+        SELECT
+            r.cluster_id,
+            r.id AS representative_id,
+            r.company,
+            r.title,
+            r.content,
+            r.url,
+            r.source_type,
+            r.content_type,
+            r.publisher,
+            r.language,
+            r.relevance_score,
+            r.relevance_label,
+            r.relevance_reason,
+            r.matched_companies,
+            r.matched_sectors,
+            '{}'::jsonb AS matched_sector_details,
+            r.source_name,
+            r.published_at,
+            r.collected_at,
+            r.metadata,
+            COALESCE(
+                array_agg(
+                    a.id
+                    ORDER BY
+                        a.published_at DESC NULLS LAST,
+                        a.collected_at DESC NULLS LAST,
+                        a.id DESC
+                ) FILTER (WHERE a.id IS NOT NULL),
+                ARRAY[]::bigint[]
+            ) AS article_ids
+        FROM raw_articles r
+        LEFT JOIN raw_articles a
+            ON a.cluster_id = r.cluster_id
+           AND a.source_type = 'news'
+        WHERE r.source_type = 'news'
+          AND r.is_representative = true
+          AND r.cluster_id IS NOT NULL
+          AND r.processing_status IN ('PROCESSED', 'CLASSIFIED')
+          AND (
+              (
+                  :published_since IS NOT NULL
+                  AND r.published_at >= CAST(:published_since AS timestamptz)
+                  AND (
+                      :published_until IS NULL
+                      OR r.published_at < CAST(:published_until AS timestamptz)
+                  )
+              )
+              OR (
+                  :published_since IS NULL
+                  AND r.collected_at >= NOW() - (:lookback_hours * INTERVAL '1 hour')
+              )
+          )
+          AND (NOT :company_filter OR r.company ?| :company_keys)
+          AND (
+              cardinality(CAST(:exclude_article_ids AS bigint[])) = 0
+              OR r.id <> ALL(CAST(:exclude_article_ids AS bigint[]))
+          )
+        GROUP BY
+            r.cluster_id, r.id, r.company, r.title, r.content, r.url,
+            r.source_type, r.content_type, r.publisher, r.language,
+            r.relevance_score, r.relevance_label, r.relevance_reason,
+            r.matched_companies, r.matched_sectors,
+            r.source_name, r.published_at, r.collected_at, r.metadata
+        ORDER BY
+            r.published_at DESC NULLS LAST,
+            r.collected_at DESC,
+            r.id DESC
+        LIMIT :limit
+    """)
+    params = {
+        "company_filter": company_filter,
+        "company_keys": company_keys or [""],
+        "exclude_article_ids": exclude_ids,
+        "lookback_hours": lookback_hours,
+        "published_since": published_since,
+        "published_until": published_until,
+        "limit": limit,
+    }
     with SessionLocal() as db:
-        rows = db.execute(
-            query,
-            {
-                "company_filter": company_filter,
-                "company_keys": company_keys or [""],
-                "exclude_article_ids": exclude_ids,
-                "lookback_hours": lookback_hours,
-                "published_since": published_since,
-                "published_until": published_until,
-                "limit": limit,
-            },
-        ).fetchall()
+        try:
+            rows = db.execute(query, params).fetchall()
+        except Exception as exc:
+            if not _is_missing_column(exc, "matched_sector_details"):
+                raise
+            db.rollback()
+            rows = db.execute(fallback_query, params).fetchall()
     return [dict(row._mapping) for row in rows]
 
 
@@ -2425,23 +2530,22 @@ def fetch_latest_trend_context(within_days: int = 7) -> dict[str, Any]:
         if cached and (now - cached[0]) < _TREND_CACHE_TTL_SEC:
             return cached[1]
 
-    with SessionLocal() as db:
-        rows = (
-            db.execute(
-                text(
-                    """
+    query = text(
+        """
                 SELECT keyword, summary, payload, trend_date, source_analysis_id
                 FROM global_industry_trends
                 WHERE trend_date >= CURRENT_DATE - make_interval(days => :days)
                 ORDER BY impact_score DESC NULLS LAST, trend_date DESC
                 LIMIT 10
                 """
-                ),
-                {"days": within_days},
-            )
-            .mappings()
-            .all()
-        )
+    )
+    try:
+        with SessionLocal() as db:
+            rows = db.execute(query, {"days": within_days}).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        if not _is_missing_relation(exc, "global_industry_trends"):
+            raise
+        rows = []
 
     result: dict[str, Any]
     if not rows:
@@ -2494,3 +2598,14 @@ def invalidate_trend_context_cache() -> None:
     """ITTrendAgent 가 cron 으로 새 trend 를 upsert 한 직후 호출하면 즉시 반영."""
     with _trend_cache_lock:
         _trend_cache.clear()
+
+
+def _is_missing_column(exc: Exception, column_name: str) -> bool:
+    """Return True when a read path hit a missing optional DB column."""
+    text_value = str(exc)
+    return "UndefinedColumn" in text_value and column_name in text_value
+
+
+def _is_missing_relation(exc: Exception, relation_name: str) -> bool:
+    text_value = str(exc)
+    return "UndefinedTable" in text_value and relation_name in text_value

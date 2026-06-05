@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import operator
+import re
 import time
 import uuid
 from datetime import UTC, datetime
@@ -508,6 +509,10 @@ def _hard_validate(
         integrated_issue=integrated_issue,
         sources=sources,
     )
+    grounded_numeric_keys = _grounded_numeric_keys(
+        grounded_corpus,
+        numeric_pattern=NUMERIC_TOKEN_PATTERN,
+    )
     numeric_violations: list[NumericViolation] = []
     seen_violation_tokens: set[str] = set()
     for location, block in text_blocks.items():
@@ -517,6 +522,8 @@ def _hard_validate(
                 continue
             seen_violation_tokens.add(token)
             if token in grounded_corpus:
+                continue
+            if _numeric_token_key(token) in grounded_numeric_keys:
                 continue
             numeric_violations.append(NumericViolation(value=token, location=location))
 
@@ -645,6 +652,38 @@ def _grounded_corpus(
                 )
             )
     return " | ".join(chunks)
+
+
+def _grounded_numeric_keys(grounded_corpus: str, *, numeric_pattern: re.Pattern[str]) -> set[str]:
+    return {
+        key
+        for match in numeric_pattern.finditer(grounded_corpus or "")
+        if (key := _numeric_token_key(match.group(0)))
+    }
+
+
+def _numeric_token_key(token: str) -> str:
+    text = re.sub(r"\s+", "", str(token or "")).strip().lower()
+    if not text:
+        return ""
+    unit = ""
+    for candidate in ("억원", "억", "조원", "조", "만원", "만", "천만", "백만", "%", "원"):
+        if text.endswith(candidate):
+            unit = candidate
+            text = text[: -len(candidate)]
+            break
+    if unit == "억원":
+        unit = "억"
+    elif unit == "조원":
+        unit = "조"
+    number_text = text.replace(",", "")
+    try:
+        number = float(number_text)
+    except ValueError:
+        normalized_number = number_text
+    else:
+        normalized_number = str(int(number)) if number.is_integer() else f"{number:.6f}".rstrip("0")
+    return f"{normalized_number}{unit}"
 
 
 def _check_evidence_chain(

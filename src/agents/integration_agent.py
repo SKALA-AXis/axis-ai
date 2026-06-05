@@ -22,6 +22,9 @@ from src.analysis.models import AnalysisInputBundle, NormalizedDataBundle
 from src.analysis.summarizer import SourceSummarizer
 from src.db.article_store import fetch_latest_trend_context, get_articles_by_ids
 
+_SUMMARY_LINE_MIN = 3
+_SUMMARY_LINE_MAX = 5
+
 
 class IntegrationAgent:
     """원문/클러스터/문서/파싱 결과를 하나의 통합 이슈로 정리하는 Agent."""
@@ -182,14 +185,15 @@ def _safe_trend_context() -> dict[str, Any]:
     global _trend_context_failure_logged
     try:
         return fetch_latest_trend_context(within_days=7) or {}
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         import logging
 
         if not _trend_context_failure_logged:
             logging.getLogger(__name__).warning(
                 "fetch_latest_trend_context() 실패 — trend_context 비워둔 채로 진행 "
-                "(이후 동일 오류는 반복 출력 안 함). design: global-trends.md §5.2.",
-                exc_info=True,
+                "(이후 동일 오류는 반복 출력 안 함). design: global-trends.md §5.2. "
+                "error=%s",
+                exc,
             )
             _trend_context_failure_logged = True
         return {}
@@ -548,12 +552,12 @@ def _fact_summary_from_issue(
     if not lines:
         lines = [
             str(fact.get("fact") or "").strip()
-            for fact in consolidated_facts[:3]
+            for fact in consolidated_facts[:_SUMMARY_LINE_MAX]
             if str(fact.get("fact") or "").strip()
         ]
     if not lines and integrated_text:
         lines = [integrated_text]
-    return _dedupe_strings(lines)[:3]
+    return _dedupe_strings(lines)[:_SUMMARY_LINE_MAX]
 
 
 def _normalize_summary_lines(value: Any) -> list[str]:
@@ -628,7 +632,7 @@ def _normalized_fact_basis(
         if _safe_int(item.get("summary_line_index")) > 0
         and _normalize_string_list(item.get("source_article_ids"))
     }
-    for index, line in enumerate(fact_summary[:3], start=1):
+    for index, line in enumerate(fact_summary[:_SUMMARY_LINE_MAX], start=1):
         if index in present_indexes:
             continue
         fact = _matching_fact(line, consolidated_facts, index=index)
@@ -761,6 +765,9 @@ def _integration_validation(payload: dict[str, Any]) -> dict[str, Any]:
         fact_basis=payload.get("fact_basis") or [],
     )
     warnings: list[str] = []
+    summary_line_count = len(_normalize_summary_lines(payload.get("fact_summary")))
+    if not _SUMMARY_LINE_MIN <= summary_line_count <= _SUMMARY_LINE_MAX:
+        warnings.append("fact_summary line count must be 3~5")
     if missing_fact_basis:
         warnings.append(
             "fact_basis missing for summary_line_index: "
@@ -769,11 +776,14 @@ def _integration_validation(payload: dict[str, Any]) -> dict[str, Any]:
     if missing_required:
         warnings.append("required fields missing: " + ", ".join(missing_required))
     return {
-        "pass": not missing_required and not missing_fact_basis,
+        "pass": not missing_required
+        and not missing_fact_basis
+        and _SUMMARY_LINE_MIN <= summary_line_count <= _SUMMARY_LINE_MAX,
         "schema_version": INTEGRATED_ISSUE_SCHEMA_VERSION,
         "prompt_version": payload.get("prompt_version"),
         "missing_required_fields": missing_required,
         "missing_fact_basis_line_indexes": missing_fact_basis,
+        "summary_line_count": summary_line_count,
         "source_article_ids_count": len(_normalize_string_list(payload.get("source_article_ids"))),
         "warnings": warnings,
     }
@@ -794,9 +804,9 @@ def _missing_fact_basis_line_indexes(
     fact_summary: list[str],
     fact_basis: list[dict[str, Any]],
 ) -> list[int]:
-    if len(fact_summary) != 3:
+    if not _SUMMARY_LINE_MIN <= len(fact_summary) <= _SUMMARY_LINE_MAX:
         return []
-    expected = {1, 2, 3}
+    expected = set(range(1, len(fact_summary) + 1))
     present = {
         _safe_int(item.get("summary_line_index") or item.get("summary_sentence_index"))
         for item in fact_basis
@@ -914,12 +924,12 @@ def _fact_summary_lines(
             lines.append(f"{label} {value}")
             break
     for fact in consolidated_facts:
-        if len(lines) >= 3:
+        if len(lines) >= _SUMMARY_LINE_MAX:
             break
         fact_text = str(fact.get("fact") or "").strip()
         if fact_text and fact_text not in lines:
             lines.append(fact_text)
-    return lines[:3]
+    return lines[:_SUMMARY_LINE_MAX]
 
 
 def _integrated_text(
@@ -941,7 +951,7 @@ def _integrated_text(
 
 def _fact_basis_from_facts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     basis: list[dict[str, Any]] = []
-    for index, fact in enumerate(facts[:3], start=1):
+    for index, fact in enumerate(facts[:_SUMMARY_LINE_MAX], start=1):
         basis.append(
             {
                 "summary_line_index": index,
