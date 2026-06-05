@@ -24,6 +24,7 @@ _EXPORT_MODULES = {
     "ReportAgent": "src.agents.report_agent",
     "StrategicAnalyzer": "src.agents.strategic_analyzer",
     "StrategicInsightAgent": "src.agents.strategic_insight_agent",
+    "TodayInsightAgent": "src.agents.today_insight_agent",
 }
 
 __all__ = list(_EXPORT_MODULES)
