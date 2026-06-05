@@ -482,22 +482,28 @@ def test_strategic_insight_agent_returns_separated_blocks():
     sent_messages = llm.invoke.call_args_list[0].args[0]
     full_prompt = "\n".join(message["content"] for message in sent_messages)
     user_prompt = sent_messages[1]["content"]
-    assert "peer_implication.peer_meaning: 짧은 요약이 아니라 2문장" in user_prompt
-    assert "ProfileContext 의" in user_prompt
-    assert "기존 사업영역/역량과 연결" in user_prompt
-    assert "IntegratedIssue 근거 신호 때문에 고객이" in user_prompt
-    assert "이유 없는 결론으로 끝내지 마세요" in user_prompt
-    for vague_claim in ("기술적 우위", "혁신성", "선점", "격차", "경쟁 심화"):
+    assert "피어 프로필 기반 시사점 생성" in user_prompt
+    assert "사실 기반 해석" in user_prompt
+    assert "최종 시사점으로 끝내지 않습니다" in user_prompt
+    assert "피어사의 기존 사업영역/역량" in user_prompt
+    assert "SK AX 프로필 기반 대응 생성" in user_prompt
+    assert "profile_context 나 recent context 가 없거나" in user_prompt
+    assert "SK AX profile_context 의 관련 사업영역/역량" in user_prompt
+    assert (
+        "현재 상태 → 왜 바꿔야 하는가 → 무엇을 바꿔야 하는가 → 바꾸면 무엇이 달라지는가"
+        in user_prompt
+    )
+    for vague_claim in ("기술적 우위", "선점", "격차", "경쟁 심화"):
         assert vague_claim in full_prompt
-    assert "입력에 있는 사업명/고객군/" in user_prompt
-    for action_context in ("제안서", "PoC", "레퍼런스", "운영 모델"):
+    assert "business_line_mapping" in user_prompt
+    for action_context in ("제안서", "PoC", "레퍼런스 비교표"):
         assert action_context in user_prompt
-    assert "무엇을 분리·설명·검증할지" in user_prompt
+    assert "SK AX 프로필과 연결되지 않은 대응방향" in user_prompt
     review_messages = llm.invoke.call_args_list[1].args[0]
     review_prompt = review_messages[1]["content"]
-    assert "근거성, 구체성, 논리성" in review_messages[0]["content"]
-    assert "1차 StrategicInsightAgent 결과" in review_prompt
-    assert "potential_impact 는 2문장" in review_prompt
+    assert "전략 QA reviewer" in review_messages[0]["content"]
+    assert "1차 결과" in review_prompt
+    assert "recommended_actions" in review_prompt
 
 
 def test_strategic_insight_agent_empty_when_integrated_issue_invalid():
@@ -1022,7 +1028,7 @@ def test_strategic_insight_agent_self_review_revises_vague_impact_and_actions():
                         (
                             "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 적용 "
                             "범위와 운영 책임을 따로 판단할 수 있습니다. 따라서 SK AX "
-                            "제안 산출물에서 적용 범위와 운영 책임을 별도 섹션으로 "
+                            "토큰증권 제안서의 적용 범위표와 운영 책임 정리를 별도 섹션으로 "
                             "재구성할 필요가 있습니다."
                         ),
                         (
@@ -1206,15 +1212,15 @@ def test_quality_gate_flags_customer_contract_role_and_unscoped_proposal_artifac
     result = {
         "analysis": {
             "analysis_summary": "LG CNS의 웹단말 공급 역량이 강화됩니다.",
-            "strategic_meaning": [],
-            "market_signal": "웹단말 공급계약 수요 신호가 확인됩니다.",
+            "strategic_meaning": ["LG CNS가 금융 IT 사업 범위를 확장합니다."],
+            "market_signal": "웹단말 공급계약 수요가 지속적으로 증가하고 있습니다.",
             "impact_reason": "웹단말 공급계약이 확인됐기 때문입니다.",
             "reason": "fact:contract를 사용했습니다.",
         },
         "implication": {
             "peer_implication": {
                 "peer_meaning": "LG CNS의 웹단말 공급 역량이 강화됩니다.",
-                "capability_change": "웹단말 공급 역량이 넓어집니다.",
+                "capability_change": "LG CNS가 장기적인 시스템 전환 및 운영 안정성을 확보합니다.",
             },
             "skax_implication": {
                 "potential_impact": (
@@ -1238,6 +1244,8 @@ def test_quality_gate_flags_customer_contract_role_and_unscoped_proposal_artifac
     )
 
     assert any("공급자 역량" in violation for violation in violations)
+    assert any("역량 강화/경쟁력 강화 성과" in violation for violation in violations)
+    assert any("수요" in violation and "입력 근거 없이" in violation for violation in violations)
     assert not any("제안서가 어떤 고객/사업/도입 프로젝트" in violation for violation in violations)
 
 
