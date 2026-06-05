@@ -65,9 +65,21 @@ class BriefingGenerateResponse(BaseModel):
     date_from: Any = None
     date_to: Any = None
     period_label: str = ""
+    created_at: Any = None
     status: str = ""
     briefing_lead: str = ""
     key_summary: str = ""
+    source_card_ids: list[str] = Field(default_factory=list)
+    executive_summary: str = ""
+    immediate_trends: list[dict[str, Any]] = Field(default_factory=list)
+    watch_trends: list[dict[str, Any]] = Field(default_factory=list)
+    sections: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_summary: list[str] = Field(default_factory=list)
+    dailySnapshot: dict[str, Any] = Field(default_factory=dict)  # noqa: N815
+    weeklySnapshot: dict[str, Any] = Field(default_factory=dict)  # noqa: N815
+    evidenceSources: list[str] = Field(default_factory=list)  # noqa: N815
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    frontend_briefings: dict[str, Any] = Field(default_factory=dict)
     selected_cards: list[dict[str, Any]] = Field(default_factory=list)
     key_change_cards: list[dict[str, Any]] = Field(default_factory=list)
     interpretation_flow: dict[str, Any] = Field(default_factory=dict)
