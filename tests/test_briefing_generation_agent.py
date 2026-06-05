@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+from src.agents import briefing_generation_agent as briefing_module
 from src.agents.briefing_generation_agent import (
     BriefingGenerationAgent,
     _display_copy_context,
@@ -147,7 +148,24 @@ def test_briefing_input_output_contract_for_integrated_issue_basis():
     assert response.briefing_basis["source_integrated_issue_ids"] == [issue_id]
     assert response.provenance["requested_integrated_issue_ids"] == [issue_id, other_issue_id]
     assert response.provenance["excluded_integrated_issue_ids"] == [other_issue_id]
-    assert response.provenance["briefing_analysis_basis"].startswith("integrated_issues.id")
+    assert response.provenance["briefing_analysis_basis"].startswith("integrated_issues primary")
+    assert response.source_card_ids == ["CN-1"]
+    assert response.executive_summary
+    assert response.immediate_trends[0]["related_card_id"] == "CN-1"
+    assert response.sections[0]["title"] == "핵심 인사이트 요약"
+    assert response.dailySnapshot["sections"][0]["title"] == "오늘 바로 검토할 동향"
+    assert response.weeklySnapshot["sections"][0]["title"] == "이번 주 핵심 변화"
+    assert response.history[0]["primaryCount"] >= 1
+    assert response.interpretation_flow["title"] == "해석 흐름 — 관찰부터 시사까지"
+    assert (
+        response.interpretation_flow["reasoning_summary"]["disclosure_level"]
+        == "summarized_intermediate_artifacts"
+    )
+    for step in response.interpretation_flow["steps"]:
+        trace = step["reasoning_trace"]
+        assert trace["source_inputs"]
+        assert len(trace["intermediate_artifacts"]) == 4
+        assert trace["output_items"]
 
     actions = response.briefing_basis["recommended_actions"]
     assert len(actions) == 3
@@ -220,3 +238,119 @@ def test_briefing_rewrites_program_actions_for_executives():
     assert all("PoC" not in action for action in actions)
     assert any("책임 조직" in action and "리스크 승인 권한" in action for action in actions)
     assert result["briefing_basis"]["action_details"][0]["use_case"] == "사업 우선순위"
+
+
+def test_briefing_uses_integrated_issues_as_primary_lookup(monkeypatch):
+    issue_id = "11111111-1111-1111-1111-111111111111"
+    legacy_issue = "낡은 card_news 통합 이슈"
+
+    def fake_rows(**_kwargs):
+        return [
+            {
+                "integrated_issue_id": issue_id,
+                "issue_key": "issue-key",
+                "cluster_id": "cluster-1",
+                "representative_raw_article_id": 1,
+                "main_company": "samsung_sds",
+                "event_type": "new_biz",
+                "is_valid": True,
+                "confidence": 0.82,
+                "headline": "삼성SDS 생성형 AI 운영 플랫폼 확대",
+                "one_line_summary": "운영 플랫폼 레퍼런스 확대",
+                "source_ids": [1],
+                "analyzed_source_ids": [1],
+                "sectors": ["ax"],
+                "mentioned_peer_companies": ["samsung_sds"],
+                "content_summary": "운영 플랫폼 레퍼런스가 확대되고 있습니다.",
+                "content_detailed_explanation": (
+                    "제조와 금융 고객군에서 운영형 AI 신호가 확인됩니다."
+                ),
+                "issue_brief": {"headline": "운영형 AI 레퍼런스 확대"},
+                "content_digest": {
+                    "summary": "운영형 AI 수요가 확인됩니다.",
+                    "detailed_explanation": "고객 평가 기준이 운영 책임으로 이동합니다.",
+                },
+                "issue_frame": {"frame": "운영형 AI"},
+                "issue_payload": {
+                    "is_valid_summary": True,
+                    "main_issue": "통합 이슈 원문",
+                    "integrated_text": "통합 이슈 상세",
+                    "source_article_ids": [1],
+                    "business_signals": [{"signal": "운영형 AI 레퍼런스"}],
+                },
+                "source_links": [
+                    {
+                        "source_name": "연합뉴스",
+                        "published_at": "2026-06-04T09:00:00+09:00",
+                        "title": "기사",
+                        "url": "https://example.com/news",
+                    }
+                ],
+                "source_names": ["연합뉴스"],
+                "evidence_refs": [
+                    {
+                        "evidence_ref_id": "fact-1",
+                        "text": "통합 근거",
+                        "source_ids": [1],
+                    }
+                ],
+                "content_sections": [],
+                "anchor_card_id": "CN-1",
+                "anchor_peer_id": "samsung_sds",
+                "anchor_importance": "high",
+                "anchor_importance_score": 0.9,
+                "anchor_evidence_payload": {
+                    "analysis_package": {
+                        "integrated_issue": {"main_issue": legacy_issue},
+                        "analysis": {
+                            "analysis_summary": "card_news legacy 분석",
+                            "market_signal": "card_news legacy 시장 신호",
+                            "confidence": 0.8,
+                        },
+                        "implication": {
+                            "skax_implication": {
+                                "why_important": "운영 책임 기준을 확인해야 합니다.",
+                                "potential_impact": "운영형 AI 수요 대응이 필요합니다.",
+                                "recommended_actions": ["legacy 액션"],
+                            },
+                            "confidence": 0.8,
+                        },
+                        "classification": {"sector": "ax", "sectors": ["ax"]},
+                        "validation": {"pass": True, "sc_score": 0.8},
+                    }
+                },
+                "basis_at": "2026-06-04T09:00:00+09:00",
+                "issue_created_at": "2026-06-04T09:00:00+09:00",
+            }
+        ]
+
+    monkeypatch.setattr(briefing_module, "_fetch_period_integrated_issue_rows", fake_rows)
+
+    result = asyncio.run(
+        BriefingGenerationAgent().generate(
+            briefing_type="daily",
+            anchor_date="2026-06-04",
+            integrated_issue_ids=[issue_id],
+            use_mock=False,
+            refine_display_copy=False,
+        )
+    )
+
+    assert result["provenance"]["source_mode"] == "integrated_issue_period_lookup"
+    assert result["related_card_ids"] == ["CN-1"]
+    assert result["source_card_ids"] == ["CN-1"]
+    assert result["source_integrated_issue_ids"] == [issue_id]
+    assert result["primary_card_news_id"] == "CN-1"
+    assert result["hidden_details"][0]["analysis_package"]["integrated_issue"]["main_issue"] == (
+        "통합 이슈 원문"
+    )
+    assert (
+        result["hidden_details"][0]["analysis_package"]["integrated_issue"]["main_issue"]
+        != legacy_issue
+    )
+    assert result["immediate_trends"][0]["related_card_id"] == "CN-1"
+    assert result["dailySnapshot"]["sections"][0]["items"][0]["source"].startswith("연합뉴스")
+    first_trace = result["interpretation_flow"]["steps"][0]["reasoning_trace"]
+    assert first_trace["source_inputs"][0]["integrated_issue_id"] == issue_id
+    assert first_trace["intermediate_artifacts"][0]["name"] == "입력 근거 묶음"
+    assert "연합뉴스" in first_trace["source_inputs"][0]["source_names"]
