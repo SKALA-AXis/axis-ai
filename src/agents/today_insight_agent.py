@@ -357,7 +357,7 @@ def _fetch_cards_for_issues(
     if not issue_ids:
         return []
     placeholders = ", ".join(f"CAST(:issue_{idx} AS uuid)" for idx in range(len(issue_ids)))
-    params = {f"issue_{idx}": issue_id for idx, issue_id in enumerate(issue_ids)}
+    params: dict[str, Any] = {f"issue_{idx}": issue_id for idx, issue_id in enumerate(issue_ids)}
     params["limit"] = int(limit)
     try:
         with SessionLocal() as db:
@@ -865,8 +865,10 @@ def _normalize_result(
         limit=10,
     )
     base["confidence"] = _clamp_float(base.get("confidence"), default=0.65)
+    raw_provenance = base.get("provenance")
+    provenance: dict[str, Any] = raw_provenance if isinstance(raw_provenance, dict) else {}
     base["provenance"] = {
-        **(base.get("provenance") if isinstance(base.get("provenance"), dict) else {}),
+        **provenance,
         "llm_model": _LLM_MODEL,
         "prompt_version": _PROMPT_VERSION,
         "context_counts": {
@@ -906,8 +908,11 @@ def _normalize_signals(value: Any, *, context: dict[str, Any]) -> list[dict[str,
     normalized: list[dict[str, Any]] = []
     for idx in range(3):
         item = rows[idx] if idx < len(rows) else fallback[idx]
-        evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
-        reasoning = [step for step in _list(item.get("reasoning")) if isinstance(step, dict)][:4]
+        raw_evidence = item.get("evidence")
+        evidence: dict[str, Any] = raw_evidence if isinstance(raw_evidence, dict) else {}
+        reasoning: list[dict[str, Any]] = [
+            step for step in _list(item.get("reasoning")) if isinstance(step, dict)
+        ][:4]
         if not reasoning:
             reasoning = fallback[idx]["reasoning"]
         signal = {
@@ -981,7 +986,7 @@ def _normalize_actions(value: Any, *, context: dict[str, Any]) -> list[dict[str,
 
 def _normalize_sources(value: Any, fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = [item for item in _list(value) if isinstance(item, dict)] or fallback
-    normalized = []
+    normalized: list[dict[str, Any]] = []
     for item in rows[:8]:
         source_id = str(item.get("id") or item.get("source_id") or item.get("url") or "")
         title = str(item.get("title") or item.get("headline") or "")
@@ -1292,7 +1297,8 @@ def _issue_for_prompt(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _card_for_prompt(card: dict[str, Any]) -> dict[str, Any]:
-    implication = card.get("implication") if isinstance(card.get("implication"), dict) else {}
+    raw_implication = card.get("implication")
+    implication: dict[str, Any] = raw_implication if isinstance(raw_implication, dict) else {}
     return {
         "id": card.get("id"),
         "integrated_issue_id": card.get("integrated_issue_id"),
@@ -1540,7 +1546,7 @@ def _counter_top(counter: Counter[str]) -> dict[str, Any] | None:
 def _delta_rows(
     current: Counter[str], history: Counter[str], window_days: int
 ) -> list[dict[str, Any]]:
-    rows = []
+    rows: list[dict[str, Any]] = []
     keys = set(current) | set(history)
     for key in keys:
         today = current.get(key, 0)
