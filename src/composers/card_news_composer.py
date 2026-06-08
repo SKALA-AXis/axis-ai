@@ -6,6 +6,7 @@ AnalysisPackage를 사용자에게 보여줄 카드뉴스/API 응답 형태로 �
 
 import json
 import logging
+import os
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -165,7 +166,7 @@ class CardNewsComposer:
             analysis.get("analysis_summary"),
             "피어사 주요 뉴스",
         )
-        summary_lines = _plain_summary_lines(summary)
+        summary_lines = _plain_summary_lines(summary, use_llm=True)
         card_text = _card_text(title, summary_lines, summary, articles)
         event_type = _infer_event_type(summary, classification, card_text)
         sectors = _infer_sectors(classification, card_text)
@@ -453,7 +454,7 @@ def _card_from_summary(
         return None
 
     effective_company = _first_non_empty(summary.get("main_company"), company)
-    summary_lines = _numbered_summary_lines(summary.get("fact_summary"))
+    summary_lines = _plain_summary_lines(summary, use_llm=True)
     if not summary_lines:
         return None
 
@@ -611,20 +612,20 @@ def _card_news_id(cluster_id: int | None, created_at: str) -> str:
     return f"CN-{date_key}-{suffix}"
 
 
-def _plain_summary_lines(summary: dict[str, Any]) -> list[str]:
+def _plain_summary_lines(summary: dict[str, Any], *, use_llm: bool = False) -> list[str]:
     lines = _list_string(summary.get("fact_summary"))[:_SUMMARY_LINE_MAX]
     if lines:
-        return _display_summary_lines(lines, summary)
+        return _display_summary_lines(lines, summary, use_llm=use_llm)
     lines = _list_string(summary.get("summary_lines"))[:_SUMMARY_LINE_MAX]
     if lines:
-        return _display_summary_lines(lines, summary)
+        return _display_summary_lines(lines, summary, use_llm=use_llm)
     facts = [
         str(fact.get("fact") or "").strip()
         for fact in _list_dicts(summary.get("consolidated_facts"))
         if str(fact.get("fact") or "").strip()
     ][:_SUMMARY_LINE_MAX]
     if facts:
-        return _display_summary_lines(facts, summary)
+        return _display_summary_lines(facts, summary, use_llm=use_llm)
     integrated_text = str(summary.get("integrated_text") or "").strip()
     if integrated_text:
         split_lines = [
@@ -633,16 +634,27 @@ def _plain_summary_lines(summary: dict[str, Any]) -> list[str]:
             if item.strip()
         ][:_SUMMARY_LINE_MAX]
         if split_lines:
-            return _display_summary_lines(split_lines, summary)
+            return _display_summary_lines(split_lines, summary, use_llm=use_llm)
     one_line = str(summary.get("one_line_summary") or "").strip()
-    return _display_summary_lines([one_line], summary) if one_line else []
+    return _display_summary_lines([one_line], summary, use_llm=use_llm) if one_line else []
 
 
-def _display_summary_lines(lines: list[str], summary: dict[str, Any]) -> list[str]:
+def _display_summary_lines(
+    lines: list[str],
+    summary: dict[str, Any],
+    *,
+    use_llm: bool = False,
+) -> list[str]:
+    candidates = _summary_candidate_lines(lines, summary)
+    if use_llm:
+        refined = _llm_display_summary_lines(summary, candidates)
+        if _SUMMARY_LINE_MIN <= len(refined) <= _SUMMARY_LINE_MAX:
+            return refined
+
     key_numbers = _key_number_display_map(summary)
     ranked: list[tuple[int, int, str]] = []
     seen: set[str] = set()
-    for index, line in enumerate(_summary_candidate_lines(lines, summary)):
+    for index, line in enumerate(candidates):
         text = _summary_line_for_display(_strip_number_prefix(line), key_numbers)
         dedupe_key = re.sub(r"\s+", " ", text).casefold()
         if not text or dedupe_key in seen:
@@ -687,6 +699,72 @@ def _summary_candidate_lines(lines: list[str], summary: dict[str, Any]) -> list[
         if text:
             candidates.append(text)
     return candidates
+
+
+def _llm_display_summary_lines(summary: dict[str, Any], candidates: list[str]) -> list[str]:
+    if not os.getenv("OPENAI_API_KEY"):
+        return []
+    clean_candidates = []
+    seen: set[str] = set()
+    key_numbers = _key_number_display_map(summary)
+    for line in candidates:
+        text = _summary_line_for_display(_strip_number_prefix(line), key_numbers)
+        key = re.sub(r"\s+", " ", text).casefold()
+        if text and key not in seen:
+            clean_candidates.append(text)
+            seen.add(key)
+    if len(clean_candidates) < _SUMMARY_LINE_MIN:
+        return []
+
+    context = {
+        "headline": summary.get("headline"),
+        "main_event": summary.get("main_event"),
+        "main_issue": summary.get("main_issue"),
+        "one_line_summary": summary.get("one_line_summary"),
+        "event_type": summary.get("cluster_event_type") or summary.get("event_type"),
+        "candidate_facts": clean_candidates[:20],
+    }
+    prompt = (
+        "You are selecting frontend summary lines for a Korean executive card news item.\n"
+        "Choose 3 to 5 lines only from candidate_facts. Do not invent facts.\n"
+        "Avoid repeating the same fact in different wording. Prefer lines that together cover "
+        "different factual dimensions such as the event, amount/scale, period/schedule, purpose, "
+        "execution scope, or source-backed consequence when present.\n"
+        "Do not include stock/market reaction unless the event_type itself is stock_market.\n"
+        'Return strict JSON only: {"summary_lines": ["..."]}.\n\n'
+        f"INPUT:\n{json.dumps(context, ensure_ascii=False, indent=2)}"
+    )
+    try:
+        from src.observability import tracing_config
+
+        response = _get_llm().invoke(
+            prompt,
+            config=tracing_config(
+                agent="CardNewsComposer",
+                prompt_version="card-news-summary-select-v1.0",
+                company=str(summary.get("main_company") or ""),
+                cluster_id=_optional_int(summary.get("cluster_id")),
+            ),
+        )
+        content = response.content if isinstance(response.content, str) else str(response.content)
+        parsed = _parse_json(content)
+    except Exception as exc:  # noqa: BLE001 - display fallback should not block card generation.
+        log.warning("카드뉴스 표시 요약 LLM 선별 실패 | error=%s", exc)
+        return []
+
+    selected: list[str] = []
+    candidate_set = {re.sub(r"\s+", " ", item).casefold() for item in clean_candidates}
+    for item in _list_string(parsed.get("summary_lines")):
+        text = _summary_line_for_display(_strip_number_prefix(item), key_numbers)
+        key = re.sub(r"\s+", " ", text).casefold()
+        if not text or key not in candidate_set:
+            continue
+        if any(_summary_lines_too_similar(text, existing) for existing in selected):
+            continue
+        selected.append(text)
+        if len(selected) >= _SUMMARY_LINE_MAX:
+            break
+    return selected if len(selected) >= _SUMMARY_LINE_MIN else []
 
 
 def _summary_line_priority(text: str, summary: dict[str, Any]) -> int:
