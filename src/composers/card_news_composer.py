@@ -752,7 +752,7 @@ def _llm_display_summary_lines(summary: dict[str, Any], candidates: list[str]) -
         log.warning("카드뉴스 표시 요약 LLM 선별 실패 | error=%s", exc)
         return []
 
-    selected = []
+    selected: list[str] = []
     candidate_set = {re.sub(r"\s+", " ", item).casefold() for item in clean_candidates}
     for item in _list_string(parsed.get("summary_lines")):
         text = _summary_line_for_display(_strip_number_prefix(item), key_numbers)
