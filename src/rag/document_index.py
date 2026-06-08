@@ -15,8 +15,6 @@ from qdrant_client.models import (
     Fusion,
     FusionQuery,
     MatchValue,
-    NamedSparseVector,
-    NamedVector,
     Prefetch,
     SparseVector,
 )
@@ -133,18 +131,17 @@ def search_dart_chunks(
             collection_name=COLLECTION_DOCUMENTS,
             prefetch=[
                 Prefetch(
-                    query=NamedVector(name="dense", vector=vectors["dense"]),  # type: ignore[arg-type]
+                    query=vectors["dense"],
+                    using="dense",
                     limit=_TOP_K_PREFETCH,
                     filter=query_filter,
                 ),
                 Prefetch(
-                    query=NamedSparseVector(  # type: ignore[arg-type]
-                        name="sparse",
-                        vector=SparseVector(
-                            indices=[int(index) for index in vectors["sparse"]["indices"]],
-                            values=[float(value) for value in vectors["sparse"]["values"]],
-                        ),
+                    query=SparseVector(
+                        indices=[int(index) for index in vectors["sparse"]["indices"]],
+                        values=[float(value) for value in vectors["sparse"]["values"]],
                     ),
+                    using="sparse",
                     limit=_TOP_K_PREFETCH,
                     filter=query_filter,
                 ),
@@ -153,8 +150,30 @@ def search_dart_chunks(
             limit=top_k,
         )
     except Exception as exc:
-        log.warning("DART chunk 검색 실패 | error=%s", exc)
-        return []
+        log.warning("DART chunk query_points 검색 실패. REST fallback 시도 | error=%s", exc)
+        try:
+            from src.rag.qdrant_compat import legacy_rrf_search
+
+            hits = legacy_rrf_search(
+                collection_name=COLLECTION_DOCUMENTS,
+                dense_vector=vectors["dense"],
+                sparse_vector=vectors["sparse"],
+                limit=top_k,
+                prefetch_limit=_TOP_K_PREFETCH,
+                query_filter=query_filter,
+            )
+        except Exception as fallback_exc:
+            log.warning("DART chunk REST fallback 검색 실패 | error=%s", fallback_exc)
+            return []
+        return [
+            {
+                **(hit.get("payload") or {}),
+                "score": hit.get("score"),
+                "point_id": str(hit.get("id") or ""),
+            }
+            for hit in hits
+            if hit.get("payload")
+        ]
 
     return [
         {

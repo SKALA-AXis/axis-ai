@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from src.api.briefing_schemas import BriefingGenerateRequest, BriefingGenerateResponse
+from src.api.chat_schemas import ChatTurnRequest, ChatTurnResponse
 from src.api.global_trends_schemas import GlobalTrendsRequest, GlobalTrendsResponse
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
 from src.api.link_verification_schemas import LinkVerificationRequest, LinkVerificationResponse
@@ -471,6 +472,25 @@ async def gen_search(request: GenSearchRequest):
         sc_passed=False,
         sc_score=0.0,
     )
+
+
+@app.post("/chat", response_model=ChatTurnResponse)
+async def chat(request: ChatTurnRequest) -> ChatTurnResponse:
+    """Floating assistant chat.
+
+    Page-aware CAG + DB/RAG retrieval 기반으로 답하고, Mixer/Briefing 같은
+    multi-step 작업은 실행하지 않고 페이지 handoff 로만 반환한다.
+    """
+    from src.agents.chat_orchestrator_agent import ChatOrchestratorAgent
+
+    log.info(
+        "Assistant chat 요청 | conversation=%s route=%s message_len=%s",
+        request.conversation_id,
+        request.current_page.route if request.current_page else None,
+        len(request.message or ""),
+    )
+    result = await ChatOrchestratorAgent().answer(request)
+    return ChatTurnResponse.model_validate(result)
 
 
 @app.post("/today-insight/generate", response_model=TodayInsightGenerateResponse)
