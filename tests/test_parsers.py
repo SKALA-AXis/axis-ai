@@ -2469,6 +2469,43 @@ def test_dart_parser_builds_section_tree_for_late_sections() -> None:
     )
 
 
+def test_dart_parser_classifies_compact_business_section_at_start() -> None:
+    article = RawArticle(
+        url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260515001990",
+        title="분기보고서 (2026.03)",
+        content=(
+            "II. 사업의 내용 1. 사업의 개요 "
+            "SK주식회사는 지속적인 사업 포트폴리오 혁신과 미래 성장동력을 발굴, "
+            "육성하는 투자부문과 Digital 기술을 기반으로 종합 IT 서비스 사업 등을 "
+            "영위하는 사업부문으로 구분되어 있습니다. "
+            "2026년 1분기 별도 재무제표 기준 영업수익은 7,158억원이며, "
+            "사업부문의 영업수익은 5,282억원입니다. "
+            "[사업부문] SK주식회사는 국내 Top-Tier IT 서비스 회사로서 "
+            "Cloud, AI 등 Digital 신기술을 적용하는 AI/Digital Transformation "
+            "사업을 수행하고 있습니다. "
+            "AI Default 기업으로의 전환을 가속화하며 IT서비스 산업의 혁신을 "
+            "선도하고 있습니다."
+        ),
+        source_name="dart",
+        published_at=datetime(2026, 5, 15),
+        peer_id="sk_ax",
+        source_type="dart",
+        content_type="api",
+        extra={
+            "rcept_no": "20260515001990",
+            "report_name": "분기보고서 (2026.03)",
+            "document_fetched": True,
+        },
+    )
+
+    parsed = DartParser().parse_article(article)
+
+    assert "business" in parsed["sections"]
+    assert "unclassified" not in parsed["sections"]
+    assert parsed["document_chunks"][0]["section_key"] == "business"
+    assert parsed["document_chunks"][0]["peer_id"] == "sk_ax"
+
+
 def test_dart_parser_classifies_and_normalizes_financial_statement_tables() -> None:
     article = RawArticle(
         url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260310000002",
