@@ -63,6 +63,12 @@ STRATEGIC_ACTION_KEYWORDS: Final[list[str]] = [
     "공시",
     "조직개편",
     "채용",
+    # 흔한 출시/제휴/조직 표현이 누락돼 멀쩡한 피어 기사가 탈락하던 케이스 보강.
+    "동맹",
+    "선보",
+    "선봬",
+    "출범",
+    "체결",
 ]
 
 STRONG_STRATEGIC_ACTION_KEYWORDS: Final[list[str]] = [
@@ -94,6 +100,9 @@ STRONG_STRATEGIC_ACTION_KEYWORDS: Final[list[str]] = [
     "공시",
     "조직개편",
     "채용",
+    # 강한 딜/동맹 신호 — 핵심성 판정(direct role)·fast-pass 에 함께 반영.
+    "동맹",
+    "체결",
 ]
 
 DIRECT_COMPANY_ROLE_KEYWORDS: Final[list[str]] = [
@@ -145,6 +154,10 @@ FAST_PASS_ACTION_KEYWORDS: Final[list[str]] = [
     "검증",
     "poc",
     "PoC",
+    # 출시/조직 출범 류 — fast-pass 에서도 LLM 없이 통과 가능하도록 보강.
+    "선보",
+    "선봬",
+    "출범",
 ]
 FAST_PASS_SOURCE_TYPES: Final[set[str]] = {"news"}
 ROLE_CONTEXT_WINDOW: Final[int] = 100
