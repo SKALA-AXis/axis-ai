@@ -1332,13 +1332,10 @@ def _company_has_core_role(
         if not alias_compact:
             continue
 
-        if (
-            alias_compact in title_compact
-            and _has_executive_strategy_signal_near_alias(
-                full_compact,
-                alias_compact,
-                matched_sectors,
-            )
+        if alias_compact in title_compact and _has_executive_strategy_signal_near_alias(
+            full_compact,
+            alias_compact,
+            matched_sectors,
         ):
             return True
 
@@ -1497,8 +1494,7 @@ def _has_executive_strategy_context(context_compact: str) -> bool:
         _compact(keyword) in context_compact for keyword in _EXECUTIVE_ROLE_KEYWORDS
     )
     has_strategy_keyword = any(
-        _compact(keyword) in context_compact
-        for keyword in _EXECUTIVE_STRATEGY_SIGNAL_KEYWORDS
+        _compact(keyword) in context_compact for keyword in _EXECUTIVE_STRATEGY_SIGNAL_KEYWORDS
     )
     return has_role_keyword and has_strategy_keyword
 

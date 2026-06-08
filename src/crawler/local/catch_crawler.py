@@ -20,9 +20,7 @@ log = logging.getLogger(__name__)
 
 CATCH_ANALYSIS_URL = "https://www.catch.co.kr/Comp/AnalysisCompView?ID={catch_id}"
 CATCH_SEARCH_URL = "https://www.catch.co.kr/Search/SearchList?Keyword={keyword}"
-DEFAULT_SESSION_PATH = (
-    Path(__file__).resolve().parents[3] / ".secrets" / "catch_storage_state.json"
-)
+DEFAULT_SESSION_PATH = Path(__file__).resolve().parents[3] / ".secrets" / "catch_storage_state.json"
 LOCKED_MESSAGE = "입사제안 받기 후 확인하세요."
 SWOT_LABELS = ("Strength", "Weakness", "Opportunity", "Threat")
 SECTION_MARKERS = (
@@ -350,9 +348,7 @@ def extract_section_bodies(lines: list[str]) -> dict[str, str]:
     bodies: dict[str, str] = {}
     for cursor, (heading, start_index) in enumerate(section_indices):
         end_index = (
-            section_indices[cursor + 1][1]
-            if cursor + 1 < len(section_indices)
-            else len(lines)
+            section_indices[cursor + 1][1] if cursor + 1 < len(section_indices) else len(lines)
         )
         body = "\n".join(lines[start_index + 1 : end_index]).strip()
         if body:
@@ -468,11 +464,7 @@ def extract_employee_review(lines: list[str]) -> dict[str, Any]:
                 "긍정적평가",
                 "부정적평가",
             }
-            payload["labels"] = [
-                value
-                for value in window
-                if value in labels
-            ]
+            payload["labels"] = [value for value in window if value in labels]
             break
     return payload
 
