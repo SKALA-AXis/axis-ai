@@ -6,7 +6,7 @@ from typing import Final
 
 NEWS_SOURCE_TYPES: Final[set[str]] = {"news"}
 OFFICIAL_SOURCE_TYPES: Final[set[str]] = {"official"}
-COMPANY_SITE_SOURCE_TYPES: Final[set[str]] = {"company_site"}
+COMPANY_SITE_SOURCE_TYPES: Final[set[str]] = {"company_site", "company_analysis"}
 PARSED_DOCUMENT_SOURCE_TYPES: Final[set[str]] = {"dart", "ir", "securities_report"}
 STRUCTURED_SIGNAL_SOURCE_TYPES: Final[set[str]] = {
     "job",

@@ -37,6 +37,27 @@ SCHEDULED_PREPROCESS_LIMIT = 5000
 # Mixer SSE keepalive 주기(초) — nginx/ALB idle timeout(기본 60s)보다 충분히 짧게.
 _MIXER_SSE_HEARTBEAT_SEC = 10
 
+PREPROCESS_SOURCE_TYPES_BY_SOURCE: dict[str, list[str]] = {
+    "naver_news": ["news"],
+    "global_newsroom": ["official"],
+    "stock": ["market_data"],
+    "naver_research": ["securities_report"],
+    "jobs": ["job"],
+    "company_news": ["official", "company_site"],
+    "dart": ["dart"],
+    "ir": ["ir"],
+    "naver_datalab": ["search_trend"],
+    "spri": ["trend_report"],
+    "bcg": ["trend_report"],
+}
+
+PREPROCESS_SOURCE_TYPES_BY_TRACK: dict[str, list[str]] = {
+    "a": ["news", "official"],
+    "b": ["market_data", "securities_report"],
+    "c": ["job", "official", "company_site"],
+    "d": ["dart", "ir", "search_trend", "trend_report"],
+}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -299,21 +320,45 @@ async def _run_collection_track(
                 crawl_window=crawl_window,
             )
 
-        preprocessing_service = PreprocessingService(
-            relevance_evaluator=RelevanceEvaluator(enable_llm=(track == "a")),
-            classifier=ClusterClassifier(enable_llm=(track == "a")),
-        )
+        crawl_run_records = processor.last_crawl_run_records
         crawl_run_ids = processor.last_crawl_run_ids
         # PreprocessingService.run() 은 sync 함수 + 내부에서 BGE-M3 encode (CPU-bound)
         # 호출 → event loop 를 막아 liveness probe (/healthz) timeout 으로 SIGKILL.
         # asyncio.to_thread 로 thread pool 위임 → event loop 자유.
-        if crawl_run_ids:
+        if crawl_run_records:
             results = []
+            for record in crawl_run_records:
+                crawl_run_id = record["crawl_run_id"]
+                source_name = record["source_name"]
+                source_types = _preprocess_source_types(track, source_name)
+                preprocessing_service = PreprocessingService(
+                    relevance_evaluator=RelevanceEvaluator(enable_llm="news" in source_types),
+                    classifier=ClusterClassifier(enable_llm="news" in source_types),
+                )
+                results.append(
+                    await asyncio.to_thread(
+                        preprocessing_service.run,
+                        company=selected,
+                        source_types=source_types,
+                        trigger_type=trigger_type,
+                        collected_since=None,
+                        crawl_run_id=crawl_run_id,
+                        limit=SCHEDULED_PREPROCESS_LIMIT,
+                    )
+                )
+        elif crawl_run_ids:
+            results = []
+            source_types = _preprocess_source_types(track, None)
+            preprocessing_service = PreprocessingService(
+                relevance_evaluator=RelevanceEvaluator(enable_llm="news" in source_types),
+                classifier=ClusterClassifier(enable_llm="news" in source_types),
+            )
             for crawl_run_id in crawl_run_ids:
                 results.append(
                     await asyncio.to_thread(
                         preprocessing_service.run,
                         company=selected,
+                        source_types=source_types,
                         trigger_type=trigger_type,
                         collected_since=None,
                         crawl_run_id=crawl_run_id,
@@ -321,10 +366,16 @@ async def _run_collection_track(
                     )
                 )
         else:
+            source_types = _preprocess_source_types(track, None)
+            preprocessing_service = PreprocessingService(
+                relevance_evaluator=RelevanceEvaluator(enable_llm="news" in source_types),
+                classifier=ClusterClassifier(enable_llm="news" in source_types),
+            )
             results = [
                 await asyncio.to_thread(
                     preprocessing_service.run,
                     company=selected,
+                    source_types=source_types,
                     trigger_type=trigger_type,
                     collected_since=started_at,
                     crawl_run_id=None,
@@ -345,6 +396,26 @@ async def _run_collection_track(
         )
     except Exception:
         log.exception("수집 파이프라인 실패 | task_id=%s track=%s", task_id, track)
+
+
+def _preprocess_source_types(track: str, source_name: str | None) -> list[str]:
+    if source_name:
+        normalized_source = source_name.split("[", 1)[0]
+        source_types = PREPROCESS_SOURCE_TYPES_BY_SOURCE.get(normalized_source)
+        if source_types:
+            return source_types
+
+    if track == "all":
+        seen: set[str] = set()
+        values: list[str] = []
+        for source_types in PREPROCESS_SOURCE_TYPES_BY_TRACK.values():
+            for source_type in source_types:
+                if source_type not in seen:
+                    seen.add(source_type)
+                    values.append(source_type)
+        return values
+
+    return PREPROCESS_SOURCE_TYPES_BY_TRACK.get(track, [])
 
 
 def _collection_window(

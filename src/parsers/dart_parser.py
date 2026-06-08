@@ -1100,6 +1100,9 @@ def _major_section_anchors(text: str) -> list[dict[str, Any]]:
 
 
 def _is_likely_toc_anchor(text: str, start: int) -> bool:
+    if start == 0:
+        return False
+
     line_start = text.rfind("\n", 0, start) + 1
     line_end = text.find("\n", start)
     if line_end < 0:
