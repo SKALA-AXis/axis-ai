@@ -261,6 +261,7 @@ def _assert_strategic_insight_schema(result: dict[str, Any]) -> None:
         "is_valid_strategic_insight",
         "analysis",
         "implication",
+        "sentence_grounding",
     }
     assert set(result["analysis"]) == {
         "is_valid_analysis",
@@ -299,6 +300,12 @@ def _assert_strategic_insight_schema(result: dict[str, Any]) -> None:
         "threats",
         "recommended_actions",
         "business_line_mapping",
+    }
+    assert set(result["sentence_grounding"]) == {
+        "schema_version",
+        "generator",
+        "entries",
+        "summary",
     }
 
 
@@ -479,6 +486,12 @@ def test_strategic_insight_agent_returns_separated_blocks():
         result["implication"]["provenance"]["prompt_version"]
         == strategic_insight_module._PROMPT_VERSION
     )
+    grounding = result["sentence_grounding"]
+    assert grounding["schema_version"] == "sentence-grounding-v1"
+    assert grounding["entries"]
+    assert any(
+        "c43682_a43100_f1" in entry.get("used_fact_ids", []) for entry in grounding["entries"]
+    )
     sent_messages = llm.invoke.call_args_list[0].args[0]
     full_prompt = "\n".join(message["content"] for message in sent_messages)
     user_prompt = sent_messages[1]["content"]
@@ -486,6 +499,9 @@ def test_strategic_insight_agent_returns_separated_blocks():
     assert "사실 기반 해석" in user_prompt
     assert "최종 시사점으로 끝내지 않습니다" in user_prompt
     assert "피어사의 기존 사업영역/역량" in user_prompt
+    assert "피어사가 원래 어떤 역량/사업영역을 갖고 있었는지" in user_prompt
+    assert "business_area/core_capability/recent_direction" in user_prompt
+    assert "기존 역량이 이번 사건에서 어떤 적용 장면" in user_prompt
     assert "SK AX 프로필 기반 대응 생성" in user_prompt
     assert "profile_context 나 recent context 가 없거나" in user_prompt
     assert "SK AX profile_context 의 관련 사업영역/역량" in user_prompt
@@ -503,6 +519,7 @@ def test_strategic_insight_agent_returns_separated_blocks():
     review_prompt = review_messages[1]["content"]
     assert "전략 QA reviewer" in review_messages[0]["content"]
     assert "1차 결과" in review_prompt
+    assert "기존 사업영역/역량 → 현재 사건 접점 → 사업적 의미" in review_prompt
     assert "recommended_actions" in review_prompt
 
 

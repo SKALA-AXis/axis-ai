@@ -1,7 +1,8 @@
 """Run one cluster through the analysis/card-news pipeline and save JSON.
 
-This script intentionally patches DB write functions, so it reads common DB
-data and calls the agents, but does not insert integrated_issues/card_news.
+By default this script patches DB write functions, so it reads DB data and
+calls the agents, but does not insert integrated_issues/card_news. Pass
+``--save-db`` to run the same pipeline with real DB writes enabled.
 """
 
 from __future__ import annotations
@@ -21,9 +22,22 @@ if str(ROOT) not in sys.path:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Card news dry run for one raw_articles cluster")
-    parser.add_argument("--env", choices=["local", "cloud"], default="cloud")
+    parser.add_argument(
+        "--env",
+        choices=["local", "cloud", "current"],
+        default="cloud",
+        help=(
+            "dotenv profile to load. Use 'current' when DATABASE_URL/OPENAI_API_KEY "
+            "are already exported and must not be overwritten by .env files."
+        ),
+    )
     parser.add_argument("--cluster-id", type=int, required=True)
     parser.add_argument("--representative-id", type=int, default=None)
+    parser.add_argument(
+        "--save-db",
+        action="store_true",
+        help="Actually insert/update integrated_issues and card_news. Default is dry-run only.",
+    )
     parser.add_argument(
         "--out",
         default=None,
@@ -41,7 +55,7 @@ def main() -> None:
     from src.config.env_loader import load_profile
 
     args = _parse_args()
-    profile = load_profile(args.env)
+    profile = "current" if args.env == "current" else load_profile(args.env)
     from src.pipeline.analysis_pipeline import AnalysisPipelineRunner, list_cluster_article_ids
 
     output_path = Path(args.out) if args.out else _default_output_path(args.cluster_id)
@@ -58,23 +72,31 @@ def main() -> None:
             f"기사 목록에 없습니다. cluster_article_ids={cluster_article_ids}"
         )
 
-    with (
-        patch(
-            "src.pipeline.analysis_flow_graph.save_integrated_issue",
-            return_value="DRYRUN-INTEGRATED-ISSUE-ID",
-        ),
-        patch(
-            "src.pipeline.analysis_flow_graph.save_card_news",
-            return_value="DRYRUN-CARD-NEWS-ID",
-        ),
-        patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
-    ):
+    if args.save_db:
         result = AnalysisPipelineRunner().run_cluster(
             cluster_id=args.cluster_id,
             representative_id=args.representative_id,
             cluster_article_ids=cluster_article_ids,
-            save_card=False,
+            save_card=True,
         )
+    else:
+        with (
+            patch(
+                "src.pipeline.analysis_flow_graph.save_integrated_issue",
+                return_value="DRYRUN-INTEGRATED-ISSUE-ID",
+            ),
+            patch(
+                "src.pipeline.analysis_flow_graph.save_card_news",
+                return_value="DRYRUN-CARD-NEWS-ID",
+            ),
+            patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
+        ):
+            result = AnalysisPipelineRunner().run_cluster(
+                cluster_id=args.cluster_id,
+                representative_id=args.representative_id,
+                cluster_article_ids=cluster_article_ids,
+                save_card=False,
+            )
 
     payload = {
         "dry_run": {
@@ -83,7 +105,8 @@ def main() -> None:
             "cluster_id": args.cluster_id,
             "representative_id": args.representative_id,
             "cluster_article_ids": cluster_article_ids,
-            "db_writes_patched": True,
+            "db_writes_patched": not args.save_db,
+            "save_db": args.save_db,
         },
         "quick_view": _quick_view(result),
         "result": result,

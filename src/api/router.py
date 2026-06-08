@@ -283,6 +283,7 @@ async def _run_collection_track(
     from src.config.companies import COMPANY_ALIASES
     from src.config.global_companies import GLOBAL_COMPANY_ALIASES, GLOBAL_COMPANY_IDS
     from src.crawler.batch_processor import BatchProcessor
+    from src.pipeline.analysis_delivery import run_analysis_delivery
     from src.preprocessing.classification import ClusterClassifier
     from src.preprocessing.preprocessing import PreprocessingService
     from src.preprocessing.relevance import RelevanceEvaluator
@@ -382,10 +383,14 @@ async def _run_collection_track(
                     limit=SCHEDULED_PREPROCESS_LIMIT,
                 )
             ]
+        delivery_results = []
+        for result in results:
+            delivery_results.append(await asyncio.to_thread(run_analysis_delivery, result))
         log.info(
             (
                 "수집 파이프라인 완료 | task_id=%s track=%s raw=%d "
-                "analysis_metrics=%d analysis_signals=%d classified=%d"
+                "analysis_metrics=%d analysis_signals=%d classified=%d "
+                "card_news=%d indexed=%d delivery_errors=%d"
             ),
             task_id,
             track,
@@ -393,6 +398,9 @@ async def _run_collection_track(
             sum(result.get("analysis_metric_count", 0) for result in results),
             sum(result.get("analysis_signal_count", 0) for result in results),
             sum(len(result.get("classified_clusters", [])) for result in results),
+            sum(len(result.get("card_news", [])) for result in delivery_results),
+            sum(len(result.get("indexed_vector_ids", [])) for result in delivery_results),
+            sum(len(result.get("errors", [])) for result in delivery_results),
         )
     except Exception:
         log.exception("수집 파이프라인 실패 | task_id=%s track=%s", task_id, track)

@@ -293,6 +293,16 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+cron = [
+    { name = "langchain-core" },
+    { name = "langchain-openai" },
+    { name = "openai" },
+    { name = "psycopg2-binary" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "sqlalchemy" },
+    { name = "tiktoken" },
+]
 dev = [
     { name = "mypy" },
     { name = "pre-commit" },
@@ -335,6 +345,16 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+cron = [
+    { name = "langchain-core", specifier = ">=0.2" },
+    { name = "langchain-openai", specifier = ">=0.1" },
+    { name = "openai", specifier = ">=1.30" },
+    { name = "psycopg2-binary", specifier = ">=2.9" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "tiktoken", specifier = ">=0.7" },
+]
 dev = [
     { name = "mypy", specifier = ">=1.10" },
     { name = "pre-commit", specifier = ">=3.0" },
