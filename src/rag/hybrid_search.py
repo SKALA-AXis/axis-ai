@@ -6,8 +6,6 @@ from typing import Optional
 from qdrant_client.models import (
     Fusion,
     FusionQuery,
-    NamedSparseVector,
-    NamedVector,
     Prefetch,
     SparseVector,
 )
@@ -66,18 +64,17 @@ def hybrid_search(
             collection_name=COLLECTION_MAIN,
             prefetch=[
                 Prefetch(
-                    query=NamedVector(name="dense", vector=vectors["dense"]),  # type: ignore[arg-type]
+                    query=vectors["dense"],
+                    using="dense",
                     limit=TOP_K_PREFETCH,
                     filter=filter_conditions,
                 ),
                 Prefetch(
-                    query=NamedSparseVector(  # type: ignore[arg-type]
-                        name="sparse",
-                        vector=SparseVector(
-                            indices=vectors["sparse"]["indices"],
-                            values=vectors["sparse"]["values"],
-                        ),
+                    query=SparseVector(
+                        indices=vectors["sparse"]["indices"],
+                        values=vectors["sparse"]["values"],
                     ),
+                    using="sparse",
                     limit=TOP_K_PREFETCH,
                     filter=filter_conditions,
                 ),
@@ -85,7 +82,30 @@ def hybrid_search(
             query=FusionQuery(fusion=Fusion.RRF),
             limit=top_k,
         )
-        return [p.payload for p in results.points if p.payload is not None]
+        return [
+            {**p.payload, "score": p.score}
+            for p in results.points
+            if p.payload is not None
+        ]
     except Exception as e:
-        log.error("Qdrant 검색 실패: %s", e)
+        log.warning("Qdrant query_points 검색 실패. REST fallback 시도: %s", e)
+
+    try:
+        from src.rag.qdrant_compat import legacy_rrf_search
+
+        hits = legacy_rrf_search(
+            collection_name=COLLECTION_MAIN,
+            dense_vector=vectors["dense"],
+            sparse_vector=vectors["sparse"],
+            limit=top_k,
+            prefetch_limit=TOP_K_PREFETCH,
+            query_filter=filter_conditions,
+        )
+        return [
+            {**(hit.get("payload") or {}), "score": hit.get("score")}
+            for hit in hits
+            if hit.get("payload")
+        ]
+    except Exception as e:
+        log.error("Qdrant REST fallback 검색 실패: %s", e)
         return []
