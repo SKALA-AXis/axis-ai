@@ -474,21 +474,6 @@ class RelevanceEvaluator:
             )
             return mention_result
 
-        role_result = _core_company_role_reject_result(
-            title=title,
-            content=analysis_content,
-            source_type=row.source_type,
-            matched_companies=matched_company_candidates,
-            matched_sectors=matched_sector_candidates,
-        )
-        if role_result is not None:
-            log.info(
-                "Gate 2.5 피어사 핵심성 부족 제외 | id=%s reason=%s",
-                getattr(row, "id", None),
-                role_result["reason"],
-            )
-            return role_result
-
         fast_pass_result = _fast_pass_result(
             title=title,
             content=analysis_content,
@@ -504,6 +489,44 @@ class RelevanceEvaluator:
             )
             return fast_pass_result
 
+        role_result = _core_company_role_reject_result(
+            title=title,
+            content=analysis_content,
+            source_type=row.source_type,
+            matched_companies=matched_company_candidates,
+            matched_sectors=matched_sector_candidates,
+        )
+        if role_result is not None:
+            if _should_defer_role_reject_to_llm(
+                title=title,
+                content=analysis_content,
+                source_type=row.source_type,
+                matched_companies=matched_company_candidates,
+                matched_sectors=matched_sector_candidates,
+            ):
+                log.info(
+                    "Gate 2.5 피어사 핵심성 LLM 위임 | id=%s reason=%s",
+                    getattr(row, "id", None),
+                    role_result["reason"],
+                )
+            else:
+                log.info(
+                    "Gate 2.5 피어사 핵심성 부족 제외 | id=%s reason=%s",
+                    getattr(row, "id", None),
+                    role_result["reason"],
+                )
+                return role_result
+
+        if role_result is not None and not self.enable_llm:
+            return _review_result(
+                label="irrelevant",
+                score=0.35,
+                companies=matched_company_candidates,
+                sectors=matched_sector_candidates,
+                reason="피어사 핵심성 hard reject 후보지만 제목/섹터/액션 신호가 있어 REVIEW 보류",
+                decision_code="core_role_deferred_needs_review",
+            )
+
         if not self.enable_llm:
             return _review_result(
                 label="irrelevant",
@@ -516,12 +539,18 @@ class RelevanceEvaluator:
 
         source_name = str(_row_value(row, "source_name", "") or "").strip().lower()
         if source_name not in _LLM_ALLOWED_SOURCE_NAMES:
-            return _result(
+            log.info(
+                "Gate 2.5 LLM 제한 소스 REVIEW 보류 | id=%s source=%s",
+                getattr(row, "id", None),
+                source_name or "unknown",
+            )
+            return _review_result(
                 label="irrelevant",
                 score=0.35,
                 companies=matched_company_candidates,
                 sectors=matched_sector_candidates,
-                reason=f"LLM relevance 제한 소스가 아님: {source_name or 'unknown'}",
+                reason=f"LLM relevance 제한 소스지만 규칙 확정 불가: REVIEW 보류 ({source_name or 'unknown'})",
+                decision_code="llm_source_not_allowed_needs_review",
             )
 
         return {
@@ -613,7 +642,7 @@ class RelevanceEvaluator:
                         )
                     )
                 else:
-                    resolved.append((row, _guard_llm_result(row, parsed)))
+                    resolved.append((row, parsed))
             log.info(
                 "Gate 2.5 LLM batch 판단 완료 | articles=%d relevant=%d",
                 len(resolved),
@@ -683,32 +712,6 @@ def analyze_relevance_article(article: dict[str, Any]) -> tuple[dict[str, Any], 
             item["skip_reason"] = result["reason"]
 
     return item, is_relevant
-
-
-def _guard_llm_result(row: Any, result: dict[str, Any]) -> dict[str, Any]:
-    if not _is_relevant(result):
-        return result
-
-    role_reject = _core_company_role_reject_result(
-        title=str(_row_value(row, "title", "") or ""),
-        content=str(_row_value(row, "content", "") or ""),
-        source_type=str(_row_value(row, "source_type", "") or ""),
-        matched_companies=result.get("matched_companies") or [],
-        matched_sectors=result.get("matched_sectors") or [],
-    )
-    if role_reject is None:
-        return result
-
-    return _result(
-        label="irrelevant",
-        score=min(float(result.get("relevance_score") or 0.35), 0.35),
-        companies=result.get("matched_companies") or [],
-        sectors=result.get("matched_sectors") or [],
-        reason=(
-            "LLM은 relevant로 판단했지만 피어사가 제목/핵심 행위 문맥의 주체가 아니라 "
-            "후처리에서 제외"
-        ),
-    )
 
 
 class _DictRow:
@@ -1400,6 +1403,57 @@ def _has_title_company_sector_candidate(
     return False
 
 
+def _should_defer_role_reject_to_llm(
+    *,
+    title: str,
+    content: str,
+    source_type: str | None,
+    matched_companies: list[str],
+    matched_sectors: list[str],
+) -> bool:
+    if str(source_type or "").strip().lower() != "news":
+        return False
+    if not matched_companies or not matched_sectors or matched_sectors == ["other"]:
+        return False
+
+    title_compact = _compact(title)
+    full_compact = _compact(f"{title} {content}")
+    has_action_signal = any(
+        keyword and keyword in full_compact
+        for keyword in (
+            [_compact(item) for item in STRATEGIC_ACTION_KEYWORDS]
+            + [_compact(item) for item in FAST_PASS_ACTION_KEYWORDS]
+            + [
+                "플랫폼",
+                "솔루션",
+                "로드맵",
+                "전략공개",
+                "전환전략",
+                "고도화",
+                "자동화",
+                "상용화",
+                "리셀러",
+                "판매권",
+            ]
+        )
+    )
+    if not has_action_signal:
+        return False
+
+    for company_id in matched_companies:
+        for alias in ALL_COMPANY_ALIASES.get(company_id, [company_id]):
+            alias_compact = _compact(alias)
+            if not alias_compact or alias_compact not in title_compact:
+                continue
+            if _has_listing_context_near_alias(title_compact, alias_compact):
+                continue
+            if _has_source_only_context_near_alias(title_compact, alias_compact):
+                continue
+            return True
+
+    return False
+
+
 def _alias_appears_as_subject(text_compact: str, alias_compact: str) -> bool:
     return any(f"{alias_compact}{marker}" in text_compact for marker in SUBJECT_MARKERS)
 
@@ -1434,8 +1488,9 @@ def _alias_appears_as_deal_counterparty(text_compact: str, alias_compact: str) -
 def _has_source_only_context_near_alias(text_compact: str, alias_compact: str) -> bool:
     source_only_keywords = (
         "출신",
-        "전",
         "前",
+        "전직",
+        "전임",
         "상무",
         "전무",
         "부사장",
