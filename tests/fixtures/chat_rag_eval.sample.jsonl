@@ -1,0 +1,2 @@
+{"query":"오늘 금융권 AI 인프라 신호를 요약해줘","expected_source_ids":["CN-FIN-1"],"current_page":{"route":"/dashboard","visible_item_ids":{"card_ids":["CN-FIN-1"]}}}
+{"query":"경쟁사 보안 거버넌스 동향 알려줘","expected_source_ids":["ISS-SEC-7"],"current_page":{"route":"/dashboard","visible_item_ids":{"integrated_issue_ids":["ISS-SEC-7"]}}}
