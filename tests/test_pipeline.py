@@ -331,6 +331,56 @@ def test_relevance_fast_pass_keeps_peer_partner_robot_adoption_news():
     assert result["relevance_label"] == "relevant"
 
 
+def test_relevance_fast_pass_keeps_peer_executive_strategy_article():
+    title = '이주평 삼성SDS 상무 "제조AI 핵심 데이터는 시계열"'
+    content = (
+        "이주평 삼성SDS 상무가 M.AX 컨퍼런스에서 제조 AX 전환과 "
+        "제조 데이터, AI 인프라 경쟁력을 발표했다."
+    )
+
+    role_reject = _core_company_role_reject_result(
+        title=title,
+        content=content,
+        source_type="news",
+        matched_companies=["samsung_sds"],
+        matched_sectors=["ax", "infra"],
+    )
+    result = _fast_pass_result(
+        title=title,
+        content=content,
+        source_type="news",
+        matched_companies=["samsung_sds"],
+        matched_sectors=["ax", "infra"],
+    )
+
+    assert role_reject is None
+    assert result is not None
+    assert result["relevance_label"] == "relevant"
+
+
+def test_core_role_defers_title_peer_sector_trend_article_to_llm():
+    title = "[이슈딜] 메모리 다음은 AX…네이버·LG CNS 뜬다"
+    content = "AX 시장 확대 속에서 네이버와 LG CNS의 클라우드·AI 사업 성장성이 주목된다."
+
+    role_reject = _core_company_role_reject_result(
+        title=title,
+        content=content,
+        source_type="news",
+        matched_companies=["lg_cns"],
+        matched_sectors=["ax"],
+    )
+    fast_pass = _fast_pass_result(
+        title=title,
+        content=content,
+        source_type="news",
+        matched_companies=["lg_cns"],
+        matched_sectors=["ax"],
+    )
+
+    assert role_reject is None
+    assert fast_pass is None
+
+
 def test_relevance_keeps_peer_subject_with_external_counterparty():
     result = _noise_reject_result(
         title="포스코DX, NC AI와 손잡고 산업현장용 피지컬AI 개발",

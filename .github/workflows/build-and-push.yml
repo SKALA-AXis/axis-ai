@@ -63,21 +63,39 @@ jobs:
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_PASSWORD }}
 
-      - name: Get short SHA
+      - name: Get image tags
         id: sha
-        run: echo "tag=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        run: |
+          echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "full=${{ github.event.workflow_run.head_sha || github.sha }}" >> $GITHUB_OUTPUT
 
-      - name: Build & push image
+      - name: Build & push axis-ai (API)
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.tag }}
+            ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.short }}
+            ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.full }}
             ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:develop
           cache-from: type=registry,ref=${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      - name: Build & push axis-ai-cron (card-evaluator)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.cron
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/axis-ai-cron:${{ steps.sha.outputs.short }}
+            ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/axis-ai-cron:${{ steps.sha.outputs.full }}
+            ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/axis-ai-cron:develop
+          cache-from: type=registry,ref=${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/axis-ai-cron:buildcache
+          cache-to: type=registry,ref=${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/axis-ai-cron:buildcache,mode=max
 
       - name: Setup kustomize
         # 비공식 action 이라 mutable tag (v2) 가 아닌 commit SHA 로 pin —
@@ -89,7 +107,7 @@ jobs:
       - name: Bump tag in axis-infra (with retry)
         env:
           GH_TOKEN: ${{ secrets.INFRA_DISPATCH_PAT }}
-          SHA: ${{ steps.sha.outputs.tag }}
+          SHA: ${{ steps.sha.outputs.short }}
           SVC: ${{ env.IMAGE_NAME }}
           HARBOR_HOST: ${{ env.HARBOR_HOST }}
           HARBOR_PROJECT: ${{ env.HARBOR_PROJECT }}
@@ -105,6 +123,9 @@ jobs:
             BASE_NAME="REPLACE_ACCOUNT.dkr.ecr.ap-northeast-2.amazonaws.com/${SVC}"
             HARBOR_REF="${HARBOR_HOST}/${HARBOR_PROJECT}/${SVC}:${SHA}"
             kustomize edit set image "${BASE_NAME}=${HARBOR_REF}"
+            CRON_BASE="REPLACE_ACCOUNT.dkr.ecr.ap-northeast-2.amazonaws.com/axis-ai-cron"
+            CRON_REF="${HARBOR_HOST}/${HARBOR_PROJECT}/axis-ai-cron:${SHA}"
+            kustomize edit set image "${CRON_BASE}=${CRON_REF}"
 
             cd ../../..
             git config user.email "ci@axis.local"

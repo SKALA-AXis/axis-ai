@@ -15,11 +15,17 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from src.config.companies import COMPANY_ALIASES, CORP_CODES
+from src.config.companies import (
+    CATCH_ANALYSIS_IDS,
+    COMPANY_ALIASES,
+    CORP_CODES,
+    company_name_ko,
+)
 from src.config.env_loader import load_profile
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES, GLOBAL_COMPANY_IDS
 from src.crawler.base import DailyLimitGuard
 from src.crawler.local.bcg_crawler import BcgCrawler
+from src.crawler.local.catch_crawler import CatchCompanyAnalysisCrawler
 from src.crawler.local.company_news_crawler import CompanyNewsCrawler
 from src.crawler.local.dart_crawler import DartCrawler
 from src.crawler.local.ir_crawler import IRCrawler
@@ -32,6 +38,7 @@ from src.crawler.local.stock_crawler import StockCrawler
 from src.crawler.parsers.link_check import LinkChecker
 from src.crawler.result_writer import DEFAULT_RESULTS_DIR, save_crawler_results
 from src.crawler.sources.global_newsroom import GlobalNewsroomCrawler
+from src.db.article_store import save_articles
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("run_local_crawler")
@@ -51,6 +58,7 @@ COMPANY_SOURCES = [
     "naver_research",
     "stock",
 ]
+OPTIONAL_COMPANY_SOURCES = ["catch"]
 INDUSTRY_SOURCES = [
     "naver_datalab",
     "company_news",
@@ -59,7 +67,7 @@ INDUSTRY_SOURCES = [
     "spri",
 ]
 
-ALL_SOURCES = COMPANY_SOURCES + INDUSTRY_SOURCES
+ALL_SOURCES = COMPANY_SOURCES + OPTIONAL_COMPANY_SOURCES + INDUSTRY_SOURCES
 SOURCE_ALIASES = {
     "official": "company_news",
     "job": "jobs",
@@ -196,6 +204,31 @@ def _parse_args() -> argparse.Namespace:
         default=6,
         help="저장 전 URL 접근성 검사 동시성. 429가 뜨면 낮춘다. 기본 6.",
     )
+    parser.add_argument(
+        "--catch-id",
+        default=None,
+        help="Catch 기업분석 ID. 예: 삼성SDS 리포트 URL의 ID=3393",
+    )
+    parser.add_argument(
+        "--catch-session",
+        default=None,
+        help="Catch storage_state JSON 경로. 기본 axis-ai/.secrets/catch_storage_state.json",
+    )
+    parser.add_argument(
+        "--catch-headed",
+        action="store_true",
+        help="Catch 크롤링을 headed 브라우저로 실행한다.",
+    )
+    parser.add_argument(
+        "--discover-latest",
+        action="store_true",
+        help="Catch 검색/기업요약 페이지에서 최신 분석리포트 ID를 먼저 탐색한다.",
+    )
+    parser.add_argument(
+        "--persist",
+        action="store_true",
+        help="로컬 JSON 저장에 더해 raw_articles DB에도 저장한다.",
+    )
     return parser.parse_args()
 
 
@@ -270,6 +303,23 @@ def _build_crawler(source: str, company: str | None, args: argparse.Namespace) -
             peer_id=company,
             lookback_days=args.stock_days,
             include_realtime=not args.no_stock_realtime,
+        )
+
+    if source == "catch":
+        if company is None:
+            raise ValueError("catch 크롤러는 company가 필요합니다.")
+        catch_id = args.catch_id or CATCH_ANALYSIS_IDS.get(company)
+        if not catch_id:
+            raise ValueError(
+                f"Catch analysis id가 없습니다: company={company}. --catch-id를 지정하세요."
+            )
+        return CatchCompanyAnalysisCrawler(
+            company=company,
+            catch_id=catch_id,
+            company_query=company_name_ko(company),
+            **({"session_path": args.catch_session} if args.catch_session else {}),
+            headless=not args.catch_headed,
+            discover_latest=args.discover_latest,
         )
 
     raise ValueError(f"지원하지 않는 source입니다: {source}")
@@ -520,6 +570,11 @@ def _build_run_plan(
                 if company_tier == "overseas":
                     continue
                 run_plan.append((source, None))
+            elif source == "catch":
+                if company:
+                    run_plan.append((source, company))
+                else:
+                    run_plan.extend((source, company_id) for company_id in CATCH_ANALYSIS_IDS)
             elif company:
                 if company in DOMESTIC_COMPANY_SEARCH_ALIASES:
                     run_plan.append((source, company))
@@ -634,6 +689,10 @@ async def _run() -> None:
             rejected_by_output.get((source, output_company), 0),
             output_path,
         )
+
+        if args.persist:
+            inserted = save_articles(articles)
+            log.info("DB 저장 완료 | source=%s inserted=%d", source, inserted)
 
         if source == "naver_datalab":
             chart_path = save_trend_chart(_datalab_rows(articles))

@@ -459,35 +459,41 @@ class RelevanceEvaluator:
                 reason=precheck["reason"],
             )
 
-        mention_result = _weak_company_mention_reject_result(
-            title=title,
-            content=analysis_content,
-            source_type=row.source_type,
-            matched_companies=matched_company_candidates,
-            matched_sectors=matched_sector_candidates,
-        )
-        if mention_result is not None:
-            log.info(
-                "Gate 2.5 피어사 언급 횟수 부족 제외 | id=%s reason=%s",
-                getattr(row, "id", None),
-                mention_result["reason"],
+        # "피어사 언급 횟수 부족 / 핵심성 부족" 규칙은 명백한 노이즈가 아니라 "약한
+        # 관련성 의심"이라 false negative 위험이 크다(예: 키워드 사전에 없는 출시·동맹
+        # 표현). LLM 이 켜진 경로에서는 하드 reject 하지 않고 판단을 LLM 으로 위임한다
+        # ── 명백한 건 이어지는 fast-pass 로 LLM 없이 통과하고, 애매한 건 LLM batch 로
+        # 내려간다. LLM 이 없는 경로(track b/c/d 등)에서만 규칙으로 보수적으로 reject.
+        if not self.enable_llm:
+            mention_result = _weak_company_mention_reject_result(
+                title=title,
+                content=analysis_content,
+                source_type=row.source_type,
+                matched_companies=matched_company_candidates,
+                matched_sectors=matched_sector_candidates,
             )
-            return mention_result
+            if mention_result is not None:
+                log.info(
+                    "Gate 2.5 피어사 언급 횟수 부족 제외(LLM 비활성) | id=%s reason=%s",
+                    getattr(row, "id", None),
+                    mention_result["reason"],
+                )
+                return mention_result
 
-        role_result = _core_company_role_reject_result(
-            title=title,
-            content=analysis_content,
-            source_type=row.source_type,
-            matched_companies=matched_company_candidates,
-            matched_sectors=matched_sector_candidates,
-        )
-        if role_result is not None:
-            log.info(
-                "Gate 2.5 피어사 핵심성 부족 제외 | id=%s reason=%s",
-                getattr(row, "id", None),
-                role_result["reason"],
+            role_result = _core_company_role_reject_result(
+                title=title,
+                content=analysis_content,
+                source_type=row.source_type,
+                matched_companies=matched_company_candidates,
+                matched_sectors=matched_sector_candidates,
             )
-            return role_result
+            if role_result is not None:
+                log.info(
+                    "Gate 2.5 피어사 핵심성 부족 제외(LLM 비활성) | id=%s reason=%s",
+                    getattr(row, "id", None),
+                    role_result["reason"],
+                )
+                return role_result
 
         fast_pass_result = _fast_pass_result(
             title=title,
@@ -861,6 +867,49 @@ _WEAK_PEER_CONTEXT_NOISE_KEYWORDS = [
     "보스턴다이나믹스",
     "보스턴 다이나믹스",
 ]
+_EXECUTIVE_ROLE_KEYWORDS = (
+    "대표",
+    "대표이사",
+    "사장",
+    "부사장",
+    "전무",
+    "상무",
+    "임원",
+    "본부장",
+    "센터장",
+    "실장",
+    "CTO",
+    "CIO",
+    "CISO",
+)
+_EXECUTIVE_STRATEGY_SIGNAL_KEYWORDS = (
+    "발제",
+    "발표",
+    "강연",
+    "기조연설",
+    "밝혔",
+    "말했",
+    "강조",
+    "제언",
+    "진단",
+    "전략",
+    "경쟁",
+    "컨퍼런스",
+    "세미나",
+    "포럼",
+    "M.AX",
+    "AX",
+    "AI",
+    "제조AI",
+    "제조AX",
+    "피지컬AI",
+    "데이터",
+    "시계열",
+    "인프라",
+    "클라우드",
+    "스마트팩토리",
+)
+_EXECUTIVE_SOURCE_CONTEXT_BLOCKERS = ("출신", "전직", "전임", "前")
 
 
 def _noise_reject_result(
@@ -1142,14 +1191,32 @@ def _fast_pass_result(
     if not company_in_title:
         return None
 
+    has_sector = bool(matched_sectors and matched_sectors != ["other"])
+    if not has_sector:
+        return None
+
+    has_executive_strategy_role = any(
+        _has_executive_strategy_signal_near_alias(text_compact, _compact(alias), matched_sectors)
+        for company_id in matched_companies
+        for alias in ALL_COMPANY_ALIASES.get(company_id, [company_id])
+        if _compact(alias)
+    )
+    if has_executive_strategy_role:
+        return _result(
+            label="relevant",
+            score=0.76,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason=(
+                "fast-pass: 피어사 임원이 섹터 전략/기술 맥락에서 발언한 기사로 "
+                "분석 가치가 있어 관련 기사로 판단"
+            ),
+        )
+
     has_strong_action = any(
         _compact(keyword) in title_compact for keyword in FAST_PASS_ACTION_KEYWORDS
     )
     if not has_strong_action:
-        return None
-
-    has_sector = bool(matched_sectors and matched_sectors != ["other"])
-    if not has_sector:
         return None
 
     has_direct_role = any(
@@ -1199,6 +1266,13 @@ def _core_company_role_reject_result(
             matched_sectors=matched_sectors,
         ):
             return None
+
+    if _has_title_company_sector_candidate(
+        title_compact=title_compact,
+        matched_companies=matched_companies,
+        matched_sectors=matched_sectors,
+    ):
+        return None
 
     return _result(
         label="irrelevant",
@@ -1264,6 +1338,13 @@ def _company_has_core_role(
         if not alias_compact:
             continue
 
+        if alias_compact in title_compact and _has_executive_strategy_signal_near_alias(
+            full_compact,
+            alias_compact,
+            matched_sectors,
+        ):
+            return True
+
         if (
             alias_compact in title_compact
             and _has_listing_context_near_alias(title_compact, alias_compact)
@@ -1302,6 +1383,29 @@ def _company_has_core_role(
     return False
 
 
+def _has_title_company_sector_candidate(
+    *,
+    title_compact: str,
+    matched_companies: list[str],
+    matched_sectors: list[str],
+) -> bool:
+    if not matched_sectors or matched_sectors == ["other"]:
+        return False
+
+    for company_id in matched_companies:
+        for alias in ALL_COMPANY_ALIASES.get(company_id, [company_id]):
+            alias_compact = _compact(alias)
+            if not alias_compact or alias_compact not in title_compact:
+                continue
+            if _has_listing_context_near_alias(title_compact, alias_compact):
+                continue
+            if _has_source_only_context_near_alias(title_compact, alias_compact):
+                continue
+            return True
+
+    return False
+
+
 def _alias_appears_as_subject(text_compact: str, alias_compact: str) -> bool:
     return any(f"{alias_compact}{marker}" in text_compact for marker in SUBJECT_MARKERS)
 
@@ -1329,6 +1433,8 @@ def _alias_appears_as_deal_counterparty(text_compact: str, alias_compact: str) -
         "협업",
         "공동개발",
         "맞손",
+        "동맹",
+        "체결",
     )
     return any(keyword in text_compact for keyword in deal_keywords)
 
@@ -1358,9 +1464,47 @@ def _has_source_only_context_near_alias(text_compact: str, alias_compact: str) -
         right = min(len(text_compact), pos + len(alias_compact) + ROLE_CONTEXT_WINDOW)
         context = text_compact[left:right]
         if any(_compact(keyword) in context for keyword in source_only_keywords):
+            if _has_executive_strategy_context(context):
+                start = pos + len(alias_compact)
+                continue
             return True
 
         start = pos + len(alias_compact)
+
+
+def _has_executive_strategy_signal_near_alias(
+    text_compact: str,
+    alias_compact: str,
+    matched_sectors: list[str],
+) -> bool:
+    if not alias_compact or not matched_sectors or matched_sectors == ["other"]:
+        return False
+
+    start = 0
+    while True:
+        pos = text_compact.find(alias_compact, start)
+        if pos < 0:
+            return False
+
+        left = max(0, pos - ROLE_CONTEXT_WINDOW)
+        right = min(len(text_compact), pos + len(alias_compact) + ROLE_CONTEXT_WINDOW)
+        if _has_executive_strategy_context(text_compact[left:right]):
+            return True
+
+        start = pos + len(alias_compact)
+
+
+def _has_executive_strategy_context(context_compact: str) -> bool:
+    if any(_compact(keyword) in context_compact for keyword in _EXECUTIVE_SOURCE_CONTEXT_BLOCKERS):
+        return False
+
+    has_role_keyword = any(
+        _compact(keyword) in context_compact for keyword in _EXECUTIVE_ROLE_KEYWORDS
+    )
+    has_strategy_keyword = any(
+        _compact(keyword) in context_compact for keyword in _EXECUTIVE_STRATEGY_SIGNAL_KEYWORDS
+    )
+    return has_role_keyword and has_strategy_keyword
 
 
 def _has_action_keyword_near_alias(text_compact: str, alias_compact: str) -> bool:

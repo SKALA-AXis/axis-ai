@@ -1,0 +1,8 @@
+title = "axis-ai gitleaks config"
+
+[allowlist]
+paths = [
+  '''\.env\.example$''',
+  '''docs/.*''',
+  '''tmp-cards/.*''',
+]
