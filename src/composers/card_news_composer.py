@@ -283,16 +283,18 @@ class CardNewsComposer:
             )
         )
         if is_llm_valid:
-            card["implication_result"] = implication_result
-            card["implication"] = _implication_from_result(
-                implication_result,
-                fallback=card.get("implication"),
-            )
-            card["frontend_implication"] = _frontend_implication_from_result(
+            frontend_implication = _frontend_implication_from_result(
                 implication_result,
                 fallback=card.get("frontend_implication"),
                 analysis=package.get("analysis") or {},
             )
+            card["implication_result"] = implication_result
+            card["implication"] = _implication_from_result(
+                implication_result,
+                fallback=card.get("implication"),
+                frontend=frontend_implication,
+            )
+            card["frontend_implication"] = frontend_implication
         else:
             # ImplicationAgent 결과 없음/무효 → analysis 기반 frontend fallback 유지.
             card.setdefault(
@@ -1152,6 +1154,7 @@ def _implication_from_result(
     implication: dict[str, Any],
     *,
     fallback: dict[str, Any] | None = None,
+    frontend: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """W2-4: CardNewsComposer 가 DB 에 저장할 implication JSONB 의 단일 출처.
 
@@ -1165,8 +1168,10 @@ def _implication_from_result(
     payload.setdefault("implication_scope", "peer_and_skax")
     payload.setdefault("watch_points", payload.get("watch_points", []))
     # frontend 호환 - flatten.
-    frontend = _frontend_implication_from_result(implication, fallback=fallback)
-    payload["frontend"] = frontend
+    payload["frontend"] = frontend or _frontend_implication_from_result(
+        implication,
+        fallback=fallback,
+    )
     return payload
 
 
