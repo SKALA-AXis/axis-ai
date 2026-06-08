@@ -286,10 +286,7 @@ def _resolve_source_types(
 def _normalize_source_types(values: Iterable[str] | None) -> set[str]:
     valid = set(ASSISTANT_KNOWLEDGE_SOURCE_TYPES)
     normalized = {
-        item.strip()
-        for value in values or []
-        for item in str(value).split(",")
-        if item.strip()
+        item.strip() for value in values or [] for item in str(value).split(",") if item.strip()
     }
     unknown = normalized - valid
     if unknown:
@@ -303,9 +300,10 @@ def _normalize_source_types(values: Iterable[str] | None) -> set[str]:
 def _integrated_issue_records(limit: int) -> Iterable[AssistantKnowledgeRecord]:
     try:
         with SessionLocal() as db:
-            rows = db.execute(
-                text(
-                    """
+            rows = (
+                db.execute(
+                    text(
+                        """
                     SELECT id::text AS id,
                            headline,
                            one_line_summary,
@@ -318,9 +316,12 @@ def _integrated_issue_records(limit: int) -> Iterable[AssistantKnowledgeRecord]:
                      ORDER BY updated_at DESC
                      LIMIT :limit
                     """
-                ),
-                {"limit": int(limit)},
-            ).mappings().all()
+                    ),
+                    {"limit": int(limit)},
+                )
+                .mappings()
+                .all()
+            )
     except Exception as exc:  # noqa: BLE001 - optional source in local/dev DBs.
         log.debug("assistant integrated issue records skipped | error=%s", exc)
         return []
@@ -347,9 +348,10 @@ def _integrated_issue_records(limit: int) -> Iterable[AssistantKnowledgeRecord]:
 def _card_analysis_records(limit: int) -> Iterable[AssistantKnowledgeRecord]:
     try:
         with SessionLocal() as db:
-            rows = db.execute(
-                text(
-                    """
+            rows = (
+                db.execute(
+                    text(
+                        """
                     SELECT id,
                            title,
                            summary_lines,
@@ -361,9 +363,12 @@ def _card_analysis_records(limit: int) -> Iterable[AssistantKnowledgeRecord]:
                      ORDER BY created_at DESC
                      LIMIT :limit
                     """
-                ),
-                {"limit": int(limit)},
-            ).mappings().all()
+                    ),
+                    {"limit": int(limit)},
+                )
+                .mappings()
+                .all()
+            )
     except Exception as exc:  # noqa: BLE001
         log.debug("assistant card analysis records skipped | error=%s", exc)
         return []
@@ -390,9 +395,10 @@ def _card_analysis_records(limit: int) -> Iterable[AssistantKnowledgeRecord]:
 def _peer_profile_records(limit: int) -> Iterable[AssistantKnowledgeRecord]:
     try:
         with SessionLocal() as db:
-            rows = db.execute(
-                text(
-                    """
+            rows = (
+                db.execute(
+                    text(
+                        """
                     SELECT id,
                            name,
                            tier,
@@ -414,9 +420,12 @@ def _peer_profile_records(limit: int) -> Iterable[AssistantKnowledgeRecord]:
                      ) DESC
                      LIMIT :limit
                     """
-                ),
-                {"limit": int(limit)},
-            ).mappings().all()
+                    ),
+                    {"limit": int(limit)},
+                )
+                .mappings()
+                .all()
+            )
     except Exception as exc:  # noqa: BLE001
         log.debug("assistant peer profile records skipped | error=%s", exc)
         return []

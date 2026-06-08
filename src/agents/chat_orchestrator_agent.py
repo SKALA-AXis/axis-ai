@@ -310,9 +310,10 @@ class ChatOrchestratorAgent:
     def _lookup_today_insight(self) -> dict[str, Any] | None:
         try:
             with SessionLocal() as db:
-                row = db.execute(
-                    text(
-                        """
+                row = (
+                    db.execute(
+                        text(
+                            """
                         SELECT id::text AS id,
                                report_date::text AS report_date,
                                headline,
@@ -330,8 +331,11 @@ class ChatOrchestratorAgent:
                          ORDER BY report_date DESC, created_at DESC
                          LIMIT 1
                         """
+                        )
                     )
-                ).mappings().first()
+                    .mappings()
+                    .first()
+                )
         except Exception as exc:  # noqa: BLE001 - optional table in local/dev DBs.
             log.debug("today insight lookup skipped | error=%s", exc)
             return None
@@ -363,9 +367,10 @@ class ChatOrchestratorAgent:
             return []
         try:
             with SessionLocal() as db:
-                rows = db.execute(
-                    text(
-                        """
+                rows = (
+                    db.execute(
+                        text(
+                            """
                         SELECT id,
                                title,
                                summary_lines,
@@ -378,9 +383,12 @@ class ChatOrchestratorAgent:
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """
-                    ),
-                    {"ids": ids, "limit": int(limit)},
-                ).mappings().all()
+                        ),
+                        {"ids": ids, "limit": int(limit)},
+                    )
+                    .mappings()
+                    .all()
+                )
         except Exception as exc:  # noqa: BLE001
             log.debug("card lookup skipped | error=%s", exc)
             return []
@@ -394,9 +402,10 @@ class ChatOrchestratorAgent:
             return []
         try:
             with SessionLocal() as db:
-                rows = db.execute(
-                    text(
-                        """
+                rows = (
+                    db.execute(
+                        text(
+                            """
                         SELECT id::text AS id,
                                headline,
                                one_line_summary,
@@ -411,9 +420,12 @@ class ChatOrchestratorAgent:
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """
-                    ),
-                    {"ids": ids, "limit": int(limit)},
-                ).mappings().all()
+                        ),
+                        {"ids": ids, "limit": int(limit)},
+                    )
+                    .mappings()
+                    .all()
+                )
         except Exception as exc:  # noqa: BLE001
             log.debug("integrated issue lookup skipped | error=%s", exc)
             return []
@@ -428,9 +440,10 @@ class ChatOrchestratorAgent:
         params["limit"] = int(limit)
         try:
             with SessionLocal() as db:
-                rows = db.execute(
-                    text(
-                        f"""
+                rows = (
+                    db.execute(
+                        text(
+                            f"""
                         SELECT id,
                                title,
                                summary_lines,
@@ -443,9 +456,12 @@ class ChatOrchestratorAgent:
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """
-                    ),
-                    params,
-                ).mappings().all()
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
         except Exception as exc:  # noqa: BLE001
             log.debug("lexical search skipped | error=%s", exc)
             return []

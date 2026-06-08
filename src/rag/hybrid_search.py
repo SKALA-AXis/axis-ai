@@ -82,11 +82,7 @@ def hybrid_search(
             query=FusionQuery(fusion=Fusion.RRF),
             limit=top_k,
         )
-        return [
-            {**p.payload, "score": p.score}
-            for p in results.points
-            if p.payload is not None
-        ]
+        return [{**p.payload, "score": p.score} for p in results.points if p.payload is not None]
     except Exception as e:
         log.warning("Qdrant query_points 검색 실패. REST fallback 시도: %s", e)
 
