@@ -163,6 +163,7 @@ class AnalysisPipelineRunner:
             "integrated_issue": state.get("integrated_issue") or {},
             "analysis": state.get("analysis") or {},
             "implication": state.get("implication") or {},
+            "sentence_grounding": state.get("sentence_grounding") or {},
             "card_news": card_news,
             "saved_card_id": saved_card_id,
             "human_review_flags": list(state.get("human_review_flags") or []),

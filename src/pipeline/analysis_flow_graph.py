@@ -85,6 +85,7 @@ class SupervisorState(TypedDict, total=False):
     integrated_issue: dict[str, Any] | None
     analysis: dict[str, Any] | None
     implication: dict[str, Any] | None
+    sentence_grounding: dict[str, Any] | None
     validation: ValidationReport | None
     analysis_package: AnalysisPackage | None
     card_news_id: str | None
@@ -302,6 +303,7 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
                 **state,
                 "analysis": insight.get("analysis") or {},
                 "implication": insight.get("implication") or {},
+                "sentence_grounding": insight.get("sentence_grounding") or {},
             },
         )
 
@@ -728,6 +730,7 @@ def _evidence_payload_from_state(state: SupervisorState) -> dict[str, Any]:
     integrated = state.get("integrated_issue") or {}
     analysis = state.get("analysis") or {}
     implication = state.get("implication") or {}
+    sentence_grounding = state.get("sentence_grounding") or {}
     evidence_payload: dict[str, Any] = {
         "source_links": [
             {
@@ -745,6 +748,7 @@ def _evidence_payload_from_state(state: SupervisorState) -> dict[str, Any]:
             "integrated_issue": integrated,
             "analysis": analysis,
             "implication": implication,
+            "sentence_grounding": sentence_grounding,
             "classification": classification,
         },
     }

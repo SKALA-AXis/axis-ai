@@ -303,6 +303,11 @@ class CardNewsComposer:
             "summary": integrated_issue,
             "analysis": package.get("analysis") or {},
             "implication": implication_result,
+            "sentence_grounding": package.get("sentence_grounding")
+            or (package.get("evidence_payload") or {})
+            .get("analysis_package", {})
+            .get("sentence_grounding")
+            or {},
             "validation": validation,
         }
         return card
@@ -635,12 +640,198 @@ def _plain_summary_lines(summary: dict[str, Any]) -> list[str]:
 
 def _display_summary_lines(lines: list[str], summary: dict[str, Any]) -> list[str]:
     key_numbers = _key_number_display_map(summary)
-    cleaned: list[str] = []
-    for line in lines[:_SUMMARY_LINE_MAX]:
+    ranked: list[tuple[int, int, str]] = []
+    seen: set[str] = set()
+    for index, line in enumerate(_summary_candidate_lines(lines, summary)):
         text = _summary_line_for_display(_strip_number_prefix(line), key_numbers)
-        if text and text not in cleaned:
-            cleaned.append(text)
-    return cleaned
+        dedupe_key = re.sub(r"\s+", " ", text).casefold()
+        if not text or dedupe_key in seen:
+            continue
+        ranked.append((_summary_line_priority(text, summary), -index, text))
+        seen.add(dedupe_key)
+    ranked.sort(reverse=True)
+    selected: list[str] = []
+    skipped: list[str] = []
+    selected_roles: set[str] = set()
+    for _, _, text in ranked:
+        if len(selected) >= _SUMMARY_LINE_MAX:
+            break
+        role = _summary_line_role(text, summary)
+        if role in selected_roles and role != "context" and len(selected) < _SUMMARY_LINE_MIN:
+            skipped.append(text)
+            continue
+        if any(_summary_lines_too_similar(text, existing) for existing in selected):
+            skipped.append(text)
+            continue
+        selected.append(text)
+        selected_roles.add(role)
+    for text in skipped:
+        if len(selected) >= _SUMMARY_LINE_MIN:
+            break
+        if text not in selected:
+            selected.append(text)
+    return selected[:_SUMMARY_LINE_MIN] if len(selected) >= _SUMMARY_LINE_MIN else selected
+
+
+def _summary_candidate_lines(lines: list[str], summary: dict[str, Any]) -> list[str]:
+    candidates = [str(line or "").strip() for line in lines if str(line or "").strip()]
+    intelligence = summary.get("cluster_fact_intelligence") or {}
+    if isinstance(intelligence, dict):
+        for group_name in ("common_facts", "unique_facts"):
+            for item in _list_dicts(intelligence.get(group_name)):
+                fact_text = str(item.get("fact") or "").strip()
+                if fact_text:
+                    candidates.append(fact_text)
+    for fact_item in _list_dicts(summary.get("consolidated_facts")):
+        text = str(fact_item.get("fact") or "").strip()
+        if text:
+            candidates.append(text)
+    return candidates
+
+
+def _summary_line_priority(text: str, summary: dict[str, Any]) -> int:
+    value = str(text or "")
+    score = 0
+    event_type = str(
+        summary.get("cluster_event_type") or summary.get("event_type") or ""
+    ).casefold()
+    if _is_market_reaction_summary_line(value) and event_type != "stock_market":
+        score -= 100
+    shared_focus = _summary_similarity_tokens(value) & _summary_focus_tokens(summary)
+    score += min(len(shared_focus), 8) * 9
+    if _has_numeric_or_period_signal(value):
+        score += 20
+    if _has_target_capacity_or_schedule(value):
+        score += 45
+    if _has_schedule_signal(value) and _has_non_money_quantity(value):
+        score += 35
+    elif _has_schedule_signal(value):
+        score += 15
+    if _has_target_capacity_or_schedule(value) and not _has_schedule_signal(value):
+        if re.search(r"최종|계약|확정|완료", value):
+            score -= 25
+    if _contains_key_number_text(value, summary):
+        score += 25
+    if re.search(r"선정|확정|수주|계약|체결|참여|사업자", value):
+        score += 20
+    if re.search(r"구축|설립|운영|착공|도입|전환|현대화|협약|계약", value):
+        score += 15
+    if re.search(r"주가|거래소|거래\s*(중|마쳤)|상승|하락|급등|급락", value):
+        score -= 30
+    return score
+
+
+def _summary_line_role(text: str, summary: dict[str, Any]) -> str:
+    value = str(text or "")
+    event_type = str(
+        summary.get("cluster_event_type") or summary.get("event_type") or ""
+    ).casefold()
+    if _is_market_reaction_summary_line(value) and event_type != "stock_market":
+        return "market_reaction"
+    if re.search(r"최종\s*선정|민간\s*참여|사업자로\s*선정|사업자에", value):
+        return "core_event"
+    if re.search(r"협약|주주\s*간|SPC|특수목적법인|출자|설립", value, re.IGNORECASE):
+        return "governance"
+    if _has_target_capacity_or_schedule(value):
+        return "scale_schedule"
+    if re.search(r"선정|확정|수주|계약|체결|참여|사업자", value):
+        return "core_event"
+    if _has_numeric_or_period_signal(value):
+        return "scale_schedule"
+    return "context"
+
+
+def _summary_lines_too_similar(left: str, right: str) -> bool:
+    left_tokens = _summary_similarity_tokens(left)
+    right_tokens = _summary_similarity_tokens(right)
+    if len(left_tokens) < 3 or len(right_tokens) < 3:
+        return False
+    overlap = len(left_tokens & right_tokens)
+    return overlap / min(len(left_tokens), len(right_tokens)) >= 0.72
+
+
+def _summary_similarity_tokens(text: str) -> set[str]:
+    tokens = re.findall(r"[가-힣A-Za-z0-9][가-힣A-Za-z0-9&+·_-]{1,}", str(text or ""))
+    stopwords = {
+        "사업",
+        "계약",
+        "체결",
+        "완료",
+        "밝혔다",
+        "위한",
+        "관련",
+        "통해",
+        "규모",
+        "계획",
+        "예정",
+    }
+    return {token for token in tokens if token not in stopwords}
+
+
+def _summary_focus_tokens(summary: dict[str, Any]) -> set[str]:
+    focus_parts = [
+        summary.get("headline"),
+        summary.get("main_event"),
+        summary.get("main_issue"),
+        summary.get("one_line_summary"),
+    ]
+    if not any(str(part or "").strip() for part in focus_parts):
+        for line in _list_string(summary.get("fact_summary")):
+            if not _is_market_reaction_summary_line(line):
+                focus_parts.append(line)
+                break
+    return _summary_similarity_tokens(" ".join(str(part or "") for part in focus_parts))
+
+
+def _has_numeric_or_period_signal(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\d|년|월|일|까지|부터|규모|금액|기간|비율|대비|투자|자본금|"
+            r"매출|수량|장|대|명|억원|조원|만원|%",
+            str(text or ""),
+        )
+    )
+
+
+def _has_target_capacity_or_schedule(text: str) -> bool:
+    value = str(text or "")
+    has_quantity = bool(re.search(r"\d[\d,.\s]*(장|대|개|건|명|곳|식|세트|억원|조원)", value))
+    has_schedule = _has_schedule_signal(value)
+    has_execution = bool(re.search(r"구축|운영|도입|전환|착공|확보|조성|목표|예정|계획", value))
+    return has_execution and (has_quantity or has_schedule)
+
+
+def _has_schedule_signal(text: str) -> bool:
+    return bool(re.search(r"\d{4}\s*년|까지|부터|기간|단계|분기|월|일", str(text or "")))
+
+
+def _has_non_money_quantity(text: str) -> bool:
+    return bool(re.search(r"\d[\d,.\s]*(장|대|개|건|명|곳|식|세트)", str(text or "")))
+
+
+def _contains_key_number_text(text: str, summary: dict[str, Any]) -> bool:
+    value = str(text or "")
+    for item in _list_dicts(summary.get("key_numbers")):
+        label = str(item.get("metric_label") or item.get("metric_name") or "").strip()
+        raw_value = str(item.get("value") or "").strip()
+        unit = str(item.get("unit") or "").strip()
+        if label and label in value:
+            return True
+        if raw_value and raw_value in value:
+            return True
+        if unit and raw_value and f"{raw_value}{unit}" in value:
+            return True
+    return False
+
+
+def _is_market_reaction_summary_line(text: str) -> bool:
+    return bool(
+        re.search(
+            r"주가|한국거래소|전\s*거래일|거래\s*(중|마쳤)|"
+            r"장\s*(초반|마감)|상승|하락|급등|급락|투자자|시장\s*반응",
+            str(text or ""),
+        )
+    )
 
 
 def _summary_line_for_display(line: str, key_numbers: dict[str, str]) -> str:
