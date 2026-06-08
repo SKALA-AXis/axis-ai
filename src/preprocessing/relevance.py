@@ -1493,9 +1493,14 @@ def _has_executive_strategy_context(context_compact: str) -> bool:
     if any(_compact(keyword) in context_compact for keyword in _EXECUTIVE_SOURCE_CONTEXT_BLOCKERS):
         return False
 
-    return any(_compact(keyword) in context_compact for keyword in _EXECUTIVE_ROLE_KEYWORDS) and any(
-        _compact(keyword) in context_compact for keyword in _EXECUTIVE_STRATEGY_SIGNAL_KEYWORDS
+    has_role_keyword = any(
+        _compact(keyword) in context_compact for keyword in _EXECUTIVE_ROLE_KEYWORDS
     )
+    has_strategy_keyword = any(
+        _compact(keyword) in context_compact
+        for keyword in _EXECUTIVE_STRATEGY_SIGNAL_KEYWORDS
+    )
+    return has_role_keyword and has_strategy_keyword
 
 
 def _has_action_keyword_near_alias(text_compact: str, alias_compact: str) -> bool:
