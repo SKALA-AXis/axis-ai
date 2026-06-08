@@ -19,3 +19,4 @@ htmlcov/
 dist/
 src/crawler/crawler_results/
 dryruns/
+.secrets/

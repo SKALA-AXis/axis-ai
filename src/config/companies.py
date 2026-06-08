@@ -20,6 +20,7 @@ class CompanyConfig(TypedDict, total=False):
     ir_pages: list[str]
     ir_fetch_strategy: str
     ir_click_fallback: bool
+    catch_analysis_id: str
 
 
 COMPANIES: Final[dict[str, CompanyConfig]] = {
@@ -36,6 +37,7 @@ COMPANIES: Final[dict[str, CompanyConfig]] = {
         ],
         "ir_fetch_strategy": "playwright_then_httpx",
         "ir_click_fallback": True,
+        "catch_analysis_id": "3393",
     },
     "lg_cns": {
         "name_ko": "LG CNS",
@@ -50,6 +52,7 @@ COMPANIES: Final[dict[str, CompanyConfig]] = {
         ],
         "ir_fetch_strategy": "playwright_then_httpx",
         "ir_click_fallback": True,
+        "catch_analysis_id": "3303",
     },
     "hyundai_autoever": {
         "name_ko": "현대오토에버",
@@ -64,6 +67,7 @@ COMPANIES: Final[dict[str, CompanyConfig]] = {
         ],
         "ir_fetch_strategy": "playwright_then_httpx",
         "ir_click_fallback": True,
+        "catch_analysis_id": "3367",
     },
     "posco_dx": {
         "name_ko": "포스코DX",
@@ -78,6 +82,7 @@ COMPANIES: Final[dict[str, CompanyConfig]] = {
         ],
         "ir_fetch_strategy": "playwright_then_httpx",
         "ir_click_fallback": True,
+        "catch_analysis_id": "3507",
     },
     "sk_ax": {
         "name_ko": "SK AX",
@@ -102,6 +107,7 @@ COMPANIES: Final[dict[str, CompanyConfig]] = {
         ],
         "ir_fetch_strategy": "playwright_then_httpx",
         "ir_click_fallback": True,
+        "catch_analysis_id": "3625",
     },
 }
 
@@ -138,6 +144,11 @@ IR_CONFIG: Final[dict[str, dict[str, object]]] = {
     }
     for company_id, config in COMPANIES.items()
     if "ir_pages" in config
+}
+CATCH_ANALYSIS_IDS: Final[dict[str, str]] = {
+    company_id: config["catch_analysis_id"]
+    for company_id, config in COMPANIES.items()
+    if "catch_analysis_id" in config
 }
 
 

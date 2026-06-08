@@ -59,6 +59,21 @@ _UPDATE_IR_CONTENT_IF_BETTER_SQL = text("""
       AND :new_content_length >= 1000
 """)
 
+_UPDATE_COMPANY_ANALYSIS_IF_CHANGED_SQL = text("""
+    UPDATE raw_articles
+    SET title = :title,
+        content = :content,
+        content_type = COALESCE(:content_type, content_type),
+        published_at = COALESCE(:published_at, published_at),
+        collected_at = COALESCE(:collected_at, collected_at),
+        processing_status = 'RAW',
+        metadata = metadata || CAST(:metadata AS jsonb),
+        error_message = COALESCE(:error_message, error_message)
+    WHERE id = :id
+      AND source_type = 'company_analysis'
+      AND COALESCE(metadata ->> 'content_hash', '') <> :content_hash
+""")
+
 _INSERT_CRAWL_RUN_ARTICLE = text("""
     INSERT INTO crawl_run_articles (
         crawl_run_id, raw_article_id, url, url_hash, discovered_at,
@@ -307,6 +322,14 @@ def save_articles(
                         article=article,
                         sanitized_content=sanitized_content,
                     )
+                    _update_company_analysis_if_changed(
+                        db,
+                        article_id=article_id,
+                        article=article,
+                        sanitized_title=sanitized_title,
+                        sanitized_content=sanitized_content,
+                        source_metadata=source_metadata,
+                    )
                     _upsert_source_metadata(
                         db,
                         article_id=article_id,
@@ -375,6 +398,37 @@ def _update_ir_content_if_better(
             "error_message": article.error_message,
             "collected_at": article.collected_at,
             "new_content_length": len(sanitized_content),
+        },
+    )
+
+
+def _update_company_analysis_if_changed(
+    db,
+    *,
+    article_id: int,
+    article: RawArticle,
+    sanitized_title: str,
+    sanitized_content: str,
+    source_metadata: str,
+) -> None:
+    if article.source_type != "company_analysis":
+        return
+    metadata = _metadata_dict(source_metadata)
+    content_hash = str(metadata.get("content_hash") or "")
+    if not content_hash:
+        return
+    db.execute(
+        _UPDATE_COMPANY_ANALYSIS_IF_CHANGED_SQL,
+        {
+            "id": article_id,
+            "title": sanitized_title,
+            "content": sanitized_content,
+            "content_type": article.content_type,
+            "published_at": article.published_at or article.collected_at,
+            "collected_at": article.collected_at,
+            "metadata": source_metadata,
+            "error_message": article.error_message,
+            "content_hash": content_hash,
         },
     )
 

@@ -69,6 +69,7 @@ class BatchProcessor:
         self.link_checker = LinkChecker()
         self.last_inserted_count = 0
         self.last_crawl_run_ids: list[str] = []
+        self.last_crawl_run_records: list[dict[str, str]] = []
 
     async def run_track_a(
         self,
@@ -414,6 +415,13 @@ class BatchProcessor:
                 source_name=run_source_name,
                 window_start=effective_window.start if effective_window else None,
                 window_end=effective_window.end if effective_window else None,
+            )
+            self.last_crawl_run_records.append(
+                {
+                    "crawl_run_id": str(run_id),
+                    "source_name": run_source_name,
+                    "track": effective_run_context.track or "",
+                }
             )
 
         try:
