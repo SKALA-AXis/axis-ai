@@ -382,10 +382,14 @@ async def _run_collection_track(
                     limit=SCHEDULED_PREPROCESS_LIMIT,
                 )
             ]
+
+        news_postprocess = None
+        if track in {"a", "all"}:
+            news_postprocess = await asyncio.to_thread(_run_recent_news_cluster_postprocess)
         log.info(
             (
                 "수집 파이프라인 완료 | task_id=%s track=%s raw=%d "
-                "analysis_metrics=%d analysis_signals=%d classified=%d"
+                "analysis_metrics=%d analysis_signals=%d classified=%d postprocess=%s"
             ),
             task_id,
             track,
@@ -393,9 +397,44 @@ async def _run_collection_track(
             sum(result.get("analysis_metric_count", 0) for result in results),
             sum(result.get("analysis_signal_count", 0) for result in results),
             sum(len(result.get("classified_clusters", [])) for result in results),
+            news_postprocess,
         )
     except Exception:
         log.exception("수집 파이프라인 실패 | task_id=%s track=%s", task_id, track)
+
+
+def _run_recent_news_cluster_postprocess() -> dict:
+    from scripts.postprocess_singleton_clusters import run_postprocess
+    from src.db.postgres import SessionLocal
+
+    with SessionLocal() as db:
+        result = run_postprocess(
+            db=db,
+            source_type="news",
+            lookback_hours=2,
+            time_field="published_at",
+            max_source_size=3,
+            min_target_size=4,
+            min_new_cluster_size=2,
+            max_time_gap_hours=72,
+            min_score=0.45,
+            apply=True,
+            skip_noise=True,
+        )
+        db.commit()
+        summary = {
+            "clusters": result["cluster_count"],
+            "sources": result["source_count"],
+            "targets": result["target_count"],
+            "merge_candidates": len(result["candidates"]),
+            "group_merge_candidates": len(result["group_candidates"]),
+            "noise_candidates": len(result["noise_ids"]),
+            "updated": result["updated"],
+            "group_updated": result["group_updated"],
+            "noise_updated": result["noise_updated"],
+        }
+    log.info("뉴스 클러스터 후처리 완료 | %s", summary)
+    return summary
 
 
 def _preprocess_source_types(track: str, source_name: str | None) -> list[str]:

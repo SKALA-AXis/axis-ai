@@ -163,6 +163,88 @@ _KEEP_AMBIGUOUS_SINGLETONS = os.getenv("DEDUP_KEEP_AMBIGUOUS_SINGLETONS", "true"
 
 _CANONICAL_ISSUE_TERMS: Mapping[str, tuple[str, ...]] = {}
 _TITLE_CONCEPT_TERMS: Mapping[str, tuple[str, ...]] = {
+    "lg_cns_agentic_aind": (
+        "aind",
+        "에이전틱ai개발플랫폼",
+        "에이전틱 ai 개발 플랫폼",
+        "에이전틱개발플랫폼",
+        "에이전틱 개발 플랫폼",
+        "ai개발플랫폼",
+        "ai 개발 플랫폼",
+        "기업용개발플랫폼",
+        "기업용 개발 플랫폼",
+        "기업시스템개발",
+        "기업 시스템 개발",
+        "기업시스템구축",
+        "기업 시스템 구축",
+        "대규모it시스템",
+        "대규모 it 시스템",
+        "대규모시스템구축",
+        "대규모 시스템 구축",
+        "데브온",
+        "바이브코딩",
+        "바이브 코딩",
+        "코볼",
+        "계좌이체",
+    ),
+    "gpu_ai_highway": (
+        "ai고속도로",
+        "ai 고속도로",
+        "gpu9704",
+        "gpu 9704",
+        "9704장",
+        "2조원대gpu",
+        "2조원대 gpu",
+        "2조800억",
+        "2조 800억",
+        "2조규모gpu",
+        "2조 규모 gpu",
+        "gpu사업자",
+        "gpu 사업자",
+        "엘리스그룹",
+        "엘리스 그룹",
+        "네이버클라우드",
+        "네이버 클라우드",
+    ),
+    "lg_nvidia_physical_ai": (
+        "젠슨황",
+        "젠슨 황",
+        "엔비디아",
+        "nvidia",
+        "lg엔비디아",
+        "lg엔 비디아",
+        "한국ai동맹",
+        "한국 ai 동맹",
+        "서울누빈젠슨황",
+        "서울 누빈 젠슨 황",
+        "광폭행보",
+        "광폭 행보",
+        "피지컬ai동맹",
+        "피지컬 ai 동맹",
+        "피지컬ai협력",
+        "피지컬 ai 협력",
+        "ai인프라까지맞손",
+        "ai 인프라까지 맞손",
+        "로봇동맹",
+        "로봇 동맹",
+        "전방위동맹",
+        "전방위 동맹",
+    ),
+    "hyundai_autoever_robotics_challenge": (
+        "현대오토에버",
+        "한국과학창의재단",
+        "로보틱스챌린지",
+        "로보틱스 챌린지",
+        "청소년로보틱스",
+        "청소년 로보틱스",
+    ),
+    "saemaul_inspection_system": (
+        "새마을금고",
+        "검사종합시스템",
+        "검사 종합 시스템",
+        "이상징후탐지",
+        "이상징후 탐지",
+    ),
     "autonomous_welding_robot": (
         "자율용접",
         "자율 용접",
@@ -983,6 +1065,16 @@ def _event_signature(article: dict[str, Any]) -> str:
     if "인더스트리데이" in text:
         return "ax_strategy:industry_day"
     title_concepts = set(_title_concepts(article))
+    if "lg_cns_agentic_aind" in title_concepts:
+        return "ax_strategy:lg_cns_agentic_aind"
+    if "gpu_ai_highway" in title_concepts:
+        return "cloud_infra:gpu_ai_highway"
+    if "lg_nvidia_physical_ai" in title_concepts:
+        return "ax_strategy:lg_nvidia_physical_ai"
+    if "hyundai_autoever_robotics_challenge" in title_concepts:
+        return "ax_strategy:hyundai_autoever_robotics_challenge"
+    if "saemaul_inspection_system" in title_concepts:
+        return "contract_deal:saemaul_inspection_system"
     if "jensen_huang_visit" in title_concepts:
         return "ax_strategy:jensen_huang_nc_meeting"
     if "autonomous_welding_robot" in title_concepts:

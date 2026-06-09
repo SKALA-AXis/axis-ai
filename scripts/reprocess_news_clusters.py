@@ -965,12 +965,14 @@ def _title_cluster_features(
     tokens: set[str] = set()
     companies: set[str] = set()
     dates: set[str] = set()
+    event_keys: set[str] = set()
     list_like_count = 0
     title_count = 0
     for article_id in article_ids:
         article = article_by_id.get(article_id) or {}
         title = str(article.get("title") or "")
         tokens |= _title_merge_tokens(title)
+        event_keys |= _title_event_keys_for_merge(title)
         companies |= set(article.get("matched_companies") or [])
         published_at = str(article.get("published_at") or "")
         if published_at:
@@ -983,6 +985,7 @@ def _title_cluster_features(
         "tokens": tokens,
         "companies": companies,
         "dates": dates,
+        "event_keys": event_keys,
         "list_like_ratio": list_like_count / title_count if title_count else 0.0,
         "article_count": len(article_ids),
     }
@@ -995,6 +998,10 @@ def _title_clusters_related(left: dict[str, Any], right: dict[str, Any]) -> bool
         return False
     if not _dates_near(left["dates"], right["dates"]):
         return False
+
+    shared_event_keys = left["event_keys"] & right["event_keys"]
+    if shared_event_keys:
+        return True
 
     left_tokens = left["tokens"]
     right_tokens = right["tokens"]
@@ -1033,6 +1040,17 @@ def _requires_strict_title_merge(left: dict[str, Any], right: dict[str, Any]) ->
 
 def _has_high_signal_shared_token(shared: set[str]) -> bool:
     high_signal_tokens = {
+        "aind",
+        "에이전틱",
+        "agentic",
+        "데브온",
+        "바이브코딩",
+        "gpu",
+        "9704장",
+        "엘리스그룹",
+        "네이버클라우드",
+        "젠슨황",
+        "엔비디아",
         "chatgpt",
         "에듀",
         "openai",
@@ -1049,6 +1067,44 @@ def _has_high_signal_shared_token(shared: set[str]) -> bool:
         "skala",
     }
     return bool(shared & high_signal_tokens)
+
+
+def _title_event_keys_for_merge(title: str) -> set[str]:
+    compact = _compact_title(title)
+    keys: set[str] = set()
+    if "lgcns" in compact and any(
+        marker in compact
+        for marker in (
+            "aind",
+            "에이전틱",
+            "agentic",
+            "ai개발플랫폼",
+            "개발플랫폼",
+            "기업시스템",
+            "대규모it시스템",
+            "대규모시스템",
+            "데브온",
+            "바이브코딩",
+            "코볼",
+            "계좌이체",
+        )
+    ):
+        keys.add("lg_cns_agentic_aind")
+    if any(marker in compact for marker in ("gpu", "ai고속도로", "9704", "엘리스", "2조800억")) and any(
+        marker in compact for marker in ("삼성sds", "삼성에스디에스", "네이버", "엘리스", "사업자", "선정", "낙점", "9704")
+    ):
+        keys.add("samsung_sds_gpu_ai_highway")
+    if any(marker in compact for marker in ("엔비디아", "nvidia", "젠슨황", "lg엔비디아")) and any(
+        marker in compact for marker in ("lg", "구광모", "피지컬ai", "로봇", "ai인프라", "동맹", "협력", "파트너십", "광폭행보")
+    ):
+        keys.add("lg_nvidia_physical_ai")
+    if "현대오토에버" in compact and any(
+        marker in compact for marker in ("로보틱스챌린지", "청소년로보틱스", "한국과학창의재단")
+    ):
+        keys.add("hyundai_autoever_robotics_challenge")
+    if any(marker in compact for marker in ("새마을금고", "검사종합시스템", "이상징후")):
+        keys.add("saemaul_inspection_system")
+    return keys
 
 
 def _is_list_like_title(title: str) -> bool:
