@@ -754,6 +754,8 @@ def _event_buckets_compatible(left: dict[str, Any], right: dict[str, Any]) -> bo
     right_bucket = _event_bucket(right)
     if left_bucket == "general" or right_bucket == "general":
         return True
+    if _same_company_action_topic(left, right):
+        return True
     left_signature = _event_signature(left)
     right_signature = _event_signature(right)
     if (
@@ -1127,6 +1129,9 @@ def _same_company_signature_or_concept(left: dict[str, Any], right: dict[str, An
     if _has_specific_ax_signature_conflict(left, right):
         return False
 
+    if _same_company_action_topic(left, right):
+        return True
+
     left_signature = _event_signature(left)
     right_signature = _event_signature(right)
     if (
@@ -1166,6 +1171,59 @@ def _title_tokens_related(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return jaccard >= 0.35 or coverage >= 0.55
 
 
+def _same_company_action_topic(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if not _same_company_context(left, right):
+        return False
+    if not (_title_has_event_action(left) and _title_has_event_action(right)):
+        return False
+
+    shared = _title_event_tokens(left) & _title_event_tokens(right)
+    company_tokens = _company_title_tokens(left) | _company_title_tokens(right)
+    non_company_shared = shared - company_tokens
+    return any(_is_distinctive_event_token(token) for token in non_company_shared)
+
+
+def _title_has_event_action(article: dict[str, Any]) -> bool:
+    title = _compact_text(str(article.get("title") or ""))
+    return any(
+        marker in title
+        for marker in (
+            "계약",
+            "도입",
+            "체결",
+            "협력",
+            "협업",
+            "맞손",
+            "수주",
+            "선정",
+            "출시",
+            "공개",
+            "공급",
+            "구축",
+            "투자",
+            "인수",
+            "확대",
+        )
+    )
+
+
+def _company_title_tokens(article: dict[str, Any]) -> set[str]:
+    tokens: set[str] = set()
+    for company_id in _company_key(article):
+        for alias in [company_id, *_ALL_COMPANY_ALIASES.get(company_id, [])]:
+            for raw_token in re.findall(r"[가-힣A-Za-z0-9]+", str(alias).lower()):
+                token = _normalize_title_token(raw_token)
+                if token:
+                    tokens.add(token)
+    return tokens
+
+
+def _is_distinctive_event_token(token: str) -> bool:
+    if len(token) >= 4:
+        return True
+    return bool(re.fullmatch(r"[가-힣]{3,}", token))
+
+
 def _shared_title_token_count(left: dict[str, Any], right: dict[str, Any]) -> int:
     return len(_title_event_tokens(left) & _title_event_tokens(right))
 
@@ -1182,6 +1240,7 @@ def _title_event_tokens(article: dict[str, Any]) -> set[str]:
 
 def _normalize_title_token(token: str) -> str:
     compact = _compact_text(token.lower())
+    compact = _strip_korean_particle(compact)
     aliases = {
         "엔씨": "nc",
         "엔씨ai": "ncai",
@@ -1204,6 +1263,15 @@ def _normalize_title_token(token: str) -> str:
         "sto": "토큰증권",
     }
     return aliases.get(compact, compact)
+
+
+def _strip_korean_particle(token: str) -> str:
+    if len(token) < 4 or not re.fullmatch(r"[가-힣]+", token):
+        return token
+    for suffix in ("으로", "에게", "에서", "과", "와", "은", "는", "이", "가", "을", "를", "의"):
+        if token.endswith(suffix) and len(token) - len(suffix) >= 3:
+            return token[: -len(suffix)]
+    return token
 
 
 def _useful_title_token(token: str) -> bool:
@@ -1237,8 +1305,13 @@ def _useful_title_token(token: str) -> bool:
         "한다",
         "위해",
         "기술",
+        "기업",
+        "기업용",
+        "기반",
         "시장",
         "사업",
+        "공략",
+        "확대",
     }
     return token not in stopwords
 
