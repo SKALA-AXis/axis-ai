@@ -1213,14 +1213,11 @@ def build_executive_summary_from_facts(
         )
     elif label == "high_salience_visible":
         base = (
-            f"오늘 {count}건 신호 중 '{short_title}'이 사업 영향과 "
-            "보도 확산 모두에서 핵심입니다."
+            f"오늘 {count}건 신호 중 '{short_title}'이 사업 영향과 보도 확산 모두에서 핵심입니다."
         )
     else:
         base = f"오늘 {count}건 신호 중 '{short_title}'을 우선 볼 만합니다."
-    window_line = (
-        f" 최근 {window_days}일 패턴과 비교하면 오늘 판단 순서가 달라질 수 있습니다."
-    )
+    window_line = f" 최근 {window_days}일 패턴과 비교하면 오늘 판단 순서가 달라질 수 있습니다."
     return _clip(f"{base}{window_line}{keyword_line}".strip(), 320)
 
 
@@ -1242,8 +1239,7 @@ def build_executive_implication_from_facts(comparison_facts: dict[str, Any] | No
             280,
         )
     return _clip(
-        f"SK AX는 '{title}'가 단건 뉴스인지 반복 패턴인지 구분한 뒤 "
-        "제안 우선순위를 정해야 합니다.",
+        f"SK AX는 '{title}'가 단건 뉴스인지 반복 패턴인지 구분한 뒤 제안 우선순위를 정해야 합니다.",
         280,
     )
 
@@ -1332,11 +1328,15 @@ def polish_executive_output(
     implication = str(out.get("executive_implication") or "")
     lead = _primary_lead(comparison)
     implication_rewrite = build_executive_implication_from_facts(comparison)
-    if lead and implication_rewrite and (
-        is_generic_executive_text(implication)
-        or "salience" in implication.lower()
-        or "노출 0." in implication
-        or implication.strip() == str(lead.get("narrative_hint") or "").strip()
+    if (
+        lead
+        and implication_rewrite
+        and (
+            is_generic_executive_text(implication)
+            or "salience" in implication.lower()
+            or "노출 0." in implication
+            or implication.strip() == str(lead.get("narrative_hint") or "").strip()
+        )
     ):
         out["executive_implication"] = implication_rewrite
 
@@ -1344,10 +1344,7 @@ def polish_executive_output(
     if len(signals) >= 3:
         polished: list[dict[str, Any]] = []
         replacements = [
-            (
-                build_primary_signal_value(comparison)
-                or str(signals[0].get("value") or "")
-            ),
+            (build_primary_signal_value(comparison) or str(signals[0].get("value") or "")),
             build_context_signal_value(comparison),
             build_next_judgment_signal_value(comparison, lead=lead),
         ]
