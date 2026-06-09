@@ -1117,14 +1117,9 @@ def _fallback_headline(context: dict[str, Any]) -> str:
             items = [item for item in _list(primary.get("items")) if isinstance(item, dict)]
             if items:
                 lead = items[0]
-                title = str(lead.get("title") or "")
-                label = str(lead.get("label") or "")
-                if label == "low_visibility_definite_event":
-                    return _clip(
-                        f"보도는 적지만 전략 이벤트로 우선 확인: {title}",
-                        120,
-                    )
-                return _clip(f"오늘 primary 신호: {title}", 120)
+                title = str(lead.get("title") or "").strip()
+                if title:
+                    return _clip(title, 120)
 
     first = _first_issue(context)
     if first:

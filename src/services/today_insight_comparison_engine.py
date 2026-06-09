@@ -1169,10 +1169,7 @@ def build_primary_headline(comparison_facts: dict[str, Any] | None) -> str:
     title = str(lead.get("title") or "").strip()
     if not title:
         return ""
-    label = str(lead.get("label") or "")
-    if label == "low_visibility_definite_event":
-        return _clip(f"보도는 적지만 우선 확인: {title}", 120)
-    return _clip(f"오늘의 핵심 신호: {title}", 120)
+    return _clip(title, 120)
 
 
 def build_executive_summary_from_facts(
@@ -1267,7 +1264,7 @@ def polish_executive_output(
     )
 
     primary_headline = build_primary_headline(comparison)
-    if primary_headline and is_generic_executive_text(str(out.get("headline") or "")):
+    if primary_headline:
         out["headline"] = primary_headline
 
     summary_rewrite = build_executive_summary_from_facts(comparison, change_stats=change_stats)

@@ -5,6 +5,7 @@ from datetime import date
 from src.services.today_insight_comparison_engine import (
     build_comparison_facts,
     build_executive_summary_from_facts,
+    build_primary_headline,
     build_ui_change_summary,
     compute_keyword_trend_facts,
     format_evidence_change_lines,
@@ -263,6 +264,25 @@ def test_format_evidence_change_lines_and_ui_chips() -> None:
     )
     assert chips[1]["label"] == "검색지수 변화"
     assert "AI 에이전트" in chips[1]["value"]
+
+
+def test_primary_headline_is_title_only_without_editorial_prefix() -> None:
+    headline = build_primary_headline(
+        {
+            "primary_selection": {
+                "items": [
+                    {
+                        "title": "LGCNS, 앤트로픽과 클로드 엔터프라이즈 도입 계약 체결",
+                        "label": "low_visibility_definite_event",
+                    }
+                ]
+            }
+        }
+    )
+
+    assert headline == "LGCNS, 앤트로픽과 클로드 엔터프라이즈 도입 계약 체결"
+    assert "보도는 적지만" not in headline
+    assert "우선 확인" not in headline
 
 
 def test_executive_summary_uses_plain_korean_not_internal_scores() -> None:
