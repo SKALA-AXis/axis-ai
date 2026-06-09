@@ -92,6 +92,27 @@ def test_same_issue_groups_shared_specific_terms_and_numbers():
     assert _same_issue(left, right) is True
 
 
+def test_hyundai_autoever_platier_contract_uses_same_signature():
+    left = {
+        "id": 47000,
+        "company": ["hyundai_autoever"],
+        "title": "[특징주] 플래티어, 현대오토에버와 24억 규모 추가 공급계약 체결",
+        "content": "플래티어가 현대오토에버와 인증중고차 관련 공급계약을 체결했다.",
+        "published_at": "2026-06-09T11:30:00+09:00",
+    }
+    right = {
+        "id": 46955,
+        "company": ["hyundai_autoever"],
+        "title": '플래티어, 현대오토에버와 연속 수주..."45억원 확보"',
+        "content": "플래티어가 현대오토에버와 연속 수주 성과를 냈다.",
+        "published_at": "2026-06-09T10:51:00+09:00",
+    }
+
+    assert _event_signature(left) == "contract_deal:platier_hyundai_autoever_contract"
+    assert _event_signature(right) == "contract_deal:platier_hyundai_autoever_contract"
+    assert _should_merge_articles(left, right, similarity=0.5, threshold=0.8) is True
+
+
 def test_representative_prefers_article_with_company_in_title():
     title_article = {
         "company": ["lg_cns"],

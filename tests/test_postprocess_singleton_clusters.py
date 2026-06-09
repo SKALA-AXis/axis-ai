@@ -5,6 +5,7 @@ from scripts.postprocess_singleton_clusters import (
     SourceCluster,
     _filter_group_candidates_after_target_merges,
     _find_candidates,
+    _is_stock_noise,
     _strong_event_keys,
 )
 
@@ -16,6 +17,13 @@ def test_lg_cns_anthropic_claude_titles_share_strong_event_key() -> None:
     assert "lg_cns_anthropic_claude" in _strong_event_keys(
         "LG CNS, 앤스로픽 클로드 도입... 그룹사 단계적 확대"
     )
+
+
+def test_platier_hyundai_autoever_contract_is_not_stock_noise() -> None:
+    title = "[특징주] 플래티어, 현대오토에버와 24억 규모 추가 공급계약 체결"
+
+    assert "platier_hyundai_autoever_contract" in _strong_event_keys(title)
+    assert _is_stock_noise(title) is False
 
 
 def test_small_lg_cns_anthropic_cluster_merges_to_large_cluster() -> None:

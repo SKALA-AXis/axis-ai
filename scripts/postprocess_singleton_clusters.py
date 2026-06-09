@@ -723,6 +723,24 @@ def _strong_event_keys(title: str) -> set[str]:
         marker in compact for marker in ("로보틱스챌린지", "청소년로보틱스", "한국과학창의재단")
     ):
         keys.add("hyundai_autoever_robotics_challenge")
+    if (
+        "플래티어" in compact
+        and "현대오토에버" in compact
+        and any(
+            marker in compact
+            for marker in (
+                "인증중고차",
+                "공급계약",
+                "운영계약",
+                "연속수주",
+                "추가수주",
+                "대형운영계약",
+                "수주",
+                "계약체결",
+            )
+        )
+    ):
+        keys.add("platier_hyundai_autoever_contract")
     if any(marker in compact for marker in ("새마을금고", "검사종합시스템", "이상징후")):
         keys.add("saemaul_inspection_system")
     if "lgcns" in compact and any(
@@ -824,6 +842,8 @@ def _within_time_gap(
 
 
 def _is_stock_noise(title: str) -> bool:
+    if _strong_event_keys(title):
+        return False
     return bool(_STOCK_NOISE_RE.search(title or ""))
 
 

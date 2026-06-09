@@ -238,6 +238,22 @@ _TITLE_CONCEPT_TERMS: Mapping[str, tuple[str, ...]] = {
         "청소년로보틱스",
         "청소년 로보틱스",
     ),
+    "platier_hyundai_autoever_contract": (
+        "플래티어",
+        "현대오토에버",
+        "인증중고차",
+        "인증 중고차",
+        "공급계약",
+        "공급 계약",
+        "운영계약",
+        "운영 계약",
+        "연속수주",
+        "연속 수주",
+        "추가수주",
+        "추가 수주",
+        "대형운영계약",
+        "대형 운영 계약",
+    ),
     "saemaul_inspection_system": (
         "새마을금고",
         "검사종합시스템",
@@ -989,6 +1005,15 @@ def _event_buckets_compatible(left: dict[str, Any], right: dict[str, Any]) -> bo
     right_bucket = _event_bucket(right)
     if left_bucket == "general" or right_bucket == "general":
         return True
+    left_signature = _event_signature(left)
+    right_signature = _event_signature(right)
+    if (
+        left_signature == right_signature
+        and not left_signature.endswith(":general")
+        and ":title:" not in left_signature
+        and ":proper:" not in left_signature
+    ):
+        return True
     return left_bucket == right_bucket
 
 
@@ -1049,7 +1074,10 @@ def _event_signature(article: dict[str, Any]) -> str:
     bucket = _event_bucket(article)
     title = _compact_text(str(article.get("title") or ""))
     text = _issue_text(article)
+    title_concepts = set(_title_concepts(article))
 
+    if "platier_hyundai_autoever_contract" in title_concepts:
+        return "contract_deal:platier_hyundai_autoever_contract"
     if bucket == "market_reaction":
         return f"market_reaction:{_published_day(article)}"
     if "두나무" in text:
@@ -1064,7 +1092,6 @@ def _event_signature(article: dict[str, Any]) -> str:
         return "ax_strategy:ai_factory"
     if "인더스트리데이" in text:
         return "ax_strategy:industry_day"
-    title_concepts = set(_title_concepts(article))
     if "lg_cns_agentic_aind" in title_concepts:
         return "ax_strategy:lg_cns_agentic_aind"
     if "gpu_ai_highway" in title_concepts:
@@ -1413,6 +1440,7 @@ def _same_company_signature_or_concept(left: dict[str, Any], right: dict[str, An
         "logistics_robotics",
         "manufacturing_ax_market",
         "smart_infra_lidar",
+        "platier_hyundai_autoever_contract",
     }
     shared_concepts = set(_title_concepts(left)) & set(_title_concepts(right))
     return bool(shared_concepts & strong_concepts)
