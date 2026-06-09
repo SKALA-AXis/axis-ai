@@ -33,12 +33,14 @@ from src.observability.langfuse_client import (
 
 log = logging.getLogger(__name__)
 
-_PROMPT_VERSION = "chat-orchestrator-v1-page-cag-rag-handoff"
-_RAG_PREFETCH_K = int(os.getenv("CHAT_RAG_PREFETCH_K", "50"))
-_RAG_VECTOR_K = int(os.getenv("CHAT_RAG_VECTOR_K", "24"))
-_RAG_RERANK_K = int(os.getenv("CHAT_RAG_RERANK_K", "24"))
-_RAG_FINAL_K = int(os.getenv("CHAT_RAG_FINAL_K", "8"))
-_DEFAULT_LLM_MODEL = "gpt-4o"
+_PROMPT_VERSION = "chat-orchestrator-v2-global-fast-guarded"
+_RAG_PREFETCH_K = int(os.getenv("CHAT_RAG_PREFETCH_K", "24"))
+_RAG_VECTOR_K = int(os.getenv("CHAT_RAG_VECTOR_K", "12"))
+_RAG_RERANK_K = int(os.getenv("CHAT_RAG_RERANK_K", "12"))
+_RAG_FINAL_K = int(os.getenv("CHAT_RAG_FINAL_K", "5"))
+_RECENT_NEWS_DAYS = int(os.getenv("CHAT_RECENT_NEWS_DAYS", "7"))
+_RECENT_NEWS_LIMIT = int(os.getenv("CHAT_RECENT_NEWS_LIMIT", "6"))
+_DEFAULT_LLM_MODEL = "gpt-4o-mini"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 _SECURITY_PATTERNS = (
@@ -77,6 +79,53 @@ _AXIS_SCOPE_HINTS = (
     "수주",
     "계약",
     "핵심 신호",
+)
+
+_PAGE_REFERENCE_HINTS = (
+    "현재 화면",
+    "현재 페이지",
+    "이 화면",
+    "이 페이지",
+    "여기",
+    "보고 있는",
+)
+
+_SEARCH_STOPWORDS = {
+    "오늘",
+    "요약",
+    "알려줘",
+    "알려줘~",
+    "찾아줘",
+    "보여줘",
+    "정리해줘",
+    "설명해줘",
+    "기사",
+    "뉴스",
+    "news",
+    "최근",
+    "관련",
+    "위주",
+}
+
+_PEER_ALIASES: tuple[tuple[str, str, str], ...] = (
+    ("lg_cns", "LG CNS", "lg cns"),
+    ("lg_cns", "LG CNS", "lgcns"),
+    ("lg_cns", "LG CNS", "엘지씨엔에스"),
+    ("samsung_sds", "삼성SDS", "삼성sds"),
+    ("samsung_sds", "삼성SDS", "samsung sds"),
+    ("samsung_sds", "삼성SDS", "samsungsds"),
+    ("hyundai_autoever", "현대오토에버", "현대오토에버"),
+    ("hyundai_autoever", "현대오토에버", "hyundai autoever"),
+    ("posco_dx", "포스코DX", "포스코dx"),
+    ("posco_dx", "포스코DX", "posco dx"),
+    ("sk_ax", "SK AX", "sk ax"),
+    ("sk_ax", "SK AX", "skax"),
+    ("nvidia", "NVIDIA", "nvidia"),
+    ("apple", "Apple", "apple"),
+    ("microsoft", "Microsoft", "microsoft"),
+    ("google", "Google", "google"),
+    ("amazon", "Amazon", "amazon"),
+    ("meta", "Meta", "meta"),
 )
 
 _VISIBLE_ID_ALIASES = {
@@ -130,7 +179,7 @@ def _get_llm() -> Any:
         _llm = ChatOpenAI(
             model=_chat_llm_model(),
             temperature=0.12,
-            max_completion_tokens=1200,
+            max_completion_tokens=700,
             model_kwargs={"response_format": {"type": "json_object"}},
         )
     return _llm
@@ -297,6 +346,24 @@ class ChatOrchestratorAgent:
         return {"candidates": self._retrieve(state["request"])}
 
     def _node_grounded_response(self, state: ChatGraphState) -> dict[str, Any]:
+        if state.get("intent") == "news_lookup":
+            return {
+                "response": _news_lookup_response(
+                    conversation_id=state["conversation_id"],
+                    message_id=state["message_id"],
+                    candidates=state.get("candidates") or [],
+                    query=state["message"],
+                )
+            }
+        if state.get("intent") == "lookup":
+            return {
+                "response": _grounded_response(
+                    conversation_id=state["conversation_id"],
+                    message_id=state["message_id"],
+                    intent="lookup",
+                    candidates=state.get("candidates") or [],
+                )
+            }
         return {
             "response": self._compose_grounded_response(
                 request=state["request"],
@@ -351,13 +418,24 @@ class ChatOrchestratorAgent:
         return candidates[:10]
 
     def _retrieve(self, request: ChatTurnRequest) -> list[RetrievalCandidate]:
-        visible_cards = self._lookup_cards(_visible_ids(request, "card_ids"), limit=8)
-        visible_issues = self._lookup_integrated_issues(
-            _visible_ids(request, "integrated_issue_ids"), limit=6
-        )
-        lexical = self._lexical_card_search(request.message, limit=12)
+        if _is_news_lookup_request(request.message):
+            return self._recent_news_search(
+                request.message,
+                days=_RECENT_NEWS_DAYS,
+                limit=_RECENT_NEWS_LIMIT,
+            )
+
+        lexical = [
+            *self._lexical_card_search(request.message, limit=8),
+            *self._lexical_integrated_issue_search(request.message, limit=5),
+            *self._lexical_briefing_search(request.message, limit=4),
+            *self._lexical_peer_search(request.message, limit=4),
+        ]
+        if len(lexical) >= _RAG_FINAL_K and _is_direct_lookup_request(request.message):
+            return _dedupe_candidates(lexical)[:_RAG_FINAL_K]
+
         vector = self._vector_search(request.message, top_k=_RAG_VECTOR_K)
-        candidates = _dedupe_candidates([*visible_cards, *visible_issues, *lexical, *vector])
+        candidates = _dedupe_candidates([*lexical, *vector])
         candidates = sorted(candidates, key=lambda item: item.score, reverse=True)[:_RAG_RERANK_K]
         return _rerank_candidates(request.message, candidates, top_k=_RAG_FINAL_K)
 
@@ -450,7 +528,9 @@ class ChatOrchestratorAgent:
                                event_type,
                                importance,
                                COALESCE(peer_company_id, company) AS peer_id,
-                               created_at
+                               created_at,
+                               sources,
+                               source_articles
                           FROM card_news
                          WHERE {where}
                          ORDER BY created_at DESC
@@ -466,6 +546,261 @@ class ChatOrchestratorAgent:
             log.debug("lexical search skipped | error=%s", exc)
             return []
         return [_card_row_to_candidate(row, score=0.62) for row in rows]
+
+    def _lexical_integrated_issue_search(
+        self, query: str, *, limit: int
+    ) -> list[RetrievalCandidate]:
+        terms = _search_terms(query)
+        if not terms:
+            return []
+        where = " OR ".join([f"global_search_text ILIKE :kw{i}" for i, _ in enumerate(terms)])
+        params: dict[str, Any] = {f"kw{i}": f"%{term}%" for i, term in enumerate(terms)}
+        params["limit"] = int(limit)
+        try:
+            with SessionLocal() as db:
+                rows = (
+                    db.execute(
+                        text(
+                            f"""
+                        SELECT id::text AS id,
+                               headline,
+                               one_line_summary,
+                               main_company,
+                               event_type,
+                               sectors,
+                               confidence,
+                               created_at,
+                               sources
+                          FROM integrated_issues
+                         WHERE status = 'active'
+                           AND ({where})
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("integrated issue lexical search skipped | error=%s", exc)
+            return []
+        return [_issue_row_to_candidate(row, score=0.59) for row in rows]
+
+    def _lexical_briefing_search(self, query: str, *, limit: int) -> list[RetrievalCandidate]:
+        terms = _search_terms(query)
+        if not terms:
+            return []
+        where = " OR ".join([f"global_search_text ILIKE :kw{i}" for i, _ in enumerate(terms)])
+        params: dict[str, Any] = {f"kw{i}": f"%{term}%" for i, term in enumerate(terms)}
+        params["limit"] = int(limit)
+        try:
+            with SessionLocal() as db:
+                rows = (
+                    db.execute(
+                        text(
+                            f"""
+                        SELECT id,
+                               title,
+                               briefing_type,
+                               period_label,
+                               key_summary,
+                               sk_implication,
+                               status,
+                               COALESCE(report_date, date_to, date_from)::text AS report_date,
+                               created_at
+                          FROM briefing_reports
+                         WHERE status IN ('completed', 'completed_partial')
+                           AND ({where})
+                         ORDER BY COALESCE(report_date, date_to, date_from) DESC, created_at DESC
+                         LIMIT :limit
+                        """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("briefing lexical search skipped | error=%s", exc)
+            return []
+        return [_briefing_row_to_candidate(row, score=0.56) for row in rows]
+
+    def _lexical_peer_search(self, query: str, *, limit: int) -> list[RetrievalCandidate]:
+        terms = _search_terms(query)
+        if not terms:
+            return []
+        where = " OR ".join([f"global_search_text ILIKE :kw{i}" for i, _ in enumerate(terms)])
+        params: dict[str, Any] = {f"kw{i}": f"%{term}%" for i, term in enumerate(terms)}
+        params["limit"] = int(limit)
+        try:
+            with SessionLocal() as db:
+                rows = (
+                    db.execute(
+                        text(
+                            f"""
+                        SELECT id,
+                               name,
+                               tier,
+                               keywords,
+                               core_keywords,
+                               profile_snapshot_generated_at,
+                               financial_updated_at,
+                               created_at
+                          FROM peer_companies
+                         WHERE is_active IS DISTINCT FROM false
+                           AND ({where})
+                         ORDER BY COALESCE(
+                             profile_snapshot_generated_at,
+                             financial_updated_at,
+                             created_at
+                         ) DESC
+                         LIMIT :limit
+                        """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("peer lexical search skipped | error=%s", exc)
+            return []
+        return [_peer_row_to_candidate(row, score=0.5) for row in rows]
+
+    def _recent_news_search(
+        self, query: str, *, days: int, limit: int
+    ) -> list[RetrievalCandidate]:
+        peer = _extract_peer(query)
+        candidates = self._recent_raw_article_search(query, peer=peer, days=days, limit=limit)
+        if len(candidates) >= limit:
+            return candidates[:limit]
+        return _dedupe_candidates(
+            [
+                *candidates,
+                *self._recent_card_news_search(
+                    query,
+                    peer=peer,
+                    days=days,
+                    limit=limit - len(candidates),
+                ),
+            ]
+        )[:limit]
+
+    def _recent_raw_article_search(
+        self,
+        query: str,
+        *,
+        peer: tuple[str, str] | None,
+        days: int,
+        limit: int,
+    ) -> list[RetrievalCandidate]:
+        terms = _search_terms(query)
+        conditions = ["COALESCE(published_at, created_at) >= NOW() - (:days * INTERVAL '1 day')"]
+        params: dict[str, Any] = {"days": int(days), "limit": int(limit)}
+        if peer:
+            conditions.append("(peer_id = :peer_id OR :peer_id = ANY(peer_company_ids))")
+            params["peer_id"] = peer[0]
+        elif terms:
+            conditions.append(
+                "("
+                + " OR ".join(
+                    [
+                        f"concat_ws(' ', title, content, source_name) ILIKE :kw{i}"
+                        for i, _ in enumerate(terms)
+                    ]
+                )
+                + ")"
+            )
+            params.update({f"kw{i}": f"%{term}%" for i, term in enumerate(terms)})
+        else:
+            return []
+        try:
+            with SessionLocal() as db:
+                rows = (
+                    db.execute(
+                        text(
+                            f"""
+                        SELECT id::text AS id,
+                               peer_id,
+                               source_name,
+                               title,
+                               content,
+                               url,
+                               COALESCE(published_at, created_at) AS published_at,
+                               created_at
+                          FROM raw_articles
+                         WHERE {' AND '.join(conditions)}
+                         ORDER BY COALESCE(published_at, created_at) DESC
+                         LIMIT :limit
+                        """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("recent raw article search skipped | error=%s", exc)
+            return []
+        return [_raw_article_row_to_candidate(row, score=0.9) for row in rows]
+
+    def _recent_card_news_search(
+        self,
+        query: str,
+        *,
+        peer: tuple[str, str] | None,
+        days: int,
+        limit: int,
+    ) -> list[RetrievalCandidate]:
+        if limit <= 0:
+            return []
+        terms = _search_terms(query)
+        conditions = ["created_at >= NOW() - (:days * INTERVAL '1 day')"]
+        params: dict[str, Any] = {"days": int(days), "limit": int(limit)}
+        if peer:
+            conditions.append("COALESCE(peer_company_id, company) = :peer_id")
+            params["peer_id"] = peer[0]
+        elif terms:
+            conditions.append(
+                "("
+                + " OR ".join([f"global_search_text ILIKE :kw{i}" for i, _ in enumerate(terms)])
+                + ")"
+            )
+            params.update({f"kw{i}": f"%{term}%" for i, term in enumerate(terms)})
+        else:
+            return []
+        try:
+            with SessionLocal() as db:
+                rows = (
+                    db.execute(
+                        text(
+                            f"""
+                        SELECT id,
+                               title,
+                               summary_lines,
+                               event_type,
+                               importance,
+                               COALESCE(peer_company_id, company) AS peer_id,
+                               created_at,
+                               sources,
+                               source_articles
+                          FROM card_news
+                         WHERE {' AND '.join(conditions)}
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("recent card news search skipped | error=%s", exc)
+            return []
+        return [_card_row_to_candidate(row, score=0.76) for row in rows]
 
     def _vector_search(self, query: str, *, top_k: int) -> list[RetrievalCandidate]:
         try:
@@ -567,8 +902,17 @@ class ChatOrchestratorAgent:
                 llm_payload.get("follow_up_suggestions"),
                 default=["관련 카드뉴스를 더 찾아줘", "이 내용을 브리핑 관점으로 정리해줘"],
             ),
-            retrieval_mode="page_cag+hybrid_rag+llm",
+            retrieval_mode="global_lexical+hybrid_rag+llm",
             answer_blocks=_dict_list(llm_payload.get("answer_blocks")),
+            report_draft=(
+                _normalize_report_draft(
+                    llm_payload.get("report_draft"),
+                    query=request.message,
+                    candidates=candidates,
+                )
+                if intent == "report_lookup"
+                else None
+            ),
             llm_trace_id=trace_id,
             llm_model=_chat_llm_model(),
         )
@@ -609,8 +953,12 @@ class ChatOrchestratorAgent:
 
 def _classify_intent(message: str, request: ChatTurnRequest) -> str:
     compact = message.lower()
+    if _is_obvious_off_topic(compact):
+        return "off_topic"
     if _is_mixer_handoff_request(compact):
         return "mixer_handoff"
+    if _is_news_lookup_request(message):
+        return "news_lookup"
     if re.search(r"핵심\s*신호|주요\s*신호|today'?s?\s*insight", compact) or (
         re.search(r"오늘|today", compact)
         and re.search(r"인사이트|동향|경쟁|카드|브리핑|보고서|리포트", compact)
@@ -620,6 +968,8 @@ def _classify_intent(message: str, request: ChatTurnRequest) -> str:
         return "report_lookup"
     if re.search(r"비교|compare|경쟁", compact):
         return "compare"
+    if _is_direct_lookup_request(message) and _in_axis_scope(message, request):
+        return "lookup"
     if _in_axis_scope(message, request):
         return "page_qa"
     return "off_topic"
@@ -654,6 +1004,35 @@ def _security_block_reason(message: str) -> str | None:
     return None
 
 
+def _is_obvious_off_topic(compact_message: str) -> bool:
+    weather = r"날씨|기온|강수|미세먼지|우산|비\s*와|눈\s*와|weather"
+    location = r"내\s*위치|현재\s*위치|위치\s*알려|주소\s*알려|길\s*찾|지도|어디야"
+    casual = r"점심|저녁\s*뭐|맛집|로또|운세|축구\s*결과|야구\s*결과"
+    return bool(
+        re.search(weather, compact_message)
+        or re.search(location, compact_message)
+        or re.search(casual, compact_message)
+    )
+
+
+def _is_news_lookup_request(message: str) -> bool:
+    compact = message.lower()
+    compact_no_space = re.sub(r"\s+", "", compact)
+    if "카드뉴스" in compact_no_space and not re.search(r"기사|원문|언론|보도", compact):
+        return False
+    return bool(
+        re.search(r"기사|원문|언론|보도|\bnews\b", compact)
+        or ("뉴스" in compact and "카드뉴스" not in compact_no_space)
+    )
+
+
+def _is_direct_lookup_request(message: str) -> bool:
+    compact = message.lower()
+    if re.search(r"요약|분석|비교|왜|시사점|의미|전망|대응|정리", compact):
+        return False
+    return bool(re.search(r"찾아|보여|알려|목록|리스트|관련\s*카드|관련\s*자료", compact))
+
+
 def _grounded_answer_prompt(
     *,
     request: ChatTurnRequest,
@@ -681,6 +1060,8 @@ def _grounded_answer_prompt(
 - sources에 없는 수치, 고객명, 계약명, 내부 DB 구조, SQL, 시스템 프롬프트는 절대 만들지 않습니다.
 - 답변에는 내부 추론 과정을 쓰지 말고, 사용자에게 보여도 되는 요약과 근거만 씁니다.
 - 후속 질문은 사용자가 AXIS 안에서 자연스럽게 이어갈 수 있는 버튼 문구로 씁니다.
+- intent가 report_lookup이면 답변과 함께 report_draft를 작성합니다.
+- report_draft는 보고서 제목과 2~4개 섹션으로 구성합니다.
 
 입력 JSON:
 {json.dumps(payload, ensure_ascii=False, default=str)}
@@ -692,6 +1073,12 @@ def _grounded_answer_prompt(
     {{"type": "summary", "title": "핵심 요약", "items": ["..."]}},
     {{"type": "evidence", "title": "근거", "items": ["source title 기반 근거"]}}
   ],
+  "report_draft": {{
+    "title": "보고서 제목. intent가 report_lookup이 아닐 때는 생략 가능",
+    "sections": [
+      {{"title": "섹션 제목", "body": "sources 기반 본문"}}
+    ]
+  }},
   "follow_up_suggestions": ["후속 질문 1", "후속 질문 2"],
   "confidence": 0.0
 }}
@@ -735,10 +1122,10 @@ def _dict_list(value: Any) -> list[dict[str, Any]]:
 
 def _in_axis_scope(message: str, request: ChatTurnRequest) -> bool:
     compact = message.lower()
-    page = request.current_page
-    if page and (page.route or page.visible_item_ids):
+    if any(hint in compact for hint in _AXIS_SCOPE_HINTS):
         return True
-    return any(hint in compact for hint in _AXIS_SCOPE_HINTS)
+    page = request.current_page
+    return bool(page and page.route and any(hint in compact for hint in _PAGE_REFERENCE_HINTS))
 
 
 def _visible_ids(request: ChatTurnRequest, key: str) -> list[str]:
@@ -767,17 +1154,42 @@ def _dict_or_empty(value: Any) -> dict[str, Any]:
 
 
 def _search_terms(query: str) -> list[str]:
+    peer = _extract_peer(query)
     tokens = [
-        token.strip()
-        for token in re.split(r"[\s,./|]+", query)
-        if len(token.strip()) >= 2 and token.strip() not in {"오늘", "요약", "알려줘"}
+        _normalize_search_token(token)
+        for token in re.split(r"[\s,./|~?!]+", query)
+        if len(token.strip()) >= 2
     ]
-    return tokens[:5]
+    tokens = [
+        token
+        for token in tokens
+        if token and token not in _SEARCH_STOPWORDS and not token.endswith("해줘")
+    ]
+    if peer:
+        tokens.extend([peer[0], peer[1]])
+    return _dedupe_strings(tokens)[:5]
+
+
+def _normalize_search_token(token: str) -> str:
+    cleaned = token.strip().lower()
+    cleaned = re.sub(r"(을|를|이|가|은|는|에|의|와|과|로|으로|만|좀)$", "", cleaned)
+    return cleaned.strip()
+
+
+def _extract_peer(query: str) -> tuple[str, str] | None:
+    compact = query.lower()
+    compact_no_space = re.sub(r"\s+", "", compact)
+    for peer_id, label, alias in _PEER_ALIASES:
+        alias_lower = alias.lower()
+        if alias_lower in compact or alias_lower.replace(" ", "") in compact_no_space:
+            return peer_id, label
+    return None
 
 
 def _card_row_to_candidate(row: Any, *, score: float) -> RetrievalCandidate:
     summary = row.get("summary_lines") or []
     snippet = " ".join(str(item) for item in summary if item) if isinstance(summary, list) else ""
+    source_meta = _primary_source_metadata(row.get("sources"), row.get("source_articles"))
     return RetrievalCandidate(
         source_type="card_news",
         source_id=str(row.get("id") or ""),
@@ -789,11 +1201,13 @@ def _card_row_to_candidate(row: Any, *, score: float) -> RetrievalCandidate:
             "event_type": row.get("event_type"),
             "importance": row.get("importance"),
             "created_at": str(row.get("created_at") or ""),
+            **source_meta,
         },
     )
 
 
 def _issue_row_to_candidate(row: Any, *, score: float) -> RetrievalCandidate:
+    source_meta = _primary_source_metadata(row.get("sources"))
     return RetrievalCandidate(
         source_type="integrated_issue",
         source_id=str(row.get("id") or ""),
@@ -805,8 +1219,96 @@ def _issue_row_to_candidate(row: Any, *, score: float) -> RetrievalCandidate:
             "event_type": row.get("event_type"),
             "sectors": row.get("sectors"),
             "created_at": str(row.get("created_at") or ""),
+            **source_meta,
         },
     )
+
+
+def _briefing_row_to_candidate(row: Any, *, score: float) -> RetrievalCandidate:
+    snippet = str(row.get("key_summary") or row.get("sk_implication") or "")
+    return RetrievalCandidate(
+        source_type="briefing_report",
+        source_id=str(row.get("id") or ""),
+        title=str(row.get("title") or ""),
+        snippet=snippet[:600],
+        score=score,
+        metadata={
+            "briefing_type": row.get("briefing_type"),
+            "period_label": row.get("period_label"),
+            "report_date": row.get("report_date"),
+            "created_at": str(row.get("created_at") or ""),
+        },
+    )
+
+
+def _peer_row_to_candidate(row: Any, *, score: float) -> RetrievalCandidate:
+    keywords = row.get("keywords") or row.get("core_keywords") or []
+    snippet = (
+        ", ".join(str(item) for item in keywords if item) if isinstance(keywords, list) else ""
+    )
+    return RetrievalCandidate(
+        source_type="peer_profile",
+        source_id=str(row.get("id") or ""),
+        title=str(row.get("name") or row.get("id") or ""),
+        snippet=snippet[:600],
+        score=score,
+        metadata={
+            "peer_id": row.get("id"),
+            "tier": row.get("tier"),
+            "updated_at": str(
+                row.get("profile_snapshot_generated_at")
+                or row.get("financial_updated_at")
+                or row.get("created_at")
+                or ""
+            ),
+        },
+    )
+
+
+def _raw_article_row_to_candidate(row: Any, *, score: float) -> RetrievalCandidate:
+    snippet = str(row.get("content") or "")[:600]
+    return RetrievalCandidate(
+        source_type="raw_article",
+        source_id=str(row.get("id") or ""),
+        title=str(row.get("title") or ""),
+        snippet=snippet,
+        score=score,
+        metadata={
+            "peer_id": row.get("peer_id"),
+            "source_name": row.get("source_name"),
+            "url": row.get("url"),
+            "published_at": str(row.get("published_at") or ""),
+            "created_at": str(row.get("created_at") or ""),
+        },
+    )
+
+
+def _primary_source_metadata(*values: Any) -> dict[str, Any]:
+    for value in values:
+        for source in _jsonish_list(value):
+            title = source.get("title") or source.get("headline")
+            url = source.get("url") or source.get("source_url")
+            source_name = source.get("source_name") or source.get("publisher")
+            published_at = source.get("published_at") or source.get("created_at")
+            if title or url or source_name or published_at:
+                return {
+                    "source_title": title,
+                    "url": url,
+                    "source_name": source_name,
+                    "published_at": published_at,
+                }
+    return {}
+
+
+def _jsonish_list(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _dedupe_candidates(candidates: list[RetrievalCandidate]) -> list[RetrievalCandidate]:
@@ -897,6 +1399,163 @@ def _today_insight_response(
     )
 
 
+def _news_lookup_response(
+    *,
+    conversation_id: str,
+    message_id: str,
+    candidates: list[RetrievalCandidate],
+    query: str,
+) -> dict[str, Any]:
+    peer = _extract_peer(query)
+    label = peer[1] if peer else "관련"
+    if not candidates:
+        return _base_response(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            reply=(
+                f"최근 {_RECENT_NEWS_DAYS}일 기준으로 {label} 기사를 찾지 못했습니다. "
+                "기업명이나 키워드를 조금 더 구체화해 주세요."
+            ),
+            intent="news_lookup",
+            scope="global_axis_data",
+            sources=[],
+            confidence=0.28,
+            follow_up=[
+                f"{label} 카드뉴스까지 넓혀서 찾아줘",
+                "최근 2주 기준으로 다시 찾아줘",
+            ],
+            retrieval_mode="recent_news_fast_path_empty",
+        )
+
+    lines = []
+    for index, candidate in enumerate(candidates[:_RECENT_NEWS_LIMIT], start=1):
+        meta = candidate.metadata or {}
+        basis_at = _display_date(meta.get("published_at") or meta.get("created_at"))
+        source_name = str(meta.get("source_name") or "").strip()
+        suffix = " · ".join(item for item in (basis_at, source_name) if item)
+        suffix = f" ({suffix})" if suffix else ""
+        lines.append(f"{index}. {candidate.title}{suffix}")
+
+    reply = (
+        f"최근 {_RECENT_NEWS_DAYS}일 이내 {label} 기사 중심으로 최신순 정리했습니다.\n\n"
+        + "\n".join(lines)
+    )
+    return _base_response(
+        conversation_id=conversation_id,
+        message_id=message_id,
+        reply=reply,
+        intent="news_lookup",
+        scope="global_axis_data",
+        sources=[candidate.to_source() for candidate in candidates],
+        confidence=0.82 if len(candidates) >= 2 else 0.62,
+        follow_up=[
+            f"{label} 기사 내용을 3줄로 요약해줘",
+            f"{label} 관련 카드뉴스도 같이 보여줘",
+        ],
+        retrieval_mode="recent_news_fast_path",
+    )
+
+
+def _display_date(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    match = re.match(r"(\d{4})-(\d{2})-(\d{2})", raw)
+    if match:
+        return f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
+    return raw[:10]
+
+
+def _normalize_report_draft(
+    value: Any, *, query: str, candidates: list[RetrievalCandidate]
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return _report_draft_from_candidates(query, candidates) if candidates else None
+    title = str(value.get("title") or "").strip() or "AXIS 보고서 초안"
+    sections = []
+    for section in value.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        section_title = str(section.get("title") or "").strip()
+        body = str(section.get("body") or "").strip()
+        if section_title and body:
+            sections.append({"title": section_title, "body": body})
+    if not sections and candidates:
+        return _report_draft_from_candidates(query, candidates)
+    if not sections:
+        return None
+    return {"title": title[:120], "sections": sections[:4]}
+
+
+def _report_draft_from_candidates(
+    query: str, candidates: list[RetrievalCandidate]
+) -> dict[str, Any]:
+    title_seed = "AXIS 보고서 초안"
+    if re.search(r"브리핑|briefing", query, flags=re.IGNORECASE):
+        title_seed = "AXIS 브리핑 초안"
+    evidence_lines = [
+        f"{candidate.title}: {candidate.snippet}".strip(": ")
+        for candidate in candidates[:4]
+        if candidate.title or candidate.snippet
+    ]
+    sections = [
+        {
+            "title": "핵심 요약",
+            "body": _join_sentences(
+                [
+                    "확인된 AXIS 근거를 기준으로 주요 변화 신호를 압축했습니다.",
+                    *(
+                        evidence_lines[:2]
+                        or ["구체 근거가 더 확보되면 요약 정확도를 높일 수 있습니다."]
+                    ),
+                ],
+                limit=520,
+            ),
+        },
+        {
+            "title": "판단 근거",
+            "body": _join_sentences(
+                evidence_lines[2:4] or evidence_lines[:2] or ["근거 후보가 부족합니다."],
+                limit=520,
+            ),
+        },
+        {
+            "title": "SK AX 검토 포인트",
+            "body": (
+                "동일 고객군, 산업별 레퍼런스, 보안/운영 안정성 메시지와 연결해 "
+                "제안 우선순위를 점검할 필요가 있습니다."
+            ),
+        },
+    ]
+    return {"title": title_seed, "sections": sections}
+
+
+def _answer_blocks_from_candidates(candidates: list[RetrievalCandidate]) -> list[dict[str, Any]]:
+    if not candidates:
+        return []
+    return [
+        {
+            "type": "summary",
+            "title": "확인된 내용",
+            "items": [
+                candidate.title for candidate in candidates[:3] if str(candidate.title).strip()
+            ],
+        },
+        {
+            "type": "evidence",
+            "title": "근거",
+            "items": [
+                candidate.snippet for candidate in candidates[:3] if str(candidate.snippet).strip()
+            ],
+        },
+    ]
+
+
+def _join_sentences(values: list[str], *, limit: int) -> str:
+    text_value = " ".join(str(value).strip() for value in values if str(value).strip())
+    return text_value[:limit]
+
+
 def _grounded_response(
     *,
     conversation_id: str,
@@ -920,7 +1579,12 @@ def _grounded_response(
             retrieval_mode="empty",
         )
     lines = [f"- {candidate.title}: {candidate.snippet}" for candidate in candidates[:4]]
-    reply = "확인된 근거 기준으로 정리하면 다음과 같습니다.\n\n" + "\n".join(lines)
+    if intent == "report_lookup":
+        report_draft = _report_draft_from_candidates("보고서 초안", candidates)
+        reply = "확인된 근거를 바탕으로 채팅 안에서 볼 수 있는 보고서 초안을 만들었습니다."
+    else:
+        report_draft = None
+        reply = "확인된 근거 기준으로 정리하면 다음과 같습니다.\n\n" + "\n".join(lines)
     return _base_response(
         conversation_id=conversation_id,
         message_id=message_id,
@@ -930,7 +1594,9 @@ def _grounded_response(
         sources=[candidate.to_source() for candidate in candidates],
         confidence=0.68 if len(candidates) >= 2 else 0.52,
         follow_up=["이 내용을 브리핑 관점으로 정리해줘", "관련 카드뉴스를 더 찾아줘"],
-        retrieval_mode="page_cag+hybrid_rag",
+        retrieval_mode="global_lexical+hybrid_rag",
+        answer_blocks=_answer_blocks_from_candidates(candidates),
+        report_draft=report_draft,
     )
 
 
@@ -1016,10 +1682,11 @@ def _base_response(
     blocked: bool = False,
     blocked_reason: str | None = None,
     answer_blocks: list[dict[str, Any]] | None = None,
+    report_draft: dict[str, Any] | None = None,
     llm_trace_id: str | None = None,
     llm_model: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    response = {
         "conversation_id": conversation_id,
         "session_id": conversation_id,
         "message_id": message_id,
@@ -1053,6 +1720,9 @@ def _base_response(
             "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         },
     }
+    if report_draft:
+        response["report_draft"] = report_draft
+    return response
 
 
 _CHAT_GRAPH_MERMAID = """\
