@@ -162,243 +162,6 @@ _EVENT_BUCKET_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _KEEP_AMBIGUOUS_SINGLETONS = os.getenv("DEDUP_KEEP_AMBIGUOUS_SINGLETONS", "true").lower() == "true"
 
 _CANONICAL_ISSUE_TERMS: Mapping[str, tuple[str, ...]] = {}
-_TITLE_CONCEPT_TERMS: Mapping[str, tuple[str, ...]] = {
-    "lg_cns_agentic_aind": (
-        "aind",
-        "에이전틱ai개발플랫폼",
-        "에이전틱 ai 개발 플랫폼",
-        "에이전틱개발플랫폼",
-        "에이전틱 개발 플랫폼",
-        "ai개발플랫폼",
-        "ai 개발 플랫폼",
-        "기업용개발플랫폼",
-        "기업용 개발 플랫폼",
-        "기업시스템개발",
-        "기업 시스템 개발",
-        "기업시스템구축",
-        "기업 시스템 구축",
-        "대규모it시스템",
-        "대규모 it 시스템",
-        "대규모시스템구축",
-        "대규모 시스템 구축",
-        "데브온",
-        "바이브코딩",
-        "바이브 코딩",
-        "코볼",
-        "계좌이체",
-    ),
-    "gpu_ai_highway": (
-        "ai고속도로",
-        "ai 고속도로",
-        "gpu9704",
-        "gpu 9704",
-        "9704장",
-        "2조원대gpu",
-        "2조원대 gpu",
-        "2조800억",
-        "2조 800억",
-        "2조규모gpu",
-        "2조 규모 gpu",
-        "gpu사업자",
-        "gpu 사업자",
-        "엘리스그룹",
-        "엘리스 그룹",
-        "네이버클라우드",
-        "네이버 클라우드",
-    ),
-    "lg_nvidia_physical_ai": (
-        "젠슨황",
-        "젠슨 황",
-        "엔비디아",
-        "nvidia",
-        "lg엔비디아",
-        "lg엔 비디아",
-        "한국ai동맹",
-        "한국 ai 동맹",
-        "서울누빈젠슨황",
-        "서울 누빈 젠슨 황",
-        "광폭행보",
-        "광폭 행보",
-        "피지컬ai동맹",
-        "피지컬 ai 동맹",
-        "피지컬ai협력",
-        "피지컬 ai 협력",
-        "ai인프라까지맞손",
-        "ai 인프라까지 맞손",
-        "로봇동맹",
-        "로봇 동맹",
-        "전방위동맹",
-        "전방위 동맹",
-    ),
-    "hyundai_autoever_robotics_challenge": (
-        "현대오토에버",
-        "한국과학창의재단",
-        "로보틱스챌린지",
-        "로보틱스 챌린지",
-        "청소년로보틱스",
-        "청소년 로보틱스",
-    ),
-    "saemaul_inspection_system": (
-        "새마을금고",
-        "검사종합시스템",
-        "검사 종합 시스템",
-        "이상징후탐지",
-        "이상징후 탐지",
-    ),
-    "autonomous_welding_robot": (
-        "자율용접",
-        "자율 용접",
-        "용접로봇",
-        "용접 로봇",
-        "ai두뇌",
-        "ai 두뇌",
-    ),
-    "robot_foundation_model": (
-        "로봇파운데이션",
-        "로봇 파운데이션",
-        "산업현장용",
-        "산업현장로봇",
-        "산업 현장 로봇",
-        "로봇뇌",
-        "로봇 뇌",
-        "로봇두뇌",
-        "로봇 두뇌",
-        "로봇의두뇌",
-        "로봇의 두뇌",
-        "범용로봇두뇌",
-        "범용 로봇 두뇌",
-        "범용로봇ai",
-        "범용 로봇 ai",
-        "로봇ai",
-        "로봇 ai",
-        "ai로봇",
-        "ai 로봇",
-        "로봇ai브레인",
-        "로봇 ai브레인",
-        "로봇 ai 브레인",
-        "ai로봇개발",
-        "ai 로봇 개발",
-        "로봇ai개발",
-        "로봇 ai 개발",
-        "산업용로봇제어모델",
-        "산업용 로봇 제어 모델",
-        "로봇지능개발",
-        "로봇 지능 개발",
-        "피지컬ai맞손",
-        "피지컬 ai 맞손",
-        "피지컬ai지능화",
-        "피지컬 ai 지능화",
-        "로봇지능화",
-        "로봇 지능화",
-    ),
-    "logistics_robotics": (
-        "물류센터",
-        "물류 센터",
-        "물류자동화",
-        "물류 자동화",
-        "스마트물류",
-        "스마트 물류",
-        "휴머노이드",
-        "피지컬웍스",
-        "로봇직원",
-        "로봇 직원",
-        "로봇피킹",
-        "로봇 피킹",
-        "로봇도입",
-        "로봇 도입",
-    ),
-    "physicalworks_rx_platform": (
-        "피지컬웍스",
-        "피지컬 웍스",
-        "rx플랫폼",
-        "rx 플랫폼",
-        "로봇학습",
-        "로봇 학습",
-        "로봇운영",
-        "로봇 운영",
-        "로봇플랫폼",
-        "로봇 플랫폼",
-        "로봇통합",
-        "로봇 통합",
-        "자율협업",
-        "자율 협업",
-        "이기종협업",
-        "이기종 협업",
-    ),
-    "manufacturing_ax_market": (
-        "제조ax",
-        "제조 ax",
-        "제조rx",
-        "제조 rx",
-        "제조기업",
-        "제조 기업",
-        "제조시장",
-        "제조 시장",
-        "제조업",
-        "제조특화",
-        "제조 특화",
-        "제조플랫폼",
-        "제조 플랫폼",
-        "스마트팩토리",
-        "스마트 팩토리",
-        "공장지능화",
-        "공장 지능화",
-        "공장전환",
-        "공장 전환",
-        "ai스마트팩토리",
-        "ai 스마트팩토리",
-    ),
-    "smart_infra_lidar": (
-        "스마트인프라",
-        "스마트 인프라",
-        "스마트시티",
-        "스마트 시티",
-        "라이다",
-        "lidar",
-        "에스오에스랩",
-        "soslab",
-        "북미스마트인프라",
-        "북미 스마트 인프라",
-    ),
-    "openai_enterprise_ai": (
-        "오픈ai",
-        "오픈 ai",
-        "openai",
-        "챗gpt",
-        "chatgpt",
-        "엔터프라이즈ai",
-        "엔터프라이즈 ai",
-        "기업용ai",
-        "기업용 ai",
-        "생성형ai",
-        "생성형 ai",
-    ),
-    "national_ai_computing_center": (
-        "국가ai컴퓨팅센터",
-        "국가 ai 컴퓨팅센터",
-        "국가ai컴퓨팅 센터",
-        "ai컴퓨팅센터",
-        "ai 컴퓨팅센터",
-        "ai고속도로",
-        "ai 고속도로",
-        "gpu1.5만장",
-        "gpu 1.5만장",
-    ),
-    "security_token_platform": (
-        "토큰증권",
-        "sto",
-        "예탁결제원",
-        "예탁원",
-        "플랫폼구축",
-        "플랫폼 구축",
-    ),
-    "jensen_huang_visit": (
-        "젠슨황",
-        "젠슨 황",
-        "방한",
-        "유퀴즈",
-    ),
-}
 _cluster_llm_calls = 0
 _cluster_llm_cache: dict[tuple[str, str, str], bool | None] = {}
 _cluster_llm_approved_pairs: set[frozenset[int]] = set()
@@ -1058,7 +821,6 @@ def _event_signature(article: dict[str, Any]) -> str:
     bucket = _event_bucket(article)
     title = _compact_text(str(article.get("title") or ""))
     text = _issue_text(article)
-    title_concepts = set(_title_concepts(article))
 
     if bucket == "market_reaction":
         if _has_contract_markers(text):
@@ -1072,42 +834,6 @@ def _event_signature(article: dict[str, Any]) -> str:
         contract_key = _contract_issue_key(article)
         if contract_key:
             return f"contract_deal:{contract_key}"
-    if "ax서밋" in text or "axsummit" in text:
-        return "ax_strategy:ax_summit"
-    if "자율공장" in text:
-        return "ax_strategy:ai_factory"
-    if "인더스트리데이" in text:
-        return "ax_strategy:industry_day"
-    if "lg_cns_agentic_aind" in title_concepts:
-        return "ax_strategy:lg_cns_agentic_aind"
-    if "gpu_ai_highway" in title_concepts:
-        return "cloud_infra:gpu_ai_highway"
-    if "jensen_huang_visit" in title_concepts:
-        return "ax_strategy:jensen_huang_nc_meeting"
-    if "lg_nvidia_physical_ai" in title_concepts:
-        return "ax_strategy:lg_nvidia_physical_ai"
-    if "hyundai_autoever_robotics_challenge" in title_concepts:
-        return "ax_strategy:hyundai_autoever_robotics_challenge"
-    if "saemaul_inspection_system" in title_concepts:
-        return "contract_deal:saemaul_inspection_system"
-    if "autonomous_welding_robot" in title_concepts:
-        return "ax_strategy:autonomous_welding_robot"
-    if "robot_foundation_model" in title_concepts:
-        return "ax_strategy:robot_foundation_model"
-    if "physicalworks_rx_platform" in title_concepts:
-        return "ax_strategy:physicalworks_rx_platform"
-    if "manufacturing_ax_market" in title_concepts:
-        return "ax_strategy:manufacturing_ax_market"
-    if "smart_infra_lidar" in title_concepts:
-        return f"{bucket}:smart_infra_lidar"
-    if "openai_enterprise_ai" in title_concepts:
-        return "ax_strategy:openai_enterprise_ai"
-    if "national_ai_computing_center" in title_concepts:
-        return "cloud_infra:national_ai_computing_center"
-    if "데이터센터" in text or "ai인프라" in text:
-        return "cloud_infra:ai_datacenter"
-    if "si주" in text or "it서비스업종" in text or "테마주" in text:
-        return "industry_theme:si_theme"
 
     title_terms = sorted(_title_topic_terms(article))
     if title_terms:
@@ -1188,8 +914,6 @@ def _should_consult_cluster_llm(
     if not _CLUSTER_LLM_JUDGE_ENABLED or not openai_calls_enabled():
         return False
     if _CLUSTER_LLM_MAX_CALLS <= 0:
-        return False
-    if reason == "event_signature_conflict":
         return False
     if similarity < 0.72:
         return False
@@ -1352,10 +1076,7 @@ def _same_cross_company_title_issue(left: dict[str, Any], right: dict[str, Any])
     if left_terms and right_terms and _topic_sets_related(left_terms, right_terms):
         return True
 
-    if set(_title_concepts(left)) & set(_title_concepts(right)):
-        return True
-
-    return False
+    return _shared_title_token_count(left, right) >= 3
 
 
 def _same_company_title_fallback(
@@ -1394,9 +1115,6 @@ def _same_company_title_fallback(
     if left_terms and right_terms and _topic_sets_related(left_terms, right_terms):
         return True
 
-    if set(_title_concepts(left)) & set(_title_concepts(right)):
-        return True
-
     return _title_tokens_related(left, right)
 
 
@@ -1417,18 +1135,7 @@ def _same_company_signature_or_concept(left: dict[str, Any], right: dict[str, An
     ):
         return True
 
-    strong_concepts = {
-        "security_token_platform",
-        "national_ai_computing_center",
-        "openai_enterprise_ai",
-        "physicalworks_rx_platform",
-        "robot_foundation_model",
-        "logistics_robotics",
-        "manufacturing_ax_market",
-        "smart_infra_lidar",
-    }
-    shared_concepts = set(_title_concepts(left)) & set(_title_concepts(right))
-    return bool(shared_concepts & strong_concepts)
+    return False
 
 
 def _has_weak_bridge_risk(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -1449,24 +1156,16 @@ def _title_tokens_related(left: dict[str, Any], right: dict[str, Any]) -> bool:
         return False
 
     shared = left_tokens & right_tokens
-    high_signal_tokens = {
-        "skala",
-        "토큰증권",
-        "예탁결제원",
-        "두나무",
-        "openai",
-        "chatgpt",
-        "피지컬웍스",
-    }
-    if shared & high_signal_tokens:
-        return True
-
     if len(shared) < 2:
         return False
 
     jaccard = len(shared) / len(left_tokens | right_tokens)
     coverage = len(shared) / min(len(left_tokens), len(right_tokens))
     return jaccard >= 0.35 or coverage >= 0.55
+
+
+def _shared_title_token_count(left: dict[str, Any], right: dict[str, Any]) -> int:
+    return len(_title_event_tokens(left) & _title_event_tokens(right))
 
 
 def _title_event_tokens(article: dict[str, Any]) -> set[str]:
@@ -1476,33 +1175,7 @@ def _title_event_tokens(article: dict[str, Any]) -> set[str]:
         for token in re.findall(r"[가-힣A-Za-z0-9]+", title)
         if token.strip()
     }
-    tokens = {token for token in tokens if _useful_title_token(token)}
-
-    compact_title = _compact_text(title)
-    for marker in (
-        "두나무",
-        "오픈ai",
-        "openai",
-        "챗gpt",
-        "피지컬웍스",
-        "토큰증권",
-        "토큰증권플랫폼",
-        "스마트팩토리",
-        "스마트인프라",
-        "예탁결제원",
-        "예탁원",
-        "로봇파운데이션",
-        "로봇브레인",
-        "로봇두뇌",
-        "로봇지능",
-        "지분투자",
-        "지분인수",
-    ):
-        compact_marker = _compact_text(marker)
-        if compact_marker in compact_title:
-            tokens.add(compact_marker)
-
-    return tokens
+    return {token for token in tokens if _useful_title_token(token)}
 
 
 def _normalize_title_token(token: str) -> str:
@@ -1772,25 +1445,7 @@ def _title_concepts(article: dict[str, Any]) -> list[str]:
 
 
 def _concepts_from_text(compact_text: str) -> list[str]:
-    concepts: list[str] = []
-    for concept, markers in _TITLE_CONCEPT_TERMS.items():
-        matched_markers = [
-            _compact_text(marker) for marker in markers if _compact_text(marker) in compact_text
-        ]
-        signal_markers = [
-            marker for marker in matched_markers if not _is_company_alias_marker(marker)
-        ]
-        if signal_markers:
-            concepts.append(concept)
-    return concepts
-
-
-def _is_company_alias_marker(marker: str) -> bool:
-    return any(
-        marker == _compact_text(alias)
-        for aliases in _ALL_COMPANY_ALIASES.values()
-        for alias in aliases
-    )
+    return []
 
 
 def _proper_terms_from_text(text: str) -> list[str]:
@@ -1916,29 +1571,14 @@ def _normalize_number_term(value: str) -> str:
 
 def _contract_issue_key(article: dict[str, Any]) -> str | None:
     title_text = _title_text(article)
-    fallback_text = _title_with_short_lead_text(article)
     amount_match = re.search(r"\d+(?:\.\d+)?(?:억|억원|원|만|천)", title_text)
     amount = _normalize_number_term(amount_match.group(0)) if amount_match else ""
-    concepts = _event_terms(article, include_lead=False)
-    for concept in sorted(concepts):
-        return concept
-    domain_key = _contract_domain_key(title_text) or _contract_domain_key(fallback_text)
-    if domain_key:
-        return domain_key
     terms = sorted(_title_topic_terms(article))
     term = _topic_value(terms[0]) if terms else ""
     if term:
         return term
     if amount:
         return amount
-    return None
-
-
-def _contract_domain_key(compact_text: str) -> str | None:
-    if "인증중고차" in compact_text or "cpo" in compact_text:
-        return "certified_used_car_platform"
-    if "코어뱅킹" in compact_text or "웹단말" in compact_text:
-        return "core_banking_web_terminal"
     return None
 
 
@@ -2023,45 +1663,12 @@ def _same_operational_event(left: dict[str, Any], right: dict[str, Any]) -> bool
     if len(shared_terms) >= 2:
         return True
 
-    strong_terms = {
-        "logistics_robotics",
-        "physicalworks_rx_platform",
-        "manufacturing_ax_market",
-        "smart_infra_lidar",
-        "openai_enterprise_ai",
-        "robot_foundation_model",
-        "national_ai_computing_center",
-        "security_token_platform",
-    }
-    return bool(shared_terms & strong_terms)
+    return False
 
 
 def _event_terms(article: dict[str, Any], *, include_lead: bool = False) -> set[str]:
     text = _title_with_short_lead_text(article) if include_lead else _title_text(article)
-    terms = set(_concepts_from_text(text))
-    if "물류" in text and ("로봇" in text or "휴머노이드" in text or "피지컬웍스" in text):
-        terms.add("logistics_robotics")
-    if "피지컬웍스" in text or (
-        ("rx" in text or "로봇" in text) and ("학습" in text or "운영" in text or "플랫폼" in text)
-    ):
-        terms.add("physicalworks_rx_platform")
-    if ("제조" in text or "공장" in text or "스마트팩토리" in text) and (
-        "ax" in text or "rx" in text or "ai" in text or "지능화" in text or "플랫폼" in text
-    ):
-        terms.add("manufacturing_ax_market")
-    if ("스마트인프라" in text or "스마트시티" in text or "라이다" in text) and (
-        "북미" in text or "에스오에스랩" in text or "lgcns" in text
-    ):
-        terms.add("smart_infra_lidar")
-    if ("오픈ai" in text or "openai" in text or "챗gpt" in text) and (
-        "skax" in text or "엔터프라이즈" in text or "기업용" in text or "생성형" in text
-    ):
-        terms.add("openai_enterprise_ai")
-    if ("국가" in text and "ai컴퓨팅" in text) or "ai고속도로" in text:
-        terms.add("national_ai_computing_center")
-    if ("토큰증권" in text or "sto" in text) and ("예탁결제원" in text or "예탁원" in text):
-        terms.add("security_token_platform")
-    return terms
+    return _topic_terms_from_text(text)
 
 
 def _has_operational_action(compact_text: str) -> bool:
