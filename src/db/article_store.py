@@ -2586,6 +2586,67 @@ def upsert_global_industry_trends(rows: list[dict[str, Any]]) -> int:
     return len(serialized)
 
 
+def fetch_previous_trend_context_for_delta() -> dict[str, Any]:
+    """오늘 이전 가장 최근 ``global_industry_trends`` batch → Phase 2 delta 입력.
+
+    design: ``global-trends.md`` §16 — ledger 대신 self-read.
+    prior batch 가 없으면 빈 dict (cold start → ``frequency_delta_pct = 0``).
+    """
+    query = text(
+        """
+                WITH latest_prior AS (
+                    SELECT MAX(trend_date) AS d
+                    FROM global_industry_trends
+                    WHERE trend_date < CURRENT_DATE
+                )
+                SELECT g.keyword, g.mention_count, g.payload, g.trend_date
+                FROM global_industry_trends g
+                INNER JOIN latest_prior lp ON g.trend_date = lp.d
+                ORDER BY g.impact_score DESC NULLS LAST, g.keyword ASC
+                """
+    )
+    try:
+        with SessionLocal() as db:
+            rows = db.execute(query).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        if not _is_missing_relation(exc, "global_industry_trends"):
+            raise
+        rows = []
+
+    if not rows:
+        return {}
+
+    keyword_counts: dict[str, int] = {}
+    signals: list[dict[str, Any]] = []
+    for row in rows:
+        kw = str(row["keyword"] or "").strip().lower()
+        if not kw:
+            continue
+        payload = row["payload"] if isinstance(row["payload"], dict) else {}
+        mention_count = int(row["mention_count"] or payload.get("mention_count") or 0)
+        keyword_counts[kw] = mention_count
+        signals.append(
+            {
+                "signal": kw,
+                "mention_count": mention_count,
+                "intensity": payload.get("intensity"),
+                "leading_companies": payload.get("leading_companies", []),
+            }
+        )
+
+    latest_date = rows[0]["trend_date"]
+    return {
+        "period": "prior_batch",
+        "keyword_counts": keyword_counts,
+        "signals": signals,
+        "source_groups": ["global_industry_trends"],
+        "updated_at": latest_date.isoformat()
+        if hasattr(latest_date, "isoformat")
+        else str(latest_date),
+        "metadata": {"row_count": len(rows), "prior_trend_date": str(latest_date)},
+    }
+
+
 # trend 는 cronjob 으로 일 1 회만 갱신되므로 60 초 캐시는 정합성 손실 거의 없음.
 _TREND_CACHE_TTL_SEC = 60
 _trend_cache: dict[int, tuple[float, dict[str, Any]]] = {}
