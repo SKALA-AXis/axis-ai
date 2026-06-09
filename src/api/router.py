@@ -374,7 +374,6 @@ async def _run_collection_track(
             for record in new_records:
                 result = await _preprocess_crawl_record(record)
                 results.append(result)
-                delivery_results.append(await asyncio.to_thread(run_analysis_delivery, result))
 
     try:
         if track in {"a", "all"}:
