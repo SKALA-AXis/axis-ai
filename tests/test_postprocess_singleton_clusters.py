@@ -16,7 +16,7 @@ def test_lg_cns_anthropic_claude_titles_share_strong_event_key() -> None:
         "LG CNS, 앤트로픽 '클로드 엔터프라이즈' 도입"
     )
     assert "lg_cns_anthropic_claude" in _strong_event_keys(
-        "LG CNS, 앤스로픽 클로드 도입... 그룹사 단계적 확대"
+        "LG CNS, 클로드 도입... 그룹사 단계적 확대"
     )
 
 

@@ -753,7 +753,7 @@ def _strong_event_keys(title: str) -> set[str]:
     ):
         keys.add("lg_cns_physicalworks_rx")
     if "lgcns" in compact and any(
-        marker in compact for marker in ("앤트로픽", "앤스로픽", "anthropic", "클로드", "claude")
+        marker in compact for marker in ("앤트로픽", "anthropic", "클로드", "claude")
     ):
         keys.add("lg_cns_anthropic_claude")
     return keys
@@ -866,7 +866,6 @@ def _normalize_token(token: str) -> str:
         "챗지피티": "chatgpt",
         "피지컬": "physical",
         "에이전틱": "agentic",
-        "앤스로픽": "anthropic",
         "앤트로픽": "anthropic",
         "클로드": "claude",
     }
