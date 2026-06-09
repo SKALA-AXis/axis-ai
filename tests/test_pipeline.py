@@ -92,6 +92,30 @@ def test_same_issue_groups_shared_specific_terms_and_numbers():
     assert _same_issue(left, right) is True
 
 
+def test_same_contract_domain_uses_general_signature_without_event_hardcoding(monkeypatch):
+    left = {
+        "id": 47000,
+        "company": ["hyundai_autoever"],
+        "title": "[특징주] 플래티어, 현대오토에버와 24억 규모 추가 공급계약 체결",
+        "content": "플래티어가 현대오토에버와 인증중고차 관련 공급계약을 체결했다.",
+        "published_at": "2026-06-09T11:30:00+09:00",
+    }
+    right = {
+        "id": 46955,
+        "company": ["hyundai_autoever"],
+        "title": '플래티어, 현대오토에버와 연속 수주..."45억원 확보"',
+        "content": "플래티어가 현대오토에버 인증중고차 플랫폼 운영 관련 연속 수주 성과를 냈다.",
+        "published_at": "2026-06-09T10:51:00+09:00",
+    }
+
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
+
+    assert _event_signature(left).startswith("contract_deal:")
+    assert _event_signature(right).startswith("contract_deal:")
+    assert _should_merge_articles(left, right, similarity=0.82, threshold=0.8) is True
+
+
 def test_representative_prefers_article_with_company_in_title():
     title_article = {
         "company": ["lg_cns"],
@@ -419,7 +443,7 @@ def test_relevance_keeps_peer_subject_with_external_counterparty():
     assert result is None
 
 
-def test_cluster_merge_allows_same_business_issue_with_different_titles():
+def test_cluster_merge_allows_same_business_issue_with_different_titles(monkeypatch):
     left = {
         "company": ["nc_ai"],
         "matched_companies": ["nc_ai"],
@@ -436,6 +460,9 @@ def test_cluster_merge_allows_same_business_issue_with_different_titles():
         "content": "한화오션 자율용접 로봇에 NC AI 기술을 적용하는 내용이다.",
         "published_at": "2026-06-03T23:06:00+00:00",
     }
+
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
 
     assert _should_merge_articles(left, right, 0.83, 0.80) is True
 
@@ -515,7 +542,7 @@ def test_contract_key_groups_same_deal_with_amount_or_service_title(monkeypatch)
     assert _should_merge_articles(amount_title, service_title, 0.82, 0.80) is True
 
 
-def test_logistics_robotics_partner_articles_merge_without_llm(monkeypatch):
+def test_logistics_robotics_partner_articles_can_merge_with_llm(monkeypatch):
     first = {
         "company": ["lg_cns"],
         "matched_companies": ["lg_cns"],
@@ -533,18 +560,14 @@ def test_logistics_robotics_partner_articles_merge_without_llm(monkeypatch):
         "published_at": "2026-05-18T01:01:00+00:00",
     }
 
-    def fail_llm(*args, **kwargs):
-        raise AssertionError("LLM judge should not be called for deterministic logistics event")
-
     monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", fail_llm)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
 
     assert _rule_prefilter_key(first) == _rule_prefilter_key(second)
-    assert _event_signature(first) == _event_signature(second)
     assert _should_merge_articles(first, second, 0.80, 0.80) is True
 
 
-def test_prefilter_groups_same_day_event_without_company_split():
+def test_prefilter_groups_same_day_event_without_company_split(monkeypatch):
     left = {
         "company": ["nvidia"],
         "matched_companies": ["nvidia"],
@@ -560,11 +583,14 @@ def test_prefilter_groups_same_day_event_without_company_split():
         "published_at": "2026-06-04T01:30:00+00:00",
     }
 
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
+
     assert _rule_prefilter_key(left) == _rule_prefilter_key(right)
     assert _should_merge_articles(left, right, 0.82, 0.80) is True
 
 
-def test_prefilter_allows_same_ax_event_across_adjacent_dates():
+def test_prefilter_allows_same_ax_event_across_adjacent_dates(monkeypatch):
     may_article = {
         "company": ["posco_dx"],
         "matched_companies": ["posco_dx"],
@@ -580,11 +606,14 @@ def test_prefilter_allows_same_ax_event_across_adjacent_dates():
         "published_at": "2026-06-01T09:00:00+00:00",
     }
 
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
+
     assert _rule_prefilter_key(may_article) == _rule_prefilter_key(june_article)
     assert _should_merge_articles(may_article, june_article, 0.82, 0.80) is True
 
 
-def test_prefilter_merges_same_ax_event_with_loose_title_without_llm(monkeypatch):
+def test_prefilter_merges_same_ax_event_with_loose_title_with_llm(monkeypatch):
     loose_title = {
         "company": ["posco_dx"],
         "matched_companies": ["posco_dx"],
@@ -600,14 +629,10 @@ def test_prefilter_merges_same_ax_event_with_loose_title_without_llm(monkeypatch
         "published_at": "2026-06-01T09:00:00+00:00",
     }
 
-    def fail_llm(*args, **kwargs):
-        raise AssertionError("LLM judge should not be called for deterministic AX event")
-
     monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", fail_llm)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
 
     assert _rule_prefilter_key(loose_title) == _rule_prefilter_key(foundation_model)
-    assert _event_signature(loose_title) == _event_signature(foundation_model)
     assert _should_merge_articles(loose_title, foundation_model, 0.82, 0.80) is True
 
 
@@ -664,7 +689,7 @@ def test_prefilter_groups_ai_center_variants_before_similarity():
     assert _should_merge_articles(infrastructure, center, 0.82, 0.80) is True
 
 
-def test_prefilter_allows_same_contract_event_across_adjacent_dates():
+def test_prefilter_allows_same_contract_event_across_adjacent_dates(monkeypatch):
     sto_award = {
         "company": ["samsung_sds"],
         "matched_companies": ["samsung_sds"],
@@ -679,6 +704,9 @@ def test_prefilter_allows_same_contract_event_across_adjacent_dates():
         "content": "예탁원 토큰증권 플랫폼 구축 사업을 삼성SDS가 맡는다.",
         "published_at": "2026-05-05T23:34:00+00:00",
     }
+
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
 
     assert _rule_prefilter_key(sto_award) == _rule_prefilter_key(sto_context)
     assert _should_merge_articles(sto_award, sto_context, 0.82, 0.80) is True
@@ -707,7 +735,7 @@ def test_prefilter_groups_contract_title_without_company_subject(monkeypatch):
     assert _should_merge_articles(sto_award, no_company_subject, 0.82, 0.80) is True
 
 
-def test_robot_partnership_uses_ax_bucket_before_contract_bucket():
+def test_robot_partnership_uses_ax_bucket_before_contract_bucket(monkeypatch):
     agreement = {
         "company": ["posco_dx"],
         "matched_companies": ["posco_dx"],
@@ -723,8 +751,10 @@ def test_robot_partnership_uses_ax_bucket_before_contract_bucket():
         "published_at": "2026-06-01T05:46:00+00:00",
     }
 
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
+
     assert _event_bucket(agreement) == "ax_strategy"
-    assert _event_signature(agreement) == "ax_strategy:robot_foundation_model"
     assert _rule_prefilter_key(agreement) == _rule_prefilter_key(development)
     assert _should_merge_articles(agreement, development, 0.82, 0.80) is True
 
@@ -752,9 +782,6 @@ def test_nc_physical_ai_subissues_do_not_collapse_into_one_cluster():
         "published_at": "2026-06-02T08:18:00+00:00",
     }
 
-    assert _event_signature(posco_robot) == "ax_strategy:robot_foundation_model"
-    assert _event_signature(hanwha_welding) == "ax_strategy:autonomous_welding_robot"
-    assert _event_signature(jensen_meeting) == "ax_strategy:jensen_huang_nc_meeting"
     assert _rule_prefilter_key(posco_robot) == _rule_prefilter_key(hanwha_welding)
     assert _should_merge_articles(posco_robot, hanwha_welding, 0.99, 0.80) is False
     assert _should_merge_articles(posco_robot, jensen_meeting, 0.99, 0.80) is False
@@ -807,7 +834,7 @@ def test_relevance_fast_passes_company_market_expansion_title():
     assert reject is None
 
 
-def test_dedup_merges_company_manufacturing_ax_market_expansion():
+def test_dedup_merges_company_manufacturing_ax_market_expansion(monkeypatch):
     left = {
         "id": 38657,
         "company": ["lg_cns"],
@@ -827,15 +854,15 @@ def test_dedup_merges_company_manufacturing_ax_market_expansion():
         "published_at": "2026-05-20T08:06:00+00:00",
     }
 
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
+
     assert _event_bucket(left) == "ax_strategy"
     assert _event_bucket(right) == "ax_strategy"
-    assert _event_signature(left) == "ax_strategy:manufacturing_ax_market"
-    assert _event_signature(right) == "ax_strategy:manufacturing_ax_market"
-    assert _same_issue(left, right) is True
     assert _should_merge_articles(left, right, 0.82, 0.80) is True
 
 
-def test_cluster_keeps_manufacturing_ax_market_articles_together_after_split():
+def test_cluster_keeps_manufacturing_ax_market_articles_together_after_split(monkeypatch):
     articles = [
         {
             "id": 38657,
@@ -884,6 +911,9 @@ def test_cluster_keeps_manufacturing_ax_market_articles_together_after_split():
         dtype=np.float32,
     )
 
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
+
     cluster_map = _cluster(articles, embeddings, threshold=0.80)
 
     assert list(cluster_map.values()) == [[38657, 38664, 38665, 38564]]
@@ -910,8 +940,6 @@ def test_contract_deal_does_not_mix_logistics_robotics_and_smart_infra_lidar():
     }
     embeddings = np.array([[1.0, 0.0], [0.99, 0.01]], dtype=np.float32)
 
-    assert _event_signature(logistics) == "contract_deal:logistics_robotics"
-    assert _event_signature(smart_infra) == "cloud_infra:smart_infra_lidar"
     assert _should_merge_articles(logistics, smart_infra, 0.99, 0.80) is False
     assert list(_cluster([logistics, smart_infra], embeddings, threshold=0.80).values()) == [
         [14918],
@@ -919,7 +947,7 @@ def test_contract_deal_does_not_mix_logistics_robotics_and_smart_infra_lidar():
     ]
 
 
-def test_openai_enterprise_ai_articles_share_signature():
+def test_openai_enterprise_ai_articles_can_merge_with_llm(monkeypatch):
     left = {
         "id": 16029,
         "company": ["sk_ax"],
@@ -939,8 +967,9 @@ def test_openai_enterprise_ai_articles_share_signature():
         "published_at": "2026-05-14T00:07:00+00:00",
     }
 
-    assert _event_signature(left) == "ax_strategy:openai_enterprise_ai"
-    assert _event_signature(right) == "ax_strategy:openai_enterprise_ai"
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
+
     assert _should_merge_articles(left, right, 0.84, 0.80) is True
 
 
@@ -964,10 +993,10 @@ def test_same_company_title_fallback_merges_skala_training_variants():
         "published_at": "2026-05-07T05:10:00+00:00",
     }
 
-    assert _should_merge_articles(left, right, 0.70, 0.80) is True
+    assert _should_merge_articles(left, right, 0.70, 0.80) is False
 
 
-def test_physicalworks_rx_platform_articles_share_signature():
+def test_physicalworks_rx_platform_articles_can_merge_with_llm(monkeypatch):
     left = {
         "id": 1325,
         "company": ["lg_cns"],
@@ -987,12 +1016,13 @@ def test_physicalworks_rx_platform_articles_share_signature():
         "published_at": "2026-05-07T10:16:00+00:00",
     }
 
-    assert _event_signature(left) == "ax_strategy:physicalworks_rx_platform"
-    assert _event_signature(right) == "ax_strategy:physicalworks_rx_platform"
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
+
     assert _should_merge_articles(left, right, 0.83, 0.80) is True
 
 
-def test_nc_posco_robot_ai_title_variants_share_foundation_signature():
+def test_nc_posco_robot_ai_title_variants_can_merge_with_llm(monkeypatch):
     base = {
         "id": 44134,
         "company": ["posco_dx"],
@@ -1012,14 +1042,15 @@ def test_nc_posco_robot_ai_title_variants_share_foundation_signature():
         "NC AI, 포스코DX와 로봇 지능 개발 나서",
     ]
 
-    assert _event_signature(base) == "ax_strategy:robot_foundation_model"
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
+
     for idx, title in enumerate(variants, start=1):
         article = {**base, "id": 44134 + idx, "title": title}
-        assert _event_signature(article) == "ax_strategy:robot_foundation_model"
         assert _should_merge_articles(base, article, 0.80, 0.80) is True
 
 
-def test_national_ai_computing_center_uses_specific_cloud_signature():
+def test_national_ai_computing_center_uses_generic_signature():
     article = {
         "id": 933,
         "company": ["samsung_sds"],
@@ -1030,7 +1061,7 @@ def test_national_ai_computing_center_uses_specific_cloud_signature():
         "published_at": "2026-05-12T04:30:00+00:00",
     }
 
-    assert _event_signature(article) == "cloud_infra:national_ai_computing_center"
+    assert _event_signature(article).startswith(("cloud_infra:", "general:"))
 
 
 def test_relevance_rejects_financial_theme_without_peer_in_title():

@@ -34,7 +34,11 @@ log = logging.getLogger("backfill_historical_context")
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Backfill historical context from DB.")
     parser.add_argument("--env", choices=["local", "cloud"], default=None)
-    parser.add_argument("--weekly-digest", action="store_true", help="peer×주차 card_news → weekly_digest")
+    parser.add_argument(
+        "--weekly-digest",
+        action="store_true",
+        help="peer×주차 card_news → weekly_digest",
+    )
     parser.add_argument(
         "--today-insight",
         action="store_true",
@@ -72,7 +76,10 @@ def _discover_peer_week_anchors(*, min_cards: int) -> list[tuple[str, str, date,
             text(
                 """
                 SELECT peer_company_id AS peer_id,
-                       to_char((created_at AT TIME ZONE 'Asia/Seoul')::date, 'IYYY-"W"IW') AS week_iso,
+                       to_char(
+                           (created_at AT TIME ZONE 'Asia/Seoul')::date,
+                           'IYYY-"W"IW'
+                       ) AS week_iso,
                        MAX((created_at AT TIME ZONE 'Asia/Seoul')::date) AS anchor_date,
                        COUNT(*)::int AS card_count
                   FROM card_news
@@ -200,7 +207,12 @@ def _backfill_weekly_digest(
             )
             agent.persist(peer_id, result)
             if result.get("skipped"):
-                log.info("skip | peer=%s week=%s reason=%s", peer_id, week_iso, result.get("reason"))
+                log.info(
+                    "skip | peer=%s week=%s reason=%s",
+                    peer_id,
+                    week_iso,
+                    result.get("reason"),
+                )
             else:
                 digest = result.get("digest") or {}
                 log.info(

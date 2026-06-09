@@ -123,7 +123,9 @@ def _warmup_card_clusters(*, limit: int) -> None:
             {"limit": int(limit)},
         ).fetchall()
 
-    cluster_ids = [int(row._mapping["cluster_id"]) for row in rows if row._mapping.get("cluster_id")]
+    cluster_ids = [
+        int(row._mapping["cluster_id"]) for row in rows if row._mapping.get("cluster_id")
+    ]
     if not cluster_ids:
         log.info("card warmup | no clusters without cards")
         return
@@ -137,6 +139,33 @@ def _warmup_card_clusters(*, limit: int) -> None:
             log.info("card pipeline done | cluster=%s card=%s", cluster_id, card_id)
         except Exception as exc:  # noqa: BLE001
             log.exception("card pipeline failed | cluster=%s error=%s", cluster_id, exc)
+
+
+def _warmup_weekly_digest(*, use_llm: bool) -> None:
+    from src.agents.context.weekly_digest_agent import WeeklyDigestAgent
+    from src.config.companies import COMPANY_IDS
+
+    agent = WeeklyDigestAgent()
+    for company_id in COMPANY_IDS:
+        log.info("weekly digest | peer=%s llm=%s", company_id, use_llm)
+        try:
+            result = agent.run(peer_id=company_id, use_llm=use_llm)
+            agent.persist(company_id, result)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("weekly digest failed | peer=%s error=%s", company_id, exc)
+            continue
+        if result.get("skipped"):
+            log.warning(
+                "weekly digest skipped | peer=%s reason=%s", company_id, result.get("reason")
+            )
+        else:
+            digest = result.get("digest") or {}
+            log.info(
+                "weekly digest done | peer=%s week=%s cards=%s",
+                company_id,
+                digest.get("week_iso"),
+                result.get("card_count"),
+            )
 
 
 def main() -> None:

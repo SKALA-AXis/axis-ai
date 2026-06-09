@@ -61,7 +61,12 @@ def main() -> None:
             log.exception("weekly digest 실패 | company=%s error=%s", company_id, exc)
             continue
         if result.get("skipped"):
-            log.info("skip | company=%s reason=%s cards=%s", company_id, result.get("reason"), result.get("card_count"))
+            log.info(
+                "skip | company=%s reason=%s cards=%s",
+                company_id,
+                result.get("reason"),
+                result.get("card_count"),
+            )
         else:
             digest = result.get("digest") or {}
             log.info(

@@ -238,7 +238,10 @@ def run_postprocess(
     if apply:
         noise_updated = _apply_noise_skips(db, noise_ids)
         updated = _apply_candidates(db, candidates)
-        group_updated = _apply_group_candidates(db, group_candidates)
+        group_updated = _apply_group_candidates(
+            db,
+            _filter_group_candidates_after_target_merges(group_candidates, candidates),
+        )
 
     return {
         "cluster_count": len(clusters),
@@ -257,23 +260,32 @@ def _load_clusters(
     db: Any, source_type: str, lookback_hours: int, time_field: str
 ) -> list[Cluster]:
     order_field = "published_at" if time_field == "published_at" else "collected_at"
-    order_clause = f"{order_field} DESC NULLS LAST, collected_at DESC, id DESC"
+    aliased_order_clause = f"ra.{order_field} DESC NULLS LAST, ra.collected_at DESC, ra.id DESC"
     rows = db.execute(
         text(
             f"""
+            WITH recent_clusters AS (
+                SELECT DISTINCT cluster_id
+                FROM raw_articles
+                WHERE source_type = :source_type
+                  AND {order_field} >= now() - (:lookback_hours * interval '1 hour')
+                  AND processing_status = 'PROCESSED'
+                  AND relevance_label = 'relevant'
+                  AND cluster_id IS NOT NULL
+            )
             SELECT
-                cluster_id,
+                ra.cluster_id,
                 COUNT(*) AS article_count,
-                ARRAY_AGG(id ORDER BY {order_clause}) AS article_ids,
-                ARRAY_AGG(title ORDER BY {order_clause}) AS titles,
-                MAX({order_field}) AS latest_event_at
-            FROM raw_articles
-            WHERE source_type = :source_type
-              AND {order_field} >= now() - (:lookback_hours * interval '1 hour')
-              AND processing_status = 'PROCESSED'
-              AND relevance_label = 'relevant'
-              AND cluster_id IS NOT NULL
-            GROUP BY cluster_id
+                ARRAY_AGG(ra.id ORDER BY {aliased_order_clause}) AS article_ids,
+                ARRAY_AGG(ra.title ORDER BY {aliased_order_clause}) AS titles,
+                MAX(ra.{order_field}) AS latest_event_at
+            FROM raw_articles ra
+            JOIN recent_clusters rc ON rc.cluster_id = ra.cluster_id
+            WHERE ra.source_type = :source_type
+              AND ra.processing_status = 'PROCESSED'
+              AND ra.relevance_label = 'relevant'
+              AND ra.cluster_id IS NOT NULL
+            GROUP BY ra.cluster_id
             """
         ),
         {"source_type": source_type, "lookback_hours": lookback_hours},
@@ -479,6 +491,28 @@ def _apply_candidates(db: Any, candidates: list[MergeCandidate]) -> int:
     return updated
 
 
+def _filter_group_candidates_after_target_merges(
+    group_candidates: list[GroupMergeCandidate],
+    merge_candidates: list[MergeCandidate],
+) -> list[GroupMergeCandidate]:
+    target_merged_source_ids = {candidate.source.cluster_id for candidate in merge_candidates}
+    if not target_merged_source_ids:
+        return group_candidates
+
+    filtered: list[GroupMergeCandidate] = []
+    for candidate in group_candidates:
+        source_ids = {source.cluster_id for source in candidate.sources}
+        if source_ids & target_merged_source_ids:
+            log.info(
+                "small-cluster group merge skipped after target merge | target=%s sources=%s",
+                candidate.target.cluster_id,
+                sorted(source_ids),
+            )
+            continue
+        filtered.append(candidate)
+    return filtered
+
+
 def _apply_group_candidates(db: Any, candidates: list[GroupMergeCandidate]) -> int:
     updated = 0
     affected_clusters: set[int] = set()
@@ -603,103 +637,28 @@ def _cluster_relation(
     right_titles: list[str],
     target_size: int,
 ) -> tuple[str, set[str], float] | None:
-    left_keys = set().union(*(_strong_event_keys(title) for title in left_titles))
-    right_keys = set().union(*(_strong_event_keys(title) for title in right_titles))
-    shared_keys = left_keys & right_keys
-
     left_tokens = set().union(*(_event_tokens(title) for title in left_titles))
     right_tokens = set().union(*(_event_tokens(title) for title in right_titles))
     shared_tokens = left_tokens & right_tokens
-    if len(shared_tokens) < 2:
-        return None
-
-    if shared_keys:
-        event_key = sorted(shared_keys)[0]
-        return (
-            event_key,
-            shared_tokens,
-            _candidate_score(left_tokens, right_tokens, shared_tokens, target_size),
-        )
 
     if not _same_company_family(left_titles, right_titles):
         return None
     if not (_has_event_action(left_titles) and _has_event_action(right_titles)):
         return None
-    if len(shared_tokens) < 3 and not _has_distinctive_shared_tokens(shared_tokens):
+
+    if len(shared_tokens) < 2 and not _has_high_signal_single_token(shared_tokens):
+        return None
+    if len(shared_tokens) < 3 and not (
+        _has_distinctive_shared_tokens(shared_tokens)
+        or _has_high_signal_single_token(shared_tokens)
+    ):
         return None
 
     score = _candidate_score(left_tokens, right_tokens, shared_tokens, target_size)
+    if _has_high_signal_single_token(shared_tokens):
+        score = max(score, 0.45)
     event_key = "generic:" + "_".join(sorted(shared_tokens)[:4])
     return event_key, shared_tokens, score
-
-
-def _strong_event_keys(title: str) -> set[str]:
-    compact = _compact(title)
-    keys: set[str] = set()
-    if "lgcns" in compact and any(
-        marker in compact
-        for marker in (
-            "aind",
-            "에이전틱",
-            "agentic",
-            "ai개발플랫폼",
-            "개발플랫폼",
-            "기업시스템",
-            "대규모it시스템",
-            "대규모시스템",
-            "데브온",
-            "바이브코딩",
-            "코볼",
-            "계좌이체",
-        )
-    ):
-        keys.add("lg_cns_agentic_aind")
-    if any(
-        marker in compact for marker in ("gpu", "ai고속도로", "9704", "엘리스", "2조800억")
-    ) and any(
-        marker in compact
-        for marker in (
-            "삼성sds",
-            "삼성에스디에스",
-            "네이버",
-            "엘리스",
-            "사업자",
-            "선정",
-            "낙점",
-            "9704",
-        )
-    ):
-        keys.add("samsung_sds_gpu_ai_highway")
-    if any(marker in compact for marker in ("엔비디아", "nvidia", "젠슨황", "lg엔비디아")) and any(
-        marker in compact
-        for marker in (
-            "lg",
-            "구광모",
-            "피지컬ai",
-            "로봇",
-            "ai인프라",
-            "동맹",
-            "협력",
-            "파트너십",
-            "광폭행보",
-        )
-    ):
-        keys.add("lg_nvidia_physical_ai")
-    if "현대오토에버" in compact and any(
-        marker in compact for marker in ("로보틱스챌린지", "청소년로보틱스", "한국과학창의재단")
-    ):
-        keys.add("hyundai_autoever_robotics_challenge")
-    if any(marker in compact for marker in ("새마을금고", "검사종합시스템", "이상징후")):
-        keys.add("saemaul_inspection_system")
-    if "lgcns" in compact and any(
-        marker in compact for marker in ("한전", "한국전력", "영업배전", "isp")
-    ):
-        keys.add("lg_cns_kepco_isp")
-    if "lgcns" in compact and any(
-        marker in compact for marker in ("피지컬웍스", "rx플랫폼", "로봇전환")
-    ):
-        keys.add("lg_cns_physicalworks_rx")
-    return keys
 
 
 def _event_tokens(title: str) -> set[str]:
@@ -763,6 +722,13 @@ def _has_distinctive_shared_tokens(shared_tokens: set[str]) -> bool:
     return len(distinctive) >= 2
 
 
+def _has_high_signal_single_token(shared_tokens: set[str]) -> bool:
+    return any(
+        len(token) >= 5 or any(char.isascii() and char.isalpha() for char in token)
+        for token in shared_tokens
+    )
+
+
 def _candidate_score(
     singleton_tokens: set[str],
     target_tokens: set[str],
@@ -786,6 +752,8 @@ def _within_time_gap(
 
 
 def _is_stock_noise(title: str) -> bool:
+    if _has_event_action([title]) and len(_event_tokens(title)) >= 2:
+        return False
     return bool(_STOCK_NOISE_RE.search(title or ""))
 
 
@@ -805,7 +773,6 @@ def _normalize_token(token: str) -> str:
         "챗지피티": "chatgpt",
         "피지컬": "physical",
         "에이전틱": "agentic",
-        "앤스로픽": "anthropic",
         "앤트로픽": "anthropic",
         "클로드": "claude",
     }
