@@ -1090,12 +1090,35 @@ def _title_event_keys_for_merge(title: str) -> set[str]:
         )
     ):
         keys.add("lg_cns_agentic_aind")
-    if any(marker in compact for marker in ("gpu", "ai고속도로", "9704", "엘리스", "2조800억")) and any(
-        marker in compact for marker in ("삼성sds", "삼성에스디에스", "네이버", "엘리스", "사업자", "선정", "낙점", "9704")
+    if any(
+        marker in compact for marker in ("gpu", "ai고속도로", "9704", "엘리스", "2조800억")
+    ) and any(
+        marker in compact
+        for marker in (
+            "삼성sds",
+            "삼성에스디에스",
+            "네이버",
+            "엘리스",
+            "사업자",
+            "선정",
+            "낙점",
+            "9704",
+        )
     ):
         keys.add("samsung_sds_gpu_ai_highway")
     if any(marker in compact for marker in ("엔비디아", "nvidia", "젠슨황", "lg엔비디아")) and any(
-        marker in compact for marker in ("lg", "구광모", "피지컬ai", "로봇", "ai인프라", "동맹", "협력", "파트너십", "광폭행보")
+        marker in compact
+        for marker in (
+            "lg",
+            "구광모",
+            "피지컬ai",
+            "로봇",
+            "ai인프라",
+            "동맹",
+            "협력",
+            "파트너십",
+            "광폭행보",
+        )
     ):
         keys.add("lg_nvidia_physical_ai")
     if "현대오토에버" in compact and any(

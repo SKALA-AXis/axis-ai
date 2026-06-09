@@ -1069,14 +1069,14 @@ def _event_signature(article: dict[str, Any]) -> str:
         return "ax_strategy:lg_cns_agentic_aind"
     if "gpu_ai_highway" in title_concepts:
         return "cloud_infra:gpu_ai_highway"
+    if "jensen_huang_visit" in title_concepts:
+        return "ax_strategy:jensen_huang_nc_meeting"
     if "lg_nvidia_physical_ai" in title_concepts:
         return "ax_strategy:lg_nvidia_physical_ai"
     if "hyundai_autoever_robotics_challenge" in title_concepts:
         return "ax_strategy:hyundai_autoever_robotics_challenge"
     if "saemaul_inspection_system" in title_concepts:
         return "contract_deal:saemaul_inspection_system"
-    if "jensen_huang_visit" in title_concepts:
-        return "ax_strategy:jensen_huang_nc_meeting"
     if "autonomous_welding_robot" in title_concepts:
         return "ax_strategy:autonomous_welding_robot"
     if "robot_foundation_model" in title_concepts:

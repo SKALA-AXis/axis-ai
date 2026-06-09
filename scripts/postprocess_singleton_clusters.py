@@ -105,7 +105,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-time-gap-hours", type=int, default=72)
     parser.add_argument("--min-score", type=float, default=0.45)
-    parser.add_argument("--skip-noise", action="store_true", help="Skip stock/list-like processed news rows")
+    parser.add_argument(
+        "--skip-noise", action="store_true", help="Skip stock/list-like processed news rows"
+    )
     parser.add_argument("--apply", action="store_true", help="Actually update DB")
     parser.add_argument("--limit", type=int, default=0, help="Limit singleton candidates")
     return parser.parse_args()
@@ -142,7 +144,9 @@ def main() -> None:
 
         print("SINGLETON_POSTPROCESS_DRY_RUN" if not args.apply else "SINGLETON_POSTPROCESS_APPLY")
         print(
-            f"clusters={result['cluster_count']} sources={result['source_count']} targets={result['target_count']} "
+            f"clusters={result['cluster_count']} "
+            f"sources={result['source_count']} "
+            f"targets={result['target_count']} "
             f"time_field={args.time_field}"
         )
         print(
@@ -168,7 +172,9 @@ def main() -> None:
             print(f"  target_titles={candidate.target.titles[:3]}")
         for candidate in group_candidates:
             source_clusters = [source.cluster_id for source in candidate.sources]
-            article_ids = [article_id for source in candidate.sources for article_id in source.article_ids]
+            article_ids = [
+                article_id for source in candidate.sources for article_id in source.article_ids
+            ]
             print(
                 "GROUP_MERGE",
                 f"article_ids={article_ids}",
@@ -247,16 +253,19 @@ def run_postprocess(
     }
 
 
-def _load_clusters(db: Any, source_type: str, lookback_hours: int, time_field: str) -> list[Cluster]:
+def _load_clusters(
+    db: Any, source_type: str, lookback_hours: int, time_field: str
+) -> list[Cluster]:
     order_field = "published_at" if time_field == "published_at" else "collected_at"
+    order_clause = f"{order_field} DESC NULLS LAST, collected_at DESC, id DESC"
     rows = db.execute(
         text(
             f"""
             SELECT
                 cluster_id,
                 COUNT(*) AS article_count,
-                ARRAY_AGG(id ORDER BY {order_field} DESC NULLS LAST, collected_at DESC, id DESC) AS article_ids,
-                ARRAY_AGG(title ORDER BY {order_field} DESC NULLS LAST, collected_at DESC, id DESC) AS titles,
+                ARRAY_AGG(id ORDER BY {order_clause}) AS article_ids,
+                ARRAY_AGG(title ORDER BY {order_clause}) AS titles,
                 MAX({order_field}) AS latest_event_at
             FROM raw_articles
             WHERE source_type = :source_type
@@ -315,9 +324,8 @@ def _find_candidates(
 ) -> list[MergeCandidate]:
     candidates: list[MergeCandidate] = []
     for source in sources:
-        if (
-            any(_is_stock_noise(title) for title in source.titles)
-            or any(_is_list_like(title) for title in source.titles)
+        if any(_is_stock_noise(title) for title in source.titles) or any(
+            _is_list_like(title) for title in source.titles
         ):
             continue
 
@@ -391,7 +399,9 @@ def _find_source_group_candidates(
         for right in eligible[i + 1 :]:
             if not _within_time_gap(left.event_at, right.event_at, max_time_gap_hours):
                 continue
-            relation = _cluster_relation(left.titles, right.titles, max(left.article_count, right.article_count))
+            relation = _cluster_relation(
+                left.titles, right.titles, max(left.article_count, right.article_count)
+            )
             if relation is None:
                 continue
             event_key, shared_tokens, score = relation
@@ -413,7 +423,10 @@ def _find_source_group_candidates(
         total_articles = sum(member.article_count for member in members)
         if len(members) < 2 or total_articles < min_new_cluster_size:
             continue
-        members.sort(key=lambda item: (item.event_at is not None, item.event_at, item.cluster_id), reverse=True)
+        members.sort(
+            key=lambda item: (item.event_at is not None, item.event_at, item.cluster_id),
+            reverse=True,
+        )
         target = members[0]
         pairs = [
             relation_by_pair[pair]
@@ -471,7 +484,9 @@ def _apply_group_candidates(db: Any, candidates: list[GroupMergeCandidate]) -> i
     affected_clusters: set[int] = set()
     for candidate in candidates:
         source_cluster_ids = [
-            source.cluster_id for source in candidate.sources if source.cluster_id != candidate.target.cluster_id
+            source.cluster_id
+            for source in candidate.sources
+            if source.cluster_id != candidate.target.cluster_id
         ]
         if not source_cluster_ids:
             continue
@@ -600,7 +615,11 @@ def _cluster_relation(
 
     if shared_keys:
         event_key = sorted(shared_keys)[0]
-        return event_key, shared_tokens, _candidate_score(left_tokens, right_tokens, shared_tokens, target_size)
+        return (
+            event_key,
+            shared_tokens,
+            _candidate_score(left_tokens, right_tokens, shared_tokens, target_size),
+        )
 
     if not _same_company_family(left_titles, right_titles):
         return None
@@ -635,7 +654,9 @@ def _strong_event_keys(title: str) -> set[str]:
         )
     ):
         keys.add("lg_cns_agentic_aind")
-    if any(marker in compact for marker in ("gpu", "ai고속도로", "9704", "엘리스", "2조800억")) and any(
+    if any(
+        marker in compact for marker in ("gpu", "ai고속도로", "9704", "엘리스", "2조800억")
+    ) and any(
         marker in compact
         for marker in (
             "삼성sds",
@@ -651,7 +672,17 @@ def _strong_event_keys(title: str) -> set[str]:
         keys.add("samsung_sds_gpu_ai_highway")
     if any(marker in compact for marker in ("엔비디아", "nvidia", "젠슨황", "lg엔비디아")) and any(
         marker in compact
-        for marker in ("lg", "구광모", "피지컬ai", "로봇", "ai인프라", "동맹", "협력", "파트너십", "광폭행보")
+        for marker in (
+            "lg",
+            "구광모",
+            "피지컬ai",
+            "로봇",
+            "ai인프라",
+            "동맹",
+            "협력",
+            "파트너십",
+            "광폭행보",
+        )
     ):
         keys.add("lg_nvidia_physical_ai")
     if "현대오토에버" in compact and any(
@@ -660,9 +691,13 @@ def _strong_event_keys(title: str) -> set[str]:
         keys.add("hyundai_autoever_robotics_challenge")
     if any(marker in compact for marker in ("새마을금고", "검사종합시스템", "이상징후")):
         keys.add("saemaul_inspection_system")
-    if "lgcns" in compact and any(marker in compact for marker in ("한전", "한국전력", "영업배전", "isp")):
+    if "lgcns" in compact and any(
+        marker in compact for marker in ("한전", "한국전력", "영업배전", "isp")
+    ):
         keys.add("lg_cns_kepco_isp")
-    if "lgcns" in compact and any(marker in compact for marker in ("피지컬웍스", "rx플랫폼", "로봇전환")):
+    if "lgcns" in compact and any(
+        marker in compact for marker in ("피지컬웍스", "rx플랫폼", "로봇전환")
+    ):
         keys.add("lg_cns_physicalworks_rx")
     return keys
 
