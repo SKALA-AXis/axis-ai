@@ -162,6 +162,8 @@ _EVENT_BUCKET_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _KEEP_AMBIGUOUS_SINGLETONS = os.getenv("DEDUP_KEEP_AMBIGUOUS_SINGLETONS", "true").lower() == "true"
 
 _CANONICAL_ISSUE_TERMS: Mapping[str, tuple[str, ...]] = {}
+
+
 _cluster_llm_calls = 0
 _cluster_llm_cache: dict[tuple[str, str, str], bool | None] = {}
 _cluster_llm_approved_pairs: set[frozenset[int]] = set()
