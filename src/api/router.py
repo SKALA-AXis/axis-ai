@@ -441,7 +441,7 @@ def _run_recent_news_cluster_postprocess() -> dict:
         result = run_postprocess(
             db=db,
             source_type="news",
-            lookback_hours=2,
+            lookback_hours=4,
             time_field="published_at",
             max_source_size=3,
             min_target_size=4,

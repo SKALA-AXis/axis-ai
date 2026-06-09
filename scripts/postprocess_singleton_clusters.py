@@ -238,7 +238,10 @@ def run_postprocess(
     if apply:
         noise_updated = _apply_noise_skips(db, noise_ids)
         updated = _apply_candidates(db, candidates)
-        group_updated = _apply_group_candidates(db, group_candidates)
+        group_updated = _apply_group_candidates(
+            db,
+            _filter_group_candidates_after_target_merges(group_candidates, candidates),
+        )
 
     return {
         "cluster_count": len(clusters),
@@ -257,23 +260,32 @@ def _load_clusters(
     db: Any, source_type: str, lookback_hours: int, time_field: str
 ) -> list[Cluster]:
     order_field = "published_at" if time_field == "published_at" else "collected_at"
-    order_clause = f"{order_field} DESC NULLS LAST, collected_at DESC, id DESC"
+    aliased_order_clause = f"ra.{order_field} DESC NULLS LAST, ra.collected_at DESC, ra.id DESC"
     rows = db.execute(
         text(
             f"""
+            WITH recent_clusters AS (
+                SELECT DISTINCT cluster_id
+                FROM raw_articles
+                WHERE source_type = :source_type
+                  AND {order_field} >= now() - (:lookback_hours * interval '1 hour')
+                  AND processing_status = 'PROCESSED'
+                  AND relevance_label = 'relevant'
+                  AND cluster_id IS NOT NULL
+            )
             SELECT
-                cluster_id,
+                ra.cluster_id,
                 COUNT(*) AS article_count,
-                ARRAY_AGG(id ORDER BY {order_clause}) AS article_ids,
-                ARRAY_AGG(title ORDER BY {order_clause}) AS titles,
-                MAX({order_field}) AS latest_event_at
-            FROM raw_articles
-            WHERE source_type = :source_type
-              AND {order_field} >= now() - (:lookback_hours * interval '1 hour')
-              AND processing_status = 'PROCESSED'
-              AND relevance_label = 'relevant'
-              AND cluster_id IS NOT NULL
-            GROUP BY cluster_id
+                ARRAY_AGG(ra.id ORDER BY {aliased_order_clause}) AS article_ids,
+                ARRAY_AGG(ra.title ORDER BY {aliased_order_clause}) AS titles,
+                MAX(ra.{order_field}) AS latest_event_at
+            FROM raw_articles ra
+            JOIN recent_clusters rc ON rc.cluster_id = ra.cluster_id
+            WHERE ra.source_type = :source_type
+              AND ra.processing_status = 'PROCESSED'
+              AND ra.relevance_label = 'relevant'
+              AND ra.cluster_id IS NOT NULL
+            GROUP BY ra.cluster_id
             """
         ),
         {"source_type": source_type, "lookback_hours": lookback_hours},
@@ -479,6 +491,28 @@ def _apply_candidates(db: Any, candidates: list[MergeCandidate]) -> int:
     return updated
 
 
+def _filter_group_candidates_after_target_merges(
+    group_candidates: list[GroupMergeCandidate],
+    merge_candidates: list[MergeCandidate],
+) -> list[GroupMergeCandidate]:
+    target_merged_source_ids = {candidate.source.cluster_id for candidate in merge_candidates}
+    if not target_merged_source_ids:
+        return group_candidates
+
+    filtered: list[GroupMergeCandidate] = []
+    for candidate in group_candidates:
+        source_ids = {source.cluster_id for source in candidate.sources}
+        if source_ids & target_merged_source_ids:
+            log.info(
+                "small-cluster group merge skipped after target merge | target=%s sources=%s",
+                candidate.target.cluster_id,
+                sorted(source_ids),
+            )
+            continue
+        filtered.append(candidate)
+    return filtered
+
+
 def _apply_group_candidates(db: Any, candidates: list[GroupMergeCandidate]) -> int:
     updated = 0
     affected_clusters: set[int] = set()
@@ -618,7 +652,7 @@ def _cluster_relation(
         return (
             event_key,
             shared_tokens,
-            _candidate_score(left_tokens, right_tokens, shared_tokens, target_size),
+            max(0.65, _candidate_score(left_tokens, right_tokens, shared_tokens, target_size)),
         )
 
     if not _same_company_family(left_titles, right_titles):
@@ -699,6 +733,10 @@ def _strong_event_keys(title: str) -> set[str]:
         marker in compact for marker in ("피지컬웍스", "rx플랫폼", "로봇전환")
     ):
         keys.add("lg_cns_physicalworks_rx")
+    if "lgcns" in compact and any(
+        marker in compact for marker in ("앤트로픽", "앤스로픽", "anthropic", "클로드", "claude")
+    ):
+        keys.add("lg_cns_anthropic_claude")
     return keys
 
 
@@ -790,6 +828,8 @@ def _is_stock_noise(title: str) -> bool:
 
 
 def _is_list_like(title: str) -> bool:
+    if _strong_event_keys(title):
+        return False
     return bool(_LIST_LIKE_RE.search(title or ""))
 
 
