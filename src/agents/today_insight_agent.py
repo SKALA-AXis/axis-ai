@@ -82,7 +82,8 @@ Dual-lane 판단:
 절대 규칙:
 1. comparison_facts 에 없는 수치를 만들지 않습니다.
    card_attached_numbers 가 비어 있으면 금액/규모 수치를 쓰지 않습니다.
-2. "시장 확대", "경쟁 심화", "전략 강화", "경쟁 환경에 영향" 같은 넓은 결론은 단독으로 쓰지 않습니다.
+2. "시장 확대", "경쟁 심화", "전략 강화", "경쟁 환경에 영향" 같은
+   넓은 결론은 단독으로 쓰지 않습니다.
    반드시 event_type/sector/운영 KPI/검증 항목/제안 산출물로 좁힙니다.
 3. response_direction은 실행 산출물이 보여야 합니다.
 4. signal은 정확히 3개이며 label은 순서대로 "주요 신호", "관찰 포인트", "다음 판단"입니다.
@@ -1013,9 +1014,7 @@ def _merge_comparison_evidence(
         return signal
 
     existing = [
-        str(item).strip()
-        for item in _list(evidence.get("changes"))
-        if str(item or "").strip()
+        str(item).strip() for item in _list(evidence.get("changes")) if str(item or "").strip()
     ]
     merged = existing[:]
     for line in computed_changes:
@@ -1487,11 +1486,7 @@ def _issue_for_prompt(row: dict[str, Any]) -> dict[str, Any]:
 def _card_for_prompt(card: dict[str, Any]) -> dict[str, Any]:
     raw_implication = card.get("implication")
     implication: dict[str, Any] = raw_implication if isinstance(raw_implication, dict) else {}
-    sector = (
-        card.get("primary_keyword_category")
-        or implication.get("sector")
-        or ""
-    )
+    sector = card.get("primary_keyword_category") or implication.get("sector") or ""
     return {
         "id": card.get("id"),
         "integrated_issue_id": card.get("integrated_issue_id"),

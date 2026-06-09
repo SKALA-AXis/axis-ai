@@ -104,9 +104,7 @@ def build_comparison_facts(
         keyword_trends=keyword_trends,
     )
     visibility_gaps = [
-        item
-        for item in salience_candidates
-        if item.get("label") == "low_visibility_definite_event"
+        item for item in salience_candidates if item.get("label") == "low_visibility_definite_event"
     ]
     primary_selection = _select_primary_lane(salience_candidates, visibility_gaps)
     context_selection = _select_context_lane(structural, salience_candidates)
@@ -137,8 +135,7 @@ def build_comparison_facts(
                 "노출이 낮아도 primary_lane 후보를 제거하지 않는다."
             ),
             "hidden_gem_rule": (
-                "visibility_gaps 가 있으면 headline 또는 signal[0]에 "
-                "최소 1건을 반드시 반영한다."
+                "visibility_gaps 가 있으면 headline 또는 signal[0]에 최소 1건을 반드시 반영한다."
             ),
             "number_rule": (
                 "comparison_facts 에 없는 수치를 생성하지 않는다. "
@@ -207,7 +204,6 @@ def _salience_for_issue(
     event_type = str(issue.get("event_type") or "").strip().lower()
     headline = str(issue.get("headline") or issue.get("one_line_summary") or "")
     summary = str(issue.get("one_line_summary") or issue.get("content_summary") or "")
-    text = f"{headline} {summary}".strip()
     source_type = _normalize_source_type(str(issue.get("source_family") or ""))
 
     impact = compute_article_impact(
@@ -260,7 +256,6 @@ def _salience_for_card(
     event_type = str(card.get("event_type") or "").strip().lower()
     title = str(card.get("title") or "")
     summary_lines = " / ".join(str(line) for line in _list(card.get("summary_lines"))[:3])
-    text = f"{title} {summary_lines}".strip()
     source_type = _infer_source_type_from_card(card)
 
     impact = compute_article_impact(
@@ -270,12 +265,16 @@ def _salience_for_card(
     salience_score = float(impact["impact_score"])
     salience_triggers = list(impact.get("impact_signals") or [])
 
-    sector = str(
-        card.get("sector")
-        or card.get("primary_keyword_category")
-        or _sector_from_implication(card)
-        or ""
-    ).strip().lower()
+    sector = (
+        str(
+            card.get("sector")
+            or card.get("primary_keyword_category")
+            or _sector_from_implication(card)
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     sector_boost = _STRATEGIC_SECTOR_BOOST.get(sector, 0.0)
     if sector_boost:
         salience_score = round(min(1.0, salience_score + sector_boost), 3)
@@ -472,8 +471,14 @@ def _fetch_keyword_trend_rows(
                             COALESCE(ra.metadata ->> 'time_unit', 'date') AS time_unit,
                             ROW_NUMBER() OVER (
                                 PARTITION BY
-                                    COALESCE(ra.metadata ->> 'group_name', ra.company::jsonb ->> 0),
-                                    COALESCE((ra.metadata ->> 'period')::date, ra.published_at::date)
+                                    COALESCE(
+                                        ra.metadata ->> 'group_name',
+                                        ra.company::jsonb ->> 0,
+                                    ),
+                                    COALESCE(
+                                        (ra.metadata ->> 'period')::date,
+                                        ra.published_at::date,
+                                    )
                                 ORDER BY ra.collected_at DESC NULLS LAST, ra.id DESC
                             ) AS rn
                         FROM raw_articles ra
@@ -557,7 +562,8 @@ def _build_structural_facts(
     facts.append(
         {
             "metric": "today_detected_count",
-            "today": change_stats.get("today_issue_count", 0) + change_stats.get("recent_card_count", 0),
+            "today": change_stats.get("today_issue_count", 0)
+            + change_stats.get("recent_card_count", 0),
             "baseline_label": f"최근 {window_days}일",
             "note": "통합 이슈 + 카드뉴스 합산",
         }
@@ -617,17 +623,13 @@ def _event_mix_shift(
     window_days: int,
 ) -> dict[str, Any] | None:
     current = Counter(
-        str(row.get("event_type") or "unknown")
-        for row in current_issues
-        if row.get("event_type")
+        str(row.get("event_type") or "unknown") for row in current_issues if row.get("event_type")
     )
     if not current:
         return None
 
     history = Counter(
-        str(row.get("event_type") or "unknown")
-        for row in history_issues
-        if row.get("event_type")
+        str(row.get("event_type") or "unknown") for row in history_issues if row.get("event_type")
     )
     history_total = sum(history.values()) or 1
     current_total = sum(current.values()) or 1
@@ -696,7 +698,9 @@ def _select_primary_lane(
     if visibility_gaps:
         top_gap = visibility_gaps[0]
         if top_gap.get("id") and not any(item.get("id") == top_gap.get("id") for item in ordered):
-            ordered = [top_gap, *[item for item in ordered if item.get("id") != top_gap.get("id")]][:3]
+            ordered = [top_gap, *[item for item in ordered if item.get("id") != top_gap.get("id")]][
+                :3
+            ]
 
     return {
         "lane": "primary",
@@ -770,8 +774,7 @@ def _coverage_summary(
         "keyword_trends": keyword_count,
         "hidden_gem_count": len(visibility_gaps),
         "card_attached_numbers": sum(
-            len(_list(item.get("card_attached_numbers")))
-            for item in salience_candidates
+            len(_list(item.get("card_attached_numbers"))) for item in salience_candidates
         ),
         "mode": (
             "dual_lane_full"
@@ -970,9 +973,7 @@ def format_evidence_change_lines(comparison_facts: dict[str, Any] | None) -> lis
             continue
         sign = "+" if delta > 0 else ""
         latest = f", 지수 {latest_ratio}" if latest_ratio is not None else ""
-        lines.append(
-            f"{group_name} 검색지수 {sign}{delta:.1f}pt (전일 대비{latest})"
-        )
+        lines.append(f"{group_name} 검색지수 {sign}{delta:.1f}pt (전일 대비{latest})")
 
     for item in _list(comparison_facts.get("structural")):
         if not isinstance(item, dict):
@@ -980,13 +981,14 @@ def format_evidence_change_lines(comparison_facts: dict[str, Any] | None) -> lis
         metric = str(item.get("metric") or "")
         if metric == "peer_activity_delta":
             peer_label = str(item.get("peer_label") or item.get("key") or "")
-            delta = item.get("delta_vs_daily_avg")
+            peer_delta = item.get("delta_vs_daily_avg")
             today_count = item.get("today_count")
-            if peer_label and delta is not None:
-                sign = "+" if float(delta) > 0 else ""
+            if peer_label and peer_delta is not None:
+                peer_delta_value = float(peer_delta)
+                sign = "+" if peer_delta_value > 0 else ""
                 lines.append(
                     f"{peer_label} 카드/이슈 {today_count}건 "
-                    f"(일평균 대비 {sign}{float(delta):.1f}건)"
+                    f"(일평균 대비 {sign}{peer_delta_value:.1f}건)"
                 )
         elif metric == "event_type_mix_shift":
             top = item.get("top_shift")
@@ -1151,10 +1153,14 @@ def build_executive_summary_from_facts(
         ratio_delta = trends[0].get("ratio_delta")
         if group_name and ratio_delta is not None:
             sign = "+" if float(ratio_delta) > 0 else ""
-            keyword_line = f" 동시에 {group_name} 검색지수는 전일 대비 {sign}{float(ratio_delta):.1f}pt입니다."
+            keyword_line = (
+                f" 동시에 {group_name} 검색지수는 전일 대비 {sign}{float(ratio_delta):.1f}pt입니다."
+            )
     stats = change_stats or {}
     window_days = stats.get("window_days", 60)
-    count = int(stats.get("today_issue_count", 0) or 0) + int(stats.get("recent_card_count", 0) or 0)
+    count = int(stats.get("today_issue_count", 0) or 0) + int(
+        stats.get("recent_card_count", 0) or 0
+    )
     base = (
         f"오늘 {count}건 신호 중 salience 상위 이벤트는 '{title}'입니다."
         f" 최근 {window_days}일 흐름과 비교해 판단 우선순위를 재정렬해야 합니다."
@@ -1176,7 +1182,9 @@ def build_context_signal_value(comparison_facts: dict[str, Any] | None) -> str:
         ratio_delta = trends[0].get("ratio_delta")
         if group_name and ratio_delta is not None:
             sign = "+" if float(ratio_delta) > 0 else ""
-            return _clip(f"{group_name} 검색지수 {sign}{float(ratio_delta):.1f}pt — 시장 관심 맥락", 96)
+            return _clip(
+                f"{group_name} 검색지수 {sign}{float(ratio_delta):.1f}pt — 시장 관심 맥락", 96
+            )
     return "보도량·sector 비중은 primary를 대체하지 않는 맥락 지표"
 
 
@@ -1205,10 +1213,16 @@ def polish_executive_output(
     if not isinstance(comparison, dict):
         return out
 
-    change_stats = context.get("change_stats") if isinstance(context.get("change_stats"), dict) else {}
+    raw_change_stats = context.get("change_stats")
+    change_stats: dict[str, Any] = raw_change_stats if isinstance(raw_change_stats, dict) else {}
+    default_summary = change_stats.get("default_change_summary")
+    default_rows: list[dict[str, str]] = (
+        default_summary
+        if isinstance(default_summary, list)
+        else [dict(row) for row in _list(out.get("change_summary")) if isinstance(row, dict)]
+    )
     out["change_summary"] = build_ui_change_summary(
-        default_rows=change_stats.get("default_change_summary")
-        or _list(out.get("change_summary")),
+        default_rows=default_rows,
         comparison_facts=comparison,
     )
 
