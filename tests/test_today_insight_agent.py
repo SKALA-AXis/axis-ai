@@ -180,7 +180,7 @@ def _patch_context(monkeypatch, fake_llm: _FakeLLM, saved: list[dict[str, Any]])
     monkeypatch.setattr(
         today_module,
         "_load_skax_context",
-        lambda **kwargs: {"skax_contexts": [{"title": "공공/금융 AX 사업 기회"}]},
+        lambda **kwargs: {"ax": {"summary": "공공/금융 AX 사업 기회", "documents": []}},
     )
     monkeypatch.setattr(today_module, "_get_llm", lambda: fake_llm)
     monkeypatch.setattr(
@@ -229,7 +229,7 @@ def test_today_insight_agent_generates_ui_ready_executive_payload(monkeypatch) -
     assert response.sources[0].id == "CN-1"
     assert response.source_integrated_issue_ids == ["11111111-1111-1111-1111-111111111111"]
     assert response.source_card_ids == ["CN-1"]
-    assert response.provenance["prompt_version"] == "today-insight-v1.2-dual-lane-postprocess"
+    assert response.provenance["prompt_version"] == "today-insight-v1.3-signals-focus"
     assert saved and saved[0]["headline"] == response.headline
     assert card_lookup_args[0]["window_days"] == 60
     assert "prior_today_insight_memory" in fake_llm.prompts[0]
@@ -396,3 +396,57 @@ def test_today_insight_agent_uses_recent_cards_when_integrated_issues_empty(
     assert response.change_summary[1].value == "최근 60일"
     assert recent_lookup_args[0]["window_days"] == 60
     assert "삼성SDS 생성형 AI 운영 자동화 확대" in fake_llm.prompts[0]
+
+
+def test_fit_llm_prompt_context_avoids_blind_truncation_marker() -> None:
+    context = {
+        "report_date": "2026-06-09",
+        "window_days": 60,
+        "comparison_facts": {
+            "primary_selection": {"items": [{"title": "핵심", "label": "high_salience_visible"}]},
+            "salience_candidates": [{"title": "후보", "label": "moderate_salience"}],
+            "keyword_trends": [],
+            "structural": [],
+            "coverage": {"mode": "dual_lane_full"},
+        },
+        "change_stats": {"default_change_summary": [], "window_days": 60},
+        "current_issues": [
+            today_module._issue_for_prompt(
+                {
+                    "id": "IC-1",
+                    "main_company": "lg_cns",
+                    "headline": "LG CNS 계약",
+                    "one_line_summary": "요약",
+                    "content_summary": "본문" * 200,
+                    "sectors": ["ax"],
+                    "source_ids": [],
+                    "sources": [],
+                }
+            )
+        ],
+        "recent_cards": [],
+        "history_issues": [],
+        "sources": [],
+        "prior_today_insight_memory": [{"headline": "prior"} for _ in range(5)],
+        "analysis_ledger_context": [{"headline": "ledger"} for _ in range(5)],
+        "profile_context": {
+            "peer_profiles": {
+                "lg_cns": {
+                    "company_name_ko": "LG CNS",
+                    "strategic_direction": "방향" * 300,
+                    "recent_signals": [{"headline": "sig"}],
+                }
+            },
+            "sector_context": {"ax": {"summary": "섹터"}},
+        },
+        "skax_context": {"ax": {"summary": "skax", "documents": [{"title": "doc"}]}},
+    }
+
+    llm_context, meta = today_module._fit_llm_prompt_context(context)
+    serialized = today_module._json_dumps(llm_context)
+
+    assert "...TRUNCATED..." not in serialized
+    assert meta["serialized_chars"] <= today_module._LLM_CONTEXT_MAX_CHARS
+    assert llm_context["comparison_facts"]["primary_selection"]["items"][0]["title"] == "핵심"
+    assert "generation_focus" in llm_context
+    assert "signals" in llm_context["generation_focus"]["llm_priority_fields"]

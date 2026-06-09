@@ -11,6 +11,7 @@ from src.services.today_insight_comparison_engine import (
     format_evidence_change_lines,
     is_generic_executive_text,
     polish_executive_output,
+    trim_comparison_facts_for_prompt,
 )
 
 
@@ -264,6 +265,27 @@ def test_format_evidence_change_lines_and_ui_chips() -> None:
     )
     assert chips[1]["label"] == "검색지수 변화"
     assert "AI 에이전트" in chips[1]["value"]
+
+
+def test_trim_comparison_facts_for_prompt_keeps_primary_lane() -> None:
+    facts = {
+        "primary_selection": {"items": [{"title": "핵심 이벤트", "label": "high_salience_visible"}]},
+        "salience_candidates": [
+            {
+                "title": f"후보 {idx}",
+                "salience_triggers": [f"trigger-{idx}", f"extra-{idx}"],
+                "card_attached_numbers": [{"label": "a"}, {"label": "b"}, {"label": "c"}],
+            }
+            for idx in range(12)
+        ],
+        "keyword_trends": [{"group_name": "AI 에이전트", "ratio_delta": 1.2}],
+        "structural": [{"metric": "peer_activity_delta"}],
+    }
+    trimmed = trim_comparison_facts_for_prompt(facts)
+    assert trimmed["primary_selection"]["items"][0]["title"] == "핵심 이벤트"
+    assert len(trimmed["salience_candidates"]) == 8
+    assert "salience_triggers" not in trimmed["salience_candidates"][0]
+    assert len(trimmed["salience_candidates"][0]["card_attached_numbers"]) <= 2
 
 
 def test_primary_headline_is_title_only_without_editorial_prefix() -> None:

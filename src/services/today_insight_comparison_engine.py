@@ -1319,6 +1319,48 @@ def polish_executive_output(
     return out
 
 
+def trim_comparison_facts_for_prompt(comparison_facts: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep salience/structural facts intact while dropping verbose candidate payloads."""
+    if not isinstance(comparison_facts, dict):
+        return {}
+
+    slim_candidates: list[dict[str, Any]] = []
+    for item in _list(comparison_facts.get("salience_candidates"))[:8]:
+        if not isinstance(item, dict):
+            continue
+        numbers = [
+            row for row in _list(item.get("card_attached_numbers")) if isinstance(row, dict)
+        ][:2]
+        slim_candidates.append(
+            {
+                "kind": item.get("kind"),
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "peer_label": item.get("peer_label"),
+                "sector": item.get("sector"),
+                "event_type": item.get("event_type"),
+                "label": item.get("label"),
+                "recurrence_label": item.get("recurrence_label"),
+                "narrative_hint": item.get("narrative_hint"),
+                "salience_score": item.get("salience_score"),
+                "exposure_score": item.get("exposure_score"),
+                "card_attached_numbers": numbers,
+            }
+        )
+
+    return {
+        "anchor_date": comparison_facts.get("anchor_date"),
+        "window_days": comparison_facts.get("window_days"),
+        "coverage": comparison_facts.get("coverage"),
+        "primary_selection": comparison_facts.get("primary_selection"),
+        "context_selection": comparison_facts.get("context_selection"),
+        "visibility_gaps": _list(comparison_facts.get("visibility_gaps"))[:3],
+        "keyword_trends": _list(comparison_facts.get("keyword_trends"))[:6],
+        "structural": _list(comparison_facts.get("structural"))[:8],
+        "salience_candidates": slim_candidates,
+    }
+
+
 __all__ = [
     "build_comparison_facts",
     "build_ui_change_summary",
@@ -1329,4 +1371,5 @@ __all__ = [
     "format_evidence_change_lines",
     "is_generic_executive_text",
     "polish_executive_output",
+    "trim_comparison_facts_for_prompt",
 ]
