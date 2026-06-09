@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Iterable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -37,6 +38,25 @@ KST = ZoneInfo("Asia/Seoul")
 SCHEDULED_PREPROCESS_LIMIT = 5000
 # Mixer SSE keepalive 주기(초) — nginx/ALB idle timeout(기본 60s)보다 충분히 짧게.
 _MIXER_SSE_HEARTBEAT_SEC = 10
+
+
+def _count_result_items(results: Iterable[Mapping[str, object]], key: str) -> int:
+    total = 0
+    for result in results:
+        value = result.get(key)
+        if isinstance(value, list):
+            total += len(value)
+    return total
+
+
+def _sum_result_ints(results: Iterable[Mapping[str, object]], key: str) -> int:
+    total = 0
+    for result in results:
+        value = result.get(key)
+        if isinstance(value, int):
+            total += value
+    return total
+
 
 PREPROCESS_SOURCE_TYPES_BY_SOURCE: dict[str, list[str]] = {
     "naver_news": ["news"],
@@ -291,9 +311,9 @@ async def _run_collection_track(
         TRACK_D_SOURCES,
         BatchProcessor,
     )
-    from src.pipeline.analysis_delivery import run_analysis_delivery
+    from src.pipeline.analysis_delivery import AnalysisDeliveryResult, run_analysis_delivery
     from src.preprocessing.classification import ClusterClassifier
-    from src.preprocessing.preprocessing import PreprocessingService
+    from src.preprocessing.preprocessing import PreprocessingResult, PreprocessingService
     from src.preprocessing.relevance import RelevanceEvaluator
 
     all_aliases = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
@@ -306,10 +326,10 @@ async def _run_collection_track(
     processor = BatchProcessor()
     started_at = datetime.now(UTC).isoformat()
     crawl_window = _collection_window(track, window_start, window_end)
-    results = []
-    delivery_results = []
+    results: list[PreprocessingResult] = []
+    delivery_results: list[AnalysisDeliveryResult] = []
 
-    async def _preprocess_crawl_record(record: dict[str, str]):
+    async def _preprocess_crawl_record(record: dict[str, str]) -> PreprocessingResult:
         crawl_run_id = record["crawl_run_id"]
         source_name = record["source_name"]
         source_types = _preprocess_source_types(track, source_name)
@@ -400,14 +420,14 @@ async def _run_collection_track(
             ),
             task_id,
             track,
-            sum(len(result.get("raw_article_ids", [])) for result in results),
-            sum(result.get("analysis_metric_count", 0) for result in results),
-            sum(result.get("analysis_signal_count", 0) for result in results),
-            sum(len(result.get("classified_clusters", [])) for result in results),
+            _count_result_items(results, "raw_article_ids"),
+            _sum_result_ints(results, "analysis_metric_count"),
+            _sum_result_ints(results, "analysis_signal_count"),
+            _count_result_items(results, "classified_clusters"),
             news_postprocess,
-            sum(len(result.get("card_news", [])) for result in delivery_results),
-            sum(len(result.get("indexed_card_ids", [])) for result in delivery_results),
-            sum(len(result.get("errors", [])) for result in delivery_results),
+            _count_result_items(delivery_results, "card_news"),
+            _count_result_items(delivery_results, "indexed_card_ids"),
+            _count_result_items(delivery_results, "errors"),
         )
     except Exception:
         log.exception("수집 파이프라인 실패 | task_id=%s track=%s", task_id, track)

@@ -464,6 +464,21 @@ class RelevanceEvaluator:
         # 표현). LLM 이 켜진 경로에서는 하드 reject 하지 않고 판단을 LLM 으로 위임한다
         # ── 명백한 건 이어지는 fast-pass 로 LLM 없이 통과하고, 애매한 건 LLM batch 로
         # 내려간다. LLM 이 없는 경로(track b/c/d 등)에서만 규칙으로 보수적으로 reject.
+        fast_pass_result = _fast_pass_result(
+            title=title,
+            content=analysis_content,
+            source_type=row.source_type,
+            matched_companies=matched_company_candidates,
+            matched_sectors=matched_sector_candidates,
+        )
+        if fast_pass_result is not None:
+            log.info(
+                "Gate 2.5 fast-pass | id=%s reason=%s",
+                getattr(row, "id", None),
+                fast_pass_result["reason"],
+            )
+            return fast_pass_result
+
         if not self.enable_llm:
             mention_result = _weak_company_mention_reject_result(
                 title=title,
@@ -472,23 +487,6 @@ class RelevanceEvaluator:
                 matched_companies=matched_company_candidates,
                 matched_sectors=matched_sector_candidates,
             )
-            return mention_result
-
-            fast_pass_result = _fast_pass_result(
-                title=title,
-                content=analysis_content,
-                source_type=row.source_type,
-                matched_companies=matched_company_candidates,
-                matched_sectors=matched_sector_candidates,
-            )
-            if fast_pass_result is not None:
-                log.info(
-                    "Gate 2.5 fast-pass | id=%s reason=%s",
-                    getattr(row, "id", None),
-                    fast_pass_result["reason"],
-                )
-                return fast_pass_result
-
             if mention_result is not None:
                 log.info(
                     "Gate 2.5 피어사 언급 횟수 부족 제외(LLM 비활성) | id=%s reason=%s",
@@ -511,6 +509,15 @@ class RelevanceEvaluator:
                     role_result["reason"],
                 )
                 return role_result
+
+            return _review_result(
+                label="irrelevant",
+                score=0.35,
+                companies=matched_company_candidates,
+                sectors=matched_sector_candidates,
+                reason="LLM 비활성화로 규칙 확정 불가: REVIEW 보류",
+                decision_code="llm_disabled_needs_review",
+            )
 
         role_result = _core_company_role_reject_result(
             title=title,
@@ -539,26 +546,6 @@ class RelevanceEvaluator:
                     role_result["reason"],
                 )
                 return role_result
-
-        if role_result is not None and not self.enable_llm:
-            return _review_result(
-                label="irrelevant",
-                score=0.35,
-                companies=matched_company_candidates,
-                sectors=matched_sector_candidates,
-                reason="피어사 핵심성 hard reject 후보지만 제목/섹터/액션 신호가 있어 REVIEW 보류",
-                decision_code="core_role_deferred_needs_review",
-            )
-
-        if not self.enable_llm:
-            return _review_result(
-                label="irrelevant",
-                score=0.35,
-                companies=matched_company_candidates,
-                sectors=matched_sector_candidates,
-                reason="LLM 비활성화로 규칙 확정 불가: REVIEW 보류",
-                decision_code="llm_disabled_needs_review",
-            )
 
         source_name = str(_row_value(row, "source_name", "") or "").strip().lower()
         if source_name not in _LLM_ALLOWED_SOURCE_NAMES:
