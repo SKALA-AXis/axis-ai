@@ -18,7 +18,6 @@ from src.preprocessing.preprocessing import PreprocessingResult
 from src.preprocessing.relevance import (
     _core_company_role_reject_result,
     _fast_pass_result,
-    _guard_llm_result,
     _noise_reject_result,
 )
 
@@ -381,6 +380,33 @@ def test_core_role_defers_title_peer_sector_trend_article_to_llm():
     assert fast_pass is None
 
 
+def test_relevance_fast_pass_keeps_lg_cns_agentic_ai_platform_release():
+    title = "LG CNS, 에이전틱 AI 개발 플랫폼 출시…대규모 시스템 구축 자동화"
+    content = (
+        "LG CNS가 데브온 에이전틱 AIND를 출시하고 IT 시스템 구축 전 과정과 "
+        "운영 전 과정을 자동화한다고 밝혔다."
+    )
+
+    role_reject = _core_company_role_reject_result(
+        title=title,
+        content=content,
+        source_type="news",
+        matched_companies=["lg_cns"],
+        matched_sectors=["ax", "security", "deal"],
+    )
+    result = _fast_pass_result(
+        title=title,
+        content=content,
+        source_type="news",
+        matched_companies=["lg_cns"],
+        matched_sectors=["ax", "security", "deal"],
+    )
+
+    assert role_reject is None
+    assert result is not None
+    assert result["relevance_label"] == "relevant"
+
+
 def test_relevance_keeps_peer_subject_with_external_counterparty():
     result = _noise_reject_result(
         title="포스코DX, NC AI와 손잡고 산업현장용 피지컬AI 개발",
@@ -734,29 +760,6 @@ def test_nc_physical_ai_subissues_do_not_collapse_into_one_cluster():
     assert _should_merge_articles(posco_robot, jensen_meeting, 0.99, 0.80) is False
 
 
-def test_llm_guard_rejects_peer_mentioned_only_as_background():
-    row = type(
-        "Row",
-        (),
-        {
-            "title": "젠슨 황, 엔씨 김택진 대표 만난다…피지컬 AI 협력 논의 가능성",
-            "content": "과거 포스코DX와 NC AI가 로봇 협력을 발표한 바 있다.",
-            "source_type": "news",
-        },
-    )()
-    result = {
-        "relevance_label": "relevant",
-        "relevance_score": 0.9,
-        "matched_companies": ["posco_dx"],
-        "matched_sectors": ["ax"],
-        "reason": "피지컬 AI 협력 맥락",
-    }
-
-    guarded = _guard_llm_result(row, result)
-
-    assert guarded["relevance_label"] == "irrelevant"
-
-
 def test_core_role_rejects_alumni_personnel_article():
     result = _noise_reject_result(
         title="중고나라 LG CNS 출신 CTO 선임, AI로 '사기 거래와의 전쟁' 나선다",
@@ -1028,29 +1031,6 @@ def test_national_ai_computing_center_uses_specific_cloud_signature():
     }
 
     assert _event_signature(article) == "cloud_infra:national_ai_computing_center"
-
-
-def test_llm_guard_rejects_nc_hanwha_article_with_posco_dx_background():
-    row = type(
-        "Row",
-        (),
-        {
-            "title": "NC AI, 한화오션 자율용접 로봇 AI 두뇌 개발…피지컬AI 영토 확장",
-            "content": "과거 NC AI는 포스코DX와 로봇 파운데이션 모델 협력을 발표했다.",
-            "source_type": "news",
-        },
-    )()
-    result = {
-        "relevance_label": "relevant",
-        "relevance_score": 0.9,
-        "matched_companies": ["posco_dx"],
-        "matched_sectors": ["ax"],
-        "reason": "피지컬 AI 협력 맥락",
-    }
-
-    guarded = _guard_llm_result(row, result)
-
-    assert guarded["relevance_label"] == "irrelevant"
 
 
 def test_relevance_rejects_financial_theme_without_peer_in_title():
