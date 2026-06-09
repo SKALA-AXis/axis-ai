@@ -6,17 +6,20 @@ from src.middleware.analysis_ledger import AnalysisLedger, _normalize_entry
 
 
 def test_normalize_entry_skips_empty_conclusion() -> None:
-    assert _normalize_entry(
-        row_id=1,
-        analysis_id="a-1",
-        analysis_type="insight",
-        conclusion="",
-        confidence=0.9,
-        source_card_ids=[],
-        sk_ax_implication=None,
-        created_at="2026-06-01",
-        source="insight_reports",
-    ) is None
+    assert (
+        _normalize_entry(
+            row_id=1,
+            analysis_id="a-1",
+            analysis_type="insight",
+            conclusion="",
+            confidence=0.9,
+            source_card_ids=[],
+            sk_ax_implication=None,
+            created_at="2026-06-01",
+            source="insight_reports",
+        )
+        is None
+    )
 
 
 @patch("src.middleware.analysis_ledger.SessionLocal")
@@ -26,7 +29,6 @@ def test_fetch_top_n_merges_insight_and_legacy(mock_session_local: MagicMock) ->
 
     insight_row = {
         "id": "uuid-insight",
-        "source_analysis_id": "insight-1",
         "final_one_liner": "클라우드 파트너십 확대",
         "confidence": 0.85,
         "source_card_ids": ["CN-1"],
@@ -61,7 +63,7 @@ def test_fetch_top_n_merges_insight_and_legacy(mock_session_local: MagicMock) ->
             result.mappings.return_value = mappings
         elif "legacy_payload" in sql:
             legacy_row = MagicMock()
-            legacy_row._mapping = {"ledger": legacy_payload}
+            legacy_row.__getitem__.return_value = legacy_payload
             result.fetchone.return_value = legacy_row
         else:
             result.fetchall.return_value = []

@@ -112,8 +112,7 @@ class PeerContextPack:
             evidence_density_per_peer=dict(self.evidence_density_per_peer),
             executive_memory_recent=[e.to_dict() for e in self.executive_memory_recent],
             analysis_ledger_by_peer={
-                peer_id: list(entries)
-                for peer_id, entries in self.analysis_ledger_by_peer.items()
+                peer_id: list(entries) for peer_id, entries in self.analysis_ledger_by_peer.items()
             },
             weekly_digest_by_peer=dict(self.weekly_digest_by_peer),
             provenance=self.provenance,

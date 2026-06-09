@@ -85,9 +85,7 @@ class ContextPackAssembler:
         if capability:
             provenance.used_layers.append("capability_evolution")
 
-        sector_pulse = self._query_sector_pulse(
-            sectors=sectors, weeks=_SECTOR_PULSE_WEEKS_DEFAULT
-        )
+        sector_pulse = self._query_sector_pulse(sectors=sectors, weeks=_SECTOR_PULSE_WEEKS_DEFAULT)
         if sector_pulse:
             provenance.used_layers.append("sector_pulse_recent")
             provenance.sector_pulse_weeks = sorted({row.week_start for row in sector_pulse})
@@ -629,7 +627,12 @@ class ContextPackAssembler:
         out: list[ExecutiveMemoryEntry] = []
         for row in rows:
             row_peers = [str(item) for item in (row.get("peer_ids") or []) if item]
-            if peer_match == "overlap" and peer_set and row_peers and peer_set.isdisjoint(row_peers):
+            if (
+                peer_match == "overlap"
+                and peer_set
+                and row_peers
+                and peer_set.isdisjoint(row_peers)
+            ):
                 continue
             payload = row.get("output_payload")
             payload_dict = payload if isinstance(payload, dict) else {}
@@ -640,18 +643,14 @@ class ContextPackAssembler:
                 if isinstance(signal, dict) and str(signal.get("value") or "").strip()
             ][:3]
             issue_ids = [
-                str(item)
-                for item in (row.get("source_integrated_issue_ids") or [])
-                if item
+                str(item) for item in (row.get("source_integrated_issue_ids") or []) if item
             ]
             out.append(
                 ExecutiveMemoryEntry(
                     report_date=str(row.get("report_date") or ""),
                     headline=str(row.get("headline") or payload_dict.get("headline") or ""),
                     executive_summary=str(
-                        row.get("executive_summary")
-                        or payload_dict.get("executive_summary")
-                        or ""
+                        row.get("executive_summary") or payload_dict.get("executive_summary") or ""
                     ),
                     executive_implication=str(
                         row.get("executive_implication")
@@ -697,7 +696,11 @@ def resolve_context_peers(
         if isinstance(mentioned, list):
             for company in mentioned:
                 text_value = str(company or "").strip()
-                if text_value and text_value not in SELF_COMPANY_IDS and text_value not in candidates:
+                if (
+                    text_value
+                    and text_value not in SELF_COMPANY_IDS
+                    and text_value not in candidates
+                ):
                     candidates.append(text_value)
     if isinstance(profile_context, ProfileContext):
         for peer_id in profile_context.peer_profiles or {}:

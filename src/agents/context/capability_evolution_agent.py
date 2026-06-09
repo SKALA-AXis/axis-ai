@@ -271,9 +271,13 @@ def _deterministic_windows(
             reverse=True,
         )[:3]
         summaries = [str(s.get("summary") or "").strip() for s in top if s.get("summary")]
-        narrative = " ".join(summaries)[:280] if summaries else f"{area} 영역 신호가 누적되고 있습니다."
+        narrative = (
+            " ".join(summaries)[:280] if summaries else f"{area} 영역 신호가 누적되고 있습니다."
+        )
         evidence_ids = [str(s.get("id")) for s in top if s.get("id")]
-        confidences = [float(s.get("confidence") or 0) for s in top if s.get("confidence") is not None]
+        confidences = [
+            float(s.get("confidence") or 0) for s in top if s.get("confidence") is not None
+        ]
         windows.append(
             {
                 "period": period_label,
@@ -309,7 +313,9 @@ def _normalize_windows(
         narrative = str(item.get("narrative") or "").strip()
         if not area or not narrative:
             continue
-        evidence_ids = [str(x) for x in (item.get("evidence_signal_ids") or []) if str(x) in valid_ids]
+        evidence_ids = [
+            str(x) for x in (item.get("evidence_signal_ids") or []) if str(x) in valid_ids
+        ]
         if not evidence_ids and area in signal_by_area:
             evidence_ids = signal_by_area[area][:3]
         if not evidence_ids:

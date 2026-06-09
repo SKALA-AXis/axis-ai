@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 
 from src.analysis.context_pack_models import PeerContextPack
 from src.analysis.models import AnalysisInputBundle, TimelineEntry
-from src.services.analysis_context_builder import AnalysisContextBuilder
 from src.services.context_pack_assembler import (
     ContextPackAssembler,
     resolve_context_peers,
@@ -125,8 +124,8 @@ def test_assembler_builds_pack_with_timeline_and_ledger(
     assert "weekly_digest_by_peer" in pack.provenance.used_layers
 
 
-def test_builder_delegates_to_assembler_and_returns_analysis_context() -> None:
-    fake_pack = PeerContextPack(
+def test_pack_to_analysis_context_maps_timeline() -> None:
+    pack = PeerContextPack(
         peer_ids=["samsung_sds"],
         peer_event_timeline_recent=[
             TimelineEntry(
@@ -140,18 +139,8 @@ def test_builder_delegates_to_assembler_and_returns_analysis_context() -> None:
                 importance_score=0.9,
             )
         ],
+        weekly_digest_by_peer={"samsung_sds": {"narrative": "주간 요약"}},
     )
-    fake_pack.provenance.used_layers.append("peer_event_timeline_recent")
-
-    assembler = MagicMock()
-    assembler.assemble.return_value = fake_pack
-    builder = AnalysisContextBuilder(assembler=assembler)
-
-    ctx = builder.build(
-        input_bundle=_stub_bundle(),
-        integrated_issue={"main_company": "samsung_sds"},
-    )
-
-    assembler.assemble.assert_called_once()
+    ctx = pack.to_analysis_context()
     assert len(ctx.peer_event_timeline_recent) == 1
-    assert ctx.available_layer_count() >= 1
+    assert ctx.weekly_digest_by_peer.get("samsung_sds", {}).get("narrative") == "주간 요약"

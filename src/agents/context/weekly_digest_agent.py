@@ -129,7 +129,11 @@ class WeeklyDigestAgent:
             digests = weekly.get("digests") or []
             if not isinstance(digests, list):
                 digests = []
-            digests = [d for d in digests if isinstance(d, dict) and d.get("week_iso") != digest.get("week_iso")]
+            digests = [
+                d
+                for d in digests
+                if isinstance(d, dict) and d.get("week_iso") != digest.get("week_iso")
+            ]
             digests.append(digest)
             weekly.update(
                 {
@@ -274,13 +278,14 @@ def _deterministic_digest(
 ) -> dict[str, Any]:
     titles = [str(c.get("title") or "").strip() for c in cards[:5] if c.get("title")]
     narrative = (
-        f"{period_label} 동안 {len(cards)}건의 카드뉴스가 감지되었습니다. "
-        + " ".join(titles[:3])
+        f"{period_label} 동안 {len(cards)}건의 카드뉴스가 감지되었습니다. " + " ".join(titles[:3])
     )[:800]
     card_ids = [str(c["id"]) for c in cards[:10] if c.get("id")]
     delta: list[str] = []
     if prev_digest and prev_digest.get("narrative"):
-        delta.append("이번 주 카드 건수·주요 이벤트 유형이 이전 주 digest 와 비교해 갱신되었습니다.")
+        delta.append(
+            "이번 주 카드 건수·주요 이벤트 유형이 이전 주 digest 와 비교해 갱신되었습니다."
+        )
     return {
         "narrative": narrative,
         "delta_vs_prev": delta,
@@ -290,7 +295,9 @@ def _deterministic_digest(
     }
 
 
-def _normalize_digest_body(parsed: dict[str, Any], *, cards: list[dict[str, Any]]) -> dict[str, Any]:
+def _normalize_digest_body(
+    parsed: dict[str, Any], *, cards: list[dict[str, Any]]
+) -> dict[str, Any]:
     valid_ids = {str(c["id"]) for c in cards if c.get("id")}
     source_ids = [str(x) for x in (parsed.get("source_card_ids") or []) if str(x) in valid_ids]
     if not source_ids:
@@ -301,7 +308,7 @@ def _normalize_digest_body(parsed: dict[str, Any], *, cards: list[dict[str, Any]
     delta = [str(x).strip() for x in (parsed.get("delta_vs_prev") or []) if str(x).strip()][:5]
     confidence = parsed.get("confidence")
     try:
-        conf = max(0.0, min(1.0, float(confidence)))
+        conf = max(0.0, min(1.0, float(confidence if confidence is not None else 0.6)))
     except (TypeError, ValueError):
         conf = 0.6
     return {

@@ -608,6 +608,8 @@ class ContextProvenance:
     precedent_card_ids: list[str] = field(default_factory=list)
     retrieved_card_ids: list[str] = field(default_factory=list)
     sector_pulse_weeks: list[str] = field(default_factory=list)
+    executive_memory_dates: list[str] = field(default_factory=list)
+    analysis_ledger_ids: list[int] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -618,11 +620,15 @@ class AnalysisContext:
     """4-Layer Context Model 의 Layer 4 active context. token budget ≤ 4,000."""
 
     peer_event_timeline_recent: list[TimelineEntry] = field(default_factory=list)
+    capability_evolution: dict[str, Any] = field(default_factory=dict)
     sector_pulse_recent: list[SectorPulseRow] = field(default_factory=list)
     financial_trend: dict[str, FinancialSeries] = field(default_factory=dict)
     event_chain_candidates: list[PrecedentCandidate] = field(default_factory=list)
     similar_cards_rag: list[RetrievedCard] = field(default_factory=list)
     evidence_density_per_peer: dict[str, EvidenceDensity] = field(default_factory=dict)
+    executive_memory_recent: list[dict[str, Any]] = field(default_factory=list)
+    analysis_ledger_by_peer: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    weekly_digest_by_peer: dict[str, Any] = field(default_factory=dict)
     token_budget_used: int = 0
     provenance: ContextProvenance = field(default_factory=ContextProvenance)
 
@@ -647,6 +653,7 @@ class AnalysisContext:
     def to_dict(self) -> dict[str, Any]:
         return {
             "peer_event_timeline_recent": [e.to_dict() for e in self.peer_event_timeline_recent],
+            "capability_evolution": dict(self.capability_evolution),
             "sector_pulse_recent": [e.to_dict() for e in self.sector_pulse_recent],
             "financial_trend": {k: v.to_dict() for k, v in self.financial_trend.items()},
             "event_chain_candidates": [e.to_dict() for e in self.event_chain_candidates],
@@ -654,6 +661,11 @@ class AnalysisContext:
             "evidence_density_per_peer": {
                 k: v.to_dict() for k, v in self.evidence_density_per_peer.items()
             },
+            "executive_memory_recent": list(self.executive_memory_recent),
+            "analysis_ledger_by_peer": {
+                peer_id: list(entries) for peer_id, entries in self.analysis_ledger_by_peer.items()
+            },
+            "weekly_digest_by_peer": dict(self.weekly_digest_by_peer),
             "token_budget_used": self.token_budget_used,
             "provenance": self.provenance.to_dict(),
         }
