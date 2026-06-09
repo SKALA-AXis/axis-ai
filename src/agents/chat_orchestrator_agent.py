@@ -669,9 +669,7 @@ class ChatOrchestratorAgent:
             return []
         return [_peer_row_to_candidate(row, score=0.5) for row in rows]
 
-    def _recent_news_search(
-        self, query: str, *, days: int, limit: int
-    ) -> list[RetrievalCandidate]:
+    def _recent_news_search(self, query: str, *, days: int, limit: int) -> list[RetrievalCandidate]:
         peer = _extract_peer(query)
         candidates = self._recent_raw_article_search(query, peer=peer, days=days, limit=limit)
         if len(candidates) >= limit:
@@ -731,7 +729,7 @@ class ChatOrchestratorAgent:
                                COALESCE(published_at, created_at) AS published_at,
                                created_at
                           FROM raw_articles
-                         WHERE {' AND '.join(conditions)}
+                         WHERE {" AND ".join(conditions)}
                          ORDER BY COALESCE(published_at, created_at) DESC
                          LIMIT :limit
                         """
@@ -787,7 +785,7 @@ class ChatOrchestratorAgent:
                                sources,
                                source_articles
                           FROM card_news
-                         WHERE {' AND '.join(conditions)}
+                         WHERE {" AND ".join(conditions)}
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """
