@@ -6403,8 +6403,7 @@ def _two_section_fact_based_fallback(
             "risk_or_opportunity": "opportunity",
             "confidence": 0.72,
             "reason": (
-                "LLM repair 실패 후 IntegratedIssue 근거만 사용해 "
-                "두 섹션 문안으로 복구했습니다."
+                "LLM repair 실패 후 IntegratedIssue 근거만 사용해 두 섹션 문안으로 복구했습니다."
             ),
         },
         "implication": {
