@@ -702,6 +702,23 @@ class StrategicInsightAgent:
                 include_financial_profile_context=include_financial_profile_context,
             )
             if "quality_gate_failed" in _json_dumps(reviewed):
+                fallback = _two_section_fact_based_fallback(
+                    reviewed,
+                    integrated_issue=integrated_issue,
+                    profile_context=profile_dict,
+                    model=self.model,
+                )
+                fallback_violations = _quality_gate_violations(
+                    fallback,
+                    integrated_issue=integrated_issue,
+                    profile_context=profile_dict,
+                )
+                if not fallback_violations:
+                    return _attach_sentence_grounding(
+                        fallback,
+                        integrated_issue=integrated_issue,
+                        profile_context=profile_dict,
+                    )
                 return _attach_sentence_grounding(
                     reviewed,
                     integrated_issue=integrated_issue,
@@ -875,6 +892,23 @@ class StrategicInsightAgent:
         if not violations:
             return _attach_sentence_grounding(
                 _restore_valid_flags_if_structurally_safe(result),
+                integrated_issue=integrated_issue,
+                profile_context=profile_context,
+            )
+        fallback = _two_section_fact_based_fallback(
+            result,
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+            model=self.model,
+        )
+        fallback_violations = _quality_gate_violations(
+            fallback,
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+        )
+        if not fallback_violations:
+            return _attach_sentence_grounding(
+                fallback,
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
             )
@@ -1087,6 +1121,19 @@ class StrategicInsightAgent:
                 )
                 if not current_violations:
                     return current
+            fallback = _two_section_fact_based_fallback(
+                current,
+                integrated_issue=integrated_issue,
+                profile_context=profile_context,
+                model=self.model,
+            )
+            fallback_violations = _quality_gate_violations(
+                fallback,
+                integrated_issue=integrated_issue,
+                profile_context=profile_context,
+            )
+            if not fallback_violations:
+                return fallback
             guarded = _minimal_quality_guard(
                 current,
                 integrated_issue=integrated_issue,
@@ -6251,6 +6298,214 @@ def _compact_value(value: Any) -> Any:
                 break
         return out
     return value
+
+
+def _two_section_fact_based_fallback(
+    original: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+    profile_context: dict[str, Any],
+    model: str,
+) -> dict[str, Any]:
+    """Build a conservative result from IntegratedIssue facts only."""
+
+    company = _main_company_display(integrated_issue) or "피어사"
+    subject = _issue_subject_phrase(integrated_issue) or _primary_issue_fact(integrated_issue)
+    subject = subject or "현재 사건"
+    evidence_text = _integrated_grounding_text(integrated_issue)
+    scope = _fact_based_scope_phrase(evidence_text)
+    work_units = _fact_based_work_unit_phrase(evidence_text)
+    external_plan = _fact_based_external_customer_phrase(evidence_text)
+    profile_phrase = _profile_area_phrase(
+        profile_context,
+        integrated_issue=integrated_issue,
+        scope="peer",
+    )
+    fact_ids = list(_known_fact_ids(integrated_issue))[:5]
+    scope_for_sentence = scope or "기업 고객에게 설명할 적용 범위"
+    work_units_for_sentence = work_units or "문서 처리·개발 지원·협업"
+    analysis_summary = (
+        f"{company}의 이번 사건은 {subject}를 단순 도입 소식이 아니라 "
+        f"{scope_for_sentence}를 확인하는 근거로 볼 수 있습니다."
+    )
+
+    strategic_meaning = [
+        (
+            "기사 근거에서 확인되는 적용 범위는 "
+            f"{scope_for_sentence}이며, "
+            f"업무 단위로 {work_units_for_sentence}가 함께 제시됩니다."
+        )
+    ]
+    if external_plan:
+        strategic_meaning.append(
+            f"{external_plan}이 확인되므로, 기업용 AI 도입 제안에서는 내부 적용 경험을 "
+            "외부 고객이 확인할 수 있는 운영 기준으로 바꾸는지가 중요합니다."
+        )
+    else:
+        strategic_meaning.append(
+            "따라서 이 사건은 모델 성능 자체보다 적용 범위, 업무 연결 방식, 운영 검증 기준을 "
+            "함께 설명해야 한다는 신호입니다."
+        )
+
+    market_signal = (
+        "고객은 기업용 AI 도입에서 모델명보다 실제 업무 적용 범위, 내부 시스템 연계 방식, "
+        "운영 중 확인할 기준을 함께 비교하게 됩니다."
+    )
+    peer_meaning = (
+        f"{company}는 {subject}를 통해 {scope_for_sentence}와 "
+        f"업무 단위의 {work_units_for_sentence}를 제시했습니다."
+    )
+    if profile_phrase:
+        peer_meaning += f" 이는 피어 프로필의 {profile_phrase} 맥락과 연결됩니다."
+    capability_change = (
+        "확인된 변화는 역량 우위가 아니라 기업용 AI를 어느 조직 범위와 업무 단위에 적용할지, "
+        "그리고 그 경험을 외부 고객 설명 근거로 전환할지에 있습니다."
+    )
+    why_important = (
+        "SK AX 대응 방향은 피어사의 도입 사실을 따라가는 것이 아니라, 고객이 확인할 "
+        "전사 적용 범위와 운영 검증 기준을 더 구체적으로 제시하는 데 맞춰야 합니다."
+    )
+    potential_impact = (
+        "고객은 AI 도입 제안에서 모델 기능 설명만으로는 실제 적용 가능성을 판단하기 어렵습니다. "
+        "따라서 SK AX는 업무별 적용 범위, 내부 시스템 연계 방식, 운영 책임을 한 번에 "
+        "비교할 수 있게 제안 구조를 바꿔야 합니다."
+    )
+    recommended_actions = [
+        (
+            "제안서에는 모델 기능 비교와 별도로 전사 적용 범위표를 둡니다. "
+            "부서·계열사·업무 단위별 적용 대상을 나누면 고객은 도입 범위와 운영 책임을 "
+            "한눈에 확인할 수 있습니다."
+        ),
+        (
+            "PoC 검증표는 답변 품질 중심이 아니라 업무 단위별 검증으로 바꿉니다. "
+            f"{work_units or '문서 처리, 개발 지원, 협업'} 같은 적용 장면별 검증 기준과 "
+            "내부 시스템 연계 조건을 함께 확인하게 해야 합니다."
+        ),
+        (
+            "레퍼런스 자료는 도입 사실 나열보다 내부 적용 경험을 외부 고객 제안에 어떻게 "
+            "전환했는지 보여주는 구조로 정리합니다. 고객은 이를 통해 실제 운영 전환 가능성과 "
+            "도입 후 확인할 기준을 비교할 수 있습니다."
+        ),
+    ]
+    result = {
+        "is_valid_strategic_insight": True,
+        "analysis": {
+            "is_valid_analysis": True,
+            "analysis_scope": "peer_and_industry",
+            "analysis_summary": analysis_summary,
+            "strategic_meaning": strategic_meaning[:2],
+            "market_signal": market_signal,
+            "impact_level": (original.get("analysis") or {}).get("impact_level") or "medium",
+            "impact_reason": (
+                "현재 근거에서 조직 적용 범위와 업무 적용 장면이 확인되어, 고객 제안의 "
+                "비교 기준을 구체화할 수 있습니다."
+            ),
+            "risk_or_opportunity": "opportunity",
+            "confidence": 0.72,
+            "reason": (
+                "LLM repair 실패 후 IntegratedIssue 근거만 사용해 "
+                "두 섹션 문안으로 복구했습니다."
+            ),
+        },
+        "implication": {
+            "is_valid_implication": True,
+            "implication_scope": "peer_and_skax",
+            "peer_implication": {
+                "company_id": str(integrated_issue.get("main_company") or ""),
+                "company_name_ko": company,
+                "peer_meaning": peer_meaning,
+                "capability_change": capability_change,
+                "sourced_evidence_ids": fact_ids,
+            },
+            "skax_implication": {
+                "why_important": why_important,
+                "potential_impact": potential_impact,
+                "opportunities": [],
+                "threats": [],
+                "recommended_actions": recommended_actions,
+                "business_line_mapping": _safe_business_line_mapping(
+                    profile_context,
+                    integrated_issue=integrated_issue,
+                ),
+            },
+            "follow_up_questions": [
+                "실제 적용 대상 조직과 업무 단위가 어디까지인지 확인이 필요합니다.",
+                "내부 적용 경험을 외부 고객 제안 근거로 쓰기 위한 운영 기준이 "
+                "무엇인지 확인해야 합니다.",
+            ],
+            "watch_points": [
+                "전사 적용 범위와 업무별 활용 기준이 후속 기사나 고객 사례에서 구체화되는지",
+                "외부 고객 대상 맞춤형 AI 구축 서비스의 실제 제공 방식이 공개되는지",
+            ],
+            "confidence": 0.72,
+            "evidence_label": "moderate",
+            "provenance": {
+                "generator": "StrategicInsightAgent",
+                "prompt_version": _PROMPT_VERSION,
+                "model": model,
+                "used_fact_ids": fact_ids,
+                "used_context_layers": ["integrated_issue_fact_fallback"],
+                "run_at": datetime.now(UTC).isoformat(),
+            },
+        },
+    }
+    return _restore_valid_flags_if_structurally_safe(result)
+
+
+def _fact_based_scope_phrase(evidence_text: str) -> str:
+    text = str(evidence_text or "")
+    group_scope_pattern = (
+        r"(?:[가-힣A-Za-z0-9&·+_-]+\s*)?그룹\s*"
+        r"(?:계열사|전\s*계열사|사)\s*전반|그룹\s*전\s*계열사"
+    )
+    if re.search(group_scope_pattern, text):
+        return "그룹 계열사 전반의 적용 범위"
+    if re.search(r"전사|임직원", text):
+        return "전사 임직원의 업무 적용 범위"
+    if re.search(r"기업\s*고객|외부\s*고객", text):
+        return "기업 고객 대상 적용 범위"
+    return ""
+
+
+def _fact_based_work_unit_phrase(evidence_text: str) -> str:
+    text = str(evidence_text or "")
+    units = []
+    patterns = [
+        ("개발", r"개발|코딩"),
+        ("문서 처리", r"문서"),
+        ("협업", r"협업"),
+        ("내부 시스템 연계", r"내부\s*시스템"),
+        ("AI 에이전트 구축", r"AI\s*에이전트|에이전트\s*구축"),
+    ]
+    for label, pattern in patterns:
+        if re.search(pattern, text, flags=re.IGNORECASE) and label not in units:
+            units.append(label)
+    return "·".join(units[:4])
+
+
+def _fact_based_external_customer_phrase(evidence_text: str) -> str:
+    text = str(evidence_text or "")
+    if re.search(r"외부|다른\s*기업|기업\s*고객", text) and re.search(r"맞춤형|구축|서비스", text):
+        return "내부 적용 경험을 바탕으로 외부 기업 고객에게 맞춤형 AI 구축 서비스를 제공할 계획"
+    return ""
+
+
+def _safe_business_line_mapping(
+    profile_context: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+) -> list[str]:
+    issue_tokens = _issue_relevance_tokens(integrated_issue)
+    candidates = _business_line_candidate_details(
+        profile_context,
+        integrated_issue=integrated_issue,
+    )
+    selected = []
+    for item in candidates:
+        name = str(item.get("name") or "").strip()
+        if name and (_content_tokens(name) & issue_tokens):
+            selected.append(name)
+    return selected[:2]
 
 
 def _parse_json_loose(text: str) -> Any:
