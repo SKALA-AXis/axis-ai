@@ -321,6 +321,8 @@ USER_PROMPT_TEMPLATE = """\
 
 ## 금지
 - 근거 없는 기술적 우위, 선점, 격차, 경쟁 심화, 점유율 확대, 성과 예측
+- 근거 없는 경쟁력 강화, 경쟁력에 긍정적인 영향, 효율성 향상, 가속화,
+  수요 증가, 외부 확장 같은 효과성/방향성 결론
 - 계약 상대방을 공급자/수행사로 바꾸는 표현
 - ProfileContext 에 없는 사업영역/역량명을 모델 일반 지식으로 생성
 - SK AX 프로필과 연결되지 않은 대응방향
@@ -329,6 +331,11 @@ USER_PROMPT_TEMPLATE = """\
 
 ## 출력
 아래 JSON schema 를 그대로 지켜 출력합니다. 설명 텍스트나 markdown 은 출력하지 마세요.
+모든 자연어 문자열 값은 한국어로 작성하세요.
+company_id, fact_id, enum 값, business_line_mapping 후보명처럼 입력에서 정해진 식별자만
+원문 값을 유지합니다. analysis_summary, strategic_meaning, market_signal, impact_reason,
+peer_meaning, capability_change, why_important, potential_impact, recommended_actions,
+follow_up_questions, watch_points 는 반드시 한국어 문장이어야 합니다.
 {{
   "is_valid_strategic_insight": true,
   "analysis": {{
