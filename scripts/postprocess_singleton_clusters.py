@@ -644,8 +644,6 @@ def _cluster_relation(
     left_tokens = set().union(*(_event_tokens(title) for title in left_titles))
     right_tokens = set().union(*(_event_tokens(title) for title in right_titles))
     shared_tokens = left_tokens & right_tokens
-    if len(shared_tokens) < 2:
-        return None
 
     if shared_keys:
         event_key = sorted(shared_keys)[0]
@@ -654,6 +652,9 @@ def _cluster_relation(
             shared_tokens,
             max(0.65, _candidate_score(left_tokens, right_tokens, shared_tokens, target_size)),
         )
+
+    if len(shared_tokens) < 2:
+        return None
 
     if not _same_company_family(left_titles, right_titles):
         return None

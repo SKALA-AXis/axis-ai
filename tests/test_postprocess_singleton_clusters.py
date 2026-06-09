@@ -3,6 +3,7 @@ from scripts.postprocess_singleton_clusters import (
     GroupMergeCandidate,
     MergeCandidate,
     SourceCluster,
+    _cluster_relation,
     _filter_group_candidates_after_target_merges,
     _find_candidates,
     _is_stock_noise,
@@ -17,6 +18,17 @@ def test_lg_cns_anthropic_claude_titles_share_strong_event_key() -> None:
     assert "lg_cns_anthropic_claude" in _strong_event_keys(
         "LG CNS, 앤스로픽 클로드 도입... 그룹사 단계적 확대"
     )
+
+
+def test_strong_event_key_merges_even_with_single_shared_token() -> None:
+    relation = _cluster_relation(
+        ["LGCNS, ‘클로드’ 도입"],
+        ["LG CNS, 앤트로픽 '클로드 엔터프라이즈' 도입…그룹 차원 AX 확대 나서"],
+        target_size=61,
+    )
+
+    assert relation is not None
+    assert relation[0] == "lg_cns_anthropic_claude"
 
 
 def test_platier_hyundai_autoever_contract_is_not_stock_noise() -> None:
