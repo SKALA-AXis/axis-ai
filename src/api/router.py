@@ -710,6 +710,9 @@ async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsRespons
     Phase 1 (Snapshot) + Phase 2 (Trend Detection) 결정적 산식,
     Phase 3 (Peer Alignment) + Phase 4 (Impact Mapping) + Phase 5 (Synthesis) LLM 3 호출.
 
+    ``previous_trend_context`` 는 ITTrendAgent.generate() 가 ``global_industry_trends`` 직전
+    batch 를 self-read 해 delta 를 계산한다 (design §16).
+
     결과는 ``global_industry_trends`` 에 keyword 별 row 로 직접 upsert. (V30 이후
     ``analysis_ledger`` DROP 되어 ``@with_ledger_writeback`` 미사용 — 설계서 §7.)
     """
