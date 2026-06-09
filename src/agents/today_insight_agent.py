@@ -56,15 +56,23 @@ _SIGNAL_LABELS = ("주요 신호", "관찰 포인트", "다음 판단")
 _llm: ChatOpenAI | None = None
 
 
+def _llm_max_completion_tokens() -> int:
+    default = "12000" if str(_LLM_MODEL).startswith("gpt-5") else "3200"
+    return int(os.getenv("TODAY_INSIGHT_MAX_COMPLETION_TOKENS", default))
+
+
 def _get_llm() -> ChatOpenAI:
     global _llm
     if _llm is None:
-        _llm = ChatOpenAI(
-            model=_LLM_MODEL,
-            temperature=0.18,
-            max_completion_tokens=3200,
-            model_kwargs={"response_format": {"type": "json_object"}},
-        )
+        llm_kwargs: dict[str, Any] = {
+            "model": _LLM_MODEL,
+            "temperature": 0.18,
+            "max_completion_tokens": _llm_max_completion_tokens(),
+            "model_kwargs": {"response_format": {"type": "json_object"}},
+        }
+        if str(_LLM_MODEL).startswith("gpt-5"):
+            llm_kwargs["reasoning_effort"] = os.getenv("TODAY_INSIGHT_REASONING_EFFORT", "low")
+        _llm = ChatOpenAI(**llm_kwargs)
     return _llm
 
 
@@ -87,6 +95,7 @@ _TODAY_INSIGHT_PROMPT = """\
 - structural·keyword_trends는 primary를 대체하지 않는 보조 맥락.
 
 reasoning step label: "관찰", "비교", "의미", "판단" 만 사용.
+각 reasoning.detail 은 1문장 이내로 짧게 씁니다.
 
 절대 규칙:
 1. comparison_facts 에 없는 수치를 만들지 않습니다.
