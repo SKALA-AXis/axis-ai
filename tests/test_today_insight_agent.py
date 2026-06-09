@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 import src.agents.today_insight_agent as today_module
+import src.services.today_insight_comparison_engine as comparison_engine
 from src.agents.today_insight_agent import TodayInsightAgent
 from src.api.today_insight_schemas import TodayInsightGenerateRequest, TodayInsightGenerateResponse
 
@@ -119,6 +120,7 @@ class _FakeLLM:
 
 
 def _patch_context(monkeypatch, fake_llm: _FakeLLM, saved: list[dict[str, Any]]) -> None:
+    monkeypatch.setattr(comparison_engine, "_fetch_keyword_trend_rows", lambda **kwargs: [])
     monkeypatch.setattr(
         today_module,
         "_fetch_integrated_issues",
@@ -227,10 +229,18 @@ def test_today_insight_agent_generates_ui_ready_executive_payload(monkeypatch) -
     assert response.sources[0].id == "CN-1"
     assert response.source_integrated_issue_ids == ["11111111-1111-1111-1111-111111111111"]
     assert response.source_card_ids == ["CN-1"]
-    assert response.provenance["prompt_version"] == "today-insight-v1.0-executive-delta"
+    assert response.provenance["prompt_version"] == "today-insight-v1.2-dual-lane-postprocess"
     assert saved and saved[0]["headline"] == response.headline
     assert card_lookup_args[0]["window_days"] == 60
     assert "prior_today_insight_memory" in fake_llm.prompts[0]
+    assert "comparison_facts" in fake_llm.prompts[0]
+    assert "comparison_facts" in result
+    assert result["comparison_facts"]["coverage"]["mode"] in {
+        "dual_lane_full",
+        "salience_only",
+        "structural_only",
+        "sparse",
+    }
     assert "공공/금융 AX 사업 기회" in fake_llm.prompts[0]
 
 
@@ -293,6 +303,7 @@ def test_today_insight_agent_cache_only_does_not_generate_when_cache_missing(mon
 
 
 def test_today_insight_agent_returns_fallback_when_no_source_data(monkeypatch) -> None:
+    monkeypatch.setattr(comparison_engine, "_fetch_keyword_trend_rows", lambda **kwargs: [])
     monkeypatch.setattr(today_module, "_fetch_integrated_issues", lambda **kwargs: [])
     monkeypatch.setattr(today_module, "_fetch_cards_for_issues", lambda issue_ids, **kwargs: [])
     monkeypatch.setattr(today_module, "_fetch_recent_cards", lambda **kwargs: [])
@@ -324,6 +335,7 @@ def test_today_insight_agent_uses_recent_cards_when_integrated_issues_empty(
     saved: list[dict[str, Any]] = []
     recent_lookup_args: list[dict[str, Any]] = []
 
+    monkeypatch.setattr(comparison_engine, "_fetch_keyword_trend_rows", lambda **kwargs: [])
     monkeypatch.setattr(today_module, "_fetch_integrated_issues", lambda **kwargs: [])
     monkeypatch.setattr(today_module, "_fetch_cards_for_issues", lambda issue_ids, **kwargs: [])
 
