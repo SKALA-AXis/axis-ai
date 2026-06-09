@@ -1023,24 +1023,8 @@ def _merge_comparison_evidence(
     if not isinstance(evidence, dict):
         return signal
 
-    existing = [
-        str(item).strip() for item in _list(evidence.get("changes")) if str(item or "").strip()
-    ]
-    merged = existing[:]
-    for line in computed_changes:
-        if line not in merged:
-            merged.append(line)
-        if len(merged) >= 3:
-            break
-
-    if idx == 0 and len(merged) < 3:
-        for line in computed_changes:
-            if line not in merged:
-                merged.append(line)
-            if len(merged) >= 3:
-                break
-
-    evidence["changes"] = merged[:3]
+    if computed_changes:
+        evidence["changes"] = computed_changes[:3]
     signal["evidence"] = evidence
     return signal
 
