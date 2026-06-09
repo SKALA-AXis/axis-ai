@@ -228,12 +228,16 @@ _FACT_ID_SUMMARY_PROMPT = """\
 7. uncertain_fact를 사용하는 문장은 확정 표현을 피하고 "소개됐다", "언급됐다", "제시됐다", "설명됐다"처럼 원문 수위를 유지하세요.
 8. 요약 문장은 같은 내용을 반복하지 말고 서로 다른 역할을 가져야 합니다.
 9. 특정 기사 키워드를 규칙처럼 추가하지 말고, 제품명/서비스명/플랫폼명/프로젝트명/이벤트명/기술명 같은 정보 유형을 기준으로 작성하세요.
-10. 같은 회사명으로 시작하는 문장은 최대 1개만 두세요. 이후 문장은 의미가 분명하면 제품명/플랫폼명/서비스명/해당 기술/기사에서는 등으로 이어가세요.
+10. 같은 회사명으로 시작하는 문장은 최대 1개만 두세요. 이후 문장은 의미가 분명하면 제품명/플랫폼명/서비스명/해당 기술 등으로 이어가세요.
+    "기사에서는", "사실이 확인됐다" 같은 보고서체 표현은 쓰지 마세요.
 11. fact에 구체 수치·개수·기간·범위·장소·현장이 있으면 3~5문장에 우선 반영하되, 연결된 fact evidence_text에서 검증되는 경우에만 쓰세요.
 12. 주어와 서술어의 의미 관계를 맞추세요. 회사/기관 주어는 행동·발표·공개를, 제품/서비스/플랫폼/기술 주어는 기능·역할·적용 범위를, 기사/보도/자료 주어는 소개·설명·언급처럼 전달 행위를 서술하세요.
 13. 계약/수주 요약에서는 정확한 사업명·프로젝트명과 계약 금액을 가능하면 1문장에 보존하세요.
     2문장은 단순 공급 여부보다 고객 업무/시스템 전환 범위를 보존하세요.
     계약 기간, 최근 매출 대비 비율, 후속 단계가 별도 fact로 있으면 3~5문장에 우선 반영하세요.
+14. 계약/협력 기사가 기술·플랫폼·AI 서비스 도입을 다루면, "계약했다"와 "적용 가능하다"만 반복하지 마세요.
+    내부 업무에서 무엇을 하게 되는지, 파트너 기술이 어떤 기능을 제공하는지,
+    향후 외부 고객/사업 확장과 어떻게 연결되는지를 서로 다른 문장으로 나누어 쓰세요.
 
 문장별 역할:
 - 1문장: 핵심 사건·상태·평가
@@ -1956,6 +1960,7 @@ def _select_fact_ids_for_summary_lines(
 ) -> dict[str, list[str]]:
     available = [fact for fact in extracted_facts if fact.get("fact_id")]
     used: set[str] = set()
+    selected_facts: list[dict[str, Any]] = []
 
     def choose(index: int, preferred_roles: tuple[str, ...]) -> list[str]:
         candidates = [
@@ -1969,9 +1974,16 @@ def _select_fact_ids_for_summary_lines(
             candidates = available
         if not candidates:
             return []
-        selected = sorted(candidates, key=_fact_selection_score, reverse=True)[0]
+        selected = sorted(
+            candidates,
+            key=lambda fact: (
+                _fact_selection_score(fact) - _similar_selected_fact_penalty(fact, selected_facts)
+            ),
+            reverse=True,
+        )[0]
         fact_id = str(selected.get("fact_id"))
         used.add(fact_id)
+        selected_facts.append(selected)
         return [fact_id]
 
     preferences = _line_summary_role_preferences(cluster_event_type)
@@ -2006,9 +2018,9 @@ def _line_summary_role_preferences(
         return (
             ("main_event",),
             ("service_function", "product_definition", "application_case"),
-            ("numeric_effect", "uncertainty_detail"),
-            ("application_case", "service_function", "numeric_effect"),
-            ("uncertainty_detail", "risk_detail", "market_reaction"),
+            ("application_case", "service_function", "product_definition"),
+            ("service_function", "application_case", "numeric_effect"),
+            ("service_function", "application_case", "uncertainty_detail", "numeric_effect"),
         )
     if event_type == "earnings":
         return (
@@ -2054,8 +2066,36 @@ def _fact_selection_score(fact: dict[str, Any]) -> int:
         score += 2
     if fact.get("event_verbs"):
         score += 1
+    text = f"{fact.get('normalized_fact') or ''} {fact.get('evidence_text') or ''}"
+    if re.search(r"업무|시스템|고객|서비스|솔루션|플랫폼|에이전트|코딩|협업|문서", text):
+        score += 3
+    if re.search(r"외부|확대|고도화|제공|지원|활용|적용|연계", text):
+        score += 2
+    if re.search(r"외부\s*기업|기업\s*고객|사업\s*영역|사업\s*확장|고객으로|고객에게", text):
+        score += 5
     score += min(len(str(fact.get("normalized_fact") or "")) // 30, 3)
     return score
+
+
+def _similar_selected_fact_penalty(
+    fact: dict[str, Any],
+    selected_facts: list[dict[str, Any]],
+) -> int:
+    text = _fact_similarity_text(fact)
+    if not text or not selected_facts:
+        return 0
+    max_similarity = max(
+        _text_similarity(text, _fact_similarity_text(selected)) for selected in selected_facts
+    )
+    if max_similarity >= 0.82:
+        return 8
+    if max_similarity >= 0.68:
+        return 4
+    return 0
+
+
+def _fact_similarity_text(fact: dict[str, Any]) -> str:
+    return str(fact.get("normalized_fact") or fact.get("evidence_text") or "").strip()
 
 
 def _summarize_from_fact_ids(
@@ -2412,7 +2452,7 @@ def _validate_fact_id_summary(
 ) -> dict[str, Any]:
     fact_by_id = {str(fact.get("fact_id")): fact for fact in extracted_facts}
     lines = [
-        normalize_korean_spacing(line)
+        _clean_summary_line(normalize_korean_spacing(line))
         for line in _normalize_string_list(result.get("fact_summary"))[:_SUMMARY_LINE_MAX]
     ]
     result["fact_summary"] = lines
@@ -2730,10 +2770,16 @@ def _topic_subject(entity: str) -> str:
 
 
 def _reported_context_sentence(rest: str) -> str:
-    nominal = _nominalize_korean_predicate(rest)
-    if not nominal:
-        return "기사에서는 관련 사실이 확인됐다."
-    return normalize_korean_spacing(f"기사에서는 {nominal} 사실이 확인됐다.")
+    value = _clean_summary_line(rest)
+    return value if value else "관련 사실이 확인됐다."
+
+
+def _clean_summary_line(line: str) -> str:
+    value = normalize_korean_spacing(line).strip()
+    value = re.sub(r"^기사에서는\s+", "", value)
+    value = re.sub(r"\s*사실이\s+확인됐다\.?$", ".", value)
+    value = re.sub(r"\s*사실이\s+확인됐습니다\.?$", ".", value)
+    return normalize_korean_spacing(value)
 
 
 def _nominalize_korean_predicate(text: str) -> str:
