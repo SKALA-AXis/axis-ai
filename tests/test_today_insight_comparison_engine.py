@@ -4,6 +4,7 @@ from datetime import date
 
 from src.services.today_insight_comparison_engine import (
     build_comparison_facts,
+    build_executive_summary_from_facts,
     build_ui_change_summary,
     compute_keyword_trend_facts,
     format_evidence_change_lines,
@@ -250,6 +251,7 @@ def test_format_evidence_change_lines_and_ui_chips() -> None:
     changes = format_evidence_change_lines(comparison)
     assert any("AI 에이전트 검색지수" in line for line in changes)
     assert any("단건·고임팩트" in line for line in changes)
+    assert not any("salience" in line.lower() for line in changes)
 
     chips = build_ui_change_summary(
         default_rows=[
@@ -261,6 +263,40 @@ def test_format_evidence_change_lines_and_ui_chips() -> None:
     )
     assert chips[1]["label"] == "검색지수 변화"
     assert "AI 에이전트" in chips[1]["value"]
+
+
+def test_executive_summary_uses_plain_korean_not_internal_scores() -> None:
+    comparison = {
+        "keyword_trends": [
+            {"group_name": "AI 에이전트", "ratio_delta": -43.5, "latest_ratio": 74.2}
+        ],
+        "primary_selection": {
+            "items": [
+                {
+                    "title": "LGCNS, 앤트로픽과 클로드 엔터프라이즈 도입 계약 체결",
+                    "label": "low_visibility_definite_event",
+                    "narrative_hint": (
+                        "LG CNS 계약 소식은 사업 영향은 크지만, 보도는 아직 제한적. "
+                        "단건·고임팩트로 우선 확인하세요."
+                    ),
+                }
+            ]
+        },
+    }
+    summary = build_executive_summary_from_facts(
+        comparison,
+        change_stats={
+            "window_days": 60,
+            "today_issue_count": 20,
+            "recent_card_count": 16,
+        },
+    )
+
+    assert "가장 먼저 확인" in summary
+    assert "AI 에이전트" in summary
+    assert "-43.5pt" in summary
+    assert "salience" not in summary.lower()
+    assert "노출 0." not in summary
 
 
 def test_is_generic_executive_text_detects_boilerplate() -> None:
@@ -279,7 +315,10 @@ def test_polish_executive_output_rewrites_generic_llm_fields() -> None:
                 {
                     "title": "LG CNS 클로드 엔터프라이즈 도입",
                     "label": "high_salience_visible",
-                    "narrative_hint": "LG CNS 신호가 salience·노출 모두 높습니다.",
+                    "narrative_hint": (
+                        "LG CNS 계약 소식은 사업 영향과 보도 확산 모두 높아 "
+                        "오늘의 핵심 판단 축입니다."
+                    ),
                 }
             ]
         },
@@ -320,6 +359,8 @@ def test_polish_executive_output_rewrites_generic_llm_fields() -> None:
     )
 
     assert "경쟁 환경" not in polished["headline"]
+    assert "salience" not in polished["executive_summary"].lower()
+    assert "가장 먼저 확인" in polished["executive_summary"]
     assert "클로드 엔터프라이즈" in polished["headline"]
     assert polished["change_summary"][1]["label"] == "검색지수 변화"
     assert "AI 에이전트" in polished["change_summary"][1]["value"]

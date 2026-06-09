@@ -71,6 +71,44 @@ _SECTOR_TO_KEYWORD_GROUPS: dict[str, tuple[str, ...]] = {
 
 _KEYWORD_TREND_HISTORY_DAYS = 7
 
+_EVENT_TYPE_LABELS: dict[str, str] = {
+    "partnership": "제휴",
+    "ma": "M&A",
+    "personnel": "인사",
+    "tech_release": "기술 출시",
+    "regulation": "규제",
+    "contract": "계약",
+    "financial": "실적·공시",
+    "expansion": "사업 확장",
+    "company": "사업",
+    "investment": "투자·계약",
+}
+
+
+def _event_type_label(event_type: str) -> str:
+    normalized = str(event_type or "").strip().lower()
+    if not normalized or normalized == "-":
+        return "관련"
+    return _EVENT_TYPE_LABELS.get(normalized, normalized.replace("_", " "))
+
+
+def _impact_level_phrase(score: float) -> str:
+    if score >= 0.85:
+        return "사업 영향은 매우 큼"
+    if score >= 0.70:
+        return "사업 영향은 큼"
+    if score >= 0.55:
+        return "사업 영향은 보통 수준"
+    return "사업 영향은 제한적"
+
+
+def _exposure_level_phrase(score: float) -> str:
+    if score >= 0.60:
+        return "보도 확산도 높음"
+    if score >= 0.40:
+        return "보도는 보통 수준"
+    return "보도는 아직 제한적"
+
 
 def build_comparison_facts(
     *,
@@ -390,21 +428,23 @@ def _narrative_hint(
     event_type: str,
     peer_label: str,
 ) -> str:
+    event_label = _event_type_label(event_type)
     if label == "low_visibility_definite_event":
         return (
-            f"{peer_label} {event_type} 이벤트는 salience {salience_score:.2f} 이지만 "
-            f"노출 {exposure_score:.2f}로 보도 확산은 제한적입니다."
+            f"{peer_label} {event_label} 소식은 {_impact_level_phrase(salience_score)}지만, "
+            f"{_exposure_level_phrase(exposure_score)}. "
+            "단건·고임팩트로 우선 확인하세요."
         )
     if label == "high_salience_visible":
         return (
-            f"{peer_label} {event_type} 이벤트가 salience·노출 모두 높아 "
-            "오늘 우선 판단 축으로 적합합니다."
+            f"{peer_label} {event_label} 소식은 사업 영향과 보도 확산 모두 높아 "
+            "오늘의 핵심 판단 축입니다."
         )
     if recurrence_label == "novel":
-        return f"{peer_label} {event_type} 조합은 최근 window 내 첫 등장입니다."
+        return f"{peer_label} {event_label} 조합은 최근 기간 내 첫 등장입니다."
     if recurrence_label == "recurring":
-        return f"{peer_label} {event_type} 조합이 반복 패턴입니다."
-    return "구조 지표와 함께 맥락으로 사용합니다."
+        return f"{peer_label} {event_label} 조합이 반복되는 패턴입니다."
+    return "보도량·업종 비중과 함께 참고 맥락으로 사용합니다."
 
 
 def _relevant_keyword_groups(
@@ -1005,10 +1045,9 @@ def format_evidence_change_lines(comparison_facts: dict[str, Any] | None) -> lis
         peer_label = str(gap.get("peer_label") or gap.get("peer_id") or "")
         title = str(gap.get("title") or "")
         if title:
-            lines.append(
-                f"단건·고임팩트: {peer_label} — 노출 {gap.get('exposure_score')} "
-                f"/ salience {gap.get('salience_score')}"
-            )
+            lines.append(f"단건·고임팩트: {title} — 영향 큼·보도 적음")
+        elif peer_label:
+            lines.append(f"단건·고임팩트: {peer_label} — 영향 큼·보도 적음")
 
     deduped: list[str] = []
     seen: set[str] = set()
@@ -1133,7 +1172,7 @@ def build_primary_headline(comparison_facts: dict[str, Any] | None) -> str:
     label = str(lead.get("label") or "")
     if label == "low_visibility_definite_event":
         return _clip(f"보도는 적지만 우선 확인: {title}", 120)
-    return _clip(f"오늘 primary 신호: {title}", 120)
+    return _clip(f"오늘의 핵심 신호: {title}", 120)
 
 
 def build_executive_summary_from_facts(
@@ -1154,7 +1193,8 @@ def build_executive_summary_from_facts(
         if group_name and ratio_delta is not None:
             sign = "+" if float(ratio_delta) > 0 else ""
             keyword_line = (
-                f" 동시에 {group_name} 검색지수는 전일 대비 {sign}{float(ratio_delta):.1f}pt입니다."
+                f" 시장 관심으로 {group_name} 검색지수는 "
+                f"전일 대비 {sign}{float(ratio_delta):.1f}pt입니다."
             )
     stats = change_stats or {}
     window_days = stats.get("window_days", 60)
@@ -1162,8 +1202,8 @@ def build_executive_summary_from_facts(
         stats.get("recent_card_count", 0) or 0
     )
     base = (
-        f"오늘 {count}건 신호 중 salience 상위 이벤트는 '{title}'입니다."
-        f" 최근 {window_days}일 흐름과 비교해 판단 우선순위를 재정렬해야 합니다."
+        f"오늘 {count}건 신호 가운데 가장 먼저 확인할 소식은 '{title}'입니다."
+        f" 최근 {window_days}일 흐름과 비교해 우선순위를 재조정하세요."
     )
     detail = hint or ""
     return _clip(f"{base}{keyword_line} {detail}".strip(), 320)
@@ -1185,7 +1225,7 @@ def build_context_signal_value(comparison_facts: dict[str, Any] | None) -> str:
             return _clip(
                 f"{group_name} 검색지수 {sign}{float(ratio_delta):.1f}pt — 시장 관심 맥락", 96
             )
-    return "보도량·sector 비중은 primary를 대체하지 않는 맥락 지표"
+    return "보도량·업종 비중은 핵심 신호를 대체하지 않는 참고 맥락"
 
 
 def build_next_judgment_signal_value(
@@ -1231,12 +1271,16 @@ def polish_executive_output(
         out["headline"] = primary_headline
 
     summary_rewrite = build_executive_summary_from_facts(comparison, change_stats=change_stats)
-    if summary_rewrite and is_generic_executive_text(str(out.get("executive_summary") or "")):
+    if summary_rewrite:
         out["executive_summary"] = summary_rewrite
 
     implication = str(out.get("executive_implication") or "")
     lead = _primary_lead(comparison)
-    if lead and is_generic_executive_text(implication):
+    if lead and (
+        is_generic_executive_text(implication)
+        or "salience" in implication.lower()
+        or "노출 0." in implication
+    ):
         hint = str(lead.get("narrative_hint") or "")
         title = str(lead.get("title") or "")
         out["executive_implication"] = _clip(
