@@ -4,8 +4,12 @@ from unittest.mock import patch
 
 
 def test_search_returns_empty_on_qdrant_failure():
-    with patch("src.rag.hybrid_search.get_qdrant_client") as mock_client:
+    with (
+        patch("src.rag.hybrid_search.get_qdrant_client") as mock_client,
+        patch("src.rag.qdrant_compat.legacy_rrf_search") as mock_legacy_search,
+    ):
         mock_client.return_value.query_points.side_effect = Exception("연결 실패")
+        mock_legacy_search.side_effect = Exception("REST 연결 실패")
         from src.rag.hybrid_search import hybrid_search
 
         result = hybrid_search("삼성SDS 전략")

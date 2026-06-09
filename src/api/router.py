@@ -374,7 +374,6 @@ async def _run_collection_track(
             for record in new_records:
                 result = await _preprocess_crawl_record(record)
                 results.append(result)
-                delivery_results.append(await asyncio.to_thread(run_analysis_delivery, result))
 
     try:
         if track in {"a", "all"}:
@@ -441,7 +440,7 @@ def _run_recent_news_cluster_postprocess() -> dict:
         result = run_postprocess(
             db=db,
             source_type="news",
-            lookback_hours=2,
+            lookback_hours=4,
             time_field="published_at",
             max_source_size=3,
             min_target_size=4,
