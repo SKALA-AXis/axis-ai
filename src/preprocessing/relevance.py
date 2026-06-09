@@ -562,17 +562,20 @@ class RelevanceEvaluator:
 
         source_name = str(_row_value(row, "source_name", "") or "").strip().lower()
         if source_name not in _LLM_ALLOWED_SOURCE_NAMES:
+            source_display = source_name or "unknown"
             log.info(
                 "Gate 2.5 LLM 제한 소스 REVIEW 보류 | id=%s source=%s",
                 getattr(row, "id", None),
-                source_name or "unknown",
+                source_display,
             )
             return _review_result(
                 label="irrelevant",
                 score=0.35,
                 companies=matched_company_candidates,
                 sectors=matched_sector_candidates,
-                reason=f"LLM relevance 제한 소스지만 규칙 확정 불가: REVIEW 보류 ({source_name or 'unknown'})",
+                reason=(
+                    f"LLM relevance 제한 소스지만 규칙 확정 불가: REVIEW 보류 ({source_display})"
+                ),
                 decision_code="llm_source_not_allowed_needs_review",
             )
 
