@@ -36,10 +36,12 @@ RUN apt-get update \
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# card-evaluator 가 import 하는 최소 src 트리만 복사
+# CronJob 별 최소 src/scripts 만 복사 (Playwright/torch 제외).
+COPY src/config ./src/config
 COPY src/db ./src/db
 COPY src/evaluators ./src/evaluators
 COPY scripts/evaluate_recent_cards.py ./scripts/evaluate_recent_cards.py
+COPY scripts/postprocess_singleton_clusters.py ./scripts/postprocess_singleton_clusters.py
 
 ENV PYTHONPATH=/app
 
