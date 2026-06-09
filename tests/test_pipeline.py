@@ -973,6 +973,39 @@ def test_openai_enterprise_ai_articles_can_merge_with_llm(monkeypatch):
     assert _should_merge_articles(left, right, 0.84, 0.80) is True
 
 
+def test_same_company_partner_product_articles_merge_across_contract_and_ax_buckets():
+    existing = {
+        "id": 46656,
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["ax"],
+        "title": "LG CNS·앤트로픽 맞손…클로드 기반 AX 시장 공략",
+        "content": "",
+        "published_at": "2026-06-09T01:00:00+00:00",
+    }
+    direct_product = {
+        "id": 47126,
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["ax"],
+        "title": "LG CNS, 앤트로픽 ‘클로드 엔터프라이즈’ 도입",
+        "content": "",
+        "published_at": "2026-06-09T09:38:00+00:00",
+    }
+    partner_action = {
+        "id": 47125,
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["ax"],
+        "title": "LG CNS, 오픈AI 이어 앤트로픽과 맞손…“기업 AX 사업 확대”",
+        "content": "",
+        "published_at": "2026-06-09T09:50:00+00:00",
+    }
+
+    assert _should_merge_articles(direct_product, existing, 0.70, 0.80) is True
+    assert _should_merge_articles(partner_action, existing, 0.70, 0.80) is True
+
+
 def test_same_company_title_fallback_merges_skala_training_variants():
     left = {
         "id": 1724,
