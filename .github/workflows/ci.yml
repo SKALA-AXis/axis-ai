@@ -40,7 +40,7 @@ jobs:
         run: uv python install
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --all-groups
 
       - name: Format check
         run: uv run ruff format --check src/
@@ -53,3 +53,29 @@ jobs:
 
       - name: Test
         run: uv run pytest tests/ -v
+
+  docker-smoke:
+    name: Docker build smoke (cron image)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build axis-ai-cron image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.cron
+          load: true
+          tags: axis-ai-cron:ci-smoke
+          platforms: linux/amd64
+          push: false
+
+      - name: Verify cron imports
+        run: |
+          docker run --rm axis-ai-cron:ci-smoke \
+            python -c "from src.evaluators.llm_judge_prompts import JUDGE_MODEL; print(JUDGE_MODEL)"
+          docker run --rm axis-ai-cron:ci-smoke \
+            python -m scripts.postprocess_singleton_clusters --help

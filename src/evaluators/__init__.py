@@ -1,5 +1,6 @@
-"""Rule-based evaluator exports."""
+"""Rule-based evaluator package.
 
-from src.evaluators.evaluator import EVALUATOR_VERSION, Evaluator
-
-__all__ = ["EVALUATOR_VERSION", "Evaluator"]
+Import submodules directly (e.g. ``from src.evaluators.evaluator import Evaluator``).
+Avoid eager imports here — axis-ai-cron imports ``llm_judge_prompts`` only and must
+not pull ``src.analysis`` (not shipped in the slim cron image).
+"""
