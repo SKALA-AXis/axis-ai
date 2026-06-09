@@ -243,6 +243,9 @@ USER_PROMPT_TEMPLATE = """\
 ## IntegratedIssue
 {integrated_issue_json}
 
+## StrategicEvidencePack
+{strategic_evidence_json}
+
 ## classification
 {classification_json}
 
@@ -266,6 +269,8 @@ USER_PROMPT_TEMPLATE = """\
 
 ## 생성 순서
 1. Fact grounding: 확정 사실, 관계 수준, 수치/날짜, evidence_ids 를 먼저 확인합니다.
+   IntegratedIssue 의 표시 요약보다 StrategicEvidencePack 의 fact_basis/evidence_texts/
+   representative_sources 를 우선합니다. 카드뉴스용 짧은 요약만 보고 시사점을 만들지 않습니다.
 2. 사실 기반 해석: 계약 규모, 기간, 고객명, 사업명은 1차 해석 재료로만 쓰고
    이 단계의 결론을 최종 시사점으로 끝내지 않습니다. 아래 peer_signal 까지 연결합니다.
 3. peer_role_in_issue: 피어가 공급자/수행사/운영자/고객/계약 상대방 중 무엇으로만
@@ -295,6 +300,9 @@ USER_PROMPT_TEMPLATE = """\
 - strategic_meaning: 2~3개. 사실 반복이 아니라 "사실이 의미하는 피어/시장 변화"를 씁니다.
   "영역 확장", "긍정적인 영향"처럼 방향만 말하지 말고, 현재 사건에서 확인된
   대상 시스템/인프라 구성/운영 구조/추진 방식/비교 기준 중 무엇이 바뀌는지 씁니다.
+  기사 제목이나 요약에 "가속화", "확장"이 있더라도 그대로 반복하지 말고
+  "그룹 계열사 전반 적용", "외부 기업 고객 대상 맞춤형 AI 구축 서비스 제공 계획",
+  "개발·문서 처리·협업 업무 적용"처럼 근거 문장의 구체 대상으로 풀어 씁니다.
 - market_signal: 한 사건으로 수요 증가를 단정하지 말고 현재 사건에서 확인된 수요 신호,
   적용 범위, 비교 기준 변화를 씁니다.
 - 시장 범위/표현 강도: 원문이 국내 정부 사업이면 국가 단위/공공 대형 인프라 수준으로 씁니다.
@@ -316,6 +324,8 @@ USER_PROMPT_TEMPLATE = """\
 - recommended_actions: 1~3개. 각 항목은 길어도 됩니다.
   현재 피어 신호 → 해당 사업/운영 의미 → SK AX가 바꿀 구체 문서·표·계획·검증 방식 →
   바꾼 뒤 고객이 확인할 수 있는 기준을 연결합니다.
+  각 action 은 StrategicEvidencePack 에서 확인되는 적용 범위, 대상 업무, 기술/서비스 기능,
+  고객 확장 신호 중 최소 1개를 포함해야 합니다. 근거가 없으면 상위 표현으로 낮춥니다.
 - business_line_mapping: 입력 후보 name 중 실제 관련 있는 항목만 0~3개 선택합니다.
 - sourced_evidence_ids / used_fact_ids: 입력에 존재하는 fact_id 만 사용합니다.
 
@@ -323,8 +333,11 @@ USER_PROMPT_TEMPLATE = """\
 - 근거 없는 기술적 우위, 선점, 격차, 경쟁 심화, 점유율 확대, 성과 예측
 - 근거 없는 경쟁력 강화, 경쟁력에 긍정적인 영향, 효율성 향상, 가속화,
   수요 증가, 외부 확장 같은 효과성/방향성 결론
+- "명확한 기회", "중요한 단계", "사업 확장 가능성", "시장 확장",
+  "AI 전환 가속화"처럼 평가만 있고 비교 기준이 없는 문장
 - 계약 상대방을 공급자/수행사로 바꾸는 표현
 - ProfileContext 에 없는 사업영역/역량명을 모델 일반 지식으로 생성
+- StrategicEvidencePack 에 없는 기술 기능, 계약 범위, 고객 확장 계획을 새로 생성
 - SK AX 프로필과 연결되지 않은 대응방향
 - 현재 상태, 변경 이유, 변경 내용, 기대효과가 없는 대응방향
 - 출력 schema 예시 문구 복사
@@ -566,6 +579,12 @@ class StrategicInsightAgent:
 
         prompt = USER_PROMPT_TEMPLATE.format(
             integrated_issue_json=_json_dumps(_integrated_issue_for_prompt(integrated_issue)),
+            strategic_evidence_json=_json_dumps(
+                _strategic_evidence_pack_for_prompt(
+                    integrated_issue=integrated_issue,
+                    bundle=bundle_dict,
+                )
+            ),
             classification_json=_json_dumps(_classification_for_prompt(classification)),
             bundle_json=_json_dumps(_bundle_for_prompt(bundle_dict, cluster_metadata)),
             profile_json=_json_dumps(
@@ -2036,6 +2055,107 @@ def _integrated_issue_for_prompt(integrated_issue: dict[str, Any]) -> dict[str, 
         "role_interpretation_hints": _role_interpretation_hints(integrated_issue),
         "missing_or_uncertain_points": integrated_issue.get("missing_or_uncertain_points", []),
         "confidence": integrated_issue.get("confidence", 0.0),
+    }
+
+
+def _strategic_evidence_pack_for_prompt(
+    *,
+    integrated_issue: dict[str, Any],
+    bundle: dict[str, Any],
+) -> dict[str, Any]:
+    """Compact article-derived evidence for strategic implication generation.
+
+    IntegratedIssue remains the only fact source. This pack simply separates the
+    article evidence that the integration step already selected from display
+    summaries, so the strategic agent does not infer from card copy alone.
+    """
+
+    fact_basis = []
+    for item in _jsonish_list(integrated_issue.get("fact_basis"))[:12]:
+        if not isinstance(item, dict):
+            continue
+        evidence_texts = [
+            str(text or "").strip()
+            for text in _jsonish_list(item.get("evidence_texts"))[:3]
+            if str(text or "").strip()
+        ]
+        evidence_text = str(item.get("evidence_text") or "").strip()
+        if evidence_text and evidence_text not in evidence_texts:
+            evidence_texts.append(evidence_text)
+        fact_text = str(item.get("fact") or "").strip()
+        fact_basis.append(
+            {
+                "fact": fact_text,
+                "fact_ids": _string_list(item.get("fact_ids"), max_items=5),
+                "source_article_ids": _int_list(item.get("source_article_ids"))[:5],
+                "evidence_type": str(item.get("evidence_type") or "").strip(),
+                "evidence_texts": evidence_texts[:3],
+            }
+        )
+
+    consolidated_facts = []
+    for item in _jsonish_list(integrated_issue.get("consolidated_facts"))[:12]:
+        fact_text = _fact_like_text(item)
+        if not fact_text:
+            continue
+        row: dict[str, Any] = {"fact": fact_text}
+        if isinstance(item, dict):
+            row["fact_id"] = str(item.get("fact_id") or "").strip()
+            row["source_article_ids"] = _int_list(item.get("source_article_ids"))[:5]
+        consolidated_facts.append(row)
+
+    representative_sources = []
+    for item in _jsonish_list(integrated_issue.get("representative_sources"))[:10]:
+        if not isinstance(item, dict):
+            continue
+        representative_sources.append(
+            {
+                "article_id": item.get("article_id") or item.get("id"),
+                "title": str(item.get("title") or "").strip(),
+                "publisher": str(item.get("publisher") or "").strip(),
+                "source_name": str(item.get("source_name") or "").strip(),
+                "published_at": str(item.get("published_at") or "").strip(),
+            }
+        )
+
+    bundle_evidence_snippets = []
+    for item in _jsonish_list(bundle.get("evidence_snippets"))[:12]:
+        if isinstance(item, dict):
+            text = str(item.get("text") or item.get("evidence_text") or "").strip()
+            if not text:
+                continue
+            bundle_evidence_snippets.append(
+                {
+                    "text": text,
+                    "source_article_ids": _int_list(item.get("source_article_ids"))[:5],
+                    "fact_ids": _string_list(item.get("fact_ids"), max_items=5),
+                }
+            )
+        else:
+            text = str(item or "").strip()
+            if text:
+                bundle_evidence_snippets.append({"text": text})
+
+    return {
+        "purpose": (
+            "Use this article-derived pack before display/card summaries when deriving "
+            "strategic implications."
+        ),
+        "current_event": {
+            "headline": integrated_issue.get("headline", ""),
+            "main_event": integrated_issue.get("main_event", ""),
+            "main_issue": integrated_issue.get("main_issue", ""),
+            "one_line_summary": integrated_issue.get("one_line_summary", ""),
+            "integrated_text": integrated_issue.get("integrated_text", ""),
+        },
+        "fact_basis": fact_basis,
+        "consolidated_facts": consolidated_facts,
+        "representative_sources": representative_sources,
+        "bundle_evidence_snippets": bundle_evidence_snippets,
+        "cluster_fact_intelligence": _cluster_fact_intelligence_for_prompt(
+            integrated_issue.get("cluster_fact_intelligence") or {}
+        ),
+        "missing_or_uncertain_points": integrated_issue.get("missing_or_uncertain_points", []),
     }
 
 
