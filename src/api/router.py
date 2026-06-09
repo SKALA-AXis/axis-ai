@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from src.api.briefing_schemas import BriefingGenerateRequest, BriefingGenerateResponse
+from src.api.chat_schemas import ChatTurnRequest, ChatTurnResponse
 from src.api.global_trends_schemas import GlobalTrendsRequest, GlobalTrendsResponse
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
 from src.api.link_verification_schemas import LinkVerificationRequest, LinkVerificationResponse
@@ -282,7 +283,15 @@ async def _run_collection_track(
 ) -> None:
     from src.config.companies import COMPANY_ALIASES
     from src.config.global_companies import GLOBAL_COMPANY_ALIASES, GLOBAL_COMPANY_IDS
-    from src.crawler.batch_processor import BatchProcessor
+    from src.crawler.base import CrawlRunContext
+    from src.crawler.batch_processor import (
+        TRACK_A_SOURCES,
+        TRACK_B_SOURCES,
+        TRACK_C_SOURCES,
+        TRACK_D_SOURCES,
+        BatchProcessor,
+    )
+    from src.pipeline.analysis_delivery import run_analysis_delivery
     from src.preprocessing.classification import ClusterClassifier
     from src.preprocessing.preprocessing import PreprocessingService
     from src.preprocessing.relevance import RelevanceEvaluator
@@ -297,75 +306,67 @@ async def _run_collection_track(
     processor = BatchProcessor()
     started_at = datetime.now(UTC).isoformat()
     crawl_window = _collection_window(track, window_start, window_end)
+    results = []
+    delivery_results = []
+
+    async def _preprocess_crawl_record(record: dict[str, str]):
+        crawl_run_id = record["crawl_run_id"]
+        source_name = record["source_name"]
+        source_types = _preprocess_source_types(track, source_name)
+        preprocessing_service = PreprocessingService(
+            relevance_evaluator=RelevanceEvaluator(enable_llm="news" in source_types),
+            classifier=ClusterClassifier(enable_llm="news" in source_types),
+        )
+        return await asyncio.to_thread(
+            preprocessing_service.run,
+            company=selected,
+            source_types=source_types,
+            trigger_type=trigger_type,
+            collected_since=None,
+            crawl_run_id=crawl_run_id,
+            limit=SCHEDULED_PREPROCESS_LIMIT,
+        )
+
+    async def _run_source_group(track_label: str, source_names: tuple[str, ...]) -> None:
+        keywords = {company: all_aliases[company] for company in selected}
+        for source_name in source_names:
+            before = len(processor.last_crawl_run_records)
+            await processor.run_sources(
+                (source_name,),
+                keywords=keywords,
+                persist=True,
+                crawl_window=crawl_window,
+                run_context=CrawlRunContext(
+                    collection_mode="realtime",
+                    track=track_label.upper(),
+                    source_name=source_name,
+                ),
+            )
+            new_records = processor.last_crawl_run_records[before:]
+            if not new_records:
+                log.info(
+                    "수집 source 후처리 스킵 | task_id=%s track=%s source=%s reason=no_crawl_run",
+                    task_id,
+                    track_label,
+                    source_name,
+                )
+                continue
+            for record in new_records:
+                result = await _preprocess_crawl_record(record)
+                results.append(result)
+                delivery_results.append(await asyncio.to_thread(run_analysis_delivery, result))
 
     try:
         if track in {"a", "all"}:
-            await processor.run_track_a(
-                {company: all_aliases[company] for company in selected},
-                crawl_window=crawl_window,
-            )
+            await _run_source_group("a", TRACK_A_SOURCES)
         if track in {"b", "all"}:
-            await processor.run_track_b(
-                {company: all_aliases[company] for company in selected},
-                crawl_window=crawl_window,
-            )
+            await _run_source_group("b", TRACK_B_SOURCES)
         if track in {"c", "all"}:
-            await processor.run_track_c(
-                {company: all_aliases[company] for company in selected},
-                crawl_window=crawl_window,
-            )
+            await _run_source_group("c", TRACK_C_SOURCES)
         if track in {"d", "all"}:
-            await processor.run_track_d(
-                {company: all_aliases[company] for company in selected},
-                crawl_window=crawl_window,
-            )
+            await _run_source_group("d", TRACK_D_SOURCES)
 
-        crawl_run_records = processor.last_crawl_run_records
-        crawl_run_ids = processor.last_crawl_run_ids
-        # PreprocessingService.run() 은 sync 함수 + 내부에서 BGE-M3 encode (CPU-bound)
-        # 호출 → event loop 를 막아 liveness probe (/healthz) timeout 으로 SIGKILL.
-        # asyncio.to_thread 로 thread pool 위임 → event loop 자유.
-        if crawl_run_records:
-            results = []
-            for record in crawl_run_records:
-                crawl_run_id = record["crawl_run_id"]
-                source_name = record["source_name"]
-                source_types = _preprocess_source_types(track, source_name)
-                preprocessing_service = PreprocessingService(
-                    relevance_evaluator=RelevanceEvaluator(enable_llm="news" in source_types),
-                    classifier=ClusterClassifier(enable_llm="news" in source_types),
-                )
-                results.append(
-                    await asyncio.to_thread(
-                        preprocessing_service.run,
-                        company=selected,
-                        source_types=source_types,
-                        trigger_type=trigger_type,
-                        collected_since=None,
-                        crawl_run_id=crawl_run_id,
-                        limit=SCHEDULED_PREPROCESS_LIMIT,
-                    )
-                )
-        elif crawl_run_ids:
-            results = []
-            source_types = _preprocess_source_types(track, None)
-            preprocessing_service = PreprocessingService(
-                relevance_evaluator=RelevanceEvaluator(enable_llm="news" in source_types),
-                classifier=ClusterClassifier(enable_llm="news" in source_types),
-            )
-            for crawl_run_id in crawl_run_ids:
-                results.append(
-                    await asyncio.to_thread(
-                        preprocessing_service.run,
-                        company=selected,
-                        source_types=source_types,
-                        trigger_type=trigger_type,
-                        collected_since=None,
-                        crawl_run_id=crawl_run_id,
-                        limit=SCHEDULED_PREPROCESS_LIMIT,
-                    )
-                )
-        else:
+        if not results:
             source_types = _preprocess_source_types(track, None)
             preprocessing_service = PreprocessingService(
                 relevance_evaluator=RelevanceEvaluator(enable_llm="news" in source_types),
@@ -386,10 +387,16 @@ async def _run_collection_track(
         news_postprocess = None
         if track in {"a", "all"}:
             news_postprocess = await asyncio.to_thread(_run_recent_news_cluster_postprocess)
+
+        if not delivery_results:
+            for result in results:
+                delivery_results.append(await asyncio.to_thread(run_analysis_delivery, result))
+
         log.info(
             (
                 "수집 파이프라인 완료 | task_id=%s track=%s raw=%d "
-                "analysis_metrics=%d analysis_signals=%d classified=%d postprocess=%s"
+                "analysis_metrics=%d analysis_signals=%d classified=%d "
+                "postprocess=%s card_news=%d indexed=%d delivery_errors=%d"
             ),
             task_id,
             track,
@@ -398,6 +405,9 @@ async def _run_collection_track(
             sum(result.get("analysis_signal_count", 0) for result in results),
             sum(len(result.get("classified_clusters", [])) for result in results),
             news_postprocess,
+            sum(len(result.get("card_news", [])) for result in delivery_results),
+            sum(len(result.get("indexed_card_ids", [])) for result in delivery_results),
+            sum(len(result.get("errors", [])) for result in delivery_results),
         )
     except Exception:
         log.exception("수집 파이프라인 실패 | task_id=%s track=%s", task_id, track)
@@ -503,6 +513,25 @@ async def gen_search(request: GenSearchRequest):
         sc_passed=False,
         sc_score=0.0,
     )
+
+
+@app.post("/chat", response_model=ChatTurnResponse)
+async def chat(request: ChatTurnRequest) -> ChatTurnResponse:
+    """Floating assistant chat.
+
+    Page-aware CAG + DB/RAG retrieval 기반으로 답하고, Mixer/Briefing 같은
+    multi-step 작업은 실행하지 않고 페이지 handoff 로만 반환한다.
+    """
+    from src.agents.chat_orchestrator_agent import ChatOrchestratorAgent
+
+    log.info(
+        "Assistant chat 요청 | conversation=%s route=%s message_len=%s",
+        request.conversation_id,
+        request.current_page.route if request.current_page else None,
+        len(request.message or ""),
+    )
+    result = await ChatOrchestratorAgent().answer(request)
+    return ChatTurnResponse.model_validate(result)
 
 
 @app.post("/today-insight/generate", response_model=TodayInsightGenerateResponse)

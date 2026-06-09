@@ -459,35 +459,58 @@ class RelevanceEvaluator:
                 reason=precheck["reason"],
             )
 
-        mention_result = _weak_company_mention_reject_result(
-            title=title,
-            content=analysis_content,
-            source_type=row.source_type,
-            matched_companies=matched_company_candidates,
-            matched_sectors=matched_sector_candidates,
-        )
-        if mention_result is not None:
-            log.info(
-                "Gate 2.5 피어사 언급 횟수 부족 제외 | id=%s reason=%s",
-                getattr(row, "id", None),
-                mention_result["reason"],
+        # "피어사 언급 횟수 부족 / 핵심성 부족" 규칙은 명백한 노이즈가 아니라 "약한
+        # 관련성 의심"이라 false negative 위험이 크다(예: 키워드 사전에 없는 출시·동맹
+        # 표현). LLM 이 켜진 경로에서는 하드 reject 하지 않고 판단을 LLM 으로 위임한다
+        # ── 명백한 건 이어지는 fast-pass 로 LLM 없이 통과하고, 애매한 건 LLM batch 로
+        # 내려간다. LLM 이 없는 경로(track b/c/d 등)에서만 규칙으로 보수적으로 reject.
+        if not self.enable_llm:
+            mention_result = _weak_company_mention_reject_result(
+                title=title,
+                content=analysis_content,
+                source_type=row.source_type,
+                matched_companies=matched_company_candidates,
+                matched_sectors=matched_sector_candidates,
             )
             return mention_result
 
-        fast_pass_result = _fast_pass_result(
-            title=title,
-            content=analysis_content,
-            source_type=row.source_type,
-            matched_companies=matched_company_candidates,
-            matched_sectors=matched_sector_candidates,
-        )
-        if fast_pass_result is not None:
-            log.info(
-                "Gate 2.5 fast-pass | id=%s reason=%s",
-                getattr(row, "id", None),
-                fast_pass_result["reason"],
+            fast_pass_result = _fast_pass_result(
+                title=title,
+                content=analysis_content,
+                source_type=row.source_type,
+                matched_companies=matched_company_candidates,
+                matched_sectors=matched_sector_candidates,
             )
-            return fast_pass_result
+            if fast_pass_result is not None:
+                log.info(
+                    "Gate 2.5 fast-pass | id=%s reason=%s",
+                    getattr(row, "id", None),
+                    fast_pass_result["reason"],
+                )
+                return fast_pass_result
+
+            if mention_result is not None:
+                log.info(
+                    "Gate 2.5 피어사 언급 횟수 부족 제외(LLM 비활성) | id=%s reason=%s",
+                    getattr(row, "id", None),
+                    mention_result["reason"],
+                )
+                return mention_result
+
+            role_result = _core_company_role_reject_result(
+                title=title,
+                content=analysis_content,
+                source_type=row.source_type,
+                matched_companies=matched_company_candidates,
+                matched_sectors=matched_sector_candidates,
+            )
+            if role_result is not None:
+                log.info(
+                    "Gate 2.5 피어사 핵심성 부족 제외(LLM 비활성) | id=%s reason=%s",
+                    getattr(row, "id", None),
+                    role_result["reason"],
+                )
+                return role_result
 
         role_result = _core_company_role_reject_result(
             title=title,
@@ -1481,6 +1504,8 @@ def _alias_appears_as_deal_counterparty(text_compact: str, alias_compact: str) -
         "협업",
         "공동개발",
         "맞손",
+        "동맹",
+        "체결",
     )
     return any(keyword in text_compact for keyword in deal_keywords)
 

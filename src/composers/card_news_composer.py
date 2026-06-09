@@ -6,6 +6,7 @@ AnalysisPackage를 사용자에게 보여줄 카드뉴스/API 응답 형태로 �
 
 import json
 import logging
+import os
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -165,7 +166,7 @@ class CardNewsComposer:
             analysis.get("analysis_summary"),
             "피어사 주요 뉴스",
         )
-        summary_lines = _plain_summary_lines(summary)
+        summary_lines = _plain_summary_lines(summary, use_llm=True)
         card_text = _card_text(title, summary_lines, summary, articles)
         event_type = _infer_event_type(summary, classification, card_text)
         sectors = _infer_sectors(classification, card_text)
@@ -282,16 +283,18 @@ class CardNewsComposer:
             )
         )
         if is_llm_valid:
-            card["implication_result"] = implication_result
-            card["implication"] = _implication_from_result(
-                implication_result,
-                fallback=card.get("implication"),
-            )
-            card["frontend_implication"] = _frontend_implication_from_result(
+            frontend_implication = _frontend_implication_from_result(
                 implication_result,
                 fallback=card.get("frontend_implication"),
                 analysis=package.get("analysis") or {},
             )
+            card["implication_result"] = implication_result
+            card["implication"] = _implication_from_result(
+                implication_result,
+                fallback=card.get("implication"),
+                frontend=frontend_implication,
+            )
+            card["frontend_implication"] = frontend_implication
         else:
             # ImplicationAgent 결과 없음/무효 → analysis 기반 frontend fallback 유지.
             card.setdefault(
@@ -303,6 +306,11 @@ class CardNewsComposer:
             "summary": integrated_issue,
             "analysis": package.get("analysis") or {},
             "implication": implication_result,
+            "sentence_grounding": package.get("sentence_grounding")
+            or (package.get("evidence_payload") or {})
+            .get("analysis_package", {})
+            .get("sentence_grounding")
+            or {},
             "validation": validation,
         }
         return card
@@ -448,7 +456,7 @@ def _card_from_summary(
         return None
 
     effective_company = _first_non_empty(summary.get("main_company"), company)
-    summary_lines = _numbered_summary_lines(summary.get("fact_summary"))
+    summary_lines = _plain_summary_lines(summary, use_llm=True)
     if not summary_lines:
         return None
 
@@ -606,20 +614,20 @@ def _card_news_id(cluster_id: int | None, created_at: str) -> str:
     return f"CN-{date_key}-{suffix}"
 
 
-def _plain_summary_lines(summary: dict[str, Any]) -> list[str]:
+def _plain_summary_lines(summary: dict[str, Any], *, use_llm: bool = False) -> list[str]:
     lines = _list_string(summary.get("fact_summary"))[:_SUMMARY_LINE_MAX]
     if lines:
-        return _display_summary_lines(lines, summary)
+        return _display_summary_lines(lines, summary, use_llm=use_llm)
     lines = _list_string(summary.get("summary_lines"))[:_SUMMARY_LINE_MAX]
     if lines:
-        return _display_summary_lines(lines, summary)
+        return _display_summary_lines(lines, summary, use_llm=use_llm)
     facts = [
         str(fact.get("fact") or "").strip()
         for fact in _list_dicts(summary.get("consolidated_facts"))
         if str(fact.get("fact") or "").strip()
     ][:_SUMMARY_LINE_MAX]
     if facts:
-        return _display_summary_lines(facts, summary)
+        return _display_summary_lines(facts, summary, use_llm=use_llm)
     integrated_text = str(summary.get("integrated_text") or "").strip()
     if integrated_text:
         split_lines = [
@@ -628,19 +636,282 @@ def _plain_summary_lines(summary: dict[str, Any]) -> list[str]:
             if item.strip()
         ][:_SUMMARY_LINE_MAX]
         if split_lines:
-            return _display_summary_lines(split_lines, summary)
+            return _display_summary_lines(split_lines, summary, use_llm=use_llm)
     one_line = str(summary.get("one_line_summary") or "").strip()
-    return _display_summary_lines([one_line], summary) if one_line else []
+    return _display_summary_lines([one_line], summary, use_llm=use_llm) if one_line else []
 
 
-def _display_summary_lines(lines: list[str], summary: dict[str, Any]) -> list[str]:
+def _display_summary_lines(
+    lines: list[str],
+    summary: dict[str, Any],
+    *,
+    use_llm: bool = False,
+) -> list[str]:
+    candidates = _summary_candidate_lines(lines, summary)
+    if use_llm:
+        refined = _llm_display_summary_lines(summary, candidates)
+        if _SUMMARY_LINE_MIN <= len(refined) <= _SUMMARY_LINE_MAX:
+            return refined
+
     key_numbers = _key_number_display_map(summary)
-    cleaned: list[str] = []
-    for line in lines[:_SUMMARY_LINE_MAX]:
+    ranked: list[tuple[int, int, str]] = []
+    seen: set[str] = set()
+    for index, line in enumerate(candidates):
         text = _summary_line_for_display(_strip_number_prefix(line), key_numbers)
-        if text and text not in cleaned:
-            cleaned.append(text)
-    return cleaned
+        dedupe_key = re.sub(r"\s+", " ", text).casefold()
+        if not text or dedupe_key in seen:
+            continue
+        ranked.append((_summary_line_priority(text, summary), -index, text))
+        seen.add(dedupe_key)
+    ranked.sort(reverse=True)
+    selected: list[str] = []
+    skipped: list[str] = []
+    selected_roles: set[str] = set()
+    for _, _, text in ranked:
+        if len(selected) >= _SUMMARY_LINE_MAX:
+            break
+        role = _summary_line_role(text, summary)
+        if role in selected_roles and role != "context" and len(selected) < _SUMMARY_LINE_MIN:
+            skipped.append(text)
+            continue
+        if any(_summary_lines_too_similar(text, existing) for existing in selected):
+            skipped.append(text)
+            continue
+        selected.append(text)
+        selected_roles.add(role)
+    for text in skipped:
+        if len(selected) >= _SUMMARY_LINE_MIN:
+            break
+        if text not in selected:
+            selected.append(text)
+    return selected[:_SUMMARY_LINE_MIN] if len(selected) >= _SUMMARY_LINE_MIN else selected
+
+
+def _summary_candidate_lines(lines: list[str], summary: dict[str, Any]) -> list[str]:
+    candidates = [str(line or "").strip() for line in lines if str(line or "").strip()]
+    intelligence = summary.get("cluster_fact_intelligence") or {}
+    if isinstance(intelligence, dict):
+        for group_name in ("common_facts", "unique_facts"):
+            for item in _list_dicts(intelligence.get(group_name)):
+                fact_text = str(item.get("fact") or "").strip()
+                if fact_text:
+                    candidates.append(fact_text)
+    for fact_item in _list_dicts(summary.get("consolidated_facts")):
+        text = str(fact_item.get("fact") or "").strip()
+        if text:
+            candidates.append(text)
+    return candidates
+
+
+def _llm_display_summary_lines(summary: dict[str, Any], candidates: list[str]) -> list[str]:
+    if not os.getenv("OPENAI_API_KEY"):
+        return []
+    clean_candidates = []
+    seen: set[str] = set()
+    key_numbers = _key_number_display_map(summary)
+    for line in candidates:
+        text = _summary_line_for_display(_strip_number_prefix(line), key_numbers)
+        key = re.sub(r"\s+", " ", text).casefold()
+        if text and key not in seen:
+            clean_candidates.append(text)
+            seen.add(key)
+    if len(clean_candidates) < _SUMMARY_LINE_MIN:
+        return []
+
+    context = {
+        "headline": summary.get("headline"),
+        "main_event": summary.get("main_event"),
+        "main_issue": summary.get("main_issue"),
+        "one_line_summary": summary.get("one_line_summary"),
+        "event_type": summary.get("cluster_event_type") or summary.get("event_type"),
+        "candidate_facts": clean_candidates[:20],
+    }
+    prompt = (
+        "You are selecting frontend summary lines for a Korean executive card news item.\n"
+        "Choose 3 to 5 lines only from candidate_facts. Do not invent facts.\n"
+        "Avoid repeating the same fact in different wording. Prefer lines that together cover "
+        "different factual dimensions such as the event, amount/scale, period/schedule, purpose, "
+        "execution scope, or source-backed consequence when present.\n"
+        "Do not include stock/market reaction unless the event_type itself is stock_market.\n"
+        'Return strict JSON only: {"summary_lines": ["..."]}.\n\n'
+        f"INPUT:\n{json.dumps(context, ensure_ascii=False, indent=2)}"
+    )
+    try:
+        from src.observability import tracing_config
+
+        response = _get_llm().invoke(
+            prompt,
+            config=tracing_config(
+                agent="CardNewsComposer",
+                prompt_version="card-news-summary-select-v1.0",
+                company=str(summary.get("main_company") or ""),
+                cluster_id=_optional_int(summary.get("cluster_id")),
+            ),
+        )
+        content = response.content if isinstance(response.content, str) else str(response.content)
+        parsed = _parse_json(content)
+    except Exception as exc:  # noqa: BLE001 - display fallback should not block card generation.
+        log.warning("카드뉴스 표시 요약 LLM 선별 실패 | error=%s", exc)
+        return []
+
+    selected: list[str] = []
+    candidate_set = {re.sub(r"\s+", " ", item).casefold() for item in clean_candidates}
+    for item in _list_string(parsed.get("summary_lines")):
+        text = _summary_line_for_display(_strip_number_prefix(item), key_numbers)
+        key = re.sub(r"\s+", " ", text).casefold()
+        if not text or key not in candidate_set:
+            continue
+        if any(_summary_lines_too_similar(text, existing) for existing in selected):
+            continue
+        selected.append(text)
+        if len(selected) >= _SUMMARY_LINE_MAX:
+            break
+    return selected if len(selected) >= _SUMMARY_LINE_MIN else []
+
+
+def _summary_line_priority(text: str, summary: dict[str, Any]) -> int:
+    value = str(text or "")
+    score = 0
+    event_type = str(
+        summary.get("cluster_event_type") or summary.get("event_type") or ""
+    ).casefold()
+    if _is_market_reaction_summary_line(value) and event_type != "stock_market":
+        score -= 100
+    shared_focus = _summary_similarity_tokens(value) & _summary_focus_tokens(summary)
+    score += min(len(shared_focus), 8) * 9
+    if _has_numeric_or_period_signal(value):
+        score += 20
+    if _has_target_capacity_or_schedule(value):
+        score += 45
+    if _has_schedule_signal(value) and _has_non_money_quantity(value):
+        score += 35
+    elif _has_schedule_signal(value):
+        score += 15
+    if _has_target_capacity_or_schedule(value) and not _has_schedule_signal(value):
+        if re.search(r"최종|계약|확정|완료", value):
+            score -= 25
+    if _contains_key_number_text(value, summary):
+        score += 25
+    if re.search(r"선정|확정|수주|계약|체결|참여|사업자", value):
+        score += 20
+    if re.search(r"구축|설립|운영|착공|도입|전환|현대화|협약|계약", value):
+        score += 15
+    if re.search(r"주가|거래소|거래\s*(중|마쳤)|상승|하락|급등|급락", value):
+        score -= 30
+    return score
+
+
+def _summary_line_role(text: str, summary: dict[str, Any]) -> str:
+    value = str(text or "")
+    event_type = str(
+        summary.get("cluster_event_type") or summary.get("event_type") or ""
+    ).casefold()
+    if _is_market_reaction_summary_line(value) and event_type != "stock_market":
+        return "market_reaction"
+    if re.search(r"최종\s*선정|민간\s*참여|사업자로\s*선정|사업자에", value):
+        return "core_event"
+    if re.search(r"협약|주주\s*간|SPC|특수목적법인|출자|설립", value, re.IGNORECASE):
+        return "governance"
+    if _has_target_capacity_or_schedule(value):
+        return "scale_schedule"
+    if re.search(r"선정|확정|수주|계약|체결|참여|사업자", value):
+        return "core_event"
+    if _has_numeric_or_period_signal(value):
+        return "scale_schedule"
+    return "context"
+
+
+def _summary_lines_too_similar(left: str, right: str) -> bool:
+    left_tokens = _summary_similarity_tokens(left)
+    right_tokens = _summary_similarity_tokens(right)
+    if len(left_tokens) < 3 or len(right_tokens) < 3:
+        return False
+    overlap = len(left_tokens & right_tokens)
+    return overlap / min(len(left_tokens), len(right_tokens)) >= 0.72
+
+
+def _summary_similarity_tokens(text: str) -> set[str]:
+    tokens = re.findall(r"[가-힣A-Za-z0-9][가-힣A-Za-z0-9&+·_-]{1,}", str(text or ""))
+    stopwords = {
+        "사업",
+        "계약",
+        "체결",
+        "완료",
+        "밝혔다",
+        "위한",
+        "관련",
+        "통해",
+        "규모",
+        "계획",
+        "예정",
+    }
+    return {token for token in tokens if token not in stopwords}
+
+
+def _summary_focus_tokens(summary: dict[str, Any]) -> set[str]:
+    focus_parts = [
+        summary.get("headline"),
+        summary.get("main_event"),
+        summary.get("main_issue"),
+        summary.get("one_line_summary"),
+    ]
+    if not any(str(part or "").strip() for part in focus_parts):
+        for line in _list_string(summary.get("fact_summary")):
+            if not _is_market_reaction_summary_line(line):
+                focus_parts.append(line)
+                break
+    return _summary_similarity_tokens(" ".join(str(part or "") for part in focus_parts))
+
+
+def _has_numeric_or_period_signal(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\d|년|월|일|까지|부터|규모|금액|기간|비율|대비|투자|자본금|"
+            r"매출|수량|장|대|명|억원|조원|만원|%",
+            str(text or ""),
+        )
+    )
+
+
+def _has_target_capacity_or_schedule(text: str) -> bool:
+    value = str(text or "")
+    has_quantity = bool(re.search(r"\d[\d,.\s]*(장|대|개|건|명|곳|식|세트|억원|조원)", value))
+    has_schedule = _has_schedule_signal(value)
+    has_execution = bool(re.search(r"구축|운영|도입|전환|착공|확보|조성|목표|예정|계획", value))
+    return has_execution and (has_quantity or has_schedule)
+
+
+def _has_schedule_signal(text: str) -> bool:
+    return bool(re.search(r"\d{4}\s*년|까지|부터|기간|단계|분기|월|일", str(text or "")))
+
+
+def _has_non_money_quantity(text: str) -> bool:
+    return bool(re.search(r"\d[\d,.\s]*(장|대|개|건|명|곳|식|세트)", str(text or "")))
+
+
+def _contains_key_number_text(text: str, summary: dict[str, Any]) -> bool:
+    value = str(text or "")
+    for item in _list_dicts(summary.get("key_numbers")):
+        label = str(item.get("metric_label") or item.get("metric_name") or "").strip()
+        raw_value = str(item.get("value") or "").strip()
+        unit = str(item.get("unit") or "").strip()
+        if label and label in value:
+            return True
+        if raw_value and raw_value in value:
+            return True
+        if unit and raw_value and f"{raw_value}{unit}" in value:
+            return True
+    return False
+
+
+def _is_market_reaction_summary_line(text: str) -> bool:
+    return bool(
+        re.search(
+            r"주가|한국거래소|전\s*거래일|거래\s*(중|마쳤)|"
+            r"장\s*(초반|마감)|상승|하락|급등|급락|투자자|시장\s*반응",
+            str(text or ""),
+        )
+    )
 
 
 def _summary_line_for_display(line: str, key_numbers: dict[str, str]) -> str:
@@ -883,6 +1154,7 @@ def _implication_from_result(
     implication: dict[str, Any],
     *,
     fallback: dict[str, Any] | None = None,
+    frontend: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """W2-4: CardNewsComposer 가 DB 에 저장할 implication JSONB 의 단일 출처.
 
@@ -896,8 +1168,10 @@ def _implication_from_result(
     payload.setdefault("implication_scope", "peer_and_skax")
     payload.setdefault("watch_points", payload.get("watch_points", []))
     # frontend 호환 - flatten.
-    frontend = _frontend_implication_from_result(implication, fallback=fallback)
-    payload["frontend"] = frontend
+    payload["frontend"] = frontend or _frontend_implication_from_result(
+        implication,
+        fallback=fallback,
+    )
     return payload
 
 

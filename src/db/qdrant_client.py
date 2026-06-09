@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlparse, urlunparse
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, SparseIndexParams, SparseVectorParams, VectorParams
@@ -13,10 +14,26 @@ COLLECTION_DOCUMENTS = "axis_documents"
 DENSE_DIM = 1024  # BGE-M3 dense dimension
 
 
+def get_qdrant_url() -> str:
+    """Return a REST/client URL, preserving QDRANT_PORT when host is URL-like."""
+    if QDRANT_HOST.startswith("http://") or QDRANT_HOST.startswith("https://"):
+        parsed = urlparse(QDRANT_HOST)
+        if parsed.port is not None:
+            return QDRANT_HOST
+        netloc = parsed.hostname or parsed.netloc
+        if parsed.username or parsed.password:
+            auth = parsed.username or ""
+            if parsed.password:
+                auth = f"{auth}:{parsed.password}"
+            netloc = f"{auth}@{netloc}"
+        return urlunparse(parsed._replace(netloc=f"{netloc}:{QDRANT_PORT}"))
+    return f"http://{QDRANT_HOST}:{QDRANT_PORT}"
+
+
 def get_qdrant_client() -> QdrantClient:
     # Qdrant Cloud는 url=https://....cloud.qdrant.io + API key. 로컬은 host/port (API key 미사용).
     if QDRANT_HOST.startswith("http://") or QDRANT_HOST.startswith("https://"):
-        return QdrantClient(url=QDRANT_HOST, api_key=QDRANT_API_KEY)
+        return QdrantClient(url=get_qdrant_url(), api_key=QDRANT_API_KEY)
     return QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
 
