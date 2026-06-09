@@ -637,126 +637,28 @@ def _cluster_relation(
     right_titles: list[str],
     target_size: int,
 ) -> tuple[str, set[str], float] | None:
-    left_keys = set().union(*(_strong_event_keys(title) for title in left_titles))
-    right_keys = set().union(*(_strong_event_keys(title) for title in right_titles))
-    shared_keys = left_keys & right_keys
-
     left_tokens = set().union(*(_event_tokens(title) for title in left_titles))
     right_tokens = set().union(*(_event_tokens(title) for title in right_titles))
     shared_tokens = left_tokens & right_tokens
-
-    if shared_keys:
-        event_key = sorted(shared_keys)[0]
-        return (
-            event_key,
-            shared_tokens,
-            max(0.65, _candidate_score(left_tokens, right_tokens, shared_tokens, target_size)),
-        )
-
-    if len(shared_tokens) < 2:
-        return None
 
     if not _same_company_family(left_titles, right_titles):
         return None
     if not (_has_event_action(left_titles) and _has_event_action(right_titles)):
         return None
-    if len(shared_tokens) < 3 and not _has_distinctive_shared_tokens(shared_tokens):
+
+    if len(shared_tokens) < 2 and not _has_high_signal_single_token(shared_tokens):
+        return None
+    if len(shared_tokens) < 3 and not (
+        _has_distinctive_shared_tokens(shared_tokens)
+        or _has_high_signal_single_token(shared_tokens)
+    ):
         return None
 
     score = _candidate_score(left_tokens, right_tokens, shared_tokens, target_size)
+    if _has_high_signal_single_token(shared_tokens):
+        score = max(score, 0.45)
     event_key = "generic:" + "_".join(sorted(shared_tokens)[:4])
     return event_key, shared_tokens, score
-
-
-def _strong_event_keys(title: str) -> set[str]:
-    compact = _compact(title)
-    keys: set[str] = set()
-    if "lgcns" in compact and any(
-        marker in compact
-        for marker in (
-            "aind",
-            "에이전틱",
-            "agentic",
-            "ai개발플랫폼",
-            "개발플랫폼",
-            "기업시스템",
-            "대규모it시스템",
-            "대규모시스템",
-            "데브온",
-            "바이브코딩",
-            "코볼",
-            "계좌이체",
-        )
-    ):
-        keys.add("lg_cns_agentic_aind")
-    if any(
-        marker in compact for marker in ("gpu", "ai고속도로", "9704", "엘리스", "2조800억")
-    ) and any(
-        marker in compact
-        for marker in (
-            "삼성sds",
-            "삼성에스디에스",
-            "네이버",
-            "엘리스",
-            "사업자",
-            "선정",
-            "낙점",
-            "9704",
-        )
-    ):
-        keys.add("samsung_sds_gpu_ai_highway")
-    if any(marker in compact for marker in ("엔비디아", "nvidia", "젠슨황", "lg엔비디아")) and any(
-        marker in compact
-        for marker in (
-            "lg",
-            "구광모",
-            "피지컬ai",
-            "로봇",
-            "ai인프라",
-            "동맹",
-            "협력",
-            "파트너십",
-            "광폭행보",
-        )
-    ):
-        keys.add("lg_nvidia_physical_ai")
-    if "현대오토에버" in compact and any(
-        marker in compact for marker in ("로보틱스챌린지", "청소년로보틱스", "한국과학창의재단")
-    ):
-        keys.add("hyundai_autoever_robotics_challenge")
-    if (
-        "플래티어" in compact
-        and "현대오토에버" in compact
-        and any(
-            marker in compact
-            for marker in (
-                "인증중고차",
-                "공급계약",
-                "운영계약",
-                "연속수주",
-                "추가수주",
-                "대형운영계약",
-                "수주",
-                "계약체결",
-            )
-        )
-    ):
-        keys.add("platier_hyundai_autoever_contract")
-    if any(marker in compact for marker in ("새마을금고", "검사종합시스템", "이상징후")):
-        keys.add("saemaul_inspection_system")
-    if "lgcns" in compact and any(
-        marker in compact for marker in ("한전", "한국전력", "영업배전", "isp")
-    ):
-        keys.add("lg_cns_kepco_isp")
-    if "lgcns" in compact and any(
-        marker in compact for marker in ("피지컬웍스", "rx플랫폼", "로봇전환")
-    ):
-        keys.add("lg_cns_physicalworks_rx")
-    if "lgcns" in compact and any(
-        marker in compact for marker in ("앤트로픽", "anthropic", "클로드", "claude")
-    ):
-        keys.add("lg_cns_anthropic_claude")
-    return keys
 
 
 def _event_tokens(title: str) -> set[str]:
@@ -820,6 +722,13 @@ def _has_distinctive_shared_tokens(shared_tokens: set[str]) -> bool:
     return len(distinctive) >= 2
 
 
+def _has_high_signal_single_token(shared_tokens: set[str]) -> bool:
+    return any(
+        len(token) >= 5 or any(char.isascii() and char.isalpha() for char in token)
+        for token in shared_tokens
+    )
+
+
 def _candidate_score(
     singleton_tokens: set[str],
     target_tokens: set[str],
@@ -843,14 +752,12 @@ def _within_time_gap(
 
 
 def _is_stock_noise(title: str) -> bool:
-    if _strong_event_keys(title):
+    if _has_event_action([title]) and len(_event_tokens(title)) >= 2:
         return False
     return bool(_STOCK_NOISE_RE.search(title or ""))
 
 
 def _is_list_like(title: str) -> bool:
-    if _strong_event_keys(title):
-        return False
     return bool(_LIST_LIKE_RE.search(title or ""))
 
 

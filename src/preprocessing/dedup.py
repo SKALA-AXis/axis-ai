@@ -238,22 +238,6 @@ _TITLE_CONCEPT_TERMS: Mapping[str, tuple[str, ...]] = {
         "청소년로보틱스",
         "청소년 로보틱스",
     ),
-    "platier_hyundai_autoever_contract": (
-        "플래티어",
-        "현대오토에버",
-        "인증중고차",
-        "인증 중고차",
-        "공급계약",
-        "공급 계약",
-        "운영계약",
-        "운영 계약",
-        "연속수주",
-        "연속 수주",
-        "추가수주",
-        "추가 수주",
-        "대형운영계약",
-        "대형 운영 계약",
-    ),
     "saemaul_inspection_system": (
         "새마을금고",
         "검사종합시스템",
@@ -1076,9 +1060,11 @@ def _event_signature(article: dict[str, Any]) -> str:
     text = _issue_text(article)
     title_concepts = set(_title_concepts(article))
 
-    if "platier_hyundai_autoever_contract" in title_concepts:
-        return "contract_deal:platier_hyundai_autoever_contract"
     if bucket == "market_reaction":
+        if _has_contract_markers(text):
+            contract_key = _contract_issue_key(article)
+            if contract_key:
+                return f"contract_deal:{contract_key}"
         return f"market_reaction:{_published_day(article)}"
     if "두나무" in text:
         return "investment_deal:dunamu"
@@ -1440,7 +1426,6 @@ def _same_company_signature_or_concept(left: dict[str, Any], right: dict[str, An
         "logistics_robotics",
         "manufacturing_ax_market",
         "smart_infra_lidar",
-        "platier_hyundai_autoever_contract",
     }
     shared_concepts = set(_title_concepts(left)) & set(_title_concepts(right))
     return bool(shared_concepts & strong_concepts)
@@ -1789,9 +1774,23 @@ def _title_concepts(article: dict[str, Any]) -> list[str]:
 def _concepts_from_text(compact_text: str) -> list[str]:
     concepts: list[str] = []
     for concept, markers in _TITLE_CONCEPT_TERMS.items():
-        if any(_compact_text(marker) in compact_text for marker in markers):
+        matched_markers = [
+            _compact_text(marker) for marker in markers if _compact_text(marker) in compact_text
+        ]
+        signal_markers = [
+            marker for marker in matched_markers if not _is_company_alias_marker(marker)
+        ]
+        if signal_markers:
             concepts.append(concept)
     return concepts
+
+
+def _is_company_alias_marker(marker: str) -> bool:
+    return any(
+        marker == _compact_text(alias)
+        for aliases in _ALL_COMPANY_ALIASES.values()
+        for alias in aliases
+    )
 
 
 def _proper_terms_from_text(text: str) -> list[str]:

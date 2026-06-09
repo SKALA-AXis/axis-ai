@@ -92,7 +92,7 @@ def test_same_issue_groups_shared_specific_terms_and_numbers():
     assert _same_issue(left, right) is True
 
 
-def test_hyundai_autoever_platier_contract_uses_same_signature():
+def test_same_contract_domain_uses_general_signature_without_event_hardcoding():
     left = {
         "id": 47000,
         "company": ["hyundai_autoever"],
@@ -104,12 +104,12 @@ def test_hyundai_autoever_platier_contract_uses_same_signature():
         "id": 46955,
         "company": ["hyundai_autoever"],
         "title": '플래티어, 현대오토에버와 연속 수주..."45억원 확보"',
-        "content": "플래티어가 현대오토에버와 연속 수주 성과를 냈다.",
+        "content": "플래티어가 현대오토에버 인증중고차 플랫폼 운영 관련 연속 수주 성과를 냈다.",
         "published_at": "2026-06-09T10:51:00+09:00",
     }
 
-    assert _event_signature(left) == "contract_deal:platier_hyundai_autoever_contract"
-    assert _event_signature(right) == "contract_deal:platier_hyundai_autoever_contract"
+    assert _event_signature(left) == "contract_deal:certified_used_car_platform"
+    assert _event_signature(right) == "contract_deal:certified_used_car_platform"
     assert _should_merge_articles(left, right, similarity=0.5, threshold=0.8) is True
 
 

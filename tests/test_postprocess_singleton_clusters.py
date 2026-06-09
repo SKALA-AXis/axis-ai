@@ -7,20 +7,10 @@ from scripts.postprocess_singleton_clusters import (
     _filter_group_candidates_after_target_merges,
     _find_candidates,
     _is_stock_noise,
-    _strong_event_keys,
 )
 
 
-def test_lg_cns_anthropic_claude_titles_share_strong_event_key() -> None:
-    assert "lg_cns_anthropic_claude" in _strong_event_keys(
-        "LG CNS, 앤트로픽 '클로드 엔터프라이즈' 도입"
-    )
-    assert "lg_cns_anthropic_claude" in _strong_event_keys(
-        "LG CNS, 클로드 도입... 그룹사 단계적 확대"
-    )
-
-
-def test_strong_event_key_merges_even_with_single_shared_token() -> None:
+def test_same_company_product_event_merges_without_specific_event_key() -> None:
     relation = _cluster_relation(
         ["LGCNS, ‘클로드’ 도입"],
         ["LG CNS, 앤트로픽 '클로드 엔터프라이즈' 도입…그룹 차원 AX 확대 나서"],
@@ -28,13 +18,12 @@ def test_strong_event_key_merges_even_with_single_shared_token() -> None:
     )
 
     assert relation is not None
-    assert relation[0] == "lg_cns_anthropic_claude"
+    assert relation[0].startswith("generic:")
 
 
-def test_platier_hyundai_autoever_contract_is_not_stock_noise() -> None:
+def test_contract_stock_article_is_not_stock_noise_without_event_hardcoding() -> None:
     title = "[특징주] 플래티어, 현대오토에버와 24억 규모 추가 공급계약 체결"
 
-    assert "platier_hyundai_autoever_contract" in _strong_event_keys(title)
     assert _is_stock_noise(title) is False
 
 
@@ -43,10 +32,10 @@ def test_small_lg_cns_anthropic_cluster_merges_to_large_cluster() -> None:
         cluster_id=46655,
         article_ids=[46655, 46641],
         titles=[
-            "[Tech & Now] LG CNS, 앤트로픽 '클로드' 품고 AX 사업 확대",
+            "LG CNS, 앤트로픽 '클로드' 품고 AX 사업 확대",
             "LG CNS, 전사에 앤트로픽 '클로드' 깐다...그룹·외부 AX도 가속",
         ],
-        title="[Tech & Now] LG CNS, 앤트로픽 '클로드' 품고 AX 사업 확대",
+        title="LG CNS, 앤트로픽 '클로드' 품고 AX 사업 확대",
         article_count=2,
         event_at=None,
     )
@@ -100,7 +89,7 @@ def test_group_merge_skips_sources_already_merged_to_large_target() -> None:
     merge_candidate = MergeCandidate(
         source=source,
         target=target,
-        event_key="lg_cns_anthropic_claude",
+        event_key="generic:anthropic_claude",
         shared_tokens={"anthropic", "claude"},
         score=0.7,
     )

@@ -125,14 +125,14 @@ def test_candidate_payloads_are_report_friendly() -> None:
     merge = MergeCandidate(
         source=source,
         target=target,
-        event_key="platier_hyundai_autoever_contract",
+        event_key="generic:contract_event",
         shared_tokens={"platier", "hyundai_autoever"},
         score=0.67891,
     )
     group = GroupMergeCandidate(
         target=source,
         sources=[source],
-        event_key="platier_hyundai_autoever_contract",
+        event_key="generic:contract_event",
         shared_tokens={"platier"},
         score=0.51234,
     )
