@@ -112,6 +112,33 @@ class TodayInsightChangeSummary(BaseModel):
     value: str = ""
 
 
+class TodayInsightKeywordTrend(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    metric: str = ""
+    group_name: str = ""
+    latest_period: str = ""
+    latest_ratio: float | None = None
+    prev_ratio: float | None = None
+    ratio_delta: float | None = None
+    source: str = ""
+    note: str = ""
+
+
+class TodayInsightComparisonFacts(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    anchor_date: str = ""
+    window_days: int = 0
+    coverage: dict[str, Any] = Field(default_factory=dict)
+    keyword_trends: list[TodayInsightKeywordTrend] = Field(default_factory=list)
+    visibility_gaps: list[dict[str, Any]] = Field(default_factory=list)
+    primary_selection: dict[str, Any] = Field(default_factory=dict)
+    context_selection: dict[str, Any] = Field(default_factory=dict)
+    structural: list[dict[str, Any]] = Field(default_factory=list)
+    salience_candidates: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class TodayInsightGenerateResponse(BaseModel):
     """Home dashboard Today's Insight response."""
 
@@ -123,6 +150,7 @@ class TodayInsightGenerateResponse(BaseModel):
     executive_summary: str = ""
     executive_implication: str = ""
     change_summary: list[TodayInsightChangeSummary] = Field(default_factory=list)
+    comparison_facts: TodayInsightComparisonFacts | dict[str, Any] | None = None
     signals: list[TodayInsightSignal] = Field(default_factory=list)
     response_direction: list[TodayInsightAction] = Field(default_factory=list)
     sources: list[TodayInsightSource] = Field(default_factory=list)

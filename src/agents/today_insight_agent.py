@@ -30,69 +30,88 @@ from src.db.postgres import SessionLocal
 from src.observability.langfuse_client import tracing_config
 from src.services.profile_context_loader import ProfileContextLoader
 from src.services.skax_profile_context_loader import SKAXProfileLoader
+from src.services.today_insight_comparison_engine import (
+    build_comparison_facts,
+    build_ui_change_summary,
+    format_evidence_change_lines,
+    polish_executive_output,
+    trim_comparison_facts_for_prompt,
+)
 
 log = logging.getLogger(__name__)
 
 KST = ZoneInfo("Asia/Seoul")
-_LLM_MODEL = os.getenv("TODAY_INSIGHT_MODEL", "gpt-4o")
-_PROMPT_VERSION = "today-insight-v1.0-executive-delta"
-_MAX_PROMPT_JSON_CHARS = 44_000
+_LLM_MODEL = os.getenv("TODAY_INSIGHT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5.5"
+_PROMPT_VERSION = "today-insight-v1.3-signals-focus"
+_LLM_CONTEXT_MAX_CHARS = 48_000
+_LLM_CONTEXT_DROP_ORDER = (
+    "analysis_ledger_context",
+    "prior_today_insight_memory",
+    "history_issues",
+    "skax_context",
+    "profile_context",
+)
 _SIGNAL_LABELS = ("주요 신호", "관찰 포인트", "다음 판단")
 
 _llm: ChatOpenAI | None = None
 
 
+def _llm_max_completion_tokens() -> int:
+    default = "12000" if str(_LLM_MODEL).startswith("gpt-5") else "3200"
+    return int(os.getenv("TODAY_INSIGHT_MAX_COMPLETION_TOKENS", default))
+
+
 def _get_llm() -> ChatOpenAI:
     global _llm
     if _llm is None:
-        _llm = ChatOpenAI(
-            model=_LLM_MODEL,
-            temperature=0.18,
-            max_completion_tokens=3200,
-            model_kwargs={"response_format": {"type": "json_object"}},
-        )
+        llm_kwargs: dict[str, Any] = {
+            "model": _LLM_MODEL,
+            "temperature": 0.18,
+            "max_completion_tokens": _llm_max_completion_tokens(),
+            "model_kwargs": {"response_format": {"type": "json_object"}},
+        }
+        if str(_LLM_MODEL).startswith("gpt-5"):
+            llm_kwargs["reasoning_effort"] = os.getenv("TODAY_INSIGHT_REASONING_EFFORT", "low")
+        _llm = ChatOpenAI(**llm_kwargs)
     return _llm
 
 
 _TODAY_INSIGHT_PROMPT = """\
-당신은 SK AX CEO/임원 홈 대시보드의 Today's Insight를 작성하는 전략 인텔리전스 에이전트입니다.
+당신은 SK AX CEO/임원 홈 대시보드 Today's Insight의 **신호·대응 방향** 작성자입니다.
 
-목표:
-- 오늘 새로 들어온 통합 이슈가 과거 흐름, 피어사 프로필, SK AX 공식 방향성과 비교해
-  무엇을 바꾸는지 판단합니다.
-- 독자는 SK 임원입니다. 일반론, 캠페인 문구, "강화 필요"만 있는 권고를 쓰지 않습니다.
-- 답은 홈 화면 첫 영역에 노출되므로 짧지만, 근거-변화-판단의 밀도가 높아야 합니다.
+서버 후처리로 이미 채워지는 필드 (품질에 영향 없음, 빈 문자열 가능):
+- headline, executive_summary, change_summary
 
-내부 판단 방식:
-- 사건 사실 → 과거 누적 패턴 대비 변화 → SK AX 사업/제안/운영 기준 영향 →
-  다음 의사결정에서 확인할 항목 순서로 충분히 검토합니다.
-- 내부 사고 과정을 그대로 쓰지 말고, UI에 보여도 되는 짧은 audit trail만 reasoning에 씁니다.
+당신이 집중할 핵심 산출물:
+1. signals 3개 — label 순서: "주요 신호", "관찰 포인트", "다음 판단"
+2. response_direction — 실행 산출물/판단 기준이 보이는 액션 1~3개
+3. executive_implication — SK AX 임원 관점 시사점 (일반론 금지)
+4. sources — 입력 id/url/title 만
+
+판단 순서:
+- comparison_facts.primary_selection(확실한 이벤트) → structural/keyword_trends 맥락
+  → SK AX 제안·운영 KPI → 오늘 확인 항목.
+- label=low_visibility_definite_event 이면 signal[0]에 반드시 반영.
+- structural·keyword_trends는 primary를 대체하지 않는 보조 맥락.
+
+reasoning step label: "관찰", "비교", "의미", "판단" 만 사용.
+각 reasoning.detail 은 1문장 이내로 짧게 씁니다.
 
 절대 규칙:
-1. 입력 근거에 없는 수치, 고객명, 계약명, 시장점유율, 우열 표현을 만들지 않습니다.
-2. "시장 확대", "경쟁 심화", "전략 강화" 같은 넓은 결론은 단독으로 쓰지 않습니다.
-   반드시 고객군/사업명/운영 구간/검증 항목/제안 산출물 중 하나로 좁힙니다.
-3. response_direction은 실행 산출물이 보여야 합니다.
-   예: "제조 AX 제안서 첫 3장에 운영 KPI, 보안 책임 범위, PoC 검증 지표를 분리 배치"
-4. signal은 정확히 3개이며 label은 순서대로 "주요 신호", "관찰 포인트", "다음 판단"입니다.
-5. reasoning은 각 signal당 3~4개 step만 씁니다. 숨은 chain-of-thought가 아니라
-   "관찰/비교/의미/판단" 수준의 설명입니다.
-6. evidence.grounds와 evidence.changes는 모두 입력 출처 또는 계산된 stats에서 확인 가능해야 합니다.
-7. sources는 기사/통합 이슈/카드 중 실제 입력에 있는 id/url/title만 사용합니다.
+1. comparison_facts 에 없는 수치를 만들지 않습니다.
+2. "경쟁 환경", "전략 강화", "시장 확대" 같은 넓은 결론만 단독으로 쓰지 않습니다.
+3. signal[0]은 primary_selection.items[0]을 우선 반영합니다.
+4. evidence.changes에는 comparison_facts 에 확인 가능한 항목만 씁니다.
 
 입력 JSON:
 {context_json}
 
 출력 JSON schema:
 {{
-  "headline": "오늘 홈 화면 H2 아래에 놓일 핵심 판단 1문장",
-  "executive_summary": "오늘 변화가 왜 중요한지 2문장 이내",
-  "executive_implication": "SK AX 임원 관점의 시사점 2문장 이내. 일반론 금지",
-  "change_summary": [
-    {{"label": "오늘 감지된 변화", "value": "N건"}},
-    {{"label": "비교 기준", "value": "최근 N일"}},
-    {{"label": "핵심 축", "value": "구체 peer/sector/keyword"}}
-  ],
+  "headline": "",
+  "executive_summary": "",
+  "executive_implication": "SK AX 임원 관점의 시사점 2문장 이내",
+  "change_summary": [],
   "signals": [
     {{
       "id": "signal-key",
@@ -170,9 +189,11 @@ class TodayInsightAgent:
                 _save_report(result, input_snapshot=context)
             return result
 
+        llm_context, llm_context_meta = _fit_llm_prompt_context(context)
+        context["llm_context_meta"] = llm_context_meta
         prompt = _TODAY_INSIGHT_PROMPT.replace(
             "{context_json}",
-            _compact_json(context, max_chars=_MAX_PROMPT_JSON_CHARS),
+            _json_dumps(llm_context),
         )
 
         try:
@@ -268,6 +289,15 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
         cards=cards,
         window_days=req.window_days,
     )
+    comparison_facts = build_comparison_facts(
+        anchor_date=anchor_date,
+        window_days=req.window_days,
+        current_issues=current_issues,
+        history_issues=history_issues,
+        cards=cards,
+        change_stats=stats,
+        prior_reports=prior_reports,
+    )
 
     return {
         "report_date": anchor_date.isoformat(),
@@ -276,6 +306,7 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
         "history_issues": [_issue_for_prompt(row) for row in history_issues[: req.max_issues * 2]],
         "recent_cards": [_card_for_prompt(card) for card in cards[: req.max_cards]],
         "change_stats": stats,
+        "comparison_facts": comparison_facts,
         "prior_today_insight_memory": prior_reports,
         "analysis_ledger_context": ledger_context,
         "profile_context": profile_context,
@@ -373,6 +404,8 @@ def _fetch_cards_for_issues(
                            importance,
                            importance_score,
                            implication,
+                           primary_keyword_category,
+                           evidence_payload,
                            source_raw_article_ids,
                            sources,
                            integrated_issue_id::text AS integrated_issue_id,
@@ -439,6 +472,8 @@ def _fetch_recent_cards(
                            importance,
                            importance_score,
                            implication,
+                           primary_keyword_category,
+                           evidence_payload,
                            source_raw_article_ids,
                            sources,
                            integrated_issue_id::text AS integrated_issue_id,
@@ -821,10 +856,17 @@ def _normalize_result(
     base.setdefault("headline", "")
     base.setdefault("executive_summary", "")
     base.setdefault("executive_implication", "")
+    comparison_facts = context.get("comparison_facts")
+    default_change_summary = build_ui_change_summary(
+        default_rows=context["change_stats"]["default_change_summary"],
+        comparison_facts=comparison_facts if isinstance(comparison_facts, dict) else None,
+    )
     base["change_summary"] = _normalize_change_summary(
         base.get("change_summary"),
-        context["change_stats"]["default_change_summary"],
+        default_change_summary,
     )
+    if isinstance(comparison_facts, dict):
+        base["comparison_facts"] = comparison_facts
     base["signals"] = _normalize_signals(base.get("signals"), context=context)
     base["response_direction"] = _normalize_actions(base.get("response_direction"), context=context)
     base["sources"] = _normalize_sources(base.get("sources"), context["sources"])
@@ -878,6 +920,12 @@ def _normalize_result(
             "prior_reports": len(context["prior_today_insight_memory"]),
             "ledger_items": len(context["analysis_ledger_context"]),
         },
+        "comparison_coverage": (
+            (context.get("comparison_facts") or {}).get("coverage")
+            if isinstance(context.get("comparison_facts"), dict)
+            else {}
+        ),
+        "llm_context": context.get("llm_context_meta") or {},
     }
     if not base["headline"]:
         base["headline"] = _fallback_headline(context)
@@ -885,6 +933,7 @@ def _normalize_result(
         base["executive_summary"] = _fallback_summary(context)
     if not base["executive_implication"]:
         base["executive_implication"] = _fallback_implication(context)
+    base = polish_executive_output(base, context=context)
     response = TodayInsightGenerateResponse.model_validate(base)
     return response.model_dump()
 
@@ -951,8 +1000,49 @@ def _normalize_signals(value: Any, *, context: dict[str, Any]) -> list[dict[str,
         }
         if not signal["reasoning"]:
             signal["reasoning"] = fallback[idx]["reasoning"]
+        signal = _merge_comparison_evidence(signal, context=context, idx=idx)
         normalized.append(signal)
     return normalized
+
+
+def _merge_comparison_evidence(
+    signal: dict[str, Any],
+    *,
+    context: dict[str, Any],
+    idx: int,
+) -> dict[str, Any]:
+    comparison = context.get("comparison_facts")
+    if not isinstance(comparison, dict):
+        return signal
+
+    computed_changes = format_evidence_change_lines(comparison)
+    if not computed_changes:
+        return signal
+
+    evidence = signal.get("evidence")
+    if not isinstance(evidence, dict):
+        return signal
+
+    existing = [
+        str(item).strip() for item in _list(evidence.get("changes")) if str(item or "").strip()
+    ]
+    merged = existing[:]
+    for line in computed_changes:
+        if line not in merged:
+            merged.append(line)
+        if len(merged) >= 3:
+            break
+
+    if idx == 0 and len(merged) < 3:
+        for line in computed_changes:
+            if line not in merged:
+                merged.append(line)
+            if len(merged) >= 3:
+                break
+
+    evidence["changes"] = merged[:3]
+    signal["evidence"] = evidence
+    return signal
 
 
 def _normalize_actions(value: Any, *, context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1030,6 +1120,17 @@ def _fallback_result(
 
 
 def _fallback_headline(context: dict[str, Any]) -> str:
+    comparison = context.get("comparison_facts")
+    if isinstance(comparison, dict):
+        primary = comparison.get("primary_selection")
+        if isinstance(primary, dict):
+            items = [item for item in _list(primary.get("items")) if isinstance(item, dict)]
+            if items:
+                lead = items[0]
+                title = str(lead.get("title") or "").strip()
+                if title:
+                    return _clip(title, 120)
+
     first = _first_issue(context)
     if first:
         company = _company_label(str(first.get("main_company") or ""))
@@ -1082,6 +1183,96 @@ def _fallback_implication(context: dict[str, Any]) -> str:
 
 
 def _fallback_signals(context: dict[str, Any]) -> list[dict[str, Any]]:
+    comparison = context.get("comparison_facts")
+    if isinstance(comparison, dict):
+        primary = comparison.get("primary_selection")
+        if isinstance(primary, dict):
+            lead = next(
+                (item for item in _list(primary.get("items")) if isinstance(item, dict)),
+                None,
+            )
+            if lead:
+                lead_id = str(lead.get("id") or "")
+                source_ids = [lead_id] if lead_id else _default_source_ids(context)
+                label = str(lead.get("label") or "")
+                title = str(lead.get("title") or "")
+                hint = str(lead.get("narrative_hint") or "")
+                structural = [
+                    str(item.get("metric") or "")
+                    for item in _list(comparison.get("structural"))
+                    if isinstance(item, dict) and item.get("metric")
+                ][:2]
+                return [
+                    {
+                        "id": "signal-primary-salience",
+                        "label": "주요 신호",
+                        "value": _clip(
+                            title or "오늘 primary salience 신호",
+                            96,
+                        ),
+                        "reasoning": [
+                            {"stage": "관찰", "detail": hint or title or "primary_selection 기준"},
+                            {
+                                "stage": "비교",
+                                "detail": (
+                                    f"salience {lead.get('salience_score')} / "
+                                    f"exposure {lead.get('exposure_score')}"
+                                ),
+                            },
+                            {
+                                "stage": "의미",
+                                "detail": (
+                                    "단건 고임팩트 이벤트로 분류"
+                                    if label == "low_visibility_definite_event"
+                                    else "오늘 우선 판단 축"
+                                ),
+                            },
+                            {"stage": "판단", "detail": "제안·PoC·운영 책임 범위 재점검"},
+                        ],
+                        "evidence": {
+                            "grounds": [hint] if hint else _default_grounds(context)[:2],
+                            "changes": structural or _default_changes(context),
+                            "related_keywords": _keywords_from_context(context),
+                            "source_ids": source_ids,
+                        },
+                    },
+                    {
+                        "id": "signal-watch-volume",
+                        "label": "관찰 포인트",
+                        "value": _clip("보도량·sector 비중 맥락 확인", 96),
+                        "reasoning": [
+                            {
+                                "stage": "관찰",
+                                "detail": "structural 지표는 primary를 대체하지 않습니다.",
+                            },
+                            {
+                                "stage": "비교",
+                                "detail": ", ".join(structural) or "rolling baseline 대비 변화",
+                            },
+                        ],
+                        "evidence": {
+                            "grounds": _default_grounds(context)[:2],
+                            "changes": _default_changes(context)[:2],
+                            "related_keywords": _keywords_from_context(context),
+                            "source_ids": source_ids,
+                        },
+                    },
+                    {
+                        "id": "signal-next-judgment",
+                        "label": "다음 판단",
+                        "value": "제안서·PoC·운영모델에서 무엇을 바꿀지 오늘 결정",
+                        "reasoning": [
+                            {"stage": "판단", "detail": "primary 이벤트 기준 의사결정 항목 확정"},
+                        ],
+                        "evidence": {
+                            "grounds": _default_grounds(context)[:2],
+                            "changes": _default_changes(context)[:2],
+                            "related_keywords": _keywords_from_context(context),
+                            "source_ids": source_ids,
+                        },
+                    },
+                ]
+
     first = _first_issue(context)
     first_card = _first_card(context)
     source_ids = _default_source_ids(context)
@@ -1284,6 +1475,7 @@ def _issue_for_prompt(row: dict[str, Any]) -> dict[str, Any]:
         "main_company": row.get("main_company"),
         "company_label": _company_label(str(row.get("main_company") or "")),
         "event_type": row.get("event_type"),
+        "source_family": row.get("source_family"),
         "sectors": _list(row.get("sectors"))[:6],
         "confidence": row.get("confidence"),
         "headline": _clip(str(row.get("headline") or ""), 240),
@@ -1299,6 +1491,7 @@ def _issue_for_prompt(row: dict[str, Any]) -> dict[str, Any]:
 def _card_for_prompt(card: dict[str, Any]) -> dict[str, Any]:
     raw_implication = card.get("implication")
     implication: dict[str, Any] = raw_implication if isinstance(raw_implication, dict) else {}
+    sector = card.get("primary_keyword_category") or implication.get("sector") or ""
     return {
         "id": card.get("id"),
         "integrated_issue_id": card.get("integrated_issue_id"),
@@ -1306,8 +1499,10 @@ def _card_for_prompt(card: dict[str, Any]) -> dict[str, Any]:
         "title": _clip(str(card.get("title") or ""), 220),
         "summary_lines": _list(card.get("summary_lines"))[:3],
         "event_type": card.get("event_type"),
+        "sector": sector,
         "importance": card.get("importance"),
         "importance_score": card.get("importance_score"),
+        "exposure_score": implication.get("exposure_score"),
         "skax_implication": _clip(
             str(
                 implication.get("potential_impact")
@@ -1606,6 +1801,213 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, date):
         return value.isoformat()
     return value
+
+
+def _slim_issue_for_llm(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row.get("id"),
+        "created_date_kst": row.get("created_date_kst"),
+        "main_company": row.get("main_company"),
+        "company_label": row.get("company_label"),
+        "event_type": row.get("event_type"),
+        "source_family": row.get("source_family"),
+        "sectors": _list(row.get("sectors"))[:4],
+        "confidence": row.get("confidence"),
+        "headline": _clip(str(row.get("headline") or ""), 200),
+        "one_line_summary": _clip(str(row.get("one_line_summary") or ""), 220),
+        "content_summary": _clip(str(row.get("content_summary") or ""), 360),
+        "source_ids": _list(row.get("source_ids"))[:4],
+    }
+
+
+def _slim_card_for_llm(card: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": card.get("id"),
+        "integrated_issue_id": card.get("integrated_issue_id"),
+        "peer_id": card.get("peer_id"),
+        "title": _clip(str(card.get("title") or ""), 200),
+        "summary_lines": [_clip(str(line), 120) for line in _list(card.get("summary_lines"))[:3]],
+        "event_type": card.get("event_type"),
+        "sector": card.get("sector"),
+        "importance_score": card.get("importance_score"),
+        "skax_implication": _clip(str(card.get("skax_implication") or ""), 220),
+    }
+
+
+def _slim_history_issue_for_llm(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row.get("id"),
+        "main_company": row.get("main_company"),
+        "company_label": row.get("company_label"),
+        "event_type": row.get("event_type"),
+        "headline": _clip(str(row.get("headline") or ""), 160),
+        "one_line_summary": _clip(str(row.get("one_line_summary") or ""), 180),
+    }
+
+
+def _slim_ledger_item_for_llm(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "peer_id": row.get("peer_id"),
+        "event_type": row.get("event_type"),
+        "headline": _clip(str(row.get("headline") or row.get("title") or ""), 160),
+        "summary": _clip(str(row.get("summary") or row.get("one_line_summary") or ""), 200),
+    }
+
+
+def _slim_profile_context_for_llm(profile_context: dict[str, Any]) -> dict[str, Any]:
+    peers = profile_context.get("peer_profiles")
+    slim_peers: dict[str, Any] = {}
+    if isinstance(peers, dict):
+        for peer_id, profile in list(peers.items())[:6]:
+            if not isinstance(profile, dict):
+                continue
+            recent_signals = []
+            for signal in _list(
+                profile.get("recent_signals") or profile.get("recent_business_signals")
+            )[:2]:
+                if isinstance(signal, dict):
+                    recent_signals.append(
+                        _clip(str(signal.get("headline") or signal.get("signal") or ""), 120)
+                    )
+                elif signal:
+                    recent_signals.append(_clip(str(signal), 120))
+            slim_peers[str(peer_id)] = {
+                "company_name_ko": profile.get("company_name_ko") or profile.get("name_ko"),
+                "business_areas": _list(profile.get("business_areas"))[:3],
+                "strategic_direction": _clip(
+                    str(
+                        profile.get("strategic_direction")
+                        or profile.get("direction_summary")
+                        or profile.get("executive_summary")
+                        or ""
+                    ),
+                    260,
+                ),
+                "recent_signals": recent_signals,
+            }
+
+    sector_context = profile_context.get("sector_context")
+    slim_sectors: dict[str, Any] = {}
+    if isinstance(sector_context, dict):
+        for sector, payload in list(sector_context.items())[:4]:
+            if isinstance(payload, dict):
+                slim_sectors[str(sector)] = {
+                    "summary": _clip(
+                        str(payload.get("summary") or payload.get("headline") or ""), 180
+                    )
+                }
+    return {"peer_profiles": slim_peers, "sector_context": slim_sectors}
+
+
+def _slim_skax_context_for_llm(skax_context: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(skax_context, dict):
+        return {}
+    slim: dict[str, Any] = {}
+    for sector, payload in list(skax_context.items())[:4]:
+        if not isinstance(payload, dict):
+            continue
+        documents = []
+        for doc in _list(payload.get("documents") or payload.get("newsroom_documents"))[:2]:
+            if isinstance(doc, dict):
+                documents.append(
+                    {
+                        "title": _clip(str(doc.get("title") or ""), 120),
+                        "published_at": doc.get("published_at"),
+                    }
+                )
+        slim[str(sector)] = {
+            "summary": _clip(str(payload.get("summary") or payload.get("headline") or ""), 200),
+            "documents": documents,
+        }
+    return slim
+
+
+def _build_llm_prompt_context(context: dict[str, Any]) -> dict[str, Any]:
+    comparison = context.get("comparison_facts")
+    raw_profile = context.get("profile_context")
+    profile_context: dict[str, Any] = raw_profile if isinstance(raw_profile, dict) else {}
+    raw_skax = context.get("skax_context")
+    skax_context: dict[str, Any] = raw_skax if isinstance(raw_skax, dict) else {}
+    return {
+        "report_date": context.get("report_date"),
+        "window_days": context.get("window_days"),
+        "generation_focus": {
+            "server_filled_fields": ["headline", "executive_summary", "change_summary"],
+            "llm_priority_fields": [
+                "signals",
+                "response_direction",
+                "executive_implication",
+                "sources",
+            ],
+        },
+        "comparison_facts": trim_comparison_facts_for_prompt(
+            comparison if isinstance(comparison, dict) else None
+        ),
+        "change_stats": context.get("change_stats"),
+        "current_issues": [
+            _slim_issue_for_llm(row)
+            for row in _list(context.get("current_issues"))
+            if isinstance(row, dict)
+        ],
+        "recent_cards": [
+            _slim_card_for_llm(card)
+            for card in _list(context.get("recent_cards"))
+            if isinstance(card, dict)
+        ],
+        "history_issues": [
+            _slim_history_issue_for_llm(row)
+            for row in _list(context.get("history_issues"))[:6]
+            if isinstance(row, dict)
+        ],
+        "sources": _list(context.get("sources"))[:10],
+        "prior_today_insight_memory": _list(context.get("prior_today_insight_memory"))[:3],
+        "analysis_ledger_context": [
+            _slim_ledger_item_for_llm(row)
+            for row in _list(context.get("analysis_ledger_context"))[:4]
+            if isinstance(row, dict)
+        ],
+        "profile_context": _slim_profile_context_for_llm(profile_context),
+        "skax_context": _slim_skax_context_for_llm(skax_context),
+    }
+
+
+def _fit_llm_prompt_context(context: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    working = _build_llm_prompt_context(context)
+    meta: dict[str, Any] = {
+        "max_chars": _LLM_CONTEXT_MAX_CHARS,
+        "serialized_chars": len(_json_dumps(working)),
+        "truncated": False,
+        "dropped_sections": [],
+    }
+    if meta["serialized_chars"] <= _LLM_CONTEXT_MAX_CHARS:
+        return working, meta
+
+    for section in _LLM_CONTEXT_DROP_ORDER:
+        if section not in working:
+            continue
+        if section in {"profile_context", "skax_context"}:
+            working[section] = {}
+        else:
+            working[section] = []
+        meta["dropped_sections"].append(section)
+        meta["serialized_chars"] = len(_json_dumps(working))
+        if meta["serialized_chars"] <= _LLM_CONTEXT_MAX_CHARS:
+            return working, meta
+
+    meta["truncated"] = True
+    shrink_targets = ("recent_cards", "current_issues", "sources")
+    while meta["serialized_chars"] > _LLM_CONTEXT_MAX_CHARS:
+        reduced = False
+        for target in shrink_targets:
+            rows = working.get(target)
+            if isinstance(rows, list) and len(rows) > 3:
+                working[target] = rows[:-1]
+                reduced = True
+                break
+        if not reduced:
+            break
+        meta["serialized_chars"] = len(_json_dumps(working))
+    return working, meta
 
 
 def _compact_json(value: Any, *, max_chars: int) -> str:
