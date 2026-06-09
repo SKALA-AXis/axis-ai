@@ -231,8 +231,9 @@ SYSTEM_PROMPT = """\
    모델의 일반 지식이나 회사 이미지로 비어 있는 프로필을 채우지 않습니다.
 3. 계약/수주/선정/투자/검토 같은 관계 수준을 보존합니다. 역할이 불명확하면
    고객, 원청, 운영 책임자, 도입 주체로 단정하지 않습니다.
-4. analysis 는 피어/시장 의미, peer_implication 은 피어 프로필 기반 시사점,
-   skax_implication 은 SK AX 프로필 기반 대응방향입니다.
+4. 최종 사용자에게 보여줄 논리는 "시사점"과 "SK AX 대응 방향" 두 묶음뿐입니다.
+   analysis 와 peer_implication 은 같은 "시사점" 묶음을 구성하는 내부 필드이고,
+   skax_implication 은 "SK AX 대응 방향" 묶음을 구성하는 내부 필드입니다.
 5. 좋은 결과는 짧은 결론이 아니라
    "근거 사실 → 왜 그렇게 해석되는지 → 어떤 대응이 필요한지"가 보입니다.
 6. JSON 외 텍스트를 출력하지 마세요.
@@ -290,13 +291,22 @@ USER_PROMPT_TEMPLATE = """\
 6. SK AX 프로필 기반 대응 생성(skax_fit_gap):
    peer_signal + SK AX 관련 프로필 역량 + SK AX가 보완할 산출물/운영 방식 차이를 정합니다.
    SK AX profile_context 의 관련 사업영역/역량과 연결되지 않은 대응은 일반론입니다.
+   SK AX 프로필의 사업영역명이 현재 사건의 고객군/대상 업무/기술 기능과 직접 맞지 않으면
+   그 사업영역명을 문장에 쓰지 말고, 더 상위의 기업용 AI 도입/운영 검증/전사 확산 대응으로 씁니다.
    대응에는 제안서, PoC, 레퍼런스 비교표, 운영 계획 중 입력 맥락에 맞는 산출물을 씁니다.
    현재 상태 → 왜 바꿔야 하는가 → 무엇을 바꿔야 하는가 → 바꾸면 무엇이 달라지는가
    이 흐름으로 씁니다.
 7. final output: 위 중간 판단은 출력하지 말고, schema 필드에 자연어로 반영합니다.
+   단, 작성 관점은 반드시 두 묶음입니다:
+   - 시사점: analysis_summary, strategic_meaning, market_signal, peer_meaning,
+     capability_change 가 서로 중복 없이 하나의 논지로 이어져야 합니다.
+   - SK AX 대응 방향: why_important, potential_impact, recommended_actions 가
+     하나의 대응 논리로 이어져야 합니다.
 
 ## 필드 기준
-- analysis_summary: 현재 사건과 피어/시장 의미를 1~2문장으로 씁니다.
+- analysis_summary: "시사점"의 대표 문장입니다. 현재 사건 요약을 반복하지 말고
+  피어/시장 의미를 1문장으로 씁니다. 이 문장은 사용자가 보는 "시사점" 첫 문장처럼
+  읽혀야 합니다.
 - strategic_meaning: 2~3개. 사실 반복이 아니라 "사실이 의미하는 피어/시장 변화"를 씁니다.
   "영역 확장", "긍정적인 영향"처럼 방향만 말하지 말고, 현재 사건에서 확인된
   대상 시스템/인프라 구성/운영 구조/추진 방식/비교 기준 중 무엇이 바뀌는지 씁니다.
@@ -304,21 +314,26 @@ USER_PROMPT_TEMPLATE = """\
   "그룹 계열사 전반 적용", "외부 기업 고객 대상 맞춤형 AI 구축 서비스 제공 계획",
   "개발·문서 처리·협업 업무 적용"처럼 근거 문장의 구체 대상으로 풀어 씁니다.
 - market_signal: 한 사건으로 수요 증가를 단정하지 말고 현재 사건에서 확인된 수요 신호,
-  적용 범위, 비교 기준 변화를 씁니다.
+  적용 범위, 비교 기준 변화를 씁니다. analysis_summary/strategic_meaning 과 같은 말을
+  반복하지 말고, 시사점에 추가되는 관찰 기준 1개만 씁니다.
 - 시장 범위/표현 강도: 원문이 국내 정부 사업이면 국가 단위/공공 대형 인프라 수준으로 씁니다.
   글로벌, 공공+민간, 전 산업, 사업 확장, 긍정적 영향은 현재 사건 또는 관련 프로필 근거가
   그 범위를 뒷받침할 때만 씁니다. 근거가 약하면 관찰 신호/연결 사례/레퍼런스 가능성으로 낮춥니다.
-- peer_meaning: 2문장 이상 가능. 현재 사실 → 피어 역할 → 관련 프로필/최근 흐름 접점을 설명합니다.
+- peer_meaning: 별도 노출 섹션이 아니라 "시사점" 묶음의 내부 근거입니다.
+  2문장 이상 가능. 현재 사실 → 피어 역할 → 관련 프로필/최근 흐름 접점을 설명합니다.
   관련 피어 프로필이 있으면 프로필의 business_area/core_capability/recent_direction 중
   현재 사건과 맞는 표현을 최소 1개 이상 자연어로 연결합니다.
   단순히 "입지 강화", "영역 확장"으로 끝내지 말고, 관련 프로필의 구체 사업영역/역량명과
   현재 사건의 대상 사업·인프라·고객군이 어떻게 만나는지 씁니다.
-- capability_change: 직접 확인되는 사업 범위, 고객군, 대상 시스템, 적용 영역만 씁니다.
+- capability_change: 별도 노출 섹션이 아니라 "시사점" 묶음의 내부 근거입니다.
+  직접 확인되는 사업 범위, 고객군, 대상 시스템, 적용 영역만 씁니다.
   "역량 강화/영역 확장 예상"으로 끝내지 말고, 어떤 고객군·대상 시스템·운영 범위·추진 구조와
   연결되는지 적습니다.
   프로필 근거가 있으면 "기존 역량이 이번 사건에서 어떤 적용 장면/운영 범위/고객군과
   만나는지"를 설명하고, 프로필 근거가 없으면 역량 변화로 단정하지 않습니다.
-- why_important: 피어/시장 신호가 SK AX의 어떤 사업영역/역량과 비교되는지 씁니다.
+- why_important: "SK AX 대응 방향"의 도입 문장입니다. 피어/시장 신호가 SK AX의 어떤
+  사업영역/역량과 비교되는지 씁니다. 현재 사건이 금융/공공/제조/인프라 사건이 아니면
+  SK AX 프로필에 해당 단어가 있더라도 쓰지 않습니다.
 - potential_impact: 고객이 무엇을 비교하게 되는지, 기존 설명으로 무엇이 부족한지,
   SK AX가 어떤 구조로 바꾸면 무엇을 확인시킬 수 있는지 2~3문장으로 씁니다.
 - recommended_actions: 1~3개. 각 항목은 길어도 됩니다.
@@ -330,6 +345,13 @@ USER_PROMPT_TEMPLATE = """\
 - sourced_evidence_ids / used_fact_ids: 입력에 존재하는 fact_id 만 사용합니다.
 
 ## 금지
+- 시사점 요약, 전략적 의미, 시장 신호, 피어 시사점, SK AX 관점처럼
+  사용자 노출용 섹션을 여러 개로 나누는 문체
+- analysis/peer_implication/skax_implication 필드명을 사용자 노출 제목처럼 해석하는 문체
+- 현재 사건 근거에 없는 SK AX 사업영역을 끌어오는 문장.
+  예: 현재 사건이 금융/인프라가 아닌데 "금융 인프라 혁신"이라고 쓰는 것
+- 같은 의미를 analysis_summary, strategic_meaning, market_signal, peer_meaning,
+  capability_change 에 반복하는 문장
 - 근거 없는 기술적 우위, 선점, 격차, 경쟁 심화, 점유율 확대, 성과 예측
 - 근거 없는 경쟁력 강화, 경쟁력에 긍정적인 영향, 효율성 향상, 가속화,
   수요 증가, 외부 확장 같은 효과성/방향성 결론
@@ -429,7 +451,12 @@ REVIEW_USER_PROMPT_TEMPLATE = """\
 
 ## 리뷰 기준
 1. 수치/날짜/회사명/고객명/사업명은 IntegratedIssue 근거 안에 있어야 합니다.
-2. 시사점이 요약 반복이면 고칩니다. 현재 사실, 피어 프로필 접점,
+2. 사용자에게 보여줄 최종 논리는 "시사점"과 "SK AX 대응 방향" 두 묶음입니다.
+   analysis 와 peer_implication 은 같은 시사점 묶음으로 읽혀야 하고,
+   skax_implication 은 대응 방향 묶음으로 읽혀야 합니다.
+   시사점 요약/전략적 의미/시장 신호/피어 시사점/SK AX 관점처럼
+   노출 섹션을 여러 개로 쪼갠 듯한 반복 문장은 고칩니다.
+3. 시사점이 요약 반복이면 고칩니다. 현재 사실, 피어 프로필 접점,
    최근 peer/sector context 접점이 보여야 합니다.
    profile_context 나 recent context 가 없거나 현재 사건과 맞는 접점이 없으면
    프로필 기반 결론처럼 쓰지 말고 confidence/evidence_label 을 낮춥니다.
@@ -438,25 +465,29 @@ REVIEW_USER_PROMPT_TEMPLATE = """\
    보여야 합니다. 이 연결이 없으면 요약 반복으로 보고 고칩니다.
    "영역 확장", "긍정적 영향"처럼 방향만 말하는 문장은 현재 사건에서 확인된
    대상 시스템, 인프라 구성, 운영 구조, 추진 방식, 비교 기준으로 구체화합니다.
-3. 피어가 계약 상대방/고객 슬롯이면 피어가 제공·수행·지원·운영했다고 쓰지 않습니다.
+4. 피어가 계약 상대방/고객 슬롯이면 피어가 제공·수행·지원·운영했다고 쓰지 않습니다.
    계약 상대방으로 확인된 사업 범위, 계약 기간, 대상 시스템, 프로필 사업영역 접점으로 낮춥니다.
-4. peer_meaning 은 2문장입니다. 현재 사실과 피어 프로필 접점이 어떤 유사 사업 비교 기준을
+5. peer_meaning 은 2문장입니다. 현재 사실과 피어 프로필 접점이 어떤 유사 사업 비교 기준을
    보여주는지까지 설명해야 합니다.
-5. 대응방향은 현재 피어/시장 신호, SK AX 프로필 또는 business_line 후보,
+6. 대응방향은 현재 피어/시장 신호, SK AX 프로필 또는 business_line 후보,
    SK AX가 바꿀 제안서/PoC/레퍼런스/운영 모델 구조가 모두 연결되어야 합니다.
    SK AX 프로필과 연결되지 않은 대응방향은 수정하거나 invalid 로 낮춥니다.
-6. recommended_actions 는 현재 상태, 변경 이유, 변경 내용, 기대효과를 포함해야 합니다.
+   현재 사건이 금융/인프라/공공/제조 등 특정 고객군·대상 업무와 직접 관련되지 않으면
+   SK AX 프로필의 해당 사업영역명을 문장에 끌어오지 않습니다.
+7. recommended_actions 는 현재 상태, 변경 이유, 변경 내용, 기대효과를 포함해야 합니다.
    "제안 산출물"이라고 쓰지 말고, 어떤 문서·표·계획·검증 방식인지 적습니다.
-7. 기술명+솔루션 표현은 IntegratedIssue에 해당 기술명이 직접 있을 때만 씁니다.
+8. 기술명+솔루션 표현은 IntegratedIssue에 해당 기술명이 직접 있을 때만 씁니다.
    business_line 후보만 보고 "클라우드 및 AI 솔루션"처럼 솔루션명을 만들지 않습니다.
-8. 성공 사례, 구축 경험, 운영 역량은 ProfileContext에 실제 근거가 있을 때만 씁니다.
+9. 성공 사례, 구축 경험, 운영 역량은 ProfileContext에 실제 근거가 있을 때만 씁니다.
    근거가 없으면 레퍼런스 자료, 비교표, 운영 전환 기준처럼 산출물 표현으로 낮춥니다.
-9. 시장 범위와 표현 강도는 근거 범위를 넘지 않습니다.
+10. 시장 범위와 표현 강도는 근거 범위를 넘지 않습니다.
    글로벌/해외, 공공+민간 양쪽, 전 산업, 사업영역 확장, 입지 강화,
    긍정적 영향 같은 표현은 IntegratedIssue 또는 관련 프로필에 그 범위를
    뒷받침하는 근거가 있을 때만 씁니다. 근거가 약하면 관찰 신호,
    연결 사례, 검증 계기, 레퍼런스 가능성으로 낮춥니다.
-10. 근거 없는 우위/선점/점유율/경쟁 심화/성과 예측은 제거합니다.
+11. 근거 없는 우위/선점/점유율/경쟁 심화/성과 예측은 제거합니다.
+12. 같은 의미가 analysis_summary, strategic_meaning, market_signal, peer_meaning,
+    capability_change 에 반복되면 하나의 시사점 논리로 압축합니다.
 
 ## 출력
 {{
@@ -495,18 +526,31 @@ REPAIR_USER_PROMPT_TEMPLATE = """\
 
 ## repair 기준
 1. 없는 수치, 없는 관계, 근거 없는 역할 단정을 제거합니다.
-2. 피어가 계약 상대방/고객 슬롯이면 제공·수행·지원·운영 같은 공급자 행동을 제거하고,
+2. analysis 와 peer_implication 은 같은 "시사점" 묶음, skax_implication 은
+   "SK AX 대응 방향" 묶음입니다. 필드별 제목을 여러 개 붙인 듯한 반복 문장은 줄이고,
+   두 묶음의 논리만 남깁니다.
+3. 피어가 계약 상대방/고객 슬롯이면 제공·수행·지원·운영 같은 공급자 행동을 제거하고,
    계약 상대방으로 확인된 사업 범위, 기간, 대상 시스템, 프로필 사업영역 접점으로 고칩니다.
-3. 공급사 매출 비율은 계약 규모 참고 근거로만 쓰고 피어사의 성과로 쓰지 않습니다.
-4. 시사점은 현재 사건과 피어 프로필 접점으로 고칩니다. 접점이 없으면 사건 기반 해석으로 낮춥니다.
+4. 공급사 매출 비율은 계약 규모 참고 근거로만 쓰고 피어사의 성과로 쓰지 않습니다.
+5. 시사점은 현재 사건과 피어 프로필 접점으로 고칩니다. 접점이 없으면 사건 기반 해석으로 낮춥니다.
    ProfileContext 에 없는 피어 사업영역/역량명은 제거합니다.
-5. SK AX 대응은 skax_profile/business_line 후보와 연결합니다.
-6. recommended_actions 는 현재 상태, 변경 이유, 변경 내용, 기대효과가 보이게 고칩니다.
+6. SK AX 대응은 skax_profile/business_line 후보와 연결합니다.
+   단, 현재 사건과 직접 맞지 않는 SK AX 사업영역명은 문장에 쓰지 않습니다.
+7. recommended_actions 는 현재 상태, 변경 이유, 변경 내용, 기대효과가 보이게 고칩니다.
    "제안 산출물"이라고 쓰지 말고, 제안서의 전환 범위표, 업무 영향도 정리,
    운영 전환 계획, PoC 검증표, 레퍼런스 비교표처럼 실제 바뀌는 문서·표·계획·검증 방식을 씁니다.
-7. 기술명+솔루션 표현은 IntegratedIssue에 해당 기술명이 직접 있을 때만 씁니다.
+8. 기술명+솔루션 표현은 IntegratedIssue에 해당 기술명이 직접 있을 때만 씁니다.
    business_line 후보만으로 "클라우드 및 AI 솔루션" 같은 표현을 만들지 않습니다.
-8. 성공 사례, 구축 경험, 운영 역량은 ProfileContext에 실제 사례 근거가 있을 때만 씁니다.
+9. 성공 사례, 구축 경험, 운영 역량은 ProfileContext에 실제 사례 근거가 있을 때만 씁니다.
+10. 같은 의미가 여러 필드에 반복되면 analysis_summary 는 시사점 대표 문장,
+    strategic_meaning/market_signal/peer_meaning/capability_change 는 서로 다른 근거·비교 기준,
+    skax_implication 은 대응 방향으로 정리합니다.
+11. 검증 실패 사유에 산업/도메인 용어 위반이 있으면 해당 단어를 제거합니다.
+    예: 현재 사건 근거에 인프라가 없으면 "인프라 구성", "대규모 인프라 사업",
+    "금융 인프라 혁신"을 쓰지 말고 "전사 적용 범위", "업무 적용 범위",
+    "운영 책임", "보안·권한 검증 기준"으로 낮춥니다.
+12. 반복 위반이 있으면 analysis_summary/strategic_meaning/market_signal/peer_meaning/
+    capability_change 전체를 합쳐 2~3개의 서로 다른 시사점으로만 정리합니다.
 
 ## 출력
 StrategicInsightAgent 최종 schema 그대로 JSON 으로 출력합니다.
@@ -2825,6 +2869,24 @@ def _quality_gate_violations(
         )
         if unsupported_profile_violation:
             violations.append(f"{label}: {unsupported_profile_violation}")
+        unsupported_skax_term_violation = _unsupported_skax_profile_term_violation(
+            value_text,
+            label=label,
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+        )
+        if unsupported_skax_term_violation:
+            violations.append(f"{label}: {unsupported_skax_term_violation}")
+        unsupported_domain_violation = _unsupported_domain_term_violation(
+            value_text,
+            label=label,
+            integrated_issue=integrated_issue,
+        )
+        if unsupported_domain_violation:
+            violations.append(f"{label}: {unsupported_domain_violation}")
+    repetition_violation = _two_section_repetition_violation(result)
+    if repetition_violation:
+        violations.append(repetition_violation)
     return list(dict.fromkeys(violations))
 
 
@@ -2852,6 +2914,138 @@ def _quality_checked_texts(result: dict[str, Any]) -> list[tuple[str, str]]:
         for index, value in enumerate(_string_list(implication.get(field), max_items=3), 1):
             items.append((f"implication.{field}[{index}]", value))
     return [(label, str(value or "").strip()) for label, value in items if str(value or "").strip()]
+
+
+def _unsupported_skax_profile_term_violation(
+    text: str,
+    *,
+    label: str,
+    integrated_issue: dict[str, Any],
+    profile_context: dict[str, Any],
+) -> str:
+    if not label.startswith("skax_implication."):
+        return ""
+    if _is_follow_up_or_watch_field(label):
+        return ""
+    issue_tokens = _issue_relevance_tokens(integrated_issue)
+    output_tokens = _content_tokens(text)
+    skax_terms = _concrete_profile_terms(
+        profile_context,
+        integrated_issue=integrated_issue,
+        scope="skax",
+    )
+    unsupported = sorted((output_tokens & skax_terms) - issue_tokens)
+    if not unsupported:
+        return ""
+    return (
+        "현재 사건 근거와 직접 맞지 않는 SK AX 프로필 용어를 사용했습니다: "
+        f"{', '.join(unsupported[:3])}. 대응 방향은 현재 사건의 적용 범위/대상 업무/"
+        "검증 기준으로 낮춰야 합니다."
+    )
+
+
+def _unsupported_domain_term_violation(
+    text: str,
+    *,
+    label: str,
+    integrated_issue: dict[str, Any],
+) -> str:
+    if not label.startswith("skax_implication."):
+        return ""
+    if _is_follow_up_or_watch_field(label):
+        return ""
+    domain_terms = {
+        "금융",
+        "제조",
+        "공공",
+        "물류",
+        "유통",
+        "통신",
+        "의료",
+        "헬스케어",
+        "인프라",
+    }
+    evidence_tokens = _content_tokens(_integrated_grounding_text(integrated_issue))
+    output_tokens = _content_tokens(text)
+    unsupported = sorted((output_tokens & domain_terms) - evidence_tokens)
+    if not unsupported:
+        return ""
+    return (
+        "현재 사건 근거에 없는 산업/도메인 용어를 SK AX 대응 방향에 사용했습니다: "
+        f"{', '.join(unsupported[:3])}. 현재 사건의 대상 업무/적용 범위/"
+        "검증 기준으로 낮춰야 합니다."
+    )
+
+
+def _two_section_repetition_violation(result: dict[str, Any]) -> str:
+    analysis = result.get("analysis") or {}
+    implication = result.get("implication") or {}
+    peer = implication.get("peer_implication") or {}
+    insight_texts = [
+        str(analysis.get("analysis_summary") or ""),
+        *[str(item or "") for item in _string_list(analysis.get("strategic_meaning"), max_items=3)],
+        str(analysis.get("market_signal") or ""),
+        str(peer.get("peer_meaning") or ""),
+        str(peer.get("capability_change") or ""),
+    ]
+    normalized: list[set[str]] = []
+    labels: list[str] = []
+    for index, insight_text in enumerate(insight_texts):
+        tokens = _high_signal_tokens_for_repetition(insight_text)
+        if len(tokens) < 4:
+            continue
+        normalized.append(tokens)
+        labels.append(f"시사점 필드 {index + 1}")
+    repeated_pairs: list[tuple[str, str]] = []
+    for left_index, left_tokens in enumerate(normalized):
+        for right_index in range(left_index + 1, len(normalized)):
+            right_tokens = normalized[right_index]
+            overlap = len(left_tokens & right_tokens)
+            smaller = max(1, min(len(left_tokens), len(right_tokens)))
+            if overlap / smaller >= 0.75:
+                repeated_pairs.append((labels[left_index], labels[right_index]))
+    if len(repeated_pairs) >= 2:
+        first, second = repeated_pairs[0]
+        return (
+            f"{first}와 {second} 등 여러 시사점 필드가 같은 의미를 반복합니다. "
+            "analysis 와 peer_implication 은 별도 노출 섹션이 아니라 하나의 "
+            "시사점 묶음으로 압축해야 합니다."
+        )
+    direction_terms = ("가속화", "확장", "확대")
+    repeated_direction_count = sum(
+        1 for text in insight_texts if any(term in text for term in direction_terms)
+    )
+    if repeated_direction_count >= 3:
+        return (
+            "시사점 필드 여러 곳에서 가속화/확장/확대 같은 방향성 표현을 반복합니다. "
+            "카드 요약을 반복하지 말고 적용 범위, 대상 업무, 검증 기준으로 나눠 써야 합니다."
+        )
+    return ""
+
+
+def _high_signal_tokens_for_repetition(text: str) -> set[str]:
+    generic = {
+        "이번",
+        "계약",
+        "통해",
+        "기반",
+        "계획",
+        "추진",
+        "제공",
+        "사업",
+        "시장",
+        "고객",
+        "외부",
+        "그룹",
+        "계열사",
+        "전반",
+        "혁신",
+        "전환",
+        "기반으로",
+        "있습니다",
+        "합니다",
+    }
+    return {token for token in _content_tokens(text) if token not in generic and len(token) >= 3}
 
 
 def _has_unsupported_pattern(text: str, pattern: str, *, evidence_text: str) -> bool:
@@ -3532,9 +3726,19 @@ def _concrete_profile_terms(
 ) -> set[str]:
     generic_terms = {
         "ai",
+        "AI",
         "ax",
+        "AX",
+        "ax는",
+        "AX는",
         "id",
         "name",
+        "있습니다",
+        "합니다",
+        "됩니다",
+        "위해",
+        "통해",
+        "따라서",
         "사업",
         "시장",
         "서비스",

@@ -1659,6 +1659,8 @@ def test_strategic_insight_agent_generates_from_analysis_package():
     assert "## StrategicEvidencePack" in first_user_prompt
     assert "## ProfileContext" in first_user_prompt
     assert "fact_basis" in first_user_prompt
+    assert "시사점" in first_user_prompt
+    assert "SK AX 대응 방향" in first_user_prompt
 
 
 def test_strategic_insight_agent_generates_from_integrated_issue_id(monkeypatch):
