@@ -139,6 +139,71 @@ async def test_competitor_compare_does_not_route_to_mixer(monkeypatch: pytest.Mo
     assert response["handoff"] is None
 
 
+@pytest.mark.asyncio
+async def test_market_trend_request_includes_selected_peer_context(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_llm = _FakeLLM()
+    agent = ChatOrchestratorAgent(llm=fake_llm)
+
+    monkeypatch.setattr(
+        agent,
+        "_retrieve",
+        lambda _request: [
+            RetrievalCandidate(
+                "card_news",
+                "CN-LG",
+                "LG CNS 클라우드 전환 수주",
+                "LG CNS는 금융권 클라우드 전환과 AX 운영 요구를 함께 제시했습니다.",
+                0.9,
+                {"peer_id": "lg_cns"},
+            ),
+            RetrievalCandidate(
+                "card_news",
+                "CN-SDS",
+                "삼성SDS 생성형 AI 플랫폼 확산",
+                "삼성SDS는 생성형 AI 플랫폼 적용 범위를 확대하고 있습니다.",
+                0.87,
+                {"peer_id": "samsung_sds"},
+            ),
+            RetrievalCandidate(
+                "card_news",
+                "CN-AUTO",
+                "현대오토에버 제조 AX 고도화",
+                "현대오토에버는 제조 운영 데이터와 AX 적용을 연결하고 있습니다.",
+                0.84,
+                {"peer_id": "hyundai_autoever"},
+            ),
+            RetrievalCandidate(
+                "card_news",
+                "CN-POSCO",
+                "포스코DX 스마트팩토리 확대",
+                "포스코DX는 스마트팩토리와 산업 자동화 축을 강화하고 있습니다.",
+                0.81,
+                {"peer_id": "posco_dx"},
+            ),
+        ],
+    )
+
+    response = await agent.answer(
+        ChatTurnRequest(
+            message="전체적인 시장 동향을 peer사 기준으로 구체적으로 설명해줘",
+            current_page=ChatPageContext(route="/dashboard"),
+        )
+    )
+
+    assert response["intent"] == "market_trend"
+    assert fake_llm.prompts
+    prompt = fake_llm.prompts[0]
+    assert "intent가 market_trend이면" in prompt
+    assert "삼성SDS" in prompt
+    assert "LG CNS" in prompt
+    assert "현대오토에버" in prompt
+    assert "포스코DX" in prompt
+    assert "CN-LG" in prompt
+    assert "report_draft" not in response
+
+
 def test_visible_id_aliases_are_supported():
     request = ChatTurnRequest(
         message="현재 화면 요약해줘",

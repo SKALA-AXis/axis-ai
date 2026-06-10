@@ -26,37 +26,40 @@ class _FakeLLM:
         return _FakeResponse(
             json.dumps(
                 {
-                    "headline": "금융 AX 수주 신호가 운영 책임 기준을 앞당깁니다.",
+                    "headline": "엔터프라이즈 LLM 도입 신호가 운영 책임 기준을 앞당깁니다.",
                     "executive_summary": (
-                        "오늘 통합 이슈는 금융 AX와 운영형 AI가 같은 판단 축으로 묶이는 "
+                        "오늘 통합 이슈는 엔터프라이즈 LLM과 운영형 AI가 같은 판단 축으로 묶이는 "
                         "변화를 보여줍니다."
                     ),
                     "executive_implication": (
-                        "SK AX는 금융 고객 제안서에서 AI 기능보다 운영 책임, 감사 대응, "
+                        "SK AX는 고객 대응 패키지에서 AI 기능보다 운영 책임, 감사 대응, "
                         "PoC 검증 지표를 먼저 보여줘야 합니다."
                     ),
                     "change_summary": [
                         {"label": "오늘 감지된 변화", "value": "3건"},
                         {"label": "비교 기준", "value": "최근 60일"},
-                        {"label": "핵심 축", "value": "금융 AX"},
+                        {"label": "핵심 축", "value": "엔터프라이즈 LLM"},
                     ],
                     "signals": [
                         {
-                            "id": "finance-ax",
+                            "id": "enterprise-llm",
                             "label": "ignored",
-                            "value": "금융 AX가 운영 책임 기준으로 이동",
+                            "value": "엔터프라이즈 LLM이 운영 책임 기준으로 이동",
                             "reasoning": [
-                                {"stage": "관찰", "detail": "LG CNS 금융 AX 이슈가 확인됐습니다."},
+                                {
+                                    "stage": "관찰",
+                                    "detail": "LG CNS 엔터프라이즈 LLM 이슈가 확인됐습니다.",
+                                },
                                 {
                                     "stage": "비교",
                                     "detail": "과거보다 보안·운영 책임 언급이 앞섭니다.",
                                 },
-                                {"stage": "판단", "detail": "제안서의 평가 항목을 바꿔야 합니다."},
+                                {"stage": "판단", "detail": "고객 대응 평가 항목을 바꿔야 합니다."},
                             ],
                             "evidence": {
-                                "grounds": ["LG CNS 금융 AX 수주 이슈"],
-                                "changes": ["보안 책임이 제안 비교 항목으로 올라왔습니다."],
-                                "related_keywords": ["금융 AX", "운영 책임"],
+                                "grounds": ["LG CNS 엔터프라이즈 LLM 도입 이슈"],
+                                "changes": ["보안 책임이 고객 대응 비교 항목으로 올라왔습니다."],
+                                "related_keywords": ["엔터프라이즈 LLM", "운영 책임"],
                                 "source_ids": ["11111111-1111-1111-1111-111111111111"],
                             },
                         },
@@ -95,7 +98,8 @@ class _FakeLLM:
                     "response_direction": [
                         {
                             "action": (
-                                "금융 AX 제안서 첫 3장에 운영 책임과 감사 대응 범위를 분리합니다."
+                                "엔터프라이즈 LLM 고객 대응 체크리스트에 운영 책임과 감사 대응 "
+                                "범위를 분리합니다."
                             ),
                             "decision_owner": "사업전략",
                             "time_horizon": "이번 주",
@@ -106,7 +110,7 @@ class _FakeLLM:
                     "sources": [
                         {
                             "id": "CN-1",
-                            "title": "LG CNS 금융 AX 수주",
+                            "title": "LG CNS 엔터프라이즈 LLM 도입",
                             "source_name": "card_news",
                             "publisher": "LG CNS",
                             "url": "https://example.com/lg",
@@ -131,9 +135,9 @@ def _patch_context(monkeypatch, fake_llm: _FakeLLM, saved: list[dict[str, Any]])
                 "main_company": "lg_cns",
                 "event_type": "contract",
                 "sectors": ["ax", "security"],
-                "headline": "LG CNS 금융 AX 수주",
-                "one_line_summary": "금융 고객의 운영 자동화와 감사 대응 요구가 함께 확인됐습니다.",
-                "content_summary": "금융 AX 수주와 보안 운영 책임이 연결됩니다.",
+                "headline": "LG CNS 엔터프라이즈 LLM 도입",
+                "one_line_summary": "고객의 운영 자동화와 감사 대응 요구가 함께 확인됐습니다.",
+                "content_summary": "엔터프라이즈 LLM 도입과 보안 운영 책임이 연결됩니다.",
                 "source_ids": [1],
                 "sources": [
                     {
@@ -155,8 +159,8 @@ def _patch_context(monkeypatch, fake_llm: _FakeLLM, saved: list[dict[str, Any]])
                 "id": "CN-1",
                 "integrated_issue_id": issue_ids[0],
                 "peer_id": "lg_cns",
-                "title": "LG CNS 금융 AX 수주",
-                "summary_lines": ["금융 AX", "보안 책임", "운영 KPI"],
+                "title": "LG CNS 엔터프라이즈 LLM 도입",
+                "summary_lines": ["엔터프라이즈 LLM", "보안 책임", "운영 KPI"],
                 "sources": [{"id": "raw-1", "title": "원문", "source_name": "AXIS News"}],
             }
         ],
@@ -165,7 +169,7 @@ def _patch_context(monkeypatch, fake_llm: _FakeLLM, saved: list[dict[str, Any]])
     monkeypatch.setattr(
         today_module,
         "_fetch_prior_today_reports",
-        lambda **kwargs: [{"report_date": "2026-06-04", "headline": "금융 AX 관찰"}],
+        lambda **kwargs: [{"report_date": "2026-06-04", "headline": "엔터프라이즈 LLM 관찰"}],
     )
     monkeypatch.setattr(
         today_module,
@@ -175,12 +179,14 @@ def _patch_context(monkeypatch, fake_llm: _FakeLLM, saved: list[dict[str, Any]])
     monkeypatch.setattr(
         today_module,
         "_load_profile_context",
-        lambda **kwargs: {"peer_profiles": {"lg_cns": {"business_areas": ["금융 AX"]}}},
+        lambda **kwargs: {"peer_profiles": {"lg_cns": {"business_areas": ["엔터프라이즈 LLM"]}}},
     )
     monkeypatch.setattr(
         today_module,
         "_load_skax_context",
-        lambda **kwargs: {"ax": {"summary": "공공/금융 AX 사업 기회", "documents": []}},
+        lambda **kwargs: {
+            "ax": {"summary": "엔터프라이즈 LLM 운영·보안 대응 기회", "documents": []}
+        },
     )
     monkeypatch.setattr(today_module, "_get_llm", lambda: fake_llm)
     monkeypatch.setattr(
@@ -201,8 +207,8 @@ def test_today_insight_agent_generates_ui_ready_executive_payload(monkeypatch) -
                 "id": "CN-1",
                 "integrated_issue_id": issue_ids[0],
                 "peer_id": "lg_cns",
-                "title": "LG CNS 금융 AX 수주",
-                "summary_lines": ["금융 AX", "보안 책임", "운영 KPI"],
+                "title": "LG CNS 엔터프라이즈 LLM 도입",
+                "summary_lines": ["엔터프라이즈 LLM", "보안 책임", "운영 KPI"],
                 "sources": [{"id": "raw-1", "title": "원문", "source_name": "AXIS News"}],
             }
         ]
@@ -225,10 +231,18 @@ def test_today_insight_agent_generates_ui_ready_executive_payload(monkeypatch) -
         "관찰 포인트",
         "다음 판단",
     ]
-    assert response.response_direction[0].action.startswith("금융 AX 제안서")
+    assert response.response_direction[0].action.startswith("엔터프라이즈 LLM 고객 대응")
     assert response.sources[0].id == "CN-1"
     assert response.source_integrated_issue_ids == ["11111111-1111-1111-1111-111111111111"]
     assert response.source_card_ids == ["CN-1"]
+    assert response.insight_sections[0].evidence.grounds
+    assert response.insight_sections[0].response_direction
+    assert response.source_trace[0].source_card_id == "CN-1"
+    assert response.memory_document is not None
+    assert response.memory_document.update_window["window_days"] == 60
+    assert response.memory_document.observed_facts
+    assert response.memory_document.important_memory
+    assert response.memory_document.next_analysis_hints
     assert response.provenance["prompt_version"] == "today-insight-v1.3-signals-focus"
     assert saved and saved[0]["headline"] == response.headline
     assert card_lookup_args[0]["window_days"] == 60
@@ -241,7 +255,7 @@ def test_today_insight_agent_generates_ui_ready_executive_payload(monkeypatch) -
         "structural_only",
         "sparse",
     }
-    assert "공공/금융 AX 사업 기회" in fake_llm.prompts[0]
+    assert "엔터프라이즈 LLM 운영·보안 대응 기회" in fake_llm.prompts[0]
 
 
 def test_today_insight_agent_returns_cached_payload_without_regeneration(monkeypatch) -> None:
@@ -300,6 +314,47 @@ def test_today_insight_agent_cache_only_does_not_generate_when_cache_missing(mon
     assert result["provenance"]["mode"] == "cache_only"
     assert not fake_llm.prompts
     assert not saved
+
+
+def test_today_insight_agent_cache_only_returns_latest_saved_before_anchor(monkeypatch) -> None:
+    cached_payload = {
+        "report_date": "2026-06-09",
+        "generated_at": "2026-06-09T23:10:00+09:00",
+        "headline": "전날 저장된 Today's Insight",
+        "signals": [{"id": "s1", "label": "주요 신호", "value": "저장 리포트"}],
+        "provenance": {
+            "cache_lookup": "latest_saved_on_or_before_anchor",
+            "served_anchor_date": "2026-06-10",
+            "cached_report_date": "2026-06-09",
+            "latest_fallback": True,
+        },
+    }
+    fake_llm = _FakeLLM()
+    monkeypatch.setattr(
+        today_module,
+        "_load_latest_report_record",
+        lambda anchor_date: {
+            "payload": cached_payload,
+            "created_at": datetime(2026, 6, 9, 8, 10, tzinfo=UTC),
+            "report_date": "2026-06-09",
+        },
+    )
+    monkeypatch.setattr(today_module, "_get_llm", lambda: fake_llm)
+
+    result = asyncio.run(
+        TodayInsightAgent().generate(
+            TodayInsightGenerateRequest(
+                anchor_date=date(2026, 6, 10),
+                cache_only=True,
+                save=True,
+            )
+        )
+    )
+
+    assert result["headline"] == "전날 저장된 Today's Insight"
+    assert result["report_date"] == "2026-06-09"
+    assert result["provenance"]["latest_fallback"] is True
+    assert not fake_llm.prompts
 
 
 def test_today_insight_agent_returns_fallback_when_no_source_data(monkeypatch) -> None:

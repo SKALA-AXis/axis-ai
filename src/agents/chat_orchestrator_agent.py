@@ -33,13 +33,15 @@ from src.observability.langfuse_client import (
 
 log = logging.getLogger(__name__)
 
-_PROMPT_VERSION = "chat-orchestrator-v2-global-fast-guarded"
+_PROMPT_VERSION = "chat-orchestrator-v2-peer-market-detail"
 _RAG_PREFETCH_K = int(os.getenv("CHAT_RAG_PREFETCH_K", "24"))
 _RAG_VECTOR_K = int(os.getenv("CHAT_RAG_VECTOR_K", "12"))
 _RAG_RERANK_K = int(os.getenv("CHAT_RAG_RERANK_K", "12"))
 _RAG_FINAL_K = int(os.getenv("CHAT_RAG_FINAL_K", "5"))
 _RECENT_NEWS_DAYS = int(os.getenv("CHAT_RECENT_NEWS_DAYS", "7"))
 _RECENT_NEWS_LIMIT = int(os.getenv("CHAT_RECENT_NEWS_LIMIT", "6"))
+_MARKET_TREND_DAYS = int(os.getenv("CHAT_MARKET_TREND_DAYS", "30"))
+_MARKET_TREND_LIMIT = int(os.getenv("CHAT_MARKET_TREND_LIMIT", "8"))
 _DEFAULT_LLM_MODEL = "gpt-4o-mini"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -127,6 +129,7 @@ _PEER_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("amazon", "Amazon", "amazon"),
     ("meta", "Meta", "meta"),
 )
+_SELECTED_PEER_IDS = ("samsung_sds", "lg_cns", "hyundai_autoever", "posco_dx")
 
 _VISIBLE_ID_ALIASES = {
     "card_ids": (
@@ -179,7 +182,7 @@ def _get_llm() -> Any:
         _llm = ChatOpenAI(
             model=_chat_llm_model(),
             temperature=0.12,
-            max_completion_tokens=700,
+            max_completion_tokens=1100,
             model_kwargs={"response_format": {"type": "json_object"}},
         )
     return _llm
@@ -425,6 +428,14 @@ class ChatOrchestratorAgent:
                 limit=_RECENT_NEWS_LIMIT,
             )
 
+        market_trend_candidates = (
+            self._recent_peer_market_trend_search(
+                days=_MARKET_TREND_DAYS,
+                limit=_MARKET_TREND_LIMIT,
+            )
+            if _is_market_trend_request(request.message)
+            else []
+        )
         lexical = [
             *self._lexical_card_search(request.message, limit=8),
             *self._lexical_integrated_issue_search(request.message, limit=5),
@@ -435,9 +446,12 @@ class ChatOrchestratorAgent:
             return _dedupe_candidates(lexical)[:_RAG_FINAL_K]
 
         vector = self._vector_search(request.message, top_k=_RAG_VECTOR_K)
-        candidates = _dedupe_candidates([*lexical, *vector])
+        candidates = _dedupe_candidates([*market_trend_candidates, *lexical, *vector])
         candidates = sorted(candidates, key=lambda item: item.score, reverse=True)[:_RAG_RERANK_K]
-        return _rerank_candidates(request.message, candidates, top_k=_RAG_FINAL_K)
+        reranked = _rerank_candidates(request.message, candidates, top_k=_RAG_FINAL_K)
+        if market_trend_candidates:
+            return _dedupe_candidates([*market_trend_candidates, *reranked])[:_MARKET_TREND_LIMIT]
+        return reranked
 
     def _lookup_cards(self, card_ids: list[str], *, limit: int) -> list[RetrievalCandidate]:
         ids = [card_id for card_id in card_ids if card_id]
@@ -668,6 +682,70 @@ class ChatOrchestratorAgent:
             log.debug("peer lexical search skipped | error=%s", exc)
             return []
         return [_peer_row_to_candidate(row, score=0.5) for row in rows]
+
+    def _recent_peer_market_trend_search(
+        self, *, days: int, limit: int
+    ) -> list[RetrievalCandidate]:
+        try:
+            with SessionLocal() as db:
+                rows = (
+                    db.execute(
+                        text(
+                            """
+                        WITH ranked_cards AS (
+                            SELECT id,
+                                   title,
+                                   summary_lines,
+                                   event_type,
+                                   importance,
+                                   COALESCE(peer_company_id, company) AS peer_id,
+                                   created_at,
+                                   sources,
+                                   source_articles,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY COALESCE(peer_company_id, company)
+                                       ORDER BY created_at DESC
+                                   ) AS rn
+                              FROM card_news
+                             WHERE created_at >= NOW() - (:days * INTERVAL '1 day')
+                               AND COALESCE(peer_company_id, company) = ANY(
+                                   CAST(:peer_ids AS text[])
+                               )
+                        )
+                        SELECT id,
+                               title,
+                               summary_lines,
+                               event_type,
+                               importance,
+                               peer_id,
+                               created_at,
+                               sources,
+                               source_articles
+                          FROM ranked_cards
+                         WHERE rn <= 2
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """
+                        ),
+                        {
+                            "days": int(days),
+                            "limit": int(limit),
+                            "peer_ids": list(_SELECTED_PEER_IDS),
+                        },
+                    )
+                    .mappings()
+                    .all()
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("recent peer market trend search skipped | error=%s", exc)
+            return []
+        return [
+            _card_row_to_candidate(
+                row,
+                score=0.88 - min(index, 6) * 0.03,
+            )
+            for index, row in enumerate(rows)
+        ]
 
     def _recent_news_search(self, query: str, *, days: int, limit: int) -> list[RetrievalCandidate]:
         peer = _extract_peer(query)
@@ -957,6 +1035,8 @@ def _classify_intent(message: str, request: ChatTurnRequest) -> str:
         return "mixer_handoff"
     if _is_news_lookup_request(message):
         return "news_lookup"
+    if _is_market_trend_request(message):
+        return "market_trend"
     if re.search(r"핵심\s*신호|주요\s*신호|today'?s?\s*insight", compact) or (
         re.search(r"오늘|today", compact)
         and re.search(r"인사이트|동향|경쟁|카드|브리핑|보고서|리포트", compact)
@@ -1024,6 +1104,13 @@ def _is_news_lookup_request(message: str) -> bool:
     )
 
 
+def _is_market_trend_request(message: str) -> bool:
+    compact = message.lower()
+    has_market_scope = re.search(r"시장|업계|전체|전반|산업|경쟁사|peer|피어", compact)
+    has_trend_intent = re.search(r"동향|트렌드|흐름|변화|추세|판도", compact)
+    return bool(has_market_scope and has_trend_intent)
+
+
 def _is_direct_lookup_request(message: str) -> bool:
     compact = message.lower()
     if re.search(r"요약|분석|비교|왜|시사점|의미|전망|대응|정리", compact):
@@ -1037,7 +1124,8 @@ def _grounded_answer_prompt(
     intent: str,
     candidates: list[RetrievalCandidate],
 ) -> str:
-    source_payload = [candidate.to_source() for candidate in candidates[:_RAG_FINAL_K]]
+    source_limit = _MARKET_TREND_LIMIT if intent == "market_trend" else _RAG_FINAL_K
+    source_payload = [candidate.to_source() for candidate in candidates[:source_limit]]
     history_payload = [
         {"role": turn.role, "content": turn.content[:800]} for turn in request.history[-6:]
     ]
@@ -1060,13 +1148,19 @@ def _grounded_answer_prompt(
 - 후속 질문은 사용자가 AXIS 안에서 자연스럽게 이어갈 수 있는 버튼 문구로 씁니다.
 - intent가 report_lookup이면 답변과 함께 report_draft를 작성합니다.
 - report_draft는 보고서 제목과 2~4개 섹션으로 구성합니다.
+- intent가 market_trend이면 짧게 줄이지 말고 선정 peer사(삼성SDS, LG CNS,
+  현대오토에버, 포스코DX)의 sources를 회사별로 분리해 설명합니다.
+- market_trend 답변은 공통 변화, peer별 차이, SK AX 관점의 시사점,
+  확인해야 할 근거 공백을 구체적으로 포함합니다.
+- market_trend에서 특정 peer사의 근거가 sources에 없으면 "근거 부족"이라고
+  표시하고 추정으로 채우지 않습니다.
 
 입력 JSON:
 {json.dumps(payload, ensure_ascii=False, default=str)}
 
 출력은 JSON object 하나만 반환하세요.
 {{
-  "reply": "한국어 답변. 2~5문장 또는 짧은 bullet 중심",
+  "reply": "한국어 답변. 일반 질문은 2~5문장, market_trend는 더 길어도 되며 peer별 구체성을 우선",
   "answer_blocks": [
     {{"type": "summary", "title": "핵심 요약", "items": ["..."]}},
     {{"type": "evidence", "title": "근거", "items": ["source title 기반 근거"]}}
@@ -1734,7 +1828,7 @@ flowchart TD
   TodayLookup -->|missing| Retrieve[page CAG + DB/RAG retrieve]
   Intent -->|mixer_handoff| HandoffRetrieve[candidate card lookup]
   HandoffRetrieve --> HandoffResponse[/mixer handoff]
-  Intent -->|page_qa/compare/report_lookup| Retrieve
+  Intent -->|page_qa/compare/report_lookup/market_trend| Retrieve
   Retrieve --> Grounded[grounded answer composer]
   Grounded -->|sources| LLM[ChatOpenAI JSON answer]
   Grounded -->|no sources or LLM error| Template[deterministic fallback]

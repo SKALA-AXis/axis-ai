@@ -1021,10 +1021,18 @@ def format_evidence_change_lines(comparison_facts: dict[str, Any] | None) -> lis
         metric = str(item.get("metric") or "")
         if metric == "peer_activity_delta":
             peer_label = str(item.get("peer_label") or item.get("key") or "")
+            if peer_label.strip().lower() in {"meta", "other", "unknown", "-"}:
+                continue
             peer_delta = item.get("delta_vs_daily_avg")
             today_count = item.get("today_count")
             if peer_label and peer_delta is not None:
                 peer_delta_value = float(peer_delta)
+                try:
+                    today_count_value = float(today_count or 0)
+                except (TypeError, ValueError):
+                    today_count_value = 0.0
+                if today_count_value <= 0 or abs(peer_delta_value) < 0.05:
+                    continue
                 sign = "+" if peer_delta_value > 0 else ""
                 lines.append(
                     f"{peer_label} 카드/이슈 {today_count}건 "
@@ -1144,7 +1152,7 @@ _GENERIC_EXECUTIVE_MARKERS = (
 
 _GENERIC_SIGNAL_MARKERS = (
     "보도량·sector 비중 맥락 확인",
-    "제안서·PoC·운영모델에서 무엇을 바꿀지 오늘 결정",
+    "고객 대응·PoC·운영모델에서 무엇을 바꿀지 오늘 결정",
     "Peer 신호가",
     "AX 신호가 단건",
 )
@@ -1229,17 +1237,17 @@ def build_executive_implication_from_facts(comparison_facts: dict[str, Any] | No
     label = str(lead.get("label") or "")
     if label == "low_visibility_definite_event":
         return _clip(
-            f"SK AX는 '{title}'를 제안서 레퍼런스·수주 후속 맥락에서 먼저 대조해야 합니다.",
+            f"SK AX는 '{title}'를 고객 대응 레퍼런스·수주 후속 맥락에서 먼저 대조해야 합니다.",
             280,
         )
     if label == "high_salience_visible":
         return _clip(
             f"SK AX는 '{title}'를 범용 AX 메시지가 아니라 "
-            "고객 제안서의 운영 KPI·검증 지표 변경 여부로 확인해야 합니다.",
+            "고객 대응 패키지의 운영 KPI·검증 지표 변경 여부로 확인해야 합니다.",
             280,
         )
     return _clip(
-        f"SK AX는 '{title}'가 단건 뉴스인지 반복 패턴인지 구분한 뒤 제안 우선순위를 정해야 합니다.",
+        f"SK AX는 '{title}'가 단건 뉴스인지 반복 패턴인지 구분한 뒤 대응 우선순위를 정해야 합니다.",
         280,
     )
 
@@ -1286,11 +1294,11 @@ def build_next_judgment_signal_value(
 ) -> str:
     item = lead or _primary_lead(comparison_facts)
     if not item:
-        return "제안서·PoC·운영 KPI 중 무엇을 바꿀지 오늘 확정"
+        return "고객 대응·PoC·운영 KPI 중 무엇을 바꿀지 오늘 확정"
     title = _short_title(str(item.get("title") or ""), limit=40)
     if str(item.get("label") or "") == "low_visibility_definite_event":
-        return _clip(f"'{title}' 후속·제안서 반영 여부를 이번 주 안에 확정", 96)
-    return _clip(f"'{title}' 기준 제안 산출물·검증 지표 변경 여부 결정", 96)
+        return _clip(f"'{title}' 후속 대응 반영 여부를 이번 주 안에 확정", 96)
+    return _clip(f"'{title}' 기준 고객 대응 산출물·검증 지표 변경 여부 결정", 96)
 
 
 def polish_executive_output(

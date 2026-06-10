@@ -9,8 +9,10 @@ design: ``axis-ai/design/30-analysis/mixer-analysis.md``.
 
 핵심 entry point:
 
-    ``MixerAnalysisAgent().analyze(card_ids, ratios, user_context)`` — DB 카드 기반.
-    ``MixerAnalysisAgent().analyze_items(items, ratios, user_context)`` — 로컬 목업/테스트 기반.
+    ``MixerAnalysisAgent().analyze(card_ids, ratios, user_context, analysis_mode)``
+    — DB 카드 기반.
+    ``MixerAnalysisAgent().analyze_items(items, ratios, user_context, analysis_mode)``
+    — 로컬 목업/테스트 기반.
 
 프론트 입력은 card_id 이지만, Mixer 의 실제 분석 재료는 카드 표시용 3줄 요약이 아니라
 카드에 연결된 통합 결과, 분석 결과, 시사점 결과, 프로필 context 다.
@@ -118,6 +120,10 @@ def _get_llm() -> ChatOpenAI:
 
 def _dict_or_empty(value: object) -> dict:
     return value if isinstance(value, dict) else {}
+
+
+def _normalize_analysis_mode(value: object) -> str:
+    return "deep" if str(value or "").strip().lower() == "deep" else "quick"
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -520,6 +526,7 @@ class MixerAnalysisAgent:
         integrated_issue_ids: list[str] | None = None,
         ratios: dict | None = None,
         user_context: str | None = None,
+        analysis_mode: str = "quick",
         progress: "ProgressFn | None" = None,
     ) -> dict:
         """N 카드 선택 → 저장된 분석 payload 기반 6축 radar + cross-issue 분석.
@@ -529,6 +536,8 @@ class MixerAnalysisAgent:
             integrated_issue_ids: canonical integrated_issues.id 입력. card_ids보다 우선.
             ratios: peer / industry / keyword 가중치 (frontend slider 결과).
             user_context: 사용자 자유 입력.
+            analysis_mode: "quick" 은 메인 믹스 분석만 실행, "deep" 은 품질 보강과
+                mix-level ImplicationAgent 보강까지 실행.
 
         Returns:
             MixerAnalysisOutput dict — design §5 schema.
@@ -594,6 +603,7 @@ class MixerAnalysisAgent:
             analysis_units=analysis_units,
             ratios=ratios,
             user_context=user_context,
+            analysis_mode=analysis_mode,
             progress=progress,
         )
 
@@ -602,6 +612,7 @@ class MixerAnalysisAgent:
         items: list[dict],
         ratios: dict | None = None,
         user_context: str | None = None,
+        analysis_mode: str = "quick",
         progress: "ProgressFn | None" = None,
     ) -> dict:
         """로컬 목업/테스트용 linked result 묶음 → 믹스 인사이트 생성.
@@ -633,6 +644,7 @@ class MixerAnalysisAgent:
             analysis_units=analysis_units,
             ratios=ratios,
             user_context=user_context,
+            analysis_mode=analysis_mode,
             progress=progress,
         )
 
@@ -645,8 +657,10 @@ class MixerAnalysisAgent:
         analysis_units: list[AnalysisUnit],
         ratios: dict | None,
         user_context: str | None,
+        analysis_mode: str,
         progress: "ProgressFn | None" = None,
     ) -> dict:
+        normalized_mode = _normalize_analysis_mode(analysis_mode)
         # 6축 radar 미리 계산 — LLM input 으로 anchor 제공 (v2)
         radar = _compute_radar(cards)
         prompt = (
@@ -679,11 +693,12 @@ class MixerAnalysisAgent:
             )
 
         result = _parse_and_validate(content, cards, requested_card_ids)
-        result = _repair_mixer_result_quality(
-            result=result,
-            cards=cards,
-            requested_card_ids=requested_card_ids,
-        )
+        if normalized_mode == "deep":
+            result = _repair_mixer_result_quality(
+                result=result,
+                cards=cards,
+                requested_card_ids=requested_card_ids,
+            )
         source_issue_ids = source_integrated_issue_ids(analysis_units)
         quality_flags = quality_flags_for_units(analysis_units)
         if source_issue_ids:
@@ -698,24 +713,34 @@ class MixerAnalysisAgent:
                 2,
             )
         _emit_progress(progress, "synthesize")
-        mix_implication = _generate_mix_level_implication(result=result, cards=cards)
-        if mix_implication:
-            result["mix_implication"] = mix_implication
-            detail_actions = _recommended_actions_from_details(result)
-            actions = _recommended_actions_from_implication(mix_implication, result=result)
-            if not actions:
-                actions = _recommended_actions_from_basis(result)
-            if detail_actions:
-                actions = _dedupe_keep_order([*detail_actions, *actions])[:3]
+        if normalized_mode == "deep":
+            mix_implication = _generate_mix_level_implication(result=result, cards=cards)
+            if mix_implication:
+                result["mix_implication"] = mix_implication
+                detail_actions = _recommended_actions_from_details(result)
+                actions = _recommended_actions_from_implication(mix_implication, result=result)
+                if not actions:
+                    actions = _recommended_actions_from_basis(result)
+                if detail_actions:
+                    actions = _dedupe_keep_order([*detail_actions, *actions])[:3]
+                if actions:
+                    result["recommended_actions"] = actions
+                    result["sk_ax_implication"] = clip_implication(" ".join(actions))
+        else:
+            actions = _recommended_actions_from_details(result) or _recommended_actions_from_basis(
+                result
+            )
             if actions:
-                result["recommended_actions"] = actions
-                result["sk_ax_implication"] = clip_implication(" ".join(actions))
+                result["recommended_actions"] = actions[:3]
+                result["sk_ax_implication"] = clip_implication(" ".join(actions[:3]))
         result["radar_axes"] = radar  # 이미 위에서 계산된 값 재사용
         result["mix_id"] = _new_mix_id()
         result.setdefault("provenance", {}).update(
             {
                 "llm_model": _LLM_MODEL,
                 "prompt_version": _PROMPT_VERSION,
+                "analysis_mode": normalized_mode,
+                "analysis_quality": "fast" if normalized_mode == "quick" else "detailed",
                 "source_card_ids": [c["id"] for c in cards],
                 "requested_integrated_issue_ids": requested_integrated_issue_ids,
                 "source_integrated_issue_ids": source_issue_ids,
@@ -730,9 +755,18 @@ class MixerAnalysisAgent:
         # 추론 흐름(trail) / 단계별 CoT(steps) / 후속 질문 — repair 이후 최종 blocks 기반으로
         # 결정적 구성 (추가 LLM 호출 없음). card_ids / integrated_issue_ids 양 경로 모두 채워짐.
         _emit_progress(progress, "finalize")
+        result["analysis_depth"] = _build_analysis_depth(result, cards, normalized_mode)
+        result["deep_dive_sections"] = (
+            _build_deep_dive_sections(result, cards) if normalized_mode == "deep" else []
+        )
         result["reasoning_trail"] = _build_reasoning_trail(result, cards)
         result["reasoning_steps"] = _build_reasoning_steps(result, cards)
-        result["follow_up_questions"] = _build_follow_up_questions(result, cards)
+        result["follow_up_checks"] = _build_follow_up_checks(result, cards)
+        result["follow_up_questions"] = [
+            str(item.get("question"))
+            for item in _json_list(result["follow_up_checks"])
+            if isinstance(item, dict) and str(item.get("question") or "").strip()
+        ][:3]
         result["warning"] = _warning_for(result)
         return result
 
@@ -746,12 +780,54 @@ def _avg(items: list[float]) -> float:
     return sum(items) / len(items) if items else 0.0
 
 
+def _cards_for_event(cards: list[dict], event_types: set[str]) -> list[dict]:
+    return [card for card in cards if (card.get("event_type") or "") in event_types]
+
+
 def _score_for_event(cards: list[dict], event_types: set[str]) -> float:
-    return _avg([_card_score(c) for c in cards if (c.get("event_type") or "") in event_types])
+    return _avg([_card_score(c) for c in _cards_for_event(cards, event_types)])
+
+
+def _cards_for_sector(cards: list[dict], sectors: set[str]) -> list[dict]:
+    return [card for card in cards if _card_sector(card) in sectors]
 
 
 def _score_for_sector(cards: list[dict], sectors: set[str]) -> float:
-    return _avg([_card_score(c) for c in cards if _card_sector(c) in sectors])
+    return _avg([_card_score(c) for c in _cards_for_sector(cards, sectors)])
+
+
+def _radar_axis(
+    *,
+    axis: str,
+    score: float,
+    explanation: str,
+    calculation: str,
+    matched_cards: list[dict],
+    total_count: int,
+) -> dict:
+    rounded_score = round(score, 3)
+    return {
+        "axis": axis,
+        "score": rounded_score,
+        "explanation": explanation,
+        "calculation": calculation,
+        "meaning": _radar_score_meaning(rounded_score),
+        "support_count": len(matched_cards),
+        "total_count": total_count,
+        "matched_card_ids": [
+            str(card.get("id")) for card in matched_cards if str(card.get("id") or "").strip()
+        ],
+    }
+
+
+def _radar_score_meaning(score: float) -> str:
+    if score >= 0.7:
+        return "선택한 카드 묶음에서 강한 판단 신호로 볼 수 있습니다."
+    if score >= 0.35:
+        return "일부 카드가 해당 축을 지지하므로 보조 판단 신호로 봅니다."
+    if score > 0:
+        return "근거는 있으나 선택 묶음 전체를 대표할 정도는 아닙니다."
+    return "이번 선택 묶음에서는 이 축을 직접 지지하는 카드가 확인되지 않았습니다."
 
 
 def _card_score(card: dict) -> float:
@@ -785,37 +861,70 @@ def _peer_diversity_score(cards: list[dict]) -> float:
 
 
 def _compute_radar(cards: list[dict]) -> list[dict]:
-    axes: dict[str, tuple[float, str]] = {
-        "peer_strategic_shift": (
-            _score_for_event(cards, {"ma", "new_biz"}),
-            "전략 전환 성격 이벤트의 평균 exposure",
+    total_count = len(cards)
+    strategic_cards = _cards_for_event(cards, {"ma", "new_biz"})
+    tech_cards = _cards_for_sector(cards, {"ax", "ai_tech", "infra"})
+    partnership_cards = _cards_for_event(cards, {"partnership"})
+    regulation_cards = _cards_for_event(cards, {"regulation"})
+    talent_cards = _cards_for_event(cards, {"personnel"})
+    peer_cards = [card for card in cards if card.get("peer_id")]
+    axes = {
+        "peer_strategic_shift": _radar_axis(
+            axis="peer_strategic_shift",
+            score=_score_for_event(cards, {"ma", "new_biz"}),
+            explanation="M&A·신사업처럼 전략 전환 성격으로 분류된 카드의 exposure 평균입니다.",
+            calculation="event_type이 ma 또는 new_biz인 카드만 골라 exposure_score를 평균했습니다.",
+            matched_cards=strategic_cards,
+            total_count=total_count,
         ),
-        "tech_investment": (
-            _score_for_sector(cards, {"ax", "ai_tech", "infra"}),
-            "기술·플랫폼·인프라 성격 섹터의 평균 exposure",
+        "tech_investment": _radar_axis(
+            axis="tech_investment",
+            score=_score_for_sector(cards, {"ax", "ai_tech", "infra"}),
+            explanation=(
+                "AX·AI 기술·인프라 섹터 카드가 기술 투자 판단을 "
+                "얼마나 지지하는지 본 값입니다."
+            ),
+            calculation="sector가 ax, ai_tech, infra인 카드의 exposure_score를 평균했습니다.",
+            matched_cards=tech_cards,
+            total_count=total_count,
         ),
-        "market_position": (
-            _peer_diversity_score(cards),
-            "선택 카드의 peer 다양성",
+        "market_position": _radar_axis(
+            axis="market_position",
+            score=_peer_diversity_score(cards),
+            explanation=(
+                "선택 묶음이 특정 peer 한 곳의 소식인지, "
+                "여러 peer에 걸친 시장 신호인지 보는 값입니다."
+            ),
+            calculation="서로 다른 peer 수를 국내 주요 peer 4개 기준으로 나눠 정규화했습니다.",
+            matched_cards=peer_cards,
+            total_count=total_count,
         ),
-        "partnership_momentum": (
-            _score_for_event(cards, {"partnership"}),
-            "협력·제휴 성격 이벤트의 평균 exposure",
+        "partnership_momentum": _radar_axis(
+            axis="partnership_momentum",
+            score=_score_for_event(cards, {"partnership"}),
+            explanation="제휴·협력 이벤트가 선택 묶음의 핵심 동력인지 보는 값입니다.",
+            calculation="event_type이 partnership인 카드의 exposure_score를 평균했습니다.",
+            matched_cards=partnership_cards,
+            total_count=total_count,
         ),
-        "regulatory_risk": (
-            _score_for_event(cards, {"regulation"}),
-            "규제·정책 성격 이벤트의 평균 exposure",
+        "regulatory_risk": _radar_axis(
+            axis="regulatory_risk",
+            score=_score_for_event(cards, {"regulation"}),
+            explanation="규제·정책 이벤트가 의사결정 리스크로 작동하는지 보는 값입니다.",
+            calculation="event_type이 regulation인 카드의 exposure_score를 평균했습니다.",
+            matched_cards=regulation_cards,
+            total_count=total_count,
         ),
-        "talent_movement": (
-            _score_for_event(cards, {"personnel"}),
-            "조직·인력 변화 성격 이벤트의 평균 exposure",
+        "talent_movement": _radar_axis(
+            axis="talent_movement",
+            score=_score_for_event(cards, {"personnel"}),
+            explanation="조직·인력 변화가 선택 묶음의 실행 역량 신호인지 보는 값입니다.",
+            calculation="event_type이 personnel인 카드의 exposure_score를 평균했습니다.",
+            matched_cards=talent_cards,
+            total_count=total_count,
         ),
     }
-    result: list[dict] = []
-    for axis in _RADAR_AXIS_ORDER:
-        score, explanation = axes[axis]
-        result.append({"axis": axis, "score": round(score, 3), "explanation": explanation})
-    return result
+    return [axes[axis] for axis in _RADAR_AXIS_ORDER]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -1335,10 +1444,11 @@ def _fallback_action_details_from_result(result: dict) -> list[dict]:
         },
         {
             "action": clip_implication(
-                "SK AX는 경영진 리뷰 안건을 정보 공유가 아니라 자원 배분 의사결정으로 격상한다. "
+                "투자 규모, 수주 전환, 규제 일정, 운영 KPI 중 어떤 지표가 확인될 때 "
+                "자원 배분을 바꿀지 의사결정 기준을 먼저 고정한다. "
                 f"{_brief_action_basis(common.get('finding') or action_basis[2:3])}"
-                " 이 반복 신호와 연결된 투자 규모, 수주 전환, 규제 일정, 운영 KPI가 확인되면 "
-                "우선 고객군별 전담 인력, 파트너십 후보, 레퍼런스 확보 예산을 재배분한다."
+                " 이 반복 신호와 연결되는 지표가 확인되면 고객군별 전담 인력, "
+                "파트너십 후보, 레퍼런스 확보 예산의 우선순위를 조정한다."
             ),
             "why": clip_string(
                 common.get("rationale")
@@ -1684,9 +1794,19 @@ def _build_reasoning_steps(result: dict, cards: list[dict]) -> list[dict]:
 
 
 def _build_follow_up_questions(result: dict, cards: list[dict]) -> list[str]:
-    """믹스 결과 근거로 임원이 이어서 볼 질문을 결정적으로 생성."""
+    """Backward-compatible question list derived from structured follow-up checks."""
+    return [
+        str(item.get("question"))
+        for item in _build_follow_up_checks(result, cards)
+        if isinstance(item, dict) and str(item.get("question") or "").strip()
+    ][:3]
+
+
+def _build_follow_up_checks(result: dict, cards: list[dict]) -> list[dict]:
+    """다음 분석에서 확인해야 할 정보 공백을 목적·근거와 함께 생성."""
     comparison = _dict_or_empty(result.get("comparison_point"))
     hidden = _dict_or_empty(result.get("hidden_conclusion"))
+    common = _dict_or_empty(result.get("common_pattern"))
     peers = _dedupe_keep_order(
         [
             str(c.get("company") or c.get("peer_id") or "").strip()
@@ -1695,24 +1815,170 @@ def _build_follow_up_questions(result: dict, cards: list[dict]) -> list[str]:
         ]
     )
     peer_phrase = "와 ".join(peers[:3]) if peers else "선택한 Peer"
-    questions: list[str] = []
+    checks: list[dict] = []
     if str(hidden.get("finding") or "").strip():
-        questions.append(
-            f"‘{clip_string(str(hidden['finding']).strip(), 70)}’ 신호가 일시적 언급인지 "
-            "반복되는 시장 신호인지 확인하려면 어떤 후속 카드를 추적해야 하는가?"
+        checks.append(
+            {
+                "question": (
+                    f"‘{clip_string(str(hidden['finding']).strip(), 70)}’ 신호가 "
+                    "일회성 이벤트인지 반복 신호인지 확인할 후속 근거는 무엇인가?"
+                ),
+                "purpose": (
+                    "숨은 결론이 단일 카드 해석이 아니라 반복되는 시장 판단 기준인지 "
+                    "검증하기 위한 확인 포인트입니다."
+                ),
+                "evidence_refs": _json_list(hidden.get("evidence_card_ids")),
+            }
         )
     if str(comparison.get("finding") or "").strip():
-        questions.append(
-            f"{peer_phrase}의 서로 다른 접근 중 "
-            "SK AX의 우선 공략 고객군에 먼저 유효한 쪽은 어디인가?"
+        checks.append(
+            {
+                "question": (
+                    f"{peer_phrase}의 서로 다른 접근 중 어느 고객군·업무 맥락에 "
+                    "먼저 적용할 수 있는 차이인가?"
+                ),
+                "purpose": (
+                    "비교 포인트가 단순 회사별 차이가 아니라 고객군 선택이나 오퍼링 "
+                    "우선순위로 이어질 수 있는지 판단하기 위한 질문입니다."
+                ),
+                "evidence_refs": _json_list(comparison.get("evidence_card_ids")),
+            }
         )
     if _json_list(result.get("recommended_action_basis")) or _json_list(
         result.get("recommended_actions")
     ):
-        questions.append(
-            "제안된 대응방향을 실행하려면 어떤 자원·파트너십·책임 조직을 먼저 확보해야 하는가?"
+        checks.append(
+            {
+                "question": (
+                    "대응 방향을 실행 판단으로 바꾸려면 어떤 수치·고객·리스크 "
+                    "조건이 추가로 필요한가?"
+                ),
+                "purpose": (
+                    "권고가 선언으로 끝나지 않고 투자, 파트너십, 리스크 게이트 결정으로 "
+                    "이어지려면 부족한 근거를 분리해야 합니다."
+                ),
+                "evidence_refs": _dedupe_keep_order(
+                    [
+                        *_json_list(common.get("evidence_card_ids")),
+                        *_json_list(comparison.get("evidence_card_ids")),
+                        *_json_list(hidden.get("evidence_card_ids")),
+                    ]
+                ),
+            }
         )
-    return _dedupe_keep_order([q for q in questions if q.strip()])[:3]
+    seen: set[str] = set()
+    result_checks: list[dict] = []
+    for check in checks:
+        question = str(check.get("question") or "").strip()
+        if not question or question in seen:
+            continue
+        seen.add(question)
+        result_checks.append(check)
+    return result_checks[:3]
+
+
+def _build_analysis_depth(result: dict, cards: list[dict], analysis_mode: str) -> dict:
+    del result
+    card_count = len(cards)
+    if analysis_mode == "deep":
+        return {
+            "mode": "deep",
+            "label": "정확 분석",
+            "summary": (
+                f"선택 카드 {card_count}장을 1차 믹스 분석한 뒤 문장 품질 보강, "
+                "믹스 단위 시사점 보강, 단계별 근거 재구성을 추가로 수행했습니다."
+            ),
+            "included_steps": [
+                "LLM 1차 믹스 분석",
+                "공통 패턴·비교 포인트·숨은 결론 품질 보강",
+                "믹스 단위 ImplicationAgent 보강",
+                "근거 카드와 실행 조건 상세 정리",
+            ],
+            "omitted_steps": [],
+        }
+    return {
+        "mode": "quick",
+        "label": "빠른 실행",
+        "summary": (
+            f"선택 카드 {card_count}장의 핵심 연결만 빠르게 산출했습니다. "
+            "정확 분석보다 짧게 끝나도록 추가 품질 보강 호출은 생략합니다."
+        ),
+        "included_steps": ["LLM 1차 믹스 분석", "기본 근거 연결", "기본 대응 방향 정리"],
+        "omitted_steps": ["문장 품질 보강", "믹스 단위 ImplicationAgent 보강"],
+    }
+
+
+def _build_deep_dive_sections(result: dict, cards: list[dict]) -> list[dict]:
+    card_lookup = {str(card.get("id") or ""): card for card in cards}
+    sections: list[dict] = []
+
+    def evidence_refs(block: dict) -> list[str]:
+        refs = [str(item) for item in _json_list(block.get("evidence_card_ids")) if str(item)]
+        if refs:
+            return _dedupe_keep_order(refs)
+        return _dedupe_keep_order(
+            [
+                str(item.get("card_id") or "")
+                for item in _json_list(block.get("evidence"))
+                if isinstance(item, dict) and str(item.get("card_id") or "")
+            ]
+        )
+
+    def evidence_summary(refs: list[str]) -> str:
+        lines: list[str] = []
+        for ref in refs[:5]:
+            card = card_lookup.get(ref, {})
+            title = str(card.get("title") or ref).strip()
+            company = str(card.get("company") or card.get("peer_id") or "").strip()
+            prefix = f"{company}: " if company else ""
+            lines.append(f"{prefix}{title}")
+        return "\n".join(lines)
+
+    for key, title in (
+        ("common_pattern", "공통 패턴 상세 검증"),
+        ("comparison_point", "비교 포인트 상세 검증"),
+        ("hidden_conclusion", "숨은 결론 상세 검증"),
+    ):
+        block = _dict_or_empty(result.get(key))
+        finding = str(block.get("finding") or "").strip()
+        rationale = str(block.get("rationale") or "").strip()
+        refs = evidence_refs(block)
+        if not (finding or rationale or refs):
+            continue
+        sections.append(
+            {
+                "title": title,
+                "summary": finding,
+                "details": [
+                    {"label": "판단", "text": finding, "evidence_refs": refs},
+                    {"label": "검증 및 근거", "text": rationale, "evidence_refs": refs},
+                    {"label": "참조 카드", "text": evidence_summary(refs), "evidence_refs": refs},
+                ],
+            }
+        )
+
+    action_details = [
+        item for item in _json_list(result.get("action_details")) if isinstance(item, dict)
+    ]
+    detail_items: list[dict] = []
+    for item in action_details[:4]:
+        refs = [str(ref) for ref in _json_list(item.get("evidence_card_ids")) if str(ref)]
+        action = str(item.get("action") or "").strip()
+        why = str(item.get("why") or "").strip()
+        use_case = str(item.get("use_case") or "").strip()
+        text = "\n".join(part for part in (action, why, use_case) if part)
+        if text:
+            detail_items.append({"label": "실행 조건", "text": text, "evidence_refs": refs})
+    if detail_items:
+        sections.append(
+            {
+                "title": "대응 방향 상세",
+                "summary": "추천 액션을 실행 조건, 적용 맥락, 참조 근거 기준으로 분해했습니다.",
+                "details": detail_items,
+            }
+        )
+
+    return sections[:4]
 
 
 def _repair_mixer_result_quality(
@@ -2053,20 +2319,27 @@ def _get_langfuse_trace_id() -> str | None:
 def _warning_for(data: dict) -> str | None:
     warnings: list[str] = []
     confidence = float(data.get("confidence") or 0.0)
-    if confidence < 0.6:
-        warnings.append("근거 불충분 — 다른 카드 조합 권장 (confidence < 0.6)")
     provenance_value = data.get("provenance")
     provenance = provenance_value if isinstance(provenance_value, dict) else {}
     quality_flags = _json_list(data.get("quality_flags") or provenance.get("quality_flags"))
-    if quality_flags:
-        warnings.append(f"quality_flags={','.join(str(flag) for flag in quality_flags)}")
+    if confidence < 0.6 or quality_flags:
+        warnings.append(
+            "일부 카드의 통합 분석 연결이 제한되어 확인 가능한 카드 요약과 "
+            "연결 근거를 중심으로 산출했습니다."
+        )
+    weak_blocks: list[str] = []
     for key in ("common_pattern", "comparison_point", "hidden_conclusion"):
         block = _dict_or_empty(data.get(key))
         if not block.get("finding") or len(_json_list(block.get("evidence_card_ids"))) < 2:
-            warnings.append(f"{key} 근거 부족")
+            weak_blocks.append(key)
+    if weak_blocks:
+        warnings.append(
+            "일부 해석 단계는 근거 카드 연결이 적어 결과 화면의 참조 근거를 "
+            "함께 확인해야 합니다."
+        )
     if not data.get("recommended_actions"):
-        warnings.append("recommended_actions 비어 있음")
-    return "; ".join(warnings) if warnings else None
+        warnings.append("대응 방향 생성 결과가 비어 있어 원문 근거 확인이 필요합니다.")
+    return " ".join(_dedupe_keep_order(warnings)) if warnings else None
 
 
 def _error_response(
