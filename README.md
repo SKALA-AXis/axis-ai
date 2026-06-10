@@ -877,10 +877,9 @@ MLFLOW_TRACKING_URI=http://localhost:5000
 ## 개발 명령어
 
 ```bash
-uv run ruff format .          # 포맷
-uv run ruff check .           # 린트
-uv run mypy src/              # 타입 체크
-uv run pytest tests/ -v       # 테스트
+make ci                       # ★ push/PR 전 — CI 와 동일 검사 (format check + lint + mypy + pytest)
+make format                   # ruff format src/ (CI format 실패 시 먼저 실행)
+uv run pre-commit install     # 커밋 시 ruff format/check 자동 (권장)
 uv add 패키지명               # 의존성 추가 (pip install 금지)
 ```
 
@@ -890,12 +889,13 @@ uv add 패키지명               # 의존성 추가 (pip install 금지)
 
 GitHub Actions (`.github/workflows/ci.yml`) — push / PR 시 자동 실행.
 
+```bash
+uv sync --all-groups
+make ci                       # 로컬에서 CI 와 동일하게 재현
+# 또는: ./scripts/ci-check.sh
 ```
-uv sync
-uv run ruff check .
-uv run mypy src/
-uv run pytest tests/
-```
+
+CI 가 `ruff format --check` 에서 자주 실패합니다. 코드 수정 후 **`make format` → `make ci`** 순서로 돌리면 대부분 막을 수 있습니다.
 
 > CI 상세 및 실패 대응: [axis-infra/docs/CI.md](https://github.com/SKALA-AXis/axis-infra/blob/develop/docs/CI.md)
 

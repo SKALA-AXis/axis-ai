@@ -1654,6 +1654,13 @@ def test_strategic_insight_agent_generates_from_analysis_package():
     assert result["is_valid_strategic_insight"] is True
     assert result["analysis"]["analysis_summary"]
     assert result["implication"]["skax_implication"]["business_line_mapping"] == [TEST_LINE_A]
+    first_messages = llm.invoke.call_args_list[0].args[0]
+    first_user_prompt = first_messages[1]["content"]
+    assert "## StrategicEvidencePack" in first_user_prompt
+    assert "## ProfileContext" in first_user_prompt
+    assert "fact_basis" in first_user_prompt
+    assert "시사점" in first_user_prompt
+    assert "SK AX 대응 방향" in first_user_prompt
 
 
 def test_strategic_insight_agent_generates_from_integrated_issue_id(monkeypatch):

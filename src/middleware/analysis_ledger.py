@@ -61,6 +61,41 @@ def _git_sha() -> str:
 _GIT_SHA_CACHE = _git_sha()
 
 
+def _normalize_entry(
+    *,
+    row_id: Any,
+    analysis_id: str,
+    analysis_type: str,
+    conclusion: str,
+    confidence: float,
+    source_card_ids: list[str],
+    sk_ax_implication: str | None,
+    created_at: str,
+    source: str,
+    strategy_label: str | None = None,
+    included_in_pack: bool | None = None,
+) -> dict[str, Any] | None:
+    text_value = (conclusion or "").strip()
+    if not text_value:
+        return None
+    entry: dict[str, Any] = {
+        "id": row_id,
+        "analysis_id": analysis_id,
+        "analysis_type": analysis_type,
+        "conclusion_one_liner": text_value,
+        "confidence": confidence,
+        "source_card_ids": list(source_card_ids or []),
+        "sk_ax_implication": sk_ax_implication,
+        "created_at": created_at,
+        "source": source,
+    }
+    if strategy_label is not None:
+        entry["strategy_label"] = strategy_label
+    if included_in_pack is not None:
+        entry["included_in_pack"] = included_in_pack
+    return entry
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Schemas
 # ──────────────────────────────────────────────────────────────────────────
@@ -324,7 +359,7 @@ class AnalysisLedger:
                 superseded.append(prev_id)
         return superseded
 
-    # ── Fetch (ContextPackBuilder 가 호출) ──────────────────────────────────
+    # ── Fetch (ContextPackAssembler read path) ─────────────────────────────
 
     @classmethod
     def fetch_top_n(
@@ -334,42 +369,247 @@ class AnalysisLedger:
         min_confidence: float | None = None,
         retention_days: int = 90,
     ) -> list[dict[str, Any]]:
-        """ContextPackBuilder 의 analysis_ledger_top5 carry-over 용."""
+        """Peer-scoped recent analysis conclusions for context carry-over."""
         thr = min_confidence if min_confidence is not None else _DEFAULT_MIN_CONF
         try:
-            with SessionLocal() as db:
-                rows = (
-                    db.execute(
-                        text(
-                            """
-                        SELECT id, analysis_id, analysis_type, conclusion_one_liner,
-                               strategy_label, confidence, source_card_ids,
-                               sk_ax_implication, created_at
-                        FROM analysis_ledger
-                        WHERE peer_ids ? :peer_id
-                          AND confidence >= :thr
-                          AND superseded_by IS NULL
-                          AND included_in_pack = TRUE
-                          AND created_at > now() - make_interval(days => :days)
-                        ORDER BY created_at DESC
-                        LIMIT :top_n
-                        """
-                        ),
-                        {
-                            "peer_id": peer_id,
-                            "thr": thr,
-                            "days": retention_days,
-                            "top_n": top_n,
-                        },
-                    )
-                    .mappings()
-                    .all()
-                )
+            entries = cls._collect_read_model_entries(
+                peer_id=peer_id,
+                min_confidence=thr,
+                retention_days=retention_days,
+                limit=top_n,
+            )
         except Exception as e:
             log.warning("AnalysisLedger.fetch_top_n failed | peer=%s | %s", peer_id, e)
             return []
+        return entries[:top_n]
 
-        return [dict(r) for r in rows]
+    @classmethod
+    def fetch_recent(
+        cls,
+        *,
+        window_days: int = 60,
+        limit: int = 8,
+        min_confidence: float = 0.6,
+    ) -> list[dict[str, Any]]:
+        """Cross-peer recent conclusions for dashboard agents."""
+        try:
+            entries = cls._collect_read_model_entries(
+                peer_id=None,
+                min_confidence=min_confidence,
+                retention_days=window_days,
+                limit=limit,
+            )
+        except Exception as e:
+            log.warning("AnalysisLedger.fetch_recent failed | %s", e)
+            return []
+        return entries[:limit]
+
+    @classmethod
+    def _collect_read_model_entries(
+        cls,
+        *,
+        peer_id: str | None,
+        min_confidence: float,
+        retention_days: int,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        fetch_limit = max(limit * 3, limit)
+        with SessionLocal() as db:
+            entries.extend(
+                cls._fetch_insight_entries(
+                    db,
+                    peer_id=peer_id,
+                    min_confidence=min_confidence,
+                    retention_days=retention_days,
+                    limit=fetch_limit,
+                )
+            )
+            entries.extend(
+                cls._fetch_mixer_entries(
+                    db,
+                    peer_id=peer_id,
+                    min_confidence=min_confidence,
+                    retention_days=retention_days,
+                    limit=fetch_limit,
+                )
+            )
+            if peer_id:
+                entries.extend(
+                    cls._fetch_legacy_entries(
+                        db,
+                        peer_id=peer_id,
+                        min_confidence=min_confidence,
+                    )
+                )
+        entries.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        return entries[:limit]
+
+    @classmethod
+    def _fetch_insight_entries(
+        cls,
+        db: Any,
+        *,
+        peer_id: str | None,
+        min_confidence: float,
+        retention_days: int,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        peer_filter = ""
+        params: dict[str, Any] = {
+            "thr": min_confidence,
+            "days": retention_days,
+            "limit": limit,
+        }
+        if peer_id:
+            peer_filter = "AND :peer_id = ANY(focus_peer_ids)"
+            params["peer_id"] = peer_id
+        rows = (
+            db.execute(
+                text(
+                    f"""
+                SELECT id, final_one_liner, confidence, source_card_ids,
+                       sk_ax_implication, payload, created_at
+                FROM insight_reports
+                WHERE confidence >= :thr
+                  AND created_at > now() - make_interval(days => :days)
+                  {peer_filter}
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            normalized = _normalize_entry(
+                row_id=row.get("id"),
+                analysis_id=str(row.get("id") or ""),
+                analysis_type="insight",
+                conclusion=str(row.get("final_one_liner") or ""),
+                confidence=float(row.get("confidence") or 0.0),
+                source_card_ids=list(row.get("source_card_ids") or []),
+                sk_ax_implication=row.get("sk_ax_implication"),
+                created_at=str(row.get("created_at") or ""),
+                source="insight_reports",
+                strategy_label=payload.get("strategy_label"),
+            )
+            if normalized:
+                out.append(normalized)
+        return out
+
+    @classmethod
+    def _fetch_mixer_entries(
+        cls,
+        db: Any,
+        *,
+        peer_id: str | None,
+        min_confidence: float,
+        retention_days: int,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        peer_filter = ""
+        params: dict[str, Any] = {
+            "thr": min_confidence,
+            "days": retention_days,
+            "limit": limit,
+        }
+        if peer_id:
+            peer_filter = "AND :peer_id = ANY(input_peer_ids)"
+            params["peer_id"] = peer_id
+        rows = (
+            db.execute(
+                text(
+                    f"""
+                SELECT id, final_one_liner, confidence, input_card_ids,
+                       sk_ax_implication, payload, created_at
+                FROM mixer_results
+                WHERE confidence >= :thr
+                  AND created_at > now() - make_interval(days => :days)
+                  {peer_filter}
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            normalized = _normalize_entry(
+                row_id=row.get("id"),
+                analysis_id=str(row.get("id") or ""),
+                analysis_type="mixer",
+                conclusion=str(row.get("final_one_liner") or ""),
+                confidence=float(row.get("confidence") or 0.0),
+                source_card_ids=list(row.get("input_card_ids") or []),
+                sk_ax_implication=row.get("sk_ax_implication"),
+                created_at=str(row.get("created_at") or ""),
+                source="mixer_results",
+                strategy_label=payload.get("strategy_label"),
+            )
+            if normalized:
+                out.append(normalized)
+        return out
+
+    @classmethod
+    def _fetch_legacy_entries(
+        cls,
+        db: Any,
+        *,
+        peer_id: str,
+        min_confidence: float,
+    ) -> list[dict[str, Any]]:
+        row = db.execute(
+            text(
+                """
+                SELECT legacy_payload->'analysis_ledger' AS ledger
+                FROM peer_companies
+                WHERE id = :peer_id
+                """
+            ),
+            {"peer_id": peer_id},
+        ).fetchone()
+        if not row or row[0] is None:
+            return []
+        raw = row[0]
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                return []
+        if not isinstance(raw, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            confidence = float(item.get("confidence") or 0.0)
+            if confidence < min_confidence:
+                continue
+            normalized = _normalize_entry(
+                row_id=item.get("id"),
+                analysis_id=str(item.get("analysis_id") or ""),
+                analysis_type=str(item.get("analysis_type") or "legacy"),
+                conclusion=str(item.get("conclusion_one_liner") or ""),
+                confidence=confidence,
+                source_card_ids=list(item.get("source_card_ids") or []),
+                sk_ax_implication=item.get("sk_ax_implication"),
+                created_at=str(item.get("created_at") or ""),
+                source="legacy_payload",
+                strategy_label=item.get("strategy_label"),
+                included_in_pack=item.get("included_in_pack"),
+            )
+            if normalized:
+                out.append(normalized)
+        return out
 
 
 # ──────────────────────────────────────────────────────────────────────────

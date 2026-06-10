@@ -34,6 +34,20 @@ _INSERT_SQL = text("""
     RETURNING id
 """)
 
+_INSERT_SQL_WITHOUT_CRAWL_RUN_ID = text("""
+    INSERT INTO raw_articles (
+        source_type, source_name, publisher, title, content, url, url_hash,
+        published_at, collected_at, company, language, content_type,
+        crawl_status, error_message, processing_status, metadata
+    ) VALUES (
+        :source_type, :source_name, :publisher, :title, :content, :url, :url_hash,
+        :published_at, :collected_at, CAST(:company AS jsonb), :language, :content_type,
+        :crawl_status, :error_message, 'RAW', CAST(:metadata AS jsonb)
+    )
+    ON CONFLICT (url) DO NOTHING
+    RETURNING id
+""")
+
 _SELECT_ARTICLE_ID_BY_URL = text("SELECT id FROM raw_articles WHERE url = :url")
 
 _UPDATE_DART_CONTENT_IF_BETTER_SQL = text("""
@@ -69,9 +83,8 @@ _UPDATE_COMPANY_ANALYSIS_IF_CHANGED_SQL = text("""
         processing_status = 'RAW',
         metadata = metadata || CAST(:metadata AS jsonb),
         error_message = COALESCE(:error_message, error_message)
-    WHERE id = :id
+    WHERE (id = :id OR url = :url)
       AND source_type = 'company_analysis'
-      AND COALESCE(metadata ->> 'content_hash', '') <> :content_hash
 """)
 
 _INSERT_CRAWL_RUN_ARTICLE = text("""
@@ -276,27 +289,35 @@ def save_articles(
                 sanitized_title = _sanitize_text(article.title)[:500]
                 sanitized_content = _sanitize_text(article.content if article.content else "")
                 source_metadata = _source_metadata_json(article, storage_company)
-                result = db.execute(
-                    _INSERT_SQL,
-                    {
-                        "source_type": article.source_type,
-                        "source_name": article.source_name,
-                        "publisher": article.publisher,
-                        "title": sanitized_title,
-                        "content": sanitized_content,
-                        "url": article.url,
-                        "url_hash": article.url_hash,
-                        "published_at": article.published_at or article.collected_at,
-                        "collected_at": article.collected_at,
-                        "company": json.dumps(storage_company, ensure_ascii=False),
-                        "language": article.language,
-                        "content_type": article.content_type,
-                        "crawl_status": article.crawl_status,
-                        "error_message": article.error_message,
-                        "metadata": source_metadata,
-                        "crawl_run_id": run_context.crawl_run_id if run_context else None,
-                    },
-                )
+                insert_params = {
+                    "source_type": article.source_type,
+                    "source_name": article.source_name,
+                    "publisher": article.publisher,
+                    "title": sanitized_title,
+                    "content": sanitized_content,
+                    "url": article.url,
+                    "url_hash": article.url_hash,
+                    "published_at": article.published_at or article.collected_at,
+                    "collected_at": article.collected_at,
+                    "company": json.dumps(storage_company, ensure_ascii=False),
+                    "language": article.language,
+                    "content_type": article.content_type,
+                    "crawl_status": article.crawl_status,
+                    "error_message": article.error_message,
+                    "metadata": source_metadata,
+                    "crawl_run_id": run_context.crawl_run_id if run_context else None,
+                }
+                try:
+                    result = db.execute(_INSERT_SQL, insert_params)
+                except Exception as exc:  # noqa: BLE001
+                    if not _is_missing_column(exc, "crawl_run_id"):
+                        raise
+                    db.rollback()
+                    log.info(
+                        "raw_articles.crawl_run_id 미적용 DB 감지 → legacy INSERT 사용 | url=%s",
+                        article.url,
+                    )
+                    result = db.execute(_INSERT_SQL_WITHOUT_CRAWL_RUN_ID, insert_params)
                 row = result.fetchone()
                 if row:
                     article_id = row[0]
@@ -413,14 +434,11 @@ def _update_company_analysis_if_changed(
 ) -> None:
     if article.source_type != "company_analysis":
         return
-    metadata = _metadata_dict(source_metadata)
-    content_hash = str(metadata.get("content_hash") or "")
-    if not content_hash:
-        return
-    db.execute(
+    result = db.execute(
         _UPDATE_COMPANY_ANALYSIS_IF_CHANGED_SQL,
         {
             "id": article_id,
+            "url": article.url,
             "title": sanitized_title,
             "content": sanitized_content,
             "content_type": article.content_type,
@@ -428,8 +446,12 @@ def _update_company_analysis_if_changed(
             "collected_at": article.collected_at,
             "metadata": source_metadata,
             "error_message": article.error_message,
-            "content_hash": content_hash,
         },
+    )
+    log.info(
+        "company_analysis 최신 본문 갱신 | url=%s rows=%d",
+        article.url,
+        result.rowcount,
     )
 
 
@@ -2562,6 +2584,67 @@ def upsert_global_industry_trends(rows: list[dict[str, Any]]) -> int:
         db.execute(_GLOBAL_TREND_UPSERT_SQL, serialized)
         db.commit()
     return len(serialized)
+
+
+def fetch_previous_trend_context_for_delta() -> dict[str, Any]:
+    """오늘 이전 가장 최근 ``global_industry_trends`` batch → Phase 2 delta 입력.
+
+    design: ``global-trends.md`` §16 — ledger 대신 self-read.
+    prior batch 가 없으면 빈 dict (cold start → ``frequency_delta_pct = 0``).
+    """
+    query = text(
+        """
+                WITH latest_prior AS (
+                    SELECT MAX(trend_date) AS d
+                    FROM global_industry_trends
+                    WHERE trend_date < CURRENT_DATE
+                )
+                SELECT g.keyword, g.mention_count, g.payload, g.trend_date
+                FROM global_industry_trends g
+                INNER JOIN latest_prior lp ON g.trend_date = lp.d
+                ORDER BY g.impact_score DESC NULLS LAST, g.keyword ASC
+                """
+    )
+    try:
+        with SessionLocal() as db:
+            rows = db.execute(query).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        if not _is_missing_relation(exc, "global_industry_trends"):
+            raise
+        rows = []
+
+    if not rows:
+        return {}
+
+    keyword_counts: dict[str, int] = {}
+    signals: list[dict[str, Any]] = []
+    for row in rows:
+        kw = str(row["keyword"] or "").strip().lower()
+        if not kw:
+            continue
+        payload = row["payload"] if isinstance(row["payload"], dict) else {}
+        mention_count = int(row["mention_count"] or payload.get("mention_count") or 0)
+        keyword_counts[kw] = mention_count
+        signals.append(
+            {
+                "signal": kw,
+                "mention_count": mention_count,
+                "intensity": payload.get("intensity"),
+                "leading_companies": payload.get("leading_companies", []),
+            }
+        )
+
+    latest_date = rows[0]["trend_date"]
+    return {
+        "period": "prior_batch",
+        "keyword_counts": keyword_counts,
+        "signals": signals,
+        "source_groups": ["global_industry_trends"],
+        "updated_at": latest_date.isoformat()
+        if hasattr(latest_date, "isoformat")
+        else str(latest_date),
+        "metadata": {"row_count": len(rows), "prior_trend_date": str(latest_date)},
+    }
 
 
 # trend 는 cronjob 으로 일 1 회만 갱신되므로 60 초 캐시는 정합성 손실 거의 없음.

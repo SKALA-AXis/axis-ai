@@ -147,6 +147,10 @@ class CatchCompanyAnalysisCrawler(BaseCrawler):
                     "sections": parsed.sections,
                     "section_bodies": parsed.section_bodies,
                     "swot": parsed.swot,
+                    "swot_available": bool(parsed.swot),
+                    "swot_unavailable_reason": None
+                    if parsed.swot
+                    else "catch_report_has_no_swot_section",
                     "locked_sections": parsed.locked_sections,
                     "locked_message_count": parsed.text.count(LOCKED_MESSAGE),
                     "has_locked_content": LOCKED_MESSAGE in parsed.text,
@@ -381,7 +385,8 @@ def extract_swot(lines: list[str]) -> dict[str, str | None]:
             case_sensitive=False,
             max_values=1,
         )
-        swot[label] = value
+        if value:
+            swot[label] = value
     return swot
 
 

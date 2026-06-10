@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Iterable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -37,6 +38,25 @@ KST = ZoneInfo("Asia/Seoul")
 SCHEDULED_PREPROCESS_LIMIT = 5000
 # Mixer SSE keepalive 주기(초) — nginx/ALB idle timeout(기본 60s)보다 충분히 짧게.
 _MIXER_SSE_HEARTBEAT_SEC = 10
+
+
+def _count_result_items(results: Iterable[Mapping[str, object]], key: str) -> int:
+    total = 0
+    for result in results:
+        value = result.get(key)
+        if isinstance(value, list):
+            total += len(value)
+    return total
+
+
+def _sum_result_ints(results: Iterable[Mapping[str, object]], key: str) -> int:
+    total = 0
+    for result in results:
+        value = result.get(key)
+        if isinstance(value, int):
+            total += value
+    return total
+
 
 PREPROCESS_SOURCE_TYPES_BY_SOURCE: dict[str, list[str]] = {
     "naver_news": ["news"],
@@ -291,9 +311,9 @@ async def _run_collection_track(
         TRACK_D_SOURCES,
         BatchProcessor,
     )
-    from src.pipeline.analysis_delivery import run_analysis_delivery
+    from src.pipeline.analysis_delivery import AnalysisDeliveryResult, run_analysis_delivery
     from src.preprocessing.classification import ClusterClassifier
-    from src.preprocessing.preprocessing import PreprocessingService
+    from src.preprocessing.preprocessing import PreprocessingResult, PreprocessingService
     from src.preprocessing.relevance import RelevanceEvaluator
 
     all_aliases = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
@@ -306,10 +326,10 @@ async def _run_collection_track(
     processor = BatchProcessor()
     started_at = datetime.now(UTC).isoformat()
     crawl_window = _collection_window(track, window_start, window_end)
-    results = []
-    delivery_results = []
+    results: list[PreprocessingResult] = []
+    delivery_results: list[AnalysisDeliveryResult] = []
 
-    async def _preprocess_crawl_record(record: dict[str, str]):
+    async def _preprocess_crawl_record(record: dict[str, str]) -> PreprocessingResult:
         crawl_run_id = record["crawl_run_id"]
         source_name = record["source_name"]
         source_types = _preprocess_source_types(track, source_name)
@@ -354,7 +374,6 @@ async def _run_collection_track(
             for record in new_records:
                 result = await _preprocess_crawl_record(record)
                 results.append(result)
-                delivery_results.append(await asyncio.to_thread(run_analysis_delivery, result))
 
     try:
         if track in {"a", "all"}:
@@ -383,27 +402,68 @@ async def _run_collection_track(
                     limit=SCHEDULED_PREPROCESS_LIMIT,
                 )
             ]
+
+        news_postprocess = None
+        if track in {"a", "all"}:
+            news_postprocess = await asyncio.to_thread(_run_recent_news_cluster_postprocess)
+
         if not delivery_results:
             for result in results:
                 delivery_results.append(await asyncio.to_thread(run_analysis_delivery, result))
+
         log.info(
             (
                 "수집 파이프라인 완료 | task_id=%s track=%s raw=%d "
                 "analysis_metrics=%d analysis_signals=%d classified=%d "
-                "card_news=%d indexed=%d delivery_errors=%d"
+                "postprocess=%s card_news=%d indexed=%d delivery_errors=%d"
             ),
             task_id,
             track,
-            sum(len(result.get("raw_article_ids", [])) for result in results),
-            sum(result.get("analysis_metric_count", 0) for result in results),
-            sum(result.get("analysis_signal_count", 0) for result in results),
-            sum(len(result.get("classified_clusters", [])) for result in results),
-            sum(len(result.get("card_news", [])) for result in delivery_results),
-            sum(len(result.get("indexed_vector_ids", [])) for result in delivery_results),
-            sum(len(result.get("errors", [])) for result in delivery_results),
+            _count_result_items(results, "raw_article_ids"),
+            _sum_result_ints(results, "analysis_metric_count"),
+            _sum_result_ints(results, "analysis_signal_count"),
+            _count_result_items(results, "classified_clusters"),
+            news_postprocess,
+            _count_result_items(delivery_results, "card_news"),
+            _count_result_items(delivery_results, "indexed_card_ids"),
+            _count_result_items(delivery_results, "errors"),
         )
     except Exception:
         log.exception("수집 파이프라인 실패 | task_id=%s track=%s", task_id, track)
+
+
+def _run_recent_news_cluster_postprocess() -> dict:
+    from scripts.postprocess_singleton_clusters import run_postprocess
+    from src.db.postgres import SessionLocal
+
+    with SessionLocal() as db:
+        result = run_postprocess(
+            db=db,
+            source_type="news",
+            lookback_hours=4,
+            time_field="published_at",
+            max_source_size=4,
+            min_target_size=4,
+            min_new_cluster_size=2,
+            max_time_gap_hours=72,
+            min_score=0.5,
+            apply=True,
+            skip_noise=True,
+        )
+        db.commit()
+        summary = {
+            "clusters": result["cluster_count"],
+            "sources": result["source_count"],
+            "targets": result["target_count"],
+            "merge_candidates": len(result["candidates"]),
+            "group_merge_candidates": len(result["group_candidates"]),
+            "noise_candidates": len(result["noise_ids"]),
+            "updated": result["updated"],
+            "group_updated": result["group_updated"],
+            "noise_updated": result["noise_updated"],
+        }
+    log.info("뉴스 클러스터 후처리 완료 | %s", summary)
+    return summary
 
 
 def _preprocess_source_types(track: str, source_name: str | None) -> list[str]:
@@ -649,6 +709,9 @@ async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsRespons
 
     Phase 1 (Snapshot) + Phase 2 (Trend Detection) 결정적 산식,
     Phase 3 (Peer Alignment) + Phase 4 (Impact Mapping) + Phase 5 (Synthesis) LLM 3 호출.
+
+    ``previous_trend_context`` 는 ITTrendAgent.generate() 가 ``global_industry_trends`` 직전
+    batch 를 self-read 해 delta 를 계산한다 (design §16).
 
     결과는 ``global_industry_trends`` 에 keyword 별 row 로 직접 upsert. (V30 이후
     ``analysis_ledger`` DROP 되어 ``@with_ledger_writeback`` 미사용 — 설계서 §7.)

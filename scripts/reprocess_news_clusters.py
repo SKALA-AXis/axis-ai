@@ -1010,8 +1010,6 @@ def _title_clusters_related(left: dict[str, Any], right: dict[str, Any]) -> bool
     jaccard = len(shared) / len(left_tokens | right_tokens)
     if strict_mode:
         return len(shared) >= 3 and coverage >= 0.62 and jaccard >= 0.32
-    if _has_high_signal_shared_token(shared):
-        return coverage >= 0.45 or len(shared) >= 3
     return coverage >= 0.58 or (len(shared) >= 3 and jaccard >= 0.30)
 
 
@@ -1029,26 +1027,6 @@ def _requires_strict_title_merge(left: dict[str, Any], right: dict[str, Any]) ->
     )
     list_like_bridge = left["list_like_ratio"] >= 0.5 or right["list_like_ratio"] >= 0.5
     return company_sets_differ or list_like_bridge
-
-
-def _has_high_signal_shared_token(shared: set[str]) -> bool:
-    high_signal_tokens = {
-        "chatgpt",
-        "에듀",
-        "openai",
-        "브리티웍스",
-        "온ai",
-        "행안부",
-        "예탁결제원",
-        "토큰증권",
-        "두나무",
-        "대신증권",
-        "피지컬웍스",
-        "모빌린트",
-        "npu",
-        "skala",
-    }
-    return bool(shared & high_signal_tokens)
 
 
 def _is_list_like_title(title: str) -> bool:

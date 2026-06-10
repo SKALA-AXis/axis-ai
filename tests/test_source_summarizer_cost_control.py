@@ -78,3 +78,85 @@ def test_candidate_peer_companies_uses_preprocessing_targets_not_body_mentions()
     ]
 
     assert summarizer._candidate_peer_companies(articles) == ["samsung_sds"]
+
+
+def test_large_cluster_selects_diverse_articles_from_majority_event(monkeypatch) -> None:
+    monkeypatch.setattr(summarizer, "_MIN_ANALYZED_ARTICLES", 8)
+    monkeypatch.setattr(summarizer, "_MAX_ANALYZED_ARTICLES", 20)
+    monkeypatch.setattr(summarizer, "_MAJORITY_THRESHOLD", 0.70)
+    monkeypatch.setattr(summarizer, "_MIXED_THRESHOLD", 0.50)
+
+    majority_titles = [
+        "LG CNS, 클로드 엔터프라이즈 도입 계약 체결",
+        "LG CNS, 클로드 도입 계약으로 그룹 AX 확산",
+        "LG CNS, 클로드 엔터프라이즈 전사 활용 계약",
+        "LG CNS, 기업용 클로드 계약 체결",
+    ]
+    articles = [
+        {
+            "id": article_id,
+            "title": majority_titles[article_id % len(majority_titles)],
+            "company": ["lg_cns"],
+            "matched_companies": ["lg_cns"],
+            "content": "LG CNS가 클로드 엔터프라이즈 도입 계약을 체결했다.",
+            "relevance_score": 0.8,
+            "importance_score": 0.8,
+            "is_representative": article_id == 1,
+        }
+        for article_id in range(1, 66)
+    ]
+    articles.extend(
+        {
+            "id": article_id,
+            "title": f"LG CNS, 다른 주제 플랫폼 출시 {article_id}",
+            "company": ["lg_cns"],
+            "matched_companies": ["lg_cns"],
+            "content": "별도 플랫폼 출시 기사다.",
+            "relevance_score": 0.8,
+            "importance_score": 0.8,
+        }
+        for article_id in range(66, 77)
+    )
+
+    selection = summarizer._select_analysis_articles(articles=articles, representative_id=1)
+
+    assert selection["status"] == "sampled_majority_group"
+    assert len(selection["selected_article_ids"]) == 20
+    assert selection["majority_ratio"] >= 0.70
+    assert 1 in selection["selected_article_ids"]
+    assert set(selection["selected_article_ids"]).issubset(set(selection["majority_article_ids"]))
+    assert selection["outlier_article_ids"]
+
+
+def test_large_mixed_cluster_without_majority_is_blocked(monkeypatch) -> None:
+    monkeypatch.setattr(summarizer, "_MIN_ANALYZED_ARTICLES", 8)
+    monkeypatch.setattr(summarizer, "_MAX_ANALYZED_ARTICLES", 20)
+    monkeypatch.setattr(summarizer, "_MIXED_THRESHOLD", 0.50)
+
+    groups = [
+        ("계약 체결", "계약을 체결했다."),
+        ("플랫폼 출시", "플랫폼을 출시했다."),
+        ("주가 강세", "주가가 강세를 보였다."),
+    ]
+    articles = []
+    article_id = 1
+    for title_suffix, content in groups:
+        for _ in range(10):
+            articles.append(
+                {
+                    "id": article_id,
+                    "title": f"LG CNS, {title_suffix} {article_id}",
+                    "company": ["lg_cns"],
+                    "matched_companies": ["lg_cns"],
+                    "content": content,
+                    "relevance_score": 0.8,
+                    "importance_score": 0.8,
+                }
+            )
+            article_id += 1
+
+    selection = summarizer._select_analysis_articles(articles=articles, representative_id=1)
+
+    assert selection["status"] == "mixed_cluster_no_majority"
+    assert selection["selected_article_ids"] == []
+    assert selection["excluded_article_ids"] == list(range(1, 31))
