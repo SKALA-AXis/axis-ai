@@ -1298,8 +1298,7 @@ def _match_sources_by_ids(
     matched = [
         source
         for source in sources
-        if str(source.get("id") or "") in source_ids
-        or str(source.get("url") or "") in source_ids
+        if str(source.get("id") or "") in source_ids or str(source.get("url") or "") in source_ids
     ]
     return matched or sources[:2]
 
@@ -1372,24 +1371,22 @@ def _build_memory_document(
 ) -> dict[str, Any]:
     window_days = int(context.get("window_days") or 60)
     window_start = anchor_date - timedelta(days=max(window_days - 1, 0))
-    source_trace = [
-        item for item in _list(result.get("source_trace")) if isinstance(item, dict)
-    ][:16]
-    sections = [
-        item for item in _list(result.get("insight_sections")) if isinstance(item, dict)
-    ][:3]
-    actions = [
-        item for item in _list(result.get("response_direction")) if isinstance(item, dict)
-    ][:3]
+    source_trace = [item for item in _list(result.get("source_trace")) if isinstance(item, dict)][
+        :16
+    ]
+    sections = [item for item in _list(result.get("insight_sections")) if isinstance(item, dict)][
+        :3
+    ]
+    actions = [item for item in _list(result.get("response_direction")) if isinstance(item, dict)][
+        :3
+    ]
     comparison = context.get("comparison_facts")
     structural = (
         [item for item in _list(comparison.get("structural")) if isinstance(item, dict)]
         if isinstance(comparison, dict)
         else []
     )
-    primary_selection = (
-        comparison.get("primary_selection") if isinstance(comparison, dict) else {}
-    )
+    primary_selection = comparison.get("primary_selection") if isinstance(comparison, dict) else {}
     primary_selection = primary_selection if isinstance(primary_selection, dict) else {}
     primary_items = (
         [item for item in _list(primary_selection.get("items")) if isinstance(item, dict)]
@@ -1501,13 +1498,11 @@ def _build_memory_document(
         },
         "observed_facts": [item for item in observed_facts if item.get("fact")],
         "important_memory": [
-            item
-            for item in important_memory
-            if item.get("content") or item.get("source_id")
+            item for item in important_memory if item.get("content") or item.get("source_id")
         ][:8],
-        "next_analysis_hints": [
-            item for item in next_analysis_hints if item.get("watch_item")
-        ][:10],
+        "next_analysis_hints": [item for item in next_analysis_hints if item.get("watch_item")][
+            :10
+        ],
         "source_trace": source_trace,
         "pruned_items": pruned_items,
     }

@@ -881,8 +881,7 @@ def _compute_radar(cards: list[dict]) -> list[dict]:
             axis="tech_investment",
             score=_score_for_sector(cards, {"ax", "ai_tech", "infra"}),
             explanation=(
-                "AX·AI 기술·인프라 섹터 카드가 기술 투자 판단을 "
-                "얼마나 지지하는지 본 값입니다."
+                "AX·AI 기술·인프라 섹터 카드가 기술 투자 판단을 얼마나 지지하는지 본 값입니다."
             ),
             calculation="sector가 ax, ai_tech, infra인 카드의 exposure_score를 평균했습니다.",
             matched_cards=tech_cards,
@@ -2334,8 +2333,7 @@ def _warning_for(data: dict) -> str | None:
             weak_blocks.append(key)
     if weak_blocks:
         warnings.append(
-            "일부 해석 단계는 근거 카드 연결이 적어 결과 화면의 참조 근거를 "
-            "함께 확인해야 합니다."
+            "일부 해석 단계는 근거 카드 연결이 적어 결과 화면의 참조 근거를 함께 확인해야 합니다."
         )
     if not data.get("recommended_actions"):
         warnings.append("대응 방향 생성 결과가 비어 있어 원문 근거 확인이 필요합니다.")
