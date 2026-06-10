@@ -242,6 +242,7 @@ class ChatOrchestratorAgent:
         graph.add_node("intent", self._node_intent)
         graph.add_node("blocked", self._node_blocked)
         graph.add_node("off_topic", self._node_off_topic)
+        graph.add_node("print_help_response", self._node_print_help_response)
         graph.add_node("today_lookup", self._node_today_lookup)
         graph.add_node("today_response", self._node_today_response)
         graph.add_node("handoff_retrieve", self._node_handoff_retrieve)
@@ -260,6 +261,7 @@ class ChatOrchestratorAgent:
             _route_after_intent,
             {
                 "off_topic": "off_topic",
+                "print_help": "print_help_response",
                 "today_lookup": "today_lookup",
                 "handoff_retrieve": "handoff_retrieve",
                 "retrieve": "retrieve",
@@ -275,6 +277,7 @@ class ChatOrchestratorAgent:
         terminal_nodes = (
             "blocked",
             "off_topic",
+            "print_help_response",
             "today_response",
             "handoff_response",
             "grounded_response",
@@ -308,6 +311,14 @@ class ChatOrchestratorAgent:
                     "AXIS 화면, 카드뉴스, 인사이트, 브리핑, 믹서 결과와 관련된 질문에만 "
                     "답변할 수 있습니다. 현재 화면의 내용이나 경쟁사 동향 기준으로 질문해 주세요."
                 ),
+            )
+        }
+
+    def _node_print_help_response(self, state: ChatGraphState) -> dict[str, Any]:
+        return {
+            "response": _print_help_response(
+                conversation_id=state["conversation_id"],
+                message_id=state["message_id"],
             )
         }
 
@@ -880,6 +891,21 @@ class ChatOrchestratorAgent:
     def _recent_card_report_search(self, query: str, *, limit: int) -> list[RetrievalCandidate]:
         days = _card_report_window_days(query)
         peer = _extract_peer(query)
+        rows = self._recent_card_report_rows(days=days, peer=peer, limit=limit)
+        if not rows and days == 1:
+            rows = self._recent_card_report_rows(days=2, peer=peer, limit=limit)
+        return [
+            _card_row_to_candidate(row, score=0.86 - min(index, 8) * 0.02)
+            for index, row in enumerate(rows)
+        ]
+
+    def _recent_card_report_rows(
+        self,
+        *,
+        days: int,
+        peer: tuple[str, str] | None,
+        limit: int,
+    ) -> list[Any]:
         conditions = ["created_at >= NOW() - (:days * INTERVAL '1 day')"]
         params: dict[str, Any] = {"days": int(days), "limit": int(limit)}
         if peer:
@@ -914,10 +940,7 @@ class ChatOrchestratorAgent:
         except Exception as exc:  # noqa: BLE001
             log.debug("recent card report search skipped | error=%s", exc)
             return []
-        return [
-            _card_row_to_candidate(row, score=0.86 - min(index, 8) * 0.02)
-            for index, row in enumerate(rows)
-        ]
+        return list(rows)
 
     def _vector_search(self, query: str, *, top_k: int) -> list[RetrievalCandidate]:
         try:
@@ -1086,6 +1109,8 @@ def _classify_intent(message: str, request: ChatTurnRequest) -> str:
     compact = message.lower()
     if _is_obvious_off_topic(compact):
         return "off_topic"
+    if _is_print_followup_request(message):
+        return "print_help"
     if _is_mixer_handoff_request(compact):
         return "mixer_handoff"
     if _is_news_lookup_request(message):
@@ -1124,6 +1149,8 @@ def _route_after_intent(state: ChatGraphState) -> str:
     intent = state.get("intent")
     if intent == "off_topic":
         return "off_topic"
+    if intent == "print_help":
+        return "print_help"
     if intent == "today_insight_summary":
         return "today_lookup"
     if intent == "mixer_handoff":
@@ -1178,23 +1205,34 @@ def _is_direct_lookup_request(message: str) -> bool:
 def _is_pdf_or_report_export_request(message: str) -> bool:
     compact = message.lower()
     asks_export = re.search(
-        r"pdf|피디에프|보고서|리포트|브리핑|출력|다운로드|내보내|export",
+        r"pdf|피디에프|보고서|리포트|브리핑|출력|프린트|인쇄|다운로드|내보내|export|print",
         compact,
     )
-    asks_create = re.search(r"만들|생성|작성|정리|요약|출력|저장|다운로드", compact)
+    asks_create = re.search(r"만들|생성|작성|정리|요약|출력|프린트|인쇄|저장|다운로드", compact)
     return bool(asks_export and asks_create)
+
+
+def _is_print_followup_request(message: str) -> bool:
+    compact = message.lower()
+    return bool(
+        re.search(r"프린트|인쇄|출력|pdf\s*저장|pdf\s*다운로드|저장\s*/\s*출력", compact)
+        and not re.search(r"보고서|리포트|브리핑|카드|카드뉴스|뉴스|신호|오늘|어제|최근", compact)
+    )
 
 
 def _is_card_news_report_request(message: str) -> bool:
     compact = message.lower()
     compact_no_space = re.sub(r"\s+", "", compact)
     has_card_scope = "카드뉴스" in compact_no_space or re.search(r"카드|뉴스|신호", compact)
+    has_generic_daily_scope = re.search(r"내용|소식|이슈|자료|변화|일어난|있었던|있던", compact)
     has_report_intent = re.search(
-        r"pdf|피디에프|보고서|리포트|브리핑|요약|정리|출력|다운로드",
+        r"pdf|피디에프|보고서|리포트|브리핑|요약|정리|출력|프린트|인쇄|다운로드",
         compact,
     )
     has_date_scope = re.search(r"오늘|어제|today|yesterday|최근", compact)
-    return bool(has_card_scope and has_report_intent and has_date_scope)
+    return bool(
+        has_report_intent and has_date_scope and (has_card_scope or has_generic_daily_scope)
+    )
 
 
 def _card_report_window_days(message: str) -> int:
@@ -1854,6 +1892,36 @@ def _handoff_response(
         retrieval_mode="handoff_candidate_search",
     )
     response["handoff"] = handoff
+    return response
+
+
+def _print_help_response(*, conversation_id: str, message_id: str) -> dict[str, Any]:
+    response = _base_response(
+        conversation_id=conversation_id,
+        message_id=message_id,
+        reply=(
+            "직전에 생성된 보고서 초안 카드에 있는 'PDF 저장/출력' 버튼을 사용해 주세요. "
+            "버튼이 보이지 않으면 '오늘 카드뉴스를 PDF로 정리해줘'처럼 보고서를 다시 생성하면 "
+            "출력 가능한 보고서 카드가 함께 표시됩니다."
+        ),
+        intent="print_help",
+        scope="assistant_ui",
+        sources=[],
+        confidence=0.78,
+        follow_up=["오늘 카드뉴스를 PDF로 다시 정리해줘", "어제 카드뉴스를 보고서로 만들어줘"],
+        retrieval_mode="print_followup_help",
+        answer_blocks=[
+            {
+                "type": "action",
+                "title": "출력 방법",
+                "items": [
+                    "보고서 초안 카드의 PDF 저장/출력 버튼을 누릅니다.",
+                    "현재 답변에 보고서 카드가 없으면 PDF 보고서를 다시 생성합니다.",
+                ],
+            }
+        ],
+    )
+    response["provenance"]["export_requested"] = "pdf"
     return response
 
 
