@@ -75,6 +75,10 @@ def test_hidden_gem_ma_security_card_ranks_primary() -> None:
     assert primary["ids"][0] == "CN-MA-1"
     assert float(primary["items"][0]["salience_score"]) >= 0.70
     assert float(primary["items"][0]["exposure_score"]) < 0.40
+    hint = str(gaps[0].get("narrative_hint") or "")
+    assert "사업 영향이" in hint
+    assert "큼지만" not in hint
+    assert "우선 확인하세요" not in hint
 
 
 def test_structural_facts_do_not_require_news_numbers() -> None:
@@ -252,7 +256,7 @@ def test_format_evidence_change_lines_and_ui_chips() -> None:
 
     changes = format_evidence_change_lines(comparison)
     assert any("AI 에이전트 검색지수" in line for line in changes)
-    assert any("단건·고임팩트" in line for line in changes)
+    assert any("영향은 크지만" in line for line in changes)
     assert not any("salience" in line.lower() for line in changes)
 
     chips = build_ui_change_summary(
@@ -318,8 +322,8 @@ def test_executive_summary_uses_plain_korean_not_internal_scores() -> None:
                     "title": "LGCNS, 앤트로픽과 클로드 엔터프라이즈 도입 계약 체결",
                     "label": "low_visibility_definite_event",
                     "narrative_hint": (
-                        "LG CNS 계약 소식은 사업 영향은 크지만, 보도는 아직 제한적. "
-                        "단건·고임팩트로 우선 확인하세요."
+                        "LG CNS 계약은 사업 영향이 큰 편인데, "
+                        "보도는 아직 많지 않습니다. 단건 보도라 놓치기 쉽습니다."
                     ),
                 }
             ]
@@ -334,11 +338,13 @@ def test_executive_summary_uses_plain_korean_not_internal_scores() -> None:
         },
     )
 
-    assert "가장 먼저 확인" in summary
+    assert "단건 이벤트" in summary
     assert "AI 에이전트" in summary
     assert "-43.5pt" in summary
+    assert "재조정" not in summary
     assert "salience" not in summary.lower()
     assert "노출 0." not in summary
+    assert "단건 보도라 놓치기 쉽습니다" not in summary
 
 
 def test_is_generic_executive_text_detects_boilerplate() -> None:
@@ -402,8 +408,10 @@ def test_polish_executive_output_rewrites_generic_llm_fields() -> None:
 
     assert "경쟁 환경" not in polished["headline"]
     assert "salience" not in polished["executive_summary"].lower()
-    assert "가장 먼저 확인" in polished["executive_summary"]
+    assert "핵심" in polished["executive_summary"]
     assert "클로드 엔터프라이즈" in polished["headline"]
+    assert polished["signals"][0]["value"].startswith("핵심 판단 축")
+    assert "SK AX는" in polished["executive_implication"]
     assert polished["change_summary"][1]["label"] == "검색지수 변화"
     assert "AI 에이전트" in polished["change_summary"][1]["value"]
     assert "검색지수" in polished["signals"][1]["value"]

@@ -413,9 +413,18 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
             card["primary_keyword_category"] = (
                 classification.get("sector") or card.get("sector") or None
             )
-        # source_raw_article_ids — bundle.items 의 id 들.
+        # source_raw_article_ids — IntegratedIssue가 실제 분석한 기사 ids를 우선 사용.
         if not card.get("source_raw_article_ids"):
             ids: list[int] = []
+            for raw_id in integrated.get("source_article_ids") or []:
+                try:
+                    ids.append(int(raw_id))
+                except (TypeError, ValueError):
+                    continue
+            card["source_raw_article_ids"] = ids
+        # fallback: 구버전 IntegratedIssue에는 source_article_ids가 없을 수 있다.
+        if not card.get("source_raw_article_ids"):
+            ids = []
             for item in bundle.items or []:
                 raw_id = item.get("id") if isinstance(item, dict) else None
                 if raw_id is None:

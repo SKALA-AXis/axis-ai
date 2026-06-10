@@ -9,9 +9,9 @@ Closes skala-ai-13/axis-infra#N
 - [ ] 변경사항 2
 
 ## 🧪 테스트
-- [ ] 로컬에서 테스트 완료
+- [ ] `make ci` (또는 `./scripts/ci-check.sh`) 통과 — ruff format/check, mypy, pytest
+- [ ] `uv run pre-commit install` 후 커밋 (선택, ruff 자동 포맷)
 - [ ] 새로운 테스트 코드 추가
-- [ ] 기존 테스트 모두 통과
 
 ## 📸 스크린샷 (UI 변경 시)
 

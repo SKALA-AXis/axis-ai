@@ -92,22 +92,22 @@ def _event_type_label(event_type: str) -> str:
     return _EVENT_TYPE_LABELS.get(normalized, normalized.replace("_", " "))
 
 
-def _impact_level_phrase(score: float) -> str:
+def _impact_adjective(score: float) -> str:
     if score >= 0.85:
-        return "사업 영향은 매우 큼"
+        return "매우 큰"
     if score >= 0.70:
-        return "사업 영향은 큼"
+        return "큰"
     if score >= 0.55:
-        return "사업 영향은 보통 수준"
-    return "사업 영향은 제한적"
+        return "있는"
+    return "제한적인"
 
 
-def _exposure_level_phrase(score: float) -> str:
+def _exposure_clause(score: float) -> str:
     if score >= 0.60:
-        return "보도 확산도 높음"
+        return "보도 확산도 함께 높습니다"
     if score >= 0.40:
-        return "보도는 보통 수준"
-    return "보도는 아직 제한적"
+        return "보도는 보통 수준입니다"
+    return "보도는 아직 많지 않습니다"
 
 
 def build_comparison_facts(
@@ -430,21 +430,21 @@ def _narrative_hint(
 ) -> str:
     event_label = _event_type_label(event_type)
     if label == "low_visibility_definite_event":
+        impact = _impact_adjective(salience_score)
         return (
-            f"{peer_label} {event_label} 소식은 {_impact_level_phrase(salience_score)}지만, "
-            f"{_exposure_level_phrase(exposure_score)}. "
-            "단건·고임팩트로 우선 확인하세요."
+            f"{peer_label} {event_label}은 사업 영향이 {impact} 편인데, "
+            f"{_exposure_clause(exposure_score)}. 단건 보도라 놓치기 쉽습니다."
         )
     if label == "high_salience_visible":
         return (
-            f"{peer_label} {event_label} 소식은 사업 영향과 보도 확산 모두 높아 "
+            f"{peer_label} {event_label}은 사업 영향과 보도 확산이 함께 높아 "
             "오늘의 핵심 판단 축입니다."
         )
     if recurrence_label == "novel":
-        return f"{peer_label} {event_label} 조합은 최근 기간 내 첫 등장입니다."
+        return f"{peer_label} {event_label} 조합이 이번 기간에 처음 포착됐습니다."
     if recurrence_label == "recurring":
         return f"{peer_label} {event_label} 조합이 반복되는 패턴입니다."
-    return "보도량·업종 비중과 함께 참고 맥락으로 사용합니다."
+    return "보도량·업종 비중은 참고 맥락으로만 봅니다."
 
 
 def _relevant_keyword_groups(
@@ -1042,12 +1042,11 @@ def format_evidence_change_lines(comparison_facts: dict[str, Any] | None) -> lis
     for gap in _list(comparison_facts.get("visibility_gaps"))[:1]:
         if not isinstance(gap, dict):
             continue
-        peer_label = str(gap.get("peer_label") or gap.get("peer_id") or "")
         title = str(gap.get("title") or "")
-        if title:
-            lines.append(f"단건·고임팩트: {title} — 영향 큼·보도 적음")
-        elif peer_label:
-            lines.append(f"단건·고임팩트: {peer_label} — 영향 큼·보도 적음")
+        peer_label = str(gap.get("peer_label") or gap.get("peer_id") or "")
+        subject = _short_title(title) if title else peer_label
+        if subject:
+            lines.append(f"{subject}: 영향은 크지만 보도는 아직 적음")
 
     deduped: list[str] = []
     seen: set[str] = set()
@@ -1121,6 +1120,15 @@ def _clip(value: str, limit: int) -> str:
     return cleaned[:limit].rstrip()
 
 
+def _short_title(title: str, *, limit: int = 42) -> str:
+    cleaned = " ".join(str(title or "").split())
+    if not cleaned:
+        return ""
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1].rstrip() + "…"
+
+
 _GENERIC_EXECUTIVE_MARKERS = (
     "경쟁 환경",
     "경쟁력 강화",
@@ -1181,7 +1189,8 @@ def build_executive_summary_from_facts(
     if not lead:
         return ""
     title = str(lead.get("title") or "")
-    hint = str(lead.get("narrative_hint") or "")
+    short_title = _short_title(title, limit=56)
+    label = str(lead.get("label") or "")
     keyword_line = ""
     trends = _list(comparison_facts.get("keyword_trends")) if comparison_facts else []
     if trends and isinstance(trends[0], dict):
@@ -1190,26 +1199,71 @@ def build_executive_summary_from_facts(
         if group_name and ratio_delta is not None:
             sign = "+" if float(ratio_delta) > 0 else ""
             keyword_line = (
-                f" 시장 관심으로 {group_name} 검색지수는 "
-                f"전일 대비 {sign}{float(ratio_delta):.1f}pt입니다."
+                f" {group_name} 검색지수는 전일 대비 {sign}{float(ratio_delta):.1f}pt입니다."
             )
     stats = change_stats or {}
     window_days = stats.get("window_days", 60)
     count = int(stats.get("today_issue_count", 0) or 0) + int(
         stats.get("recent_card_count", 0) or 0
     )
-    base = (
-        f"오늘 {count}건 신호 가운데 가장 먼저 확인할 소식은 '{title}'입니다."
-        f" 최근 {window_days}일 흐름과 비교해 우선순위를 재조정하세요."
+    if label == "low_visibility_definite_event":
+        base = (
+            f"오늘 {count}건 신호 중 '{short_title}'은 영향은 크지만 "
+            f"보도가 아직 적은 단건 이벤트입니다."
+        )
+    elif label == "high_salience_visible":
+        base = (
+            f"오늘 {count}건 신호 중 '{short_title}'이 사업 영향과 보도 확산 모두에서 핵심입니다."
+        )
+    else:
+        base = f"오늘 {count}건 신호 중 '{short_title}'을 우선 볼 만합니다."
+    window_line = f" 최근 {window_days}일 패턴과 비교하면 오늘 판단 순서가 달라질 수 있습니다."
+    return _clip(f"{base}{window_line}{keyword_line}".strip(), 320)
+
+
+def build_executive_implication_from_facts(comparison_facts: dict[str, Any] | None) -> str:
+    lead = _primary_lead(comparison_facts)
+    if not lead:
+        return ""
+    title = _short_title(str(lead.get("title") or ""), limit=48)
+    label = str(lead.get("label") or "")
+    if label == "low_visibility_definite_event":
+        return _clip(
+            f"SK AX는 '{title}'를 제안서 레퍼런스·수주 후속 맥락에서 먼저 대조해야 합니다.",
+            280,
+        )
+    if label == "high_salience_visible":
+        return _clip(
+            f"SK AX는 '{title}'를 범용 AX 메시지가 아니라 "
+            "고객 제안서의 운영 KPI·검증 지표 변경 여부로 확인해야 합니다.",
+            280,
+        )
+    return _clip(
+        f"SK AX는 '{title}'가 단건 뉴스인지 반복 패턴인지 구분한 뒤 제안 우선순위를 정해야 합니다.",
+        280,
     )
-    detail = hint or ""
-    return _clip(f"{base}{keyword_line} {detail}".strip(), 320)
+
+
+def build_primary_signal_value(comparison_facts: dict[str, Any] | None) -> str:
+    lead = _primary_lead(comparison_facts)
+    if not lead:
+        return ""
+    title = _short_title(str(lead.get("title") or ""), limit=36)
+    label = str(lead.get("label") or "")
+    if label == "low_visibility_definite_event":
+        return _clip(f"영향 큰 단건 이벤트 — {title}", 96)
+    if label == "high_salience_visible":
+        return _clip(f"핵심 판단 축 — {title}", 96)
+    return _clip(title, 96)
 
 
 def build_context_signal_value(comparison_facts: dict[str, Any] | None) -> str:
     if not isinstance(comparison_facts, dict):
         return ""
     changes = format_evidence_change_lines(comparison_facts)
+    for line in changes:
+        if "영향은 크지만" in line:
+            return _clip(line, 96)
     for line in changes:
         if "검색지수" in line or "일평균" in line or "비중" in line:
             return _clip(line, 96)
@@ -1220,9 +1274,9 @@ def build_context_signal_value(comparison_facts: dict[str, Any] | None) -> str:
         if group_name and ratio_delta is not None:
             sign = "+" if float(ratio_delta) > 0 else ""
             return _clip(
-                f"{group_name} 검색지수 {sign}{float(ratio_delta):.1f}pt — 시장 관심 맥락", 96
+                f"{group_name} 검색지수 {sign}{float(ratio_delta):.1f}pt — 시장 관심 참고", 96
             )
-    return "보도량·업종 비중은 핵심 신호를 대체하지 않는 참고 맥락"
+    return "보도량·업종 비중은 핵심 신호를 대체하지 않음"
 
 
 def build_next_judgment_signal_value(
@@ -1233,10 +1287,10 @@ def build_next_judgment_signal_value(
     item = lead or _primary_lead(comparison_facts)
     if not item:
         return "제안서·PoC·운영 KPI 중 무엇을 바꿀지 오늘 확정"
-    title = str(item.get("title") or "")
+    title = _short_title(str(item.get("title") or ""), limit=40)
     if str(item.get("label") or "") == "low_visibility_definite_event":
-        return _clip(f"{title} — 인수·제휴 후속과 제안서 레퍼런스 반영 여부 결정", 96)
-    return _clip(f"{title} 기준으로 제안 산출물·검증 지표 변경 여부 결정", 96)
+        return _clip(f"'{title}' 후속·제안서 반영 여부를 이번 주 안에 확정", 96)
+    return _clip(f"'{title}' 기준 제안 산출물·검증 지표 변경 여부 결정", 96)
 
 
 def polish_executive_output(
@@ -1273,27 +1327,24 @@ def polish_executive_output(
 
     implication = str(out.get("executive_implication") or "")
     lead = _primary_lead(comparison)
-    if lead and (
-        is_generic_executive_text(implication)
-        or "salience" in implication.lower()
-        or "노출 0." in implication
-    ):
-        hint = str(lead.get("narrative_hint") or "")
-        title = str(lead.get("title") or "")
-        out["executive_implication"] = _clip(
-            hint
-            or (
-                f"SK AX는 '{title}'를 범용 메시지가 아니라 "
-                "고객 제안서의 운영 KPI·검증 지표 변경 여부로 확인해야 합니다."
-            ),
-            280,
+    implication_rewrite = build_executive_implication_from_facts(comparison)
+    if (
+        lead
+        and implication_rewrite
+        and (
+            is_generic_executive_text(implication)
+            or "salience" in implication.lower()
+            or "노출 0." in implication
+            or implication.strip() == str(lead.get("narrative_hint") or "").strip()
         )
+    ):
+        out["executive_implication"] = implication_rewrite
 
     signals = [item for item in _list(out.get("signals")) if isinstance(item, dict)]
     if len(signals) >= 3:
         polished: list[dict[str, Any]] = []
         replacements = [
-            (primary_headline or str(lead.get("title") if lead else "") or signals[0].get("value")),
+            (build_primary_signal_value(comparison) or str(signals[0].get("value") or "")),
             build_context_signal_value(comparison),
             build_next_judgment_signal_value(comparison, lead=lead),
         ]
@@ -1365,8 +1416,10 @@ __all__ = [
     "build_comparison_facts",
     "build_ui_change_summary",
     "build_context_signal_value",
+    "build_executive_implication_from_facts",
     "build_executive_summary_from_facts",
     "build_primary_headline",
+    "build_primary_signal_value",
     "compute_keyword_trend_facts",
     "format_evidence_change_lines",
     "is_generic_executive_text",

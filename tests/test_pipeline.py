@@ -116,6 +116,46 @@ def test_same_contract_domain_uses_general_signature_without_event_hardcoding(mo
     assert _should_merge_articles(left, right, similarity=0.82, threshold=0.8) is True
 
 
+def test_same_company_security_action_articles_merge_across_bucket_noise():
+    left = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, AI 보안 스타트업 손잡고 클라우드 보안 강화",
+        "content": "",
+        "published_at": "2026-06-10T13:48:00+09:00",
+    }
+    right = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, AI 보안 전선 넓힌다…국내외 전문기업과 맞손",
+        "content": "",
+        "published_at": "2026-06-10T14:36:00+09:00",
+    }
+
+    assert _rule_prefilter_key(left) == _rule_prefilter_key(right)
+    assert _event_bucket(left) != _event_bucket(right)
+    assert _should_merge_articles(left, right, similarity=0.82, threshold=0.8) is True
+
+
+def test_security_action_articles_do_not_merge_on_security_only():
+    left = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, 보안 솔루션 출시로 고객 대응 강화",
+        "content": "",
+        "published_at": "2026-06-10T09:00:00+09:00",
+    }
+    right = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, 보안 기업과 협력 확대",
+        "content": "",
+        "published_at": "2026-06-10T10:00:00+09:00",
+    }
+
+    assert _should_merge_articles(left, right, similarity=0.82, threshold=0.8) is False
+
+
 def test_representative_prefers_article_with_company_in_title():
     title_article = {
         "company": ["lg_cns"],
@@ -971,6 +1011,85 @@ def test_openai_enterprise_ai_articles_can_merge_with_llm(monkeypatch):
     monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
 
     assert _should_merge_articles(left, right, 0.84, 0.80) is True
+
+
+def test_same_company_partner_product_articles_merge_across_contract_and_ax_buckets():
+    existing = {
+        "id": 46656,
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["ax"],
+        "title": "LG CNS·앤트로픽 맞손…클로드 기반 AX 시장 공략",
+        "content": "",
+        "published_at": "2026-06-09T01:00:00+00:00",
+    }
+    direct_product = {
+        "id": 47126,
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["ax"],
+        "title": "LG CNS, 앤트로픽 ‘클로드 엔터프라이즈’ 도입",
+        "content": "",
+        "published_at": "2026-06-09T09:38:00+00:00",
+    }
+    partner_action = {
+        "id": 47125,
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["ax"],
+        "title": "LG CNS, 오픈AI 이어 앤트로픽과 맞손…“기업 AX 사업 확대”",
+        "content": "",
+        "published_at": "2026-06-09T09:50:00+00:00",
+    }
+
+    assert _should_merge_articles(direct_product, existing, 0.70, 0.80) is True
+    assert _should_merge_articles(partner_action, existing, 0.70, 0.80) is True
+
+
+def test_same_day_action_prefilter_lets_llm_review_cross_bucket_security_news(monkeypatch):
+    cloud_title = {
+        "id": 47168,
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, AI 해커·클라우드 보안 스타트업 손잡았다",
+        "published_at": "2026-06-10T08:24:00+09:00",
+    }
+    broad_partner_title = {
+        "id": 47166,
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, 국내외 보안기업과 협력 확대…AI 보안 역량 강화",
+        "published_at": "2026-06-10T08:44:00+09:00",
+    }
+    named_partner_title = {
+        "id": 47169,
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS 엑스보우·테이텀 시큐리티 손잡고 AI 보안 삼각편대 구축",
+        "published_at": "2026-06-10T08:12:00+09:00",
+    }
+    capability_title = {
+        "id": 47212,
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": '"취약점 탐지부터 사고 복구까지"…삼성SDS, AI 보안체계 강화',
+        "published_at": "2026-06-10T09:02:00+09:00",
+    }
+
+    assert _event_bucket(cloud_title) == "cloud_infra"
+    assert _event_bucket(broad_partner_title) == "contract_deal"
+    assert _event_bucket(named_partner_title) == "security"
+    assert _event_bucket(capability_title) == "security"
+    assert _rule_prefilter_key(cloud_title) == _rule_prefilter_key(broad_partner_title)
+    assert _rule_prefilter_key(cloud_title) == _rule_prefilter_key(named_partner_title)
+    assert _rule_prefilter_key(capability_title) != _rule_prefilter_key(named_partner_title)
+
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
+
+    assert _should_merge_articles(cloud_title, broad_partner_title, 0.82, 0.80) is True
+    assert _should_merge_articles(cloud_title, named_partner_title, 0.82, 0.80) is True
+    assert _should_merge_articles(named_partner_title, capability_title, 0.82, 0.80) is False
 
 
 def test_same_company_title_fallback_merges_skala_training_variants():

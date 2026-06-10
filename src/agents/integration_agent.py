@@ -522,10 +522,16 @@ def _source_article_ids_for_issue(
     input_bundle: AnalysisInputBundle,
 ) -> list[int]:
     candidates: list[int] = []
-    for key in ("source_article_ids", "cluster_article_ids", "analyzed_article_ids"):
+    for key in ("source_article_ids", "analyzed_article_ids"):
         candidates.extend(
             _safe_int(value) for value in _normalize_string_list(integrated_issue.get(key))
         )
+    if candidates:
+        return _dedupe_ints(candidates)
+    candidates.extend(
+        _safe_int(value)
+        for value in _normalize_string_list(integrated_issue.get("cluster_article_ids"))
+    )
     candidates.extend(_item_ids(input_bundle.items))
     candidates.extend(
         _safe_int(source.get("article_id"))

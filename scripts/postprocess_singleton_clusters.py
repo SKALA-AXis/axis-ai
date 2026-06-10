@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.config.companies import COMPANY_ALIASES  # noqa: E402
 from src.config.env_loader import load_profile  # noqa: E402
 from src.db.postgres import SessionLocal  # noqa: E402
 
@@ -673,18 +674,10 @@ def _same_company_family(left_titles: list[str], right_titles: list[str]) -> boo
 def _company_families(titles: list[str]) -> set[str]:
     compact = " ".join(_compact(title) for title in titles)
     families: set[str] = set()
-    if any(marker in compact for marker in ("lgcns", "엘지씨엔에스", "lg씨엔에스")):
-        families.add("lg_cns")
-    if any(marker in compact for marker in ("삼성sds", "삼성에스디에스")):
-        families.add("samsung_sds")
-    if "현대오토에버" in compact:
-        families.add("hyundai_autoever")
-    if any(marker in compact for marker in ("skax", "sk에이엑스")):
-        families.add("sk_ax")
-    if "포스코dx" in compact:
-        families.add("posco_dx")
-    if any(marker in compact for marker in ("ncai", "엔씨ai")):
-        families.add("nc_ai")
+    for company_id, aliases in COMPANY_ALIASES.items():
+        markers = {_compact(company_id), *(_compact(alias) for alias in aliases)}
+        if any(marker and marker in compact for marker in markers):
+            families.add(company_id)
     return families
 
 
@@ -762,7 +755,7 @@ def _is_list_like(title: str) -> bool:
 
 
 def _normalize_token(token: str) -> str:
-    compact = _compact(token)
+    compact = _strip_korean_particle(_compact(token))
     aliases = {
         "엘지씨엔에스": "lgcns",
         "lg씨엔에스": "lgcns",
@@ -777,6 +770,15 @@ def _normalize_token(token: str) -> str:
         "클로드": "claude",
     }
     return aliases.get(compact, compact)
+
+
+def _strip_korean_particle(token: str) -> str:
+    if len(token) < 4 or not re.fullmatch(r"[가-힣]+", token):
+        return token
+    for suffix in ("으로", "에게", "에서", "과", "와", "은", "는", "이", "가", "을", "를", "의"):
+        if token.endswith(suffix) and len(token) - len(suffix) >= 3:
+            return token[: -len(suffix)]
+    return token
 
 
 def _useful_token(token: str) -> bool:
@@ -813,9 +815,12 @@ def _useful_token(token: str) -> bool:
         "확대",
         "기반",
         "기업용",
+        "기업",
         "전사",
         "그룹",
         "계열사",
+        "공략",
+        "확대",
     }
     return token not in stopwords
 
