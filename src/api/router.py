@@ -616,8 +616,8 @@ def _build_pdf_chat_response(
     conversation_id = request.conversation_id or request.session_id or str(uuid.uuid4())
     message_id = str(uuid.uuid4())
     text = str(pdf_payload.get("text") or "").strip()
-    page_count = int(pdf_payload.get("page_count") or 0)
-    parsed_page_count = int(pdf_payload.get("parsed_page_count") or 0)
+    page_count = _safe_pdf_int(pdf_payload.get("page_count"))
+    parsed_page_count = _safe_pdf_int(pdf_payload.get("parsed_page_count"))
     source_id = f"pdf:{file_hash[:16]}"
 
     if not text:
@@ -683,8 +683,9 @@ def _build_pdf_chat_response(
             f"{file_name}에서 {parsed_page_count or page_count}개 페이지의 텍스트를 확인했습니다. "
             f"요청 '{question}' 기준으로 핵심은 {bullets[0] if bullets else title} 입니다."
         )
-    report_draft_payload = (
-        llm_payload.get("report_draft") if isinstance(llm_payload.get("report_draft"), dict) else {}
+    raw_report_draft = llm_payload.get("report_draft") if llm_payload else None
+    report_draft_payload: Mapping[str, object] = (
+        raw_report_draft if isinstance(raw_report_draft, dict) else {}
     )
     report_draft = {
         "title": str(report_draft_payload.get("title") or "").strip() or f"{title} 분석 보고서",
@@ -906,13 +907,38 @@ def _section_body(report_draft: object, title: str) -> str:
 
 
 def _safe_pdf_confidence(value: object, text: str) -> float:
-    try:
-        parsed = float(value)
-        if 0.0 <= parsed <= 1.0:
-            return parsed
-    except (TypeError, ValueError):
-        pass
+    parsed = _safe_pdf_float(value)
+    if parsed is not None and 0.0 <= parsed <= 1.0:
+        return parsed
     return 0.74 if len(text) >= 800 else 0.58
+
+
+def _safe_pdf_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, (str, bytes, bytearray)):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
+
+
+def _safe_pdf_float(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, (str, bytes, bytearray)):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _rank_pdf_lines(text: str) -> list[str]:
