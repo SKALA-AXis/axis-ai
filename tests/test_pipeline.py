@@ -10,6 +10,7 @@ from src.preprocessing.dedup import (
     _event_bucket,
     _event_signature,
     _existing_cluster_candidate_window,
+    _reset_cluster_llm_run_state,
     _rule_prefilter_key,
     _same_issue,
     _should_merge_articles,
@@ -114,6 +115,18 @@ def test_same_contract_domain_uses_general_signature_without_event_hardcoding(mo
     assert _event_signature(left).startswith("contract_deal:")
     assert _event_signature(right).startswith("contract_deal:")
     assert _should_merge_articles(left, right, similarity=0.82, threshold=0.8) is True
+
+
+def test_cluster_llm_state_resets_per_dedup_run():
+    dedup._cluster_llm_calls = 30
+    dedup._cluster_llm_cache = {("left", "right", "reason"): None}
+    dedup._cluster_llm_approved_pairs = {frozenset({1, 2})}
+
+    _reset_cluster_llm_run_state()
+
+    assert dedup._cluster_llm_calls == 0
+    assert dedup._cluster_llm_cache == {}
+    assert dedup._cluster_llm_approved_pairs == set()
 
 
 def test_same_company_security_action_articles_merge_across_bucket_noise():
