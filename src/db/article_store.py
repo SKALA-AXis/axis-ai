@@ -1368,7 +1368,13 @@ _INSERT_CARD_NEWS_V2 = text("""
         CAST(:evaluation_payload AS jsonb)
     )
     ON CONFLICT (id) DO UPDATE SET
+        title = EXCLUDED.title,
+        summary_lines = EXCLUDED.summary_lines,
+        event_type = EXCLUDED.event_type,
+        importance = EXCLUDED.importance,
+        importance_score = EXCLUDED.importance_score,
         implication = CAST(:implication AS jsonb),
+        sources = CAST(:sources AS jsonb),
         validation_pass = :validation_pass,
         validation_sc_score = :validation_sc_score,
         peer_company_id = COALESCE(EXCLUDED.peer_company_id, card_news.peer_company_id),
@@ -1411,7 +1417,13 @@ _INSERT_CARD_NEWS_V2_WITHOUT_INTEGRATED_ISSUE = text("""
         CAST(:evaluation_payload AS jsonb)
     )
     ON CONFLICT (id) DO UPDATE SET
+        title = EXCLUDED.title,
+        summary_lines = EXCLUDED.summary_lines,
+        event_type = EXCLUDED.event_type,
+        importance = EXCLUDED.importance,
+        importance_score = EXCLUDED.importance_score,
         implication = CAST(:implication AS jsonb),
+        sources = CAST(:sources AS jsonb),
         validation_pass = :validation_pass,
         validation_sc_score = :validation_sc_score,
         peer_company_id = COALESCE(EXCLUDED.peer_company_id, card_news.peer_company_id),
@@ -1663,12 +1675,27 @@ def _sync_card_news_articles(
             )
             db.commit()
     except Exception as e:  # noqa: BLE001
+        if _is_missing_card_news_articles_table(e):
+            log.info(
+                "card_news_articles table unavailable; skip normalized card/article sync | "
+                "card_id=%s article_ids=%s",
+                card_id,
+                ids,
+            )
+            return
         log.warning(
             "card_news_articles 동기화 실패 | card_id=%s article_ids=%s error=%s",
             card_id,
             ids,
             e,
         )
+
+
+def _is_missing_card_news_articles_table(exc: Exception) -> bool:
+    text_repr = str(exc).lower()
+    return "card_news_articles" in text_repr and (
+        "undefinedtable" in text_repr or "does not exist" in text_repr
+    )
 
 
 def _source_ids_from_sources(value: Any) -> list[int]:
@@ -1768,6 +1795,9 @@ def _build_evidence_payload(card: dict[str, Any]) -> dict[str, Any]:
     raw_evidence = card.get("evidence_payload")
     if isinstance(raw_evidence, dict):
         payload.update(raw_evidence)
+    analysis_package = card.get("analysis_package")
+    if isinstance(analysis_package, dict) and analysis_package:
+        payload.setdefault("analysis_package", analysis_package)
     evidence_chain = card.get("evidence_chain") or {}
     if isinstance(evidence_chain, dict):
         payload.setdefault("source_links", evidence_chain.get("source_links") or [])

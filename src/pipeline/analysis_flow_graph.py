@@ -86,6 +86,11 @@ class SupervisorState(TypedDict, total=False):
     analysis: dict[str, Any] | None
     implication: dict[str, Any] | None
     sentence_grounding: dict[str, Any] | None
+    issue_understanding: dict[str, Any] | None
+    profile_linkage: dict[str, Any] | None
+    skax_response_linkage: dict[str, Any] | None
+    grounding_summary: dict[str, Any] | None
+    claim_strength: str | None
     validation: ValidationReport | None
     analysis_package: AnalysisPackage | None
     card_news_id: str | None
@@ -304,6 +309,11 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
                 "analysis": insight.get("analysis") or {},
                 "implication": insight.get("implication") or {},
                 "sentence_grounding": insight.get("sentence_grounding") or {},
+                "issue_understanding": insight.get("issue_understanding") or {},
+                "profile_linkage": insight.get("profile_linkage") or {},
+                "skax_response_linkage": insight.get("skax_response_linkage") or {},
+                "grounding_summary": insight.get("grounding_summary") or {},
+                "claim_strength": insight.get("claim_strength"),
             },
         )
 
@@ -379,6 +389,11 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
             validation=validation.to_dict() if validation is not None else {},
             evidence_payload=evidence_payload,
             classification=state.get("classification") or {},
+            issue_understanding=state.get("issue_understanding") or {},
+            profile_linkage=state.get("profile_linkage") or {},
+            skax_response_linkage=state.get("skax_response_linkage") or {},
+            grounding_summary=state.get("grounding_summary") or {},
+            claim_strength=state.get("claim_strength"),
         )
         return cast(
             SupervisorState,
@@ -740,6 +755,11 @@ def _evidence_payload_from_state(state: SupervisorState) -> dict[str, Any]:
     analysis = state.get("analysis") or {}
     implication = state.get("implication") or {}
     sentence_grounding = state.get("sentence_grounding") or {}
+    issue_understanding = state.get("issue_understanding") or {}
+    profile_linkage = state.get("profile_linkage") or {}
+    skax_response_linkage = state.get("skax_response_linkage") or {}
+    grounding_summary = state.get("grounding_summary") or {}
+    claim_strength = state.get("claim_strength")
     evidence_payload: dict[str, Any] = {
         "source_links": [
             {
@@ -758,6 +778,11 @@ def _evidence_payload_from_state(state: SupervisorState) -> dict[str, Any]:
             "analysis": analysis,
             "implication": implication,
             "sentence_grounding": sentence_grounding,
+            "issue_understanding": issue_understanding,
+            "profile_linkage": profile_linkage,
+            "skax_response_linkage": skax_response_linkage,
+            "grounding_summary": grounding_summary,
+            "claim_strength": claim_strength,
             "classification": classification,
         },
     }

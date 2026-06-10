@@ -906,6 +906,11 @@ class AnalysisPackage:
     validation: dict[str, Any]
     evidence_payload: dict[str, Any] = field(default_factory=dict)
     classification: dict[str, Any] = field(default_factory=dict)
+    issue_understanding: dict[str, Any] = field(default_factory=dict)
+    profile_linkage: dict[str, Any] = field(default_factory=dict)
+    skax_response_linkage: dict[str, Any] = field(default_factory=dict)
+    grounding_summary: dict[str, Any] = field(default_factory=dict)
+    claim_strength: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -919,6 +924,11 @@ class AnalysisPackage:
             "validation": self.validation,
             "evidence_payload": self.evidence_payload,
             "classification": self.classification,
+            "issue_understanding": self.issue_understanding,
+            "profile_linkage": self.profile_linkage,
+            "skax_response_linkage": self.skax_response_linkage,
+            "grounding_summary": self.grounding_summary,
+            "claim_strength": self.claim_strength,
         }
 
 

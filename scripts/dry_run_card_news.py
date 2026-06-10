@@ -31,7 +31,13 @@ def _parse_args() -> argparse.Namespace:
             "are already exported and must not be overwritten by .env files."
         ),
     )
-    parser.add_argument("--cluster-id", type=int, required=True)
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--cluster-id", type=int)
+    target.add_argument(
+        "--raw-article-id",
+        type=int,
+        help="Run one raw_articles.id directly, even when cluster_id is empty.",
+    )
     parser.add_argument("--representative-id", type=int, default=None)
     parser.add_argument(
         "--save-db",
@@ -46,8 +52,14 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _default_output_path(cluster_id: int) -> Path:
+def _default_output_path(
+    *,
+    cluster_id: int | None = None,
+    raw_article_id: int | None = None,
+) -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    if raw_article_id is not None:
+        return Path("dryruns") / f"card_news_dry_run_article_{raw_article_id}_{stamp}.json"
     return Path("dryruns") / f"card_news_dry_run_cluster_{cluster_id}_{stamp}.json"
 
 
@@ -58,9 +70,35 @@ def main() -> None:
     profile = "current" if args.env == "current" else load_profile(args.env)
     from src.pipeline.analysis_pipeline import AnalysisPipelineRunner, list_cluster_article_ids
 
-    output_path = Path(args.out) if args.out else _default_output_path(args.cluster_id)
+    output_path = (
+        Path(args.out)
+        if args.out
+        else _default_output_path(
+            cluster_id=args.cluster_id,
+            raw_article_id=args.raw_article_id,
+        )
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    cluster_article_ids = list_cluster_article_ids(args.cluster_id)
+    if args.raw_article_id is not None:
+        cluster_article_ids = [args.raw_article_id]
+
+        def run_pipeline() -> dict[str, Any]:
+            return AnalysisPipelineRunner().run_raw_article(
+                raw_article_id=args.raw_article_id,
+                save_card=args.save_db,
+            )
+
+    else:
+        cluster_article_ids = list_cluster_article_ids(args.cluster_id)
+
+        def run_pipeline() -> dict[str, Any]:
+            return AnalysisPipelineRunner().run_cluster(
+                cluster_id=args.cluster_id,
+                representative_id=args.representative_id,
+                cluster_article_ids=cluster_article_ids,
+                save_card=args.save_db,
+            )
+
     if not cluster_article_ids:
         raise SystemExit(
             f"cluster_id={args.cluster_id} 에 속한 raw_articles가 없습니다. "
@@ -73,12 +111,7 @@ def main() -> None:
         )
 
     if args.save_db:
-        result = AnalysisPipelineRunner().run_cluster(
-            cluster_id=args.cluster_id,
-            representative_id=args.representative_id,
-            cluster_article_ids=cluster_article_ids,
-            save_card=True,
-        )
+        result = run_pipeline()
     else:
         with (
             patch(
@@ -91,18 +124,14 @@ def main() -> None:
             ),
             patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
         ):
-            result = AnalysisPipelineRunner().run_cluster(
-                cluster_id=args.cluster_id,
-                representative_id=args.representative_id,
-                cluster_article_ids=cluster_article_ids,
-                save_card=False,
-            )
+            result = run_pipeline()
 
     payload = {
         "dry_run": {
             "created_at": datetime.now(UTC).isoformat(),
             "env_profile": profile,
             "cluster_id": args.cluster_id,
+            "raw_article_id": args.raw_article_id,
             "representative_id": args.representative_id,
             "cluster_article_ids": cluster_article_ids,
             "db_writes_patched": not args.save_db,
