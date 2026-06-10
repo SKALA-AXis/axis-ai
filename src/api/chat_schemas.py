@@ -48,6 +48,15 @@ class ChatTurnRequest(BaseModel):
         return self
 
 
+class ChatPdfRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    request: ChatTurnRequest
+    file_name: str
+    content_type: str | None = None
+    pdf_base64: str
+
+
 class ChatSource(BaseModel):
     model_config = ConfigDict(extra="allow")
 

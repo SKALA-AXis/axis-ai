@@ -17,7 +17,6 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -30,6 +29,7 @@ from src.observability.langfuse_client import (
     tracing_config,
     with_session,
 )
+from src.services.llm_env import ensure_llm_env_loaded
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +43,6 @@ _RECENT_NEWS_LIMIT = int(os.getenv("CHAT_RECENT_NEWS_LIMIT", "6"))
 _MARKET_TREND_DAYS = int(os.getenv("CHAT_MARKET_TREND_DAYS", "30"))
 _MARKET_TREND_LIMIT = int(os.getenv("CHAT_MARKET_TREND_LIMIT", "8"))
 _DEFAULT_LLM_MODEL = "gpt-4o-mini"
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 _SECURITY_PATTERNS = (
     r"시스템\s*프롬프트",
@@ -94,6 +93,7 @@ _PAGE_REFERENCE_HINTS = (
 
 _SEARCH_STOPWORDS = {
     "오늘",
+    "어제",
     "요약",
     "알려줘",
     "알려줘~",
@@ -104,9 +104,14 @@ _SEARCH_STOPWORDS = {
     "기사",
     "뉴스",
     "news",
+    "pdf",
+    "피디에프",
     "최근",
     "관련",
     "위주",
+    "만들어줘",
+    "생성해줘",
+    "출력해줘",
 }
 
 _PEER_ALIASES: tuple[tuple[str, str, str], ...] = (
@@ -158,25 +163,10 @@ def _chat_llm_model() -> str:
     return os.getenv("CHAT_ORCHESTRATOR_MODEL", _DEFAULT_LLM_MODEL)
 
 
-def _ensure_llm_env_loaded() -> None:
-    if os.getenv("OPENAI_API_KEY", "").strip():
-        return
-    try:
-        from dotenv import load_dotenv
-
-        profile = os.getenv("AXIS_PROFILE", "").strip()
-        if profile in {"local", "cloud"}:
-            load_dotenv(_PROJECT_ROOT / f".env.{profile}", override=True)
-        if not os.getenv("OPENAI_API_KEY", "").strip():
-            load_dotenv(_PROJECT_ROOT / ".env")
-    except Exception as exc:  # noqa: BLE001 - env fallback should not mask the real LLM error.
-        log.debug("chat LLM dotenv load skipped | error=%s", exc)
-
-
 def _get_llm() -> Any:
     global _llm
     if _llm is None:
-        _ensure_llm_env_loaded()
+        ensure_llm_env_loaded()
         from langchain_openai import ChatOpenAI
 
         _llm = ChatOpenAI(
@@ -428,6 +418,14 @@ class ChatOrchestratorAgent:
                 limit=_RECENT_NEWS_LIMIT,
             )
 
+        report_cards = (
+            self._recent_card_report_search(request.message, limit=10)
+            if _is_card_news_report_request(request.message)
+            else []
+        )
+        if report_cards and _is_pdf_or_report_export_request(request.message):
+            return report_cards
+
         market_trend_candidates = (
             self._recent_peer_market_trend_search(
                 days=_MARKET_TREND_DAYS,
@@ -437,6 +435,7 @@ class ChatOrchestratorAgent:
             else []
         )
         lexical = [
+            *report_cards,
             *self._lexical_card_search(request.message, limit=8),
             *self._lexical_integrated_issue_search(request.message, limit=5),
             *self._lexical_briefing_search(request.message, limit=4),
@@ -878,6 +877,48 @@ class ChatOrchestratorAgent:
             return []
         return [_card_row_to_candidate(row, score=0.76) for row in rows]
 
+    def _recent_card_report_search(self, query: str, *, limit: int) -> list[RetrievalCandidate]:
+        days = _card_report_window_days(query)
+        peer = _extract_peer(query)
+        conditions = ["created_at >= NOW() - (:days * INTERVAL '1 day')"]
+        params: dict[str, Any] = {"days": int(days), "limit": int(limit)}
+        if peer:
+            conditions.append("COALESCE(peer_company_id, company) = :peer_id")
+            params["peer_id"] = peer[0]
+        try:
+            with SessionLocal() as db:
+                rows = (
+                    db.execute(
+                        text(
+                            f"""
+                        SELECT id,
+                               title,
+                               summary_lines,
+                               event_type,
+                               importance,
+                               COALESCE(peer_company_id, company) AS peer_id,
+                               created_at,
+                               sources,
+                               source_articles
+                          FROM card_news
+                         WHERE {" AND ".join(conditions)}
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("recent card report search skipped | error=%s", exc)
+            return []
+        return [
+            _card_row_to_candidate(row, score=0.86 - min(index, 8) * 0.02)
+            for index, row in enumerate(rows)
+        ]
+
     def _vector_search(self, query: str, *, top_k: int) -> list[RetrievalCandidate]:
         try:
             from src.rag.hybrid_search import hybrid_search
@@ -949,6 +990,7 @@ class ChatOrchestratorAgent:
                 message_id=message_id,
                 intent=intent,
                 candidates=candidates,
+                query=request.message,
             )
         try:
             llm_payload, trace_id = self._generate_grounded_answer(
@@ -964,6 +1006,7 @@ class ChatOrchestratorAgent:
                 message_id=message_id,
                 intent=intent,
                 candidates=candidates,
+                query=request.message,
             )
 
         response = _base_response(
@@ -998,7 +1041,19 @@ class ChatOrchestratorAgent:
                 message_id=message_id,
                 intent=intent,
                 candidates=candidates,
+                query=request.message,
             )
+        if intent == "report_lookup" and _is_pdf_or_report_export_request(request.message):
+            export_note = (
+                "\n\n아래 보고서 초안의 'PDF 저장/출력' 버튼으로 바로 저장하거나 "
+                "출력할 수 있습니다."
+            )
+            reply_text = response["reply"].rstrip()
+            reply_text = reply_text.replace("작성하겠습니다", "작성했습니다")
+            reply_text = reply_text.replace("생성하겠습니다", "생성했습니다")
+            reply_text = reply_text.replace("정리하겠습니다", "정리했습니다")
+            response["reply"] = reply_text + export_note
+            response["provenance"]["export_requested"] = "pdf"
         return response
 
     def _generate_grounded_answer(
@@ -1037,6 +1092,8 @@ def _classify_intent(message: str, request: ChatTurnRequest) -> str:
         return "news_lookup"
     if _is_market_trend_request(message):
         return "market_trend"
+    if _is_pdf_or_report_export_request(message):
+        return "report_lookup"
     if re.search(r"핵심\s*신호|주요\s*신호|today'?s?\s*insight", compact) or (
         re.search(r"오늘|today", compact)
         and re.search(r"인사이트|동향|경쟁|카드|브리핑|보고서|리포트", compact)
@@ -1118,6 +1175,42 @@ def _is_direct_lookup_request(message: str) -> bool:
     return bool(re.search(r"찾아|보여|알려|목록|리스트|관련\s*카드|관련\s*자료", compact))
 
 
+def _is_pdf_or_report_export_request(message: str) -> bool:
+    compact = message.lower()
+    asks_export = re.search(
+        r"pdf|피디에프|보고서|리포트|브리핑|출력|다운로드|내보내|export",
+        compact,
+    )
+    asks_create = re.search(r"만들|생성|작성|정리|요약|출력|저장|다운로드", compact)
+    return bool(asks_export and asks_create)
+
+
+def _is_card_news_report_request(message: str) -> bool:
+    compact = message.lower()
+    compact_no_space = re.sub(r"\s+", "", compact)
+    has_card_scope = "카드뉴스" in compact_no_space or re.search(r"카드|뉴스|신호", compact)
+    has_report_intent = re.search(
+        r"pdf|피디에프|보고서|리포트|브리핑|요약|정리|출력|다운로드",
+        compact,
+    )
+    has_date_scope = re.search(r"오늘|어제|today|yesterday|최근", compact)
+    return bool(has_card_scope and has_report_intent and has_date_scope)
+
+
+def _card_report_window_days(message: str) -> int:
+    compact = message.lower()
+    compact_no_space = re.sub(r"\s+", "", compact)
+    if "어제오늘" in compact_no_space or (
+        re.search(r"어제|yesterday", compact) and re.search(r"오늘|today", compact)
+    ):
+        return 2
+    if re.search(r"어제|yesterday", compact):
+        return 2
+    if re.search(r"최근\s*7|일주일|1주", compact):
+        return 7
+    return 1
+
+
 def _grounded_answer_prompt(
     *,
     request: ChatTurnRequest,
@@ -1194,7 +1287,10 @@ def _parse_json_object(content: str) -> dict[str, Any]:
 
 def _safe_confidence(value: Any, *, default: float) -> float:
     try:
-        return max(0.0, min(float(value), 1.0))
+        parsed = float(value)
+        if parsed <= 0 and default > 0:
+            return default
+        return max(0.0, min(parsed, 1.0))
     except (TypeError, ValueError):
         return default
 
@@ -1583,32 +1679,47 @@ def _report_draft_from_candidates(
     query: str, candidates: list[RetrievalCandidate]
 ) -> dict[str, Any]:
     title_seed = "AXIS 보고서 초안"
+    if _is_card_news_report_request(query):
+        title_seed = "AXIS 카드뉴스 요약 보고서"
+    if _is_pdf_or_report_export_request(query):
+        title_seed = "AXIS 카드뉴스 요약 PDF"
     if re.search(r"브리핑|briefing", query, flags=re.IGNORECASE):
         title_seed = "AXIS 브리핑 초안"
     evidence_lines = [
         f"{candidate.title}: {candidate.snippet}".strip(": ")
-        for candidate in candidates[:4]
+        for candidate in candidates[:6]
         if candidate.title or candidate.snippet
     ]
+    card_count = sum(1 for candidate in candidates if candidate.source_type == "card_news")
+    date_lines = [
+        _display_date((candidate.metadata or {}).get("created_at"))
+        for candidate in candidates
+        if candidate.metadata
+    ]
+    date_lines = [line for line in _dedupe_strings(date_lines) if line]
+    period = ", ".join(date_lines[:3]) if date_lines else "확인된 기간"
     sections = [
         {
             "title": "핵심 요약",
             "body": _join_sentences(
                 [
-                    "확인된 AXIS 근거를 기준으로 주요 변화 신호를 압축했습니다.",
+                    (
+                        f"{period} 카드뉴스 {card_count or len(candidates)}건을 기준으로 "
+                        "주요 변화 신호를 압축했습니다."
+                    ),
                     *(
-                        evidence_lines[:2]
+                        evidence_lines[:3]
                         or ["구체 근거가 더 확보되면 요약 정확도를 높일 수 있습니다."]
                     ),
                 ],
-                limit=520,
+                limit=760,
             ),
         },
         {
             "title": "판단 근거",
             "body": _join_sentences(
-                evidence_lines[2:4] or evidence_lines[:2] or ["근거 후보가 부족합니다."],
-                limit=520,
+                evidence_lines[3:6] or evidence_lines[:3] or ["근거 후보가 부족합니다."],
+                limit=760,
             ),
         },
         {
@@ -1654,6 +1765,7 @@ def _grounded_response(
     message_id: str,
     intent: str,
     candidates: list[RetrievalCandidate],
+    query: str = "",
 ) -> dict[str, Any]:
     if not candidates:
         return _base_response(
@@ -1672,12 +1784,17 @@ def _grounded_response(
         )
     lines = [f"- {candidate.title}: {candidate.snippet}" for candidate in candidates[:4]]
     if intent == "report_lookup":
-        report_draft = _report_draft_from_candidates("보고서 초안", candidates)
+        report_draft = _report_draft_from_candidates(query or "보고서 초안", candidates)
         reply = "확인된 근거를 바탕으로 채팅 안에서 볼 수 있는 보고서 초안을 만들었습니다."
+        if _is_pdf_or_report_export_request(query):
+            reply += (
+                "\n\n아래 보고서 초안의 'PDF 저장/출력' 버튼으로 바로 저장하거나 "
+                "출력할 수 있습니다."
+            )
     else:
         report_draft = None
         reply = "확인된 근거 기준으로 정리하면 다음과 같습니다.\n\n" + "\n".join(lines)
-    return _base_response(
+    response = _base_response(
         conversation_id=conversation_id,
         message_id=message_id,
         reply=reply,
@@ -1690,6 +1807,9 @@ def _grounded_response(
         answer_blocks=_answer_blocks_from_candidates(candidates),
         report_draft=report_draft,
     )
+    if intent == "report_lookup" and _is_pdf_or_report_export_request(query):
+        response["provenance"]["export_requested"] = "pdf"
+    return response
 
 
 def _handoff_response(
