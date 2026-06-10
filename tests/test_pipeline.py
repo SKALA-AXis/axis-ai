@@ -116,6 +116,46 @@ def test_same_contract_domain_uses_general_signature_without_event_hardcoding(mo
     assert _should_merge_articles(left, right, similarity=0.82, threshold=0.8) is True
 
 
+def test_same_company_security_action_articles_merge_across_bucket_noise():
+    left = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, AI 보안 스타트업 손잡고 클라우드 보안 강화",
+        "content": "",
+        "published_at": "2026-06-10T13:48:00+09:00",
+    }
+    right = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, AI 보안 전선 넓힌다…국내외 전문기업과 맞손",
+        "content": "",
+        "published_at": "2026-06-10T14:36:00+09:00",
+    }
+
+    assert _rule_prefilter_key(left) == _rule_prefilter_key(right)
+    assert _event_bucket(left) != _event_bucket(right)
+    assert _should_merge_articles(left, right, similarity=0.82, threshold=0.8) is True
+
+
+def test_security_action_articles_do_not_merge_on_security_only():
+    left = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, 보안 솔루션 출시로 고객 대응 강화",
+        "content": "",
+        "published_at": "2026-06-10T09:00:00+09:00",
+    }
+    right = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, 보안 기업과 협력 확대",
+        "content": "",
+        "published_at": "2026-06-10T10:00:00+09:00",
+    }
+
+    assert _should_merge_articles(left, right, similarity=0.82, threshold=0.8) is False
+
+
 def test_representative_prefers_article_with_company_in_title():
     title_article = {
         "company": ["lg_cns"],

@@ -1191,6 +1191,9 @@ def _same_company_action_topic(left: dict[str, Any], right: dict[str, Any]) -> b
     if not _same_company_action_candidate(left, right):
         return False
 
+    if _same_company_security_action_topic(left, right):
+        return True
+
     shared_anchors = _concrete_title_anchors(left) & _concrete_title_anchors(right)
     return bool(shared_anchors)
 
@@ -1204,6 +1207,21 @@ def _same_company_action_candidate(left: dict[str, Any], right: dict[str, Any]) 
     company_tokens = _company_title_tokens(left) | _company_title_tokens(right)
     non_company_shared = shared - company_tokens
     return bool(non_company_shared)
+
+
+def _same_company_security_action_topic(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if _published_day(left) != _published_day(right):
+        return False
+    if _security_action_prefilter_key(left) != _security_action_prefilter_key(right):
+        return False
+
+    company_tokens = _company_title_tokens(left) | _company_title_tokens(right)
+    shared = (_title_event_tokens(left) & _title_event_tokens(right)) - company_tokens
+    if len(shared) < 2:
+        return False
+
+    domain_tokens = {"보안", "클라우드", "취약점", "침해", "해킹"}
+    return bool(shared & domain_tokens)
 
 
 def _security_signature_conflict_without_action(
