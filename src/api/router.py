@@ -609,7 +609,8 @@ async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
     from src.agents.mixer_analysis_agent import MixerAnalysisAgent
 
     log.info(
-        "Mixer 요청 | card_ids=%s integrated_issue_ids=%s",
+        "Mixer 요청 | mode=%s card_ids=%s integrated_issue_ids=%s",
+        request.analysis_mode,
         request.card_ids,
         request.integrated_issue_ids,
     )
@@ -618,6 +619,7 @@ async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
         integrated_issue_ids=request.integrated_issue_ids,
         ratios=request.ratios,
         user_context=request.user_context,
+        analysis_mode=request.analysis_mode,
     )
     return MixerAnalysisResponse.model_validate(result)
 
@@ -656,6 +658,7 @@ async def analyze_mixer_stream(request: MixerAnalysisRequest) -> StreamingRespon
                 integrated_issue_ids=request.integrated_issue_ids,
                 ratios=request.ratios,
                 user_context=request.user_context,
+                analysis_mode=request.analysis_mode,
                 progress=progress,
             )
         )

@@ -29,7 +29,13 @@ class TodayInsightGenerateRequest(BaseModel):
     )
     max_issues: int = Field(default=8, ge=1, le=20, description="LLM 입력 통합 이슈 cap.")
     max_cards: int = Field(default=12, ge=1, le=30, description="연결 카드뉴스 cap.")
-    use_cached: bool = Field(default=True, description="같은 기준일 최신 저장 결과 재사용.")
+    use_cached: bool = Field(
+        default=True,
+        description=(
+            "기준일 이하의 최신 저장 결과를 재사용. "
+            "오늘 결과가 없으면 마지막 저장 리포트를 반환한다."
+        ),
+    )
     force_refresh: bool = Field(default=False, description="캐시 무시 후 새로 생성.")
     refresh_policy: Literal["cache_first", "urgent_only"] = Field(
         default="cache_first",
@@ -47,7 +53,8 @@ class TodayInsightGenerateRequest(BaseModel):
     cache_only: bool = Field(
         default=False,
         description=(
-            "저장된 결과만 반환한다. 캐시가 없으면 생성하지 않고 scheduled pending 상태를 반환."
+            "저장된 결과만 반환한다. 기준일 이하 저장 리포트가 전혀 없을 때만 "
+            "scheduled pending 상태를 반환."
         ),
     )
     preload_model: bool = Field(
@@ -105,6 +112,16 @@ class TodayInsightSource(BaseModel):
     published_at: Optional[str] = None
 
 
+class TodayInsightSourceTrace(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    source_integrated_issue_id: str = ""
+    source_card_id: str = ""
+    source_raw_article_ids: list[str] = Field(default_factory=list)
+    title: str = ""
+    url: str = ""
+
+
 class TodayInsightChangeSummary(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -139,6 +156,31 @@ class TodayInsightComparisonFacts(BaseModel):
     salience_candidates: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class TodayInsightSection(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str = ""
+    label: str = ""
+    title: str = ""
+    summary: str = ""
+    reasoning: list[TodayInsightReasoningStep] = Field(default_factory=list)
+    evidence: TodayInsightEvidence = Field(default_factory=TodayInsightEvidence)
+    response_direction: list[TodayInsightAction] = Field(default_factory=list)
+    sources: list[TodayInsightSource] = Field(default_factory=list)
+    source_trace: list[TodayInsightSourceTrace] = Field(default_factory=list)
+
+
+class TodayInsightMemoryDocument(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    update_window: dict[str, Any] = Field(default_factory=dict)
+    observed_facts: list[dict[str, Any]] = Field(default_factory=list)
+    important_memory: list[dict[str, Any]] = Field(default_factory=list)
+    next_analysis_hints: list[dict[str, Any]] = Field(default_factory=list)
+    source_trace: list[TodayInsightSourceTrace] = Field(default_factory=list)
+    pruned_items: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class TodayInsightGenerateResponse(BaseModel):
     """Home dashboard Today's Insight response."""
 
@@ -151,9 +193,12 @@ class TodayInsightGenerateResponse(BaseModel):
     executive_implication: str = ""
     change_summary: list[TodayInsightChangeSummary] = Field(default_factory=list)
     comparison_facts: TodayInsightComparisonFacts | dict[str, Any] | None = None
+    insight_sections: list[TodayInsightSection] = Field(default_factory=list)
     signals: list[TodayInsightSignal] = Field(default_factory=list)
     response_direction: list[TodayInsightAction] = Field(default_factory=list)
     sources: list[TodayInsightSource] = Field(default_factory=list)
+    source_trace: list[TodayInsightSourceTrace] = Field(default_factory=list)
+    memory_document: TodayInsightMemoryDocument | dict[str, Any] | None = None
     source_integrated_issue_ids: list[str] = Field(default_factory=list)
     source_card_ids: list[str] = Field(default_factory=list)
     peer_ids: list[str] = Field(default_factory=list)
