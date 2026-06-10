@@ -310,6 +310,20 @@ def test_relevance_rejects_pure_market_price_article():
     assert result["relevance_label"] == "irrelevant"
 
 
+def test_relevance_rejects_multi_company_roundup_news_title():
+    result = _noise_reject_result(
+        title="[#시큐리티 포커스] 유락 '디파스 프로 맥' 출시·삼성SDS 'AI 클라우드 ...",
+        content="여러 보안 기업과 IT 기업의 소식을 묶어 전한다.",
+        source_type="news",
+        matched_companies=["samsung_sds"],
+        matched_sectors=["security"],
+    )
+
+    assert result is not None
+    assert result["relevance_label"] == "irrelevant"
+    assert "섹션형" in result["reason"]
+
+
 def test_relevance_keeps_event_driven_market_article_for_analysis():
     result = _noise_reject_result(
         title="[특징주] 삼성SDS, AI 데이터센터 수혜 기대감에 28%대 급등",

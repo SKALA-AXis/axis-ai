@@ -957,6 +957,17 @@ def _noise_reject_result(
             reason="뉴스브리핑·교육/멘토링·일반 시황성 기사로 피어사 전략 동향 신호가 약해 제외",
         )
 
+    if _is_roundup_news_title(title):
+        return _result(
+            label="irrelevant",
+            score=0.25,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason=(
+                "여러 기업 소식을 묶은 섹션형/브리핑형 기사라 개별 피어사 전략 이벤트 근거에서 제외"
+            ),
+        )
+
     if _is_financial_theme_noise(title=title, content=content, matched_companies=matched_companies):
         return _result(
             label="irrelevant",
@@ -1682,6 +1693,29 @@ def _is_low_value_news_noise(*, title: str, content: str) -> bool:
         return True
 
     return False
+
+
+def _is_roundup_news_title(title: str) -> bool:
+    compact_title = _compact(title)
+    if not compact_title:
+        return False
+
+    markers = (
+        "뉴스브리프",
+        "뉴스브리핑",
+        "ai브리프",
+        "it브리프",
+        "it스냅샷",
+        "전자it레이더",
+        "시큐리티포커스",
+        "테크앤나우",
+        "technow",
+        "클라우드월드",
+    )
+    if any(marker in compact_title for marker in markers):
+        return True
+
+    return bool(re.match(r"^\[?#?[가-힣a-z0-9]*(?:포커스|레이더|브리프|스냅샷)\]?", compact_title))
 
 
 def _is_non_korean_news_title(*, title: str, source_type: str | None) -> bool:

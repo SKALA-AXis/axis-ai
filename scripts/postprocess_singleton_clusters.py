@@ -46,6 +46,18 @@ _LIST_LIKE_RE = re.compile(
     r"클라우드\s*월드|ai\s*브리프|it\s*스냅샷|전자\s*it\s*레이더|테크\s*&?\s*나우|tech\s*&?\s*now",
     re.I,
 )
+_LIST_LIKE_COMPACT_MARKERS = (
+    "뉴스브리프",
+    "뉴스브리핑",
+    "ai브리프",
+    "it브리프",
+    "it스냅샷",
+    "전자it레이더",
+    "시큐리티포커스",
+    "테크앤나우",
+    "technow",
+    "클라우드월드",
+)
 
 
 @dataclass(frozen=True)
@@ -751,6 +763,11 @@ def _is_stock_noise(title: str) -> bool:
 
 
 def _is_list_like(title: str) -> bool:
+    compact = _compact(title)
+    if any(marker in compact for marker in _LIST_LIKE_COMPACT_MARKERS):
+        return True
+    if re.match(r"^\[?#?[가-힣a-z0-9]*(?:포커스|레이더|브리프|스냅샷)\]?", compact):
+        return True
     return bool(_LIST_LIKE_RE.search(title or ""))
 
 

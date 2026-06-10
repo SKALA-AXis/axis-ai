@@ -1032,15 +1032,23 @@ def _requires_strict_title_merge(left: dict[str, Any], right: dict[str, Any]) ->
 def _is_list_like_title(title: str) -> bool:
     compact = _compact_title(title)
     markers = (
+        "뉴스브리프",
+        "뉴스브리핑",
         "클라우드월드",
         "ai브리프",
+        "it브리프",
+        "it스냅샷",
+        "전자it레이더",
+        "시큐리티포커스",
         "it는지금",
         "biznow",
         "기업경쟁력",
         "테크앤나우",
         "tech&now",
     )
-    return any(marker in compact for marker in markers)
+    if any(marker in compact for marker in markers):
+        return True
+    return bool(re.match(r"^\[?#?[가-힣a-z0-9]*(?:포커스|레이더|브리프|스냅샷)\]?", compact))
 
 
 def _dates_near(left_dates: set[str], right_dates: set[str]) -> bool:
