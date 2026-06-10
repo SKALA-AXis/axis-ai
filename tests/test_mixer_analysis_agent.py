@@ -314,6 +314,40 @@ def test_mixer_quality_flags_lower_confidence_and_warn(monkeypatch):
     assert "다른 카드 조합" not in result["warning"]
 
 
+def test_mixer_missing_credentials_error_is_sanitized(monkeypatch):
+    issue_ids = [
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+    ]
+    units = [_unit("CN-1", issue_ids[0]), _unit("CN-2", issue_ids[1])]
+
+    monkeypatch.setattr(
+        mixer_module,
+        "load_analysis_units_by_integrated_issue_ids",
+        lambda ids: units,
+    )
+
+    class _MissingCredentialLLM:
+        def invoke(self, prompt, config=None):  # noqa: ANN001
+            del prompt, config
+            raise ValueError(
+                "Missing credentials. Please pass an `api_key`, `workload_identity`, "
+                "`admin_api_key`, or set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` "
+                "environment variable."
+            )
+
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda: _MissingCredentialLLM())
+
+    result = asyncio.run(
+        MixerAnalysisAgent().analyze(integrated_issue_ids=issue_ids, analysis_mode="quick")
+    )
+
+    assert result["confidence"] == 0.0
+    assert "AI 모델 인증 정보가 설정되지 않아" in result["warning"]
+    assert "Missing credentials" not in result["warning"]
+    assert "api_key" not in result["warning"]
+
+
 def test_mixer_schema_requires_card_or_integrated_issue_ids():
     assert MixerAnalysisRequest(integrated_issue_ids=["a"]).integrated_issue_ids == ["a"]
     assert (

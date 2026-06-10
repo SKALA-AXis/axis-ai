@@ -49,6 +49,11 @@ from src.services.analysis_units import (
     quality_flags_for_units,
     source_integrated_issue_ids,
 )
+from src.services.llm_env import (
+    ensure_llm_env_loaded,
+    is_missing_llm_credentials_error,
+    missing_llm_credentials_message,
+)
 
 log = logging.getLogger(__name__)
 
@@ -109,6 +114,7 @@ _llm: ChatOpenAI | None = None
 def _get_llm() -> ChatOpenAI:
     global _llm
     if _llm is None:
+        ensure_llm_env_loaded()
         _llm = ChatOpenAI(
             model=_LLM_MODEL,
             temperature=0.15,
@@ -685,9 +691,12 @@ class MixerAnalysisAgent:
             )
         except Exception as e:
             log.exception("MixerAnalysisAgent LLM 호출 실패 | error=%s", e)
+            detail = (
+                missing_llm_credentials_message() if is_missing_llm_credentials_error(e) else str(e)
+            )
             return _error_response(
                 "LLM 호출 실패",
-                str(e),
+                detail,
                 requested_card_ids,
                 integrated_issue_ids=requested_integrated_issue_ids,
             )

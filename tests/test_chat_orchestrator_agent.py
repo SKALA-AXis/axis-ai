@@ -353,6 +353,91 @@ async def test_report_lookup_returns_report_draft(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
+async def test_card_news_pdf_request_returns_printable_report_without_today_shortcut(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    agent = ChatOrchestratorAgent(enable_llm=False)
+
+    def fail_today_lookup():
+        raise AssertionError("PDF/report export request should not use today insight shortcut")
+
+    monkeypatch.setattr(agent, "_lookup_today_insight", fail_today_lookup)
+    monkeypatch.setattr(
+        agent,
+        "_recent_card_report_search",
+        lambda _query, limit: [
+            RetrievalCandidate(
+                "card_news",
+                "CN-TODAY",
+                "LG CNS, 클로드 오픈 및 AX 추진",
+                "오늘 36건 신호 중 영향은 크지만 보도가 아직 적은 단건 이벤트입니다.",
+                0.91,
+                {"created_at": "2026-06-10T08:30:00+09:00", "peer_id": "lg_cns"},
+            ),
+            RetrievalCandidate(
+                "card_news",
+                "CN-YESTERDAY",
+                "삼성SDS 금융 AX 수주 확대",
+                "전일 카드뉴스에서 금융 AX 운영 요구가 반복 확인됐습니다.",
+                0.87,
+                {"created_at": "2026-06-09T08:30:00+09:00", "peer_id": "samsung_sds"},
+            ),
+        ],
+    )
+
+    response = await agent.answer(
+        ChatTurnRequest(message="어제 오늘의 카드뉴스를 요약한 pdf를 만들어줘.")
+    )
+
+    assert response["intent"] == "report_lookup"
+    assert response["report_draft"]["title"] == "AXIS 카드뉴스 요약 PDF"
+    assert "PDF 저장/출력" in response["reply"]
+    assert response["provenance"]["export_requested"] == "pdf"
+    assert [source["id"] for source in response["sources"]] == ["CN-TODAY", "CN-YESTERDAY"]
+
+
+@pytest.mark.asyncio
+async def test_today_content_pdf_request_uses_recent_cards(monkeypatch: pytest.MonkeyPatch):
+    agent = ChatOrchestratorAgent(enable_llm=False)
+
+    monkeypatch.setattr(
+        agent,
+        "_recent_card_report_search",
+        lambda _query, limit: [
+            RetrievalCandidate(
+                "card_news",
+                "CN-TODAY",
+                "오늘 감지된 AX 실행 신호",
+                "오늘 카드뉴스에서 AX 운영 전환과 경쟁사 계약 신호가 확인됐습니다.",
+                0.91,
+                {"created_at": "2026-06-10T08:30:00+09:00", "peer_id": "lg_cns"},
+            )
+        ],
+    )
+
+    response = await agent.answer(
+        ChatTurnRequest(message="오늘 있었던 내용을 pdf로 정리해서 보여줘")
+    )
+
+    assert response["intent"] == "report_lookup"
+    assert response["report_draft"]["title"] == "AXIS 카드뉴스 요약 PDF"
+    assert "PDF 저장/출력" in response["reply"]
+    assert response["sources"][0]["id"] == "CN-TODAY"
+
+
+@pytest.mark.asyncio
+async def test_print_followup_returns_ui_help_without_fixture() -> None:
+    agent = ChatOrchestratorAgent(enable_llm=False)
+
+    response = await agent.answer(ChatTurnRequest(message="프린트할수있게해줘"))
+
+    assert response["intent"] == "print_help"
+    assert response["scope"] == "assistant_ui"
+    assert "PDF 저장/출력" in response["reply"]
+    assert response["provenance"]["export_requested"] == "pdf"
+
+
+@pytest.mark.asyncio
 async def test_grounded_answer_uses_injected_llm(monkeypatch: pytest.MonkeyPatch):
     fake_llm = _FakeLLM()
     agent = ChatOrchestratorAgent(llm=fake_llm)
