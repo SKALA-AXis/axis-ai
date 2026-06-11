@@ -1933,7 +1933,11 @@ def _normalize_fact_type(*, fact_type: str, text: str, activity_type: str) -> st
     if normalized == "numeric_fact" and _has_business_scope_terms(text):
         if _normalize_event_type(activity_type) in {"contract", "partnership"}:
             return "application_fact"
-        if _normalize_event_type(activity_type) in {"launch", "technology_update", "general_update"}:
+        if _normalize_event_type(activity_type) in {
+            "launch",
+            "technology_update",
+            "general_update",
+        }:
             return "application_fact"
     return normalized
 
@@ -1962,9 +1966,7 @@ def _coerce_summary_role(*, role: str, fact_type: str, text: str, activity_type:
         return "application_case"
     if fact_type == "numeric_fact":
         return role
-    if role == "main_event" and re.search(
-        r"기능|역할|지원|자동화|분석|검증|운영|적용|연계", text
-    ):
+    if role == "main_event" and re.search(r"기능|역할|지원|자동화|분석|검증|운영|적용|연계", text):
         return "service_function"
     return role
 
