@@ -204,6 +204,62 @@ async def test_market_trend_request_includes_selected_peer_context(
     assert "report_draft" not in response
 
 
+@pytest.mark.asyncio
+async def test_peer_profile_summary_request_stays_in_axis_scope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    agent = ChatOrchestratorAgent(enable_llm=False)
+
+    monkeypatch.setattr(
+        agent,
+        "_retrieve",
+        lambda _request: [
+            RetrievalCandidate(
+                "peer_profile",
+                "lg_cns",
+                "LG CNS",
+                "클라우드, 금융 IT, AX 운영 전환 역량을 보유한 주요 피어사입니다.",
+                0.8,
+            )
+        ],
+    )
+
+    response = await agent.answer(ChatTurnRequest(message="lg cns 피어사 정보를 요약해서 알려줘"))
+
+    assert response["intent"] == "page_qa"
+    assert response["scope"] == "global_axis_data"
+    assert "LG CNS" in response["reply"]
+    assert response["blocked"] is False
+
+
+@pytest.mark.asyncio
+async def test_relative_day_briefing_request_routes_to_report_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    agent = ChatOrchestratorAgent(enable_llm=False)
+
+    monkeypatch.setattr(
+        agent,
+        "_retrieve",
+        lambda _request: [
+            RetrievalCandidate(
+                "briefing_report",
+                "BR-3D",
+                "3일 전 브리핑",
+                "금융권 AX 전환과 피어사 수주 신호를 정리한 브리핑입니다.",
+                0.72,
+            )
+        ],
+    )
+
+    response = await agent.answer(ChatTurnRequest(message="3일전 브리핑 내용을 설ㅈ명해줘"))
+
+    assert response["intent"] == "report_lookup"
+    assert response["blocked"] is False
+    assert "보고서 초안" in response["reply"]
+    assert response["report_draft"]["title"] == "AXIS 브리핑 초안"
+
+
 def test_visible_id_aliases_are_supported():
     request = ChatTurnRequest(
         message="현재 화면 요약해줘",
@@ -348,7 +404,8 @@ async def test_report_lookup_returns_report_draft(monkeypatch: pytest.MonkeyPatc
     assert response["intent"] == "report_lookup"
     assert fake_llm.prompts
     assert response["report_draft"]["title"] == "금융 AX 동향 보고서"
-    assert response["report_draft"]["sections"][0]["title"] == "핵심 변화"
+    assert response["report_draft"]["sections"][0]["title"] == "목차 및 구성"
+    assert len(response["report_draft"]["sections"]) >= 6
     assert response["answer_blocks"][0]["title"] == "핵심 요약"
 
 
@@ -435,6 +492,60 @@ async def test_print_followup_returns_ui_help_without_fixture() -> None:
     assert response["scope"] == "assistant_ui"
     assert "PDF 저장/출력" in response["reply"]
     assert response["provenance"]["export_requested"] == "pdf"
+
+
+@pytest.mark.asyncio
+async def test_print_followup_with_history_returns_printable_report() -> None:
+    agent = ChatOrchestratorAgent(enable_llm=False)
+
+    response = await agent.answer(
+        ChatTurnRequest(
+            message="프린트할수있게해줘",
+            history=[
+                {"role": "user", "content": "오늘 핵심 신호를 요약해줘"},
+                {
+                    "role": "assistant",
+                    "content": "금융권 AX 전환 수요와 보안 거버넌스 요구가 함께 확대되고 있습니다.",
+                },
+            ],
+        )
+    )
+
+    assert response["intent"] == "report_lookup"
+    assert response["scope"] == "assistant_history"
+    assert response["report_draft"]["title"] == "AXIS 대화 기반 PDF"
+    assert response["report_draft"]["sections"][0]["title"] == "목차 및 구성"
+    assert response["report_draft"]["sections"][2]["title"] == "상세 정리"
+    assert "PDF 저장/출력" in response["reply"]
+    assert response["provenance"]["export_requested"] == "pdf"
+
+
+@pytest.mark.asyncio
+async def test_context_pdf_request_uses_history_when_retrieval_is_empty() -> None:
+    agent = ChatOrchestratorAgent(enable_llm=False)
+
+    response = await agent.answer(
+        ChatTurnRequest(
+            message="이 내용을 pdf로 만들어줘",
+            history=[
+                {
+                    "role": "assistant",
+                    "content": "LG CNS와 삼성SDS의 금융 AX 수주 확대 신호가 확인됐습니다.",
+                },
+                {
+                    "role": "assistant",
+                    "content": "SK AX 관점에서는 운영 안정성과 보안 레퍼런스 메시지를 강화해야 합니다.",
+                },
+            ],
+        )
+    )
+
+    assert response["intent"] == "report_lookup"
+    assert response["scope"] == "assistant_history"
+    assert response["report_draft"]["title"] == "AXIS 대화 기반 PDF"
+    assert "금융 AX 수주 확대" in response["report_draft"]["sections"][1]["body"]
+    assert "SK AX 관점" in response["report_draft"]["sections"][5]["title"]
+    assert "PDF 저장/출력" in response["reply"]
 
 
 @pytest.mark.asyncio
