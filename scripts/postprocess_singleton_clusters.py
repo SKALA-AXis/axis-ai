@@ -220,6 +220,9 @@ def main() -> None:
         print(f"updated={result['updated']}")
         print(f"group_updated={result['group_updated']}")
         print(f"noise_updated={result['noise_updated']}")
+        print(f"card_cluster_id_updated={result['card_cluster_id_updated']}")
+        print(f"card_source_payload_updated={result['card_source_payload_updated']}")
+        print(f"card_stale_deleted={result['card_stale_deleted']}")
 
 
 def run_postprocess(
@@ -270,6 +273,9 @@ def run_postprocess(
             db,
             _filter_group_candidates_after_target_merges(group_candidates, candidates),
         )
+        card_sync = _sync_card_news_with_current_clusters(db)
+    else:
+        card_sync = {"cluster_id_updated": 0, "source_payload_updated": 0, "stale_deleted": 0}
 
     return {
         "cluster_count": len(clusters),
@@ -281,6 +287,9 @@ def run_postprocess(
         "updated": updated,
         "group_updated": group_updated,
         "noise_updated": noise_updated,
+        "card_cluster_id_updated": card_sync["cluster_id_updated"],
+        "card_source_payload_updated": card_sync["source_payload_updated"],
+        "card_stale_deleted": card_sync["stale_deleted"],
     }
 
 
@@ -639,6 +648,174 @@ def _apply_noise_skips(db: Any, article_ids: list[int]) -> int:
         {"article_ids": article_ids},
     )
     return int(getattr(result, "rowcount", 0) or 0)
+
+
+def _sync_card_news_with_current_clusters(db: Any) -> dict[str, int]:
+    if not _table_exists(db, "card_news"):
+        return {"cluster_id_updated": 0, "source_payload_updated": 0, "stale_deleted": 0}
+
+    cluster_update = db.execute(
+        text(
+            """
+            WITH card_sources AS (
+                SELECT
+                    cn.id,
+                    cn.cluster_id,
+                    cardinality(COALESCE(cn.source_raw_article_ids, ARRAY[]::bigint[]))
+                        AS source_id_count,
+                    COUNT(ra.id) AS resolved_count,
+                    COUNT(ra.cluster_id) AS resolved_cluster_count,
+                    ARRAY_AGG(DISTINCT ra.cluster_id ORDER BY ra.cluster_id)
+                        FILTER (WHERE ra.cluster_id IS NOT NULL) AS source_clusters
+                FROM card_news cn
+                LEFT JOIN LATERAL unnest(
+                    COALESCE(cn.source_raw_article_ids, ARRAY[]::bigint[])
+                ) source_id(id) ON TRUE
+                LEFT JOIN raw_articles ra ON ra.id = source_id.id
+                WHERE cn.status = 'ACTIVE'
+                GROUP BY cn.id, cn.cluster_id, cn.source_raw_article_ids
+            ),
+            fixes AS (
+                SELECT id, source_clusters[1] AS current_cluster_id
+                FROM card_sources
+                WHERE source_clusters IS NOT NULL
+                  AND cardinality(source_clusters) = 1
+            )
+            UPDATE card_news cn
+            SET cluster_id = fixes.current_cluster_id
+            FROM fixes
+            WHERE cn.id = fixes.id
+              AND cn.status = 'ACTIVE'
+              AND cn.cluster_id <> fixes.current_cluster_id
+            """
+        )
+    )
+
+    stale_update = db.execute(
+        text(
+            """
+            WITH card_sources AS (
+                SELECT
+                    cn.id,
+                    cardinality(COALESCE(cn.source_raw_article_ids, ARRAY[]::bigint[]))
+                        AS source_id_count,
+                    COUNT(ra.id) AS resolved_count,
+                    COUNT(ra.cluster_id) AS resolved_cluster_count,
+                    ARRAY_AGG(DISTINCT ra.cluster_id ORDER BY ra.cluster_id)
+                        FILTER (WHERE ra.cluster_id IS NOT NULL) AS source_clusters
+                FROM card_news cn
+                LEFT JOIN LATERAL unnest(
+                    COALESCE(cn.source_raw_article_ids, ARRAY[]::bigint[])
+                ) source_id(id) ON TRUE
+                LEFT JOIN raw_articles ra ON ra.id = source_id.id
+                WHERE cn.status = 'ACTIVE'
+                GROUP BY cn.id, cn.source_raw_article_ids
+            ),
+            stale AS (
+                SELECT id
+                FROM card_sources
+                WHERE source_id_count = 0
+                   OR cardinality(source_clusters) > 1
+                   OR (resolved_count > 0 AND resolved_cluster_count = 0)
+            )
+            UPDATE card_news cn
+            SET status = 'DELETED'
+            FROM stale
+            WHERE cn.id = stale.id
+              AND cn.status = 'ACTIVE'
+            """
+        )
+    )
+
+    source_update = db.execute(
+        text(
+            """
+            WITH active_clusters AS (
+                SELECT DISTINCT cluster_id
+                FROM card_news
+                WHERE status = 'ACTIVE'
+            ),
+            ranked_articles AS (
+                SELECT
+                    ra.cluster_id,
+                    ra.id,
+                    ra.title,
+                    ra.url,
+                    ra.source_name,
+                    ra.publisher,
+                    ra.published_at,
+                    ra.collected_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY ra.cluster_id
+                        ORDER BY
+                            ra.published_at DESC NULLS LAST,
+                            ra.collected_at DESC NULLS LAST,
+                            ra.id DESC
+                    ) AS rn
+                FROM raw_articles ra
+                JOIN active_clusters ac ON ac.cluster_id = ra.cluster_id
+                WHERE ra.processing_status = 'PROCESSED'
+                  AND ra.relevance_label = 'relevant'
+            ),
+            cluster_sources AS (
+                SELECT
+                    cluster_id,
+                    ARRAY_AGG(
+                        id
+                        ORDER BY published_at DESC NULLS LAST, collected_at DESC NULLS LAST, id DESC
+                    ) AS raw_ids,
+                    JSONB_AGG(
+                        JSONB_BUILD_OBJECT(
+                            'index', rn,
+                            'raw_article_id', id,
+                            'title', COALESCE(title, ''),
+                            'source_name', COALESCE(source_name, publisher, ''),
+                            'url', COALESCE(url, ''),
+                            'published_at', published_at,
+                            'collected_at', collected_at
+                        )
+                        ORDER BY published_at DESC NULLS LAST, collected_at DESC NULLS LAST, id DESC
+                    ) AS sources,
+                    JSONB_AGG(
+                        JSONB_BUILD_OBJECT(
+                            'id', id,
+                            'title', COALESCE(title, ''),
+                            'url', COALESCE(url, ''),
+                            'source_name', COALESCE(source_name, ''),
+                            'publisher', COALESCE(publisher, ''),
+                            'published_at', published_at,
+                            'collected_at', collected_at
+                        )
+                        ORDER BY published_at DESC NULLS LAST, collected_at DESC NULLS LAST, id DESC
+                    ) AS source_articles
+                FROM ranked_articles
+                GROUP BY cluster_id
+            )
+            UPDATE card_news cn
+            SET source_raw_article_ids = cs.raw_ids,
+                sources = cs.sources,
+                source_articles = cs.source_articles
+            FROM cluster_sources cs
+            WHERE cn.status = 'ACTIVE'
+              AND cn.cluster_id = cs.cluster_id
+              AND (
+                  cn.source_raw_article_ids IS DISTINCT FROM cs.raw_ids
+                  OR cn.sources IS DISTINCT FROM cs.sources
+                  OR cn.source_articles IS DISTINCT FROM cs.source_articles
+              )
+            """
+        )
+    )
+
+    return {
+        "cluster_id_updated": int(getattr(cluster_update, "rowcount", 0) or 0),
+        "source_payload_updated": int(getattr(source_update, "rowcount", 0) or 0),
+        "stale_deleted": int(getattr(stale_update, "rowcount", 0) or 0),
+    }
+
+
+def _table_exists(db: Any, table_name: str) -> bool:
+    return bool(db.execute(text("SELECT to_regclass(:table_name)"), {"table_name": table_name}).scalar())
 
 
 def _reset_representatives(db: Any, cluster_ids: list[int]) -> None:
