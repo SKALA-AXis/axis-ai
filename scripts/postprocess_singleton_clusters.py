@@ -878,7 +878,7 @@ def _title_llm_same_event(
 
     left_key = " | ".join(sorted(left_titles))
     right_key = " | ".join(sorted(right_titles))
-    cache_key = tuple(sorted((left_key, right_key)))
+    cache_key: tuple[str, str] = (left_key, right_key) if left_key <= right_key else (right_key, left_key)
     if cache_key in _title_llm_cache:
         return _title_llm_cache[cache_key]
     if _title_llm_calls >= _TITLE_LLM_MAX_CALLS:
