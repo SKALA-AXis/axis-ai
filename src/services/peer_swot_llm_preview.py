@@ -513,7 +513,7 @@ def build_pack(
         [company["diagnostic_evidence"] for company in companies],
         limit=max(16, len(companies) * 4),
     )
-    pack = {
+    pack: dict[str, Any] = {
         "peer": normalize_peer(peer),
         "reference_peer": {"id": SK_AX_ID, "name": "SK AX"},
         "comparison_mode": comparison_mode,
@@ -1343,7 +1343,7 @@ def normalize_swot_items(
     *,
     diagnostics_override: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    raw_items = []
+    raw_items: list[Any] = []
     if isinstance(raw, dict):
         raw_items = raw.get("swot") or raw.get("swot_monitoring_axes") or []
     if not isinstance(raw_items, list):

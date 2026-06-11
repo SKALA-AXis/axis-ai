@@ -924,14 +924,8 @@ def normalize_result(result: dict[str, Any], evidence_pack: dict[str, Any], *, m
     result["schema_version"] = SCHEMA_VERSION
     result["evidence_hash"] = evidence_pack.get("evidence_hash")
 
-    business = (
-        result.get("business_keyword") if isinstance(result.get("business_keyword"), dict) else {}
-    )
-    technology = (
-        result.get("technology_keyword")
-        if isinstance(result.get("technology_keyword"), dict)
-        else {}
-    )
+    business = keyword_item(result, "business_keyword")
+    technology = keyword_item(result, "technology_keyword")
     business_label = clean_label(business.get("label"))
     technology_label = clean_label(technology.get("label"))
     business["label"] = business_label
@@ -951,6 +945,11 @@ def normalize_result(result: dict[str, Any], evidence_pack: dict[str, Any], *, m
     result["top_keyword_evidence"] = normalize_evidence_lines(result, evidence_pack)
     result["top_keyword_evidence_urls"] = normalize_evidence_urls(result)
     normalize_trace_reasoning_fields(result)
+
+
+def keyword_item(result: dict[str, Any], key: str) -> dict[str, Any]:
+    item = result.get(key)
+    return item if isinstance(item, dict) else {}
 
 
 def normalize_keyword_reasoning_fields(item: dict[str, Any]) -> None:
@@ -1051,7 +1050,7 @@ def normalize_evidence_lines(result: dict[str, Any], evidence_pack: dict[str, An
     for axis_index, (axis_name, key) in enumerate(
         (("사업", "business_keyword"), ("기술", "technology_keyword"))
     ):
-        item = result.get(key) if isinstance(result.get(key), dict) else {}
+        item = keyword_item(result, key)
         label = clean_label(item.get("label")) or "-"
         refs = [ref for ref in item.get("evidence_refs") or [] if isinstance(ref, str)]
         evidence_details = [lookup_evidence_detail(evidence_pack, ref) for ref in refs[:2]]
@@ -1088,7 +1087,7 @@ def normalize_evidence_lines(result: dict[str, Any], evidence_pack: dict[str, An
 def normalize_evidence_urls(result: dict[str, Any]) -> list[str]:
     urls: list[str] = []
     for key in ("business_keyword", "technology_keyword"):
-        item = result.get(key) if isinstance(result.get(key), dict) else {}
+        item = keyword_item(result, key)
         source_urls = [
             str(url).strip() for url in item.get("source_urls") or [] if str(url).strip()
         ]
@@ -1307,7 +1306,7 @@ def save_result_to_db(
 def collect_evidence_ids_from_result(result: dict[str, Any]) -> set[str]:
     refs: set[str] = set()
     for key in ("business_keyword", "technology_keyword"):
-        item = result.get(key) if isinstance(result.get(key), dict) else {}
+        item = keyword_item(result, key)
         for ref in item.get("evidence_refs") or []:
             if isinstance(ref, str) and ref.strip():
                 refs.add(ref.strip())
@@ -1343,9 +1342,9 @@ def collect_raw_article_ids(
 
 
 def average_confidence(result: dict[str, Any]) -> float | None:
-    values = []
+    values: list[float] = []
     for key in ("business_keyword", "technology_keyword"):
-        item = result.get(key) if isinstance(result.get(key), dict) else {}
+        item = keyword_item(result, key)
         confidence = safe_float(item.get("confidence"))
         if confidence is not None:
             values.append(confidence)
