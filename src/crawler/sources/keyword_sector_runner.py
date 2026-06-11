@@ -10,6 +10,8 @@ This runner keeps the existing keyword crawler helpers untouched and executes a 
 It does not call an LLM.
 """
 
+# ruff: noqa: E402, E501
+
 from __future__ import annotations
 
 import sys as _sys

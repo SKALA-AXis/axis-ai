@@ -10,6 +10,8 @@ Usage:
     ENABLE_OPENAI_CALLS=true uv run python scripts/generate_peer_overview_keywords.py --env local --period 2026Q1 --save-db
 """
 
+# ruff: noqa: E402, E501
+
 from __future__ import annotations
 
 import argparse

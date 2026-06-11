@@ -13,6 +13,8 @@ The output payload is kept compatible with Peer+:
 `swot` labels are `Strength`, `Weakness`, `Opportunity`, `Threat`.
 """
 
+# ruff: noqa: E402, E501
+
 from __future__ import annotations
 
 import argparse
@@ -22,8 +24,8 @@ import logging
 import os
 import re
 import sys
-from difflib import SequenceMatcher
 from datetime import date, datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
