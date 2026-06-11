@@ -4195,7 +4195,267 @@ def _build_report(
     grounded_flow = _grounded_front_interpretation_flow(report)
     if grounded_flow:
         report["interpretation_flow"] = grounded_flow
+    briefing_report = _front_briefing_report_payload(
+        result=report,
+        briefing_type=briefing_type,
+        period=period,
+        selected_cards=selected_cards,
+    )
+    report["briefingReport"] = briefing_report
+    report["flowSteps"] = briefing_report["flowSteps"]
     return report
+
+
+def _front_briefing_report_payload(
+    *,
+    result: dict[str, Any],
+    briefing_type: BriefingType,
+    period: dict[str, Any],
+    selected_cards: list[dict[str, Any]],
+) -> dict[str, Any]:
+    signal_cards = _front_briefing_signal_cards(result)
+    flow_steps = _front_briefing_flow_steps(_json_dict(result.get("interpretation_flow")))
+    summary_line = _first_text(result.get("key_summary"), _front_signal_summary(signal_cards))
+    digest = _dedupe_keep_order(
+        [
+            _first_text(result.get("briefing_lead"), result.get("executive_summary")),
+            summary_line,
+            *[_first_text(card.get("title"), card.get("summary")) for card in signal_cards],
+            *_json_list(result.get("evidence_summary")),
+        ]
+    )
+    front_cards = [_front_card_news_item(card) for card in selected_cards]
+    return {
+        "label": _front_briefing_label(briefing_type),
+        "title": result.get("title") or f"{period['label']} 브리핑",
+        "window": period.get("label") or "",
+        "count": _front_briefing_count(briefing_type),
+        "selectedCards": front_cards,
+        "peers": _dedupe_keep_order(
+            [_company_label(card) for card in selected_cards if _company_label(card)]
+        ),
+        "headline": _first_text(result.get("key_summary"), _front_signal_title(signal_cards)),
+        "briefingLead": _first_text(result.get("briefing_lead"), result.get("executive_summary")),
+        "briefingSummaryLine": summary_line,
+        "whatHappenedDigest": digest,
+        "signalCards": signal_cards,
+        "meaning": _front_briefing_meaning(result, flow_steps),
+        "benchmark": _front_briefing_benchmark(result),
+        "flowSteps": flow_steps,
+    }
+
+
+def _front_briefing_label(briefing_type: BriefingType) -> str:
+    return {"daily": "일간", "weekly": "주간", "monthly": "월간"}[briefing_type]
+
+
+def _front_briefing_count(briefing_type: BriefingType) -> int:
+    return {"daily": 4, "weekly": 6, "monthly": 8}[briefing_type]
+
+
+def _front_signal_title(signal_cards: list[dict[str, Any]]) -> str:
+    for card in signal_cards:
+        title = _first_text(card.get("title"))
+        if title:
+            return title
+    return ""
+
+
+def _front_signal_summary(signal_cards: list[dict[str, Any]]) -> str:
+    for card in signal_cards:
+        summary = _first_text(card.get("summary"), card.get("reason"))
+        if summary:
+            return summary
+    return ""
+
+
+def _front_card_news_item(card: dict[str, Any]) -> dict[str, Any]:
+    source = _primary_source(card)
+    source_url = _first_text(source.get("url"), source.get("link"), source.get("source_url"), "#")
+    source_name = _source_name(source)
+    title = _card_display_title(card)
+    summary = _front_card_summary_lines(card)
+    package = _analysis_package(card)
+    analysis = _json_dict(package.get("analysis"))
+    implication = _json_dict(package.get("implication"))
+    skax = _json_dict(implication.get("skax_implication"))
+    published_at = _source_published_at(card, source)
+    return {
+        "id": str(card.get("id") or ""),
+        "category": _first_text(card.get("sector"), card.get("primary_keyword_category"), "AX"),
+        "date": published_at,
+        "title": title,
+        "coverImageUrl": _first_text(
+            card.get("cover_image_url"),
+            _nested_get(card, "display", "background_asset_url"),
+            "/png.png",
+        ),
+        "coverImageAlt": f"{title} 대표 이미지",
+        "summary": summary,
+        "articlePages": [{"title": title, "paragraphs": summary}],
+        "insights": _json_list(analysis.get("strategic_meaning")),
+        "source": source_name,
+        "sourceUrl": source_url,
+        "detailTitle": title,
+        "detailDescription": _card_summary(card),
+        "detailPoints": _dedupe_keep_order(
+            [
+                _first_text(analysis.get("analysis_summary")),
+                _first_text(analysis.get("market_signal")),
+                *_json_list(analysis.get("strategic_meaning")),
+            ]
+        ),
+        "actionItems": _json_list(skax.get("recommended_actions")),
+        "peer_id": card.get("peer_id"),
+        "cluster_id": card.get("cluster_id"),
+        "subtitle": _first_text(card.get("subtitle")),
+        "category_label": _first_text(card.get("category_label"), card.get("sector")),
+        "published_date": published_at,
+        "summary_lines": summary,
+        "event_type": card.get("event_type"),
+        "sector": card.get("sector"),
+        "keywords": _json_list(card.get("keywords")),
+        "exposure_score": card.get("exposure_score"),
+        "importance_score": card.get("importance_score"),
+        "trust_score": card.get("trust_score"),
+        "sources": [_front_card_source_payload(source)] if source else [],
+        "source_count": len(_json_list(card.get("sources"))),
+        "created_at": _first_text(card.get("created_at"), published_at),
+    }
+
+
+def _front_card_source_payload(source: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "title": _first_text(source.get("title"), _source_name(source)),
+        "url": _first_text(source.get("url"), source.get("link"), source.get("source_url"), "#"),
+        "source_name": _source_name(source),
+        "published_at": _first_text(source.get("published_at")),
+    }
+
+
+def _front_card_summary_lines(card: dict[str, Any]) -> list[str]:
+    summary_lines = [
+        str(item).strip() for item in _json_list(card.get("summary_lines")) if str(item).strip()
+    ]
+    if summary_lines:
+        return summary_lines[:4]
+    summary = _card_summary(card)
+    return [summary] if summary else []
+
+
+def _front_briefing_signal_cards(result: dict[str, Any]) -> list[dict[str, Any]]:
+    cards: list[dict[str, Any]] = []
+    for index, item in enumerate(_json_list(result.get("key_change_cards")), 1):
+        if not isinstance(item, dict):
+            continue
+        title = _first_text(item.get("title"), item.get("description"))
+        summary = _first_text(item.get("description"), item.get("summary"))
+        reason = _first_text(item.get("why_important"), summary)
+        if not title and not summary and not reason:
+            continue
+        cards.append(
+            {
+                "label": _first_text(
+                    item.get("display_label"),
+                    item.get("peer_label"),
+                    f"핵심 변화 {index}",
+                ),
+                "title": title,
+                "summary": summary,
+                "reason": reason,
+                "relatedCardIds": [
+                    str(card_id)
+                    for card_id in _json_list(item.get("evidence_card_ids"))
+                    if str(card_id).strip()
+                ]
+                or [str(card_id) for card_id in _json_list(result.get("related_card_ids"))],
+            }
+        )
+    return cards
+
+
+def _front_briefing_flow_steps(flow: dict[str, Any]) -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = []
+    for index, step in enumerate(_json_list(flow.get("steps")), 1):
+        if not isinstance(step, dict):
+            continue
+        items = [item for item in _json_list(step.get("items")) if isinstance(item, dict)]
+        headline = _first_text(*(item.get("title") for item in items))
+        description = _first_text(*(item.get("description") for item in items))
+        details = [_front_flow_detail(item) for item in items[1:]]
+        details = [detail for detail in details if detail]
+        if not headline and not description and not details:
+            continue
+        steps.append(
+            {
+                "id": f"generated-{step.get('seq') or index}",
+                "label": _first_text(step.get("label"), f"Step {index}"),
+                "headline": headline or _first_text(step.get("label"), f"Step {index}"),
+                "description": description,
+                "details": details,
+            }
+        )
+    return steps
+
+
+def _front_flow_detail(item: dict[str, Any]) -> str:
+    title = _first_text(item.get("title"))
+    description = _first_text(item.get("description"))
+    if title and description:
+        return f"{title} {description}"
+    return title or description
+
+
+def _front_briefing_meaning(
+    result: dict[str, Any],
+    flow_steps: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    basis = _json_dict(result.get("briefing_basis"))
+    candidates = [
+        (
+            _block_text(basis.get("comparison_point"), "finding"),
+            _block_text(basis.get("comparison_point"), "rationale"),
+        ),
+        (
+            _block_text(basis.get("hidden_conclusion"), "finding"),
+            _block_text(basis.get("hidden_conclusion"), "rationale"),
+        ),
+        *[
+            (
+                _first_text(step.get("headline")),
+                _first_text(step.get("description")),
+            )
+            for step in flow_steps
+        ],
+    ]
+    return [
+        {
+            "title": _brief_sentence(title, max_chars=140),
+            "reason": _brief_sentence(reason, max_chars=180),
+        }
+        for title, reason in candidates
+        if _first_text(title)
+    ][:4]
+
+
+def _front_briefing_benchmark(result: dict[str, Any]) -> list[dict[str, str]]:
+    basis = _json_dict(result.get("briefing_basis"))
+    candidates = [
+        (
+            _block_text(basis.get("strategy_implication"), "finding"),
+            _block_text(basis.get("strategy_implication"), "rationale"),
+        ),
+        *[(str(item), "") for item in _json_list(basis.get("recommended_actions"))],
+        *[(str(item), "") for item in _json_list(result.get("evidence_summary"))],
+    ]
+    return [
+        {
+            "title": _brief_sentence(title, max_chars=140),
+            "reason": _brief_sentence(reason, max_chars=180),
+        }
+        for title, reason in candidates
+        if _first_text(title)
+    ][:4]
 
 
 def _empty_report(

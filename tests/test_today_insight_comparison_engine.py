@@ -338,9 +338,11 @@ def test_executive_summary_uses_plain_korean_not_internal_scores() -> None:
         },
     )
 
-    assert "단건 이벤트" in summary
-    assert "AI 에이전트" in summary
-    assert "-43.5pt" in summary
+    assert "고객 비교 기준" in summary
+    assert "PoC 검증 지표" in summary
+    assert "오늘 고객별 대응 기준" in summary
+    assert "오늘 36건" not in summary
+    assert "최근 60일" not in summary
     assert "재조정" not in summary
     assert "salience" not in summary.lower()
     assert "노출 0." not in summary
@@ -408,7 +410,7 @@ def test_polish_executive_output_rewrites_generic_llm_fields() -> None:
 
     assert "경쟁 환경" not in polished["headline"]
     assert "salience" not in polished["executive_summary"].lower()
-    assert "핵심" in polished["executive_summary"]
+    assert "고객 대응 패키지" in polished["executive_summary"]
     assert "클로드 엔터프라이즈" in polished["headline"]
     assert polished["signals"][0]["value"].startswith("핵심 판단 축")
     assert "SK AX는" in polished["executive_implication"]

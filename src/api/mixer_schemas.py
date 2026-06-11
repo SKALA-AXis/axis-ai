@@ -57,6 +57,8 @@ class RadarAxis(BaseModel):
     explanation: str = ""
     calculation: str = ""
     meaning: str = ""
+    prompted_interpretation: str = ""
+    analysis_prompt: str = ""
     support_count: int = 0
     total_count: int = 0
     matched_card_ids: list[str] = Field(default_factory=list)
@@ -133,6 +135,7 @@ class FollowUpCheck(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     question: str = ""
+    answer: str = ""
     purpose: str = ""
     evidence_refs: list[str] = Field(default_factory=list)
 

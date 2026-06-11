@@ -94,5 +94,6 @@ class ChatTurnResponse(BaseModel):
     confidence: float = 0.0
     blocked: bool = False
     blocked_reason: str | None = None
+    error_code: str | None = None
     handoff: ChatHandoff | None = None
     provenance: dict[str, Any] = Field(default_factory=dict)

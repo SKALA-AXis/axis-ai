@@ -80,6 +80,8 @@ class BriefingGenerateResponse(BaseModel):
     evidenceSources: list[str] = Field(default_factory=list)  # noqa: N815
     history: list[dict[str, Any]] = Field(default_factory=list)
     frontend_briefings: dict[str, Any] = Field(default_factory=dict)
+    briefingReport: dict[str, Any] = Field(default_factory=dict)  # noqa: N815
+    flowSteps: list[dict[str, Any]] = Field(default_factory=list)  # noqa: N815
     selected_cards: list[dict[str, Any]] = Field(default_factory=list)
     key_change_cards: list[dict[str, Any]] = Field(default_factory=list)
     interpretation_flow: dict[str, Any] = Field(default_factory=dict)

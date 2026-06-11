@@ -26,7 +26,7 @@ import os
 import re
 import time
 import uuid
-from typing import Callable
+from typing import Any, Callable
 
 from langchain_openai import ChatOpenAI
 
@@ -57,7 +57,9 @@ from src.services.llm_env import (
 
 log = logging.getLogger(__name__)
 
-_LLM_MODEL = "gpt-4o"
+_QUICK_LLM_MODEL = os.getenv("MIXER_QUICK_LLM_MODEL", "gpt-4o")
+_DEEP_LLM_MODEL = os.getenv("MIXER_DEEP_LLM_MODEL", "gpt-5.5")
+_LLM_MODEL = _QUICK_LLM_MODEL  # legacy fallback for older callers/tests.
 _PROMPT_VERSION = "mixer-v3.1-linked-results-insight"
 _MAX_CARDS = int(os.getenv("MIXER_MAX_CARDS", "20"))
 _MIN_CARDS = 2
@@ -107,21 +109,53 @@ _RADAR_AXIS_ORDER: tuple[str, ...] = (
     "regulatory_risk",
     "talent_movement",
 )
+_RADAR_AXIS_LABELS: dict[str, str] = {
+    "peer_strategic_shift": "Peer 전략 전환",
+    "tech_investment": "기술 투자",
+    "market_position": "시장 포지션",
+    "partnership_momentum": "파트너십",
+    "regulatory_risk": "규제 리스크",
+    "talent_movement": "인재 이동",
+}
+_RADAR_AXIS_PROMPTS: dict[str, str] = {
+    "peer_strategic_shift": (
+        "선택한 카드들이 피어사의 전략 방향 전환을 얼마나 직접적으로 보여주는가?"
+    ),
+    "tech_investment": "본문 근거가 기술 투자나 기술 기반 사업화 신호로 읽힐 수 있는가?",
+    "market_position": "이 신호가 한 회사 이슈를 넘어 시장 포지션 변화로 확장될 수 있는가?",
+    "partnership_momentum": "제휴나 협력 구조가 실행 동력 또는 시장 진입 방식으로 작동하는가?",
+    "regulatory_risk": "규제·정책 조건이 사업 판단의 제약이나 게이트로 작동하는가?",
+    "talent_movement": "조직·인재 변화가 실행 역량 또는 우선순위 변화의 근거가 되는가?",
+}
 
-_llm: ChatOpenAI | None = None
+_llms: dict[str, ChatOpenAI] = {}
 
 
-def _get_llm() -> ChatOpenAI:
-    global _llm
-    if _llm is None:
+def _model_for_mode(analysis_mode: object = "quick") -> str:
+    if _normalize_analysis_mode(analysis_mode) == "deep":
+        return _DEEP_LLM_MODEL
+    return _QUICK_LLM_MODEL
+
+
+def _llm_max_completion_tokens(model: str) -> int:
+    default = "9000" if str(model).startswith("gpt-5") else "3000"
+    return int(os.getenv("MIXER_MAX_COMPLETION_TOKENS", default))
+
+
+def _get_llm(analysis_mode: object = "quick") -> ChatOpenAI:
+    model = _model_for_mode(analysis_mode)
+    if model not in _llms:
         ensure_llm_env_loaded()
-        _llm = ChatOpenAI(
-            model=_LLM_MODEL,
-            temperature=0.15,
-            max_completion_tokens=3000,
-            model_kwargs={"response_format": {"type": "json_object"}},
-        )
-    return _llm
+        llm_kwargs: dict[str, Any] = {
+            "model": model,
+            "temperature": 0.15,
+            "max_completion_tokens": _llm_max_completion_tokens(model),
+            "model_kwargs": {"response_format": {"type": "json_object"}},
+        }
+        if str(model).startswith("gpt-5"):
+            llm_kwargs["reasoning_effort"] = os.getenv("MIXER_DEEP_REASONING_EFFORT", "medium")
+        _llms[model] = ChatOpenAI(**llm_kwargs)
+    return _llms[model]
 
 
 def _dict_or_empty(value: object) -> dict:
@@ -350,6 +384,14 @@ action_details:
   고객군, 상품 패키지, 파트너십, 리스크 게이트를 어떻게 바꿀지까지 쓰세요.
 - 제안서 작성, 대시보드 표시, 다음 모니터링 항목 같은 프로그램 산출물 중심 action은 금지입니다.
 
+radar_axis_interpretations:
+- 결정적 산식 결과의 6개 축을 그대로 사용하세요.
+- 각 axis가 본문 근거에서 무엇을 확인하게 하는 분석 질문인지 analysis_prompt에 쓰세요.
+- interpretation에는 현재 카드 묶음의 본문 근거를 통해 그 축을 어떻게 읽어야 하는지 답하세요.
+- 점수가 낮은 축도 “없음”으로 끝내지 말고, 왜 이번 묶음에서 약한 신호인지 설명하세요.
+- axis 값은 peer_strategic_shift, tech_investment, market_position, partnership_momentum,
+  regulatory_risk, talent_movement 중 하나만 사용하세요.
+
 ## 수신자 관점
 
 결과를 받는 사람은 임원입니다.
@@ -419,6 +461,13 @@ action_details:
     }}
   ],
   "recommended_actions": ["action_details의 action 문장만 모은 배열"],
+  "radar_axis_interpretations": [
+    {{
+      "axis": "peer_strategic_shift",
+      "analysis_prompt": "이 축을 본문 근거에서 읽기 위한 분석 질문 1문장",
+      "interpretation": "현재 카드 묶음에서 이 축을 어떻게 판단해야 하는지 1~2문장"
+    }}
+  ],
   "sources_used": ["CN-..."],
   "confidence": 0.0
 }}
@@ -678,7 +727,7 @@ class MixerAnalysisAgent:
 
         _emit_progress(progress, "analyze")
         try:
-            response = _get_llm().invoke(
+            response = _get_llm(normalized_mode).invoke(
                 prompt,
                 config=tracing_config(
                     agent="MixerAnalysisAgent",
@@ -723,18 +772,20 @@ class MixerAnalysisAgent:
             )
         _emit_progress(progress, "synthesize")
         if normalized_mode == "deep":
+            result["action_details"] = _augment_deep_action_details(result)
+            actions = _recommended_actions_from_details(result, limit=5)
             mix_implication = _generate_mix_level_implication(result=result, cards=cards)
             if mix_implication:
                 result["mix_implication"] = mix_implication
-                detail_actions = _recommended_actions_from_details(result)
-                actions = _recommended_actions_from_implication(mix_implication, result=result)
+                implication_actions = _recommended_actions_from_implication(
+                    mix_implication, result=result, limit=5
+                )
+                actions = _dedupe_keep_order([*actions, *implication_actions])
                 if not actions:
-                    actions = _recommended_actions_from_basis(result)
-                if detail_actions:
-                    actions = _dedupe_keep_order([*detail_actions, *actions])[:3]
-                if actions:
-                    result["recommended_actions"] = actions
-                    result["sk_ax_implication"] = clip_implication(" ".join(actions))
+                    actions = _recommended_actions_from_basis(result, limit=5)
+            if actions:
+                result["recommended_actions"] = actions[:5]
+                result["sk_ax_implication"] = clip_implication(" ".join(actions[:5]))
         else:
             actions = _recommended_actions_from_details(result) or _recommended_actions_from_basis(
                 result
@@ -742,11 +793,13 @@ class MixerAnalysisAgent:
             if actions:
                 result["recommended_actions"] = actions[:3]
                 result["sk_ax_implication"] = clip_implication(" ".join(actions[:3]))
-        result["radar_axes"] = radar  # 이미 위에서 계산된 값 재사용
+        result["radar_axes"] = _merge_radar_axis_interpretations(
+            radar, result.get("radar_axis_interpretations")
+        )
         result["mix_id"] = _new_mix_id()
         result.setdefault("provenance", {}).update(
             {
-                "llm_model": _LLM_MODEL,
+                "llm_model": _model_for_mode(normalized_mode),
                 "prompt_version": _PROMPT_VERSION,
                 "analysis_mode": normalized_mode,
                 "analysis_quality": "fast" if normalized_mode == "quick" else "detailed",
@@ -935,6 +988,68 @@ def _compute_radar(cards: list[dict]) -> list[dict]:
     return [axes[axis] for axis in _RADAR_AXIS_ORDER]
 
 
+def _radar_axis_analysis_prompt(axis: str) -> str:
+    return _RADAR_AXIS_PROMPTS.get(axis, "본문 근거가 이 신호 축을 어떻게 지지하거나 약화하는가?")
+
+
+def _fallback_radar_prompted_interpretation(axis: dict) -> str:
+    axis_id = str(axis.get("axis") or "")
+    label = _RADAR_AXIS_LABELS.get(axis_id, axis_id or "해당 축")
+    score = float(axis.get("score") or 0.0)
+    support_count = int(axis.get("support_count") or 0)
+    total_count = int(axis.get("total_count") or 0)
+    explanation = str(axis.get("explanation") or "").strip()
+    meaning = str(axis.get("meaning") or "").strip()
+    if support_count <= 0:
+        return (
+            f"{label}은 이번 카드 묶음에서 직접 근거가 약한 축입니다. "
+            "따라서 핵심 결론보다는 공백 신호로 보고, 관련 후속 카드가 반복되는지 확인해야 합니다."
+        )
+    return clip_string(
+        (
+            f"{label}은 {total_count}개 중 {support_count}개 카드가 지지하고 "
+            f"점수는 {score:.2f}입니다. "
+            f"{explanation} {meaning}"
+        ).strip(),
+        360,
+    )
+
+
+def _merge_radar_axis_interpretations(radar: list[dict], interpretations: object) -> list[dict]:
+    by_axis: dict[str, dict[str, object]] = {}
+    for item in _json_list(interpretations):
+        if not isinstance(item, dict):
+            continue
+        axis_key = str(item.get("axis") or "").strip()
+        if axis_key in _RADAR_AXIS_ORDER:
+            by_axis[axis_key] = item
+
+    enriched: list[dict] = []
+    for radar_axis in radar:
+        axis_id = str(radar_axis.get("axis") or "").strip()
+        interpretation = by_axis.get(axis_id, {})
+        next_axis = dict(radar_axis)
+        next_axis["analysis_prompt"] = clip_string(
+            str(
+                interpretation.get("analysis_prompt")
+                or interpretation.get("prompt")
+                or _radar_axis_analysis_prompt(axis_id)
+            ).strip(),
+            220,
+        )
+        next_axis["prompted_interpretation"] = clip_string(
+            str(
+                interpretation.get("interpretation")
+                or interpretation.get("prompted_interpretation")
+                or interpretation.get("answer")
+                or _fallback_radar_prompted_interpretation(radar_axis)
+            ).strip(),
+            420,
+        )
+        enriched.append(next_axis)
+    return enriched
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────
@@ -952,18 +1067,10 @@ def _format_radar(radar: list[dict]) -> str:
     if not radar:
         return "*radar 점수 산출 불가*"
     lines: list[str] = []
-    label_kr = {
-        "peer_strategic_shift": "Peer 전략 전환",
-        "tech_investment": "기술 투자",
-        "market_position": "시장 포지션",
-        "partnership_momentum": "파트너십",
-        "regulatory_risk": "규제 리스크",
-        "talent_movement": "인재 이동",
-    }
     for axis in radar:
         score = float(axis.get("score") or 0.0)
         bar = "▰" * int(score * 10) + "▱" * (10 - int(score * 10))
-        label = label_kr.get(axis["axis"], axis["axis"])
+        label = _RADAR_AXIS_LABELS.get(axis["axis"], axis["axis"])
         explanation = axis.get("explanation", "")
         lines.append(f"- {label}: {bar} {score:.2f} ({explanation})")
     return "\n".join(lines)
@@ -985,12 +1092,18 @@ def _fetch_cards(card_ids: list[str]) -> list[dict]:
 
 
 def _cards_from_linked_result_items(items: list[dict]) -> list[dict]:
-    """목업/런타임 linked result 입력을 Mixer 가 쓰는 card-like dict 로 정규화한다."""
+    """런타임 linked result 입력을 Mixer 가 쓰는 card-like dict 로 정규화한다."""
     cards: list[dict] = []
     for index, item in enumerate(items or [], start=1):
         if not isinstance(item, dict):
             continue
-        card_id = str(item.get("card_id") or item.get("id") or f"mock-card-{index}")
+        card_id = str(item.get("card_id") or item.get("id") or "").strip()
+        if not card_id:
+            log.warning(
+                "MixerAnalysisAgent linked result item without card_id skipped | index=%s",
+                index,
+            )
+            continue
         linked_results = _linked_results_from_item(item)
         implication = item.get("implication")
         if not isinstance(implication, dict):
@@ -1320,17 +1433,17 @@ def _normalize_action_details(value: object, allowed_card_ids: set[str]) -> list
                 "evidence_card_ids": refs[:6],
             }
         )
-    return details[:3]
+    return details[:5]
 
 
-def _recommended_actions_from_details(result: dict) -> list[str]:
+def _recommended_actions_from_details(result: dict, *, limit: int = 3) -> list[str]:
     return _dedupe_keep_order(
         [
             clip_implication(item.get("action"))
             for item in _json_list(result.get("action_details"))
             if isinstance(item, dict) and item.get("action")
         ]
-    )[:3]
+    )[:limit]
 
 
 def _needs_action_detail_fallback(details: list[dict]) -> bool:
@@ -1471,6 +1584,135 @@ def _fallback_action_details_from_result(result: dict) -> list[dict]:
             "evidence_card_ids": _dedupe_keep_order([str(item) for item in common_refs])[:6],
         },
     ]
+
+
+def _augment_deep_action_details(result: dict) -> list[dict]:
+    """정확 분석 전용: LLM 액션을 보존하되 실행 판단 축을 최대 5개로 보강."""
+    existing = [
+        dict(item) for item in _json_list(result.get("action_details")) if isinstance(item, dict)
+    ]
+    common = _dict_or_empty(result.get("common_pattern"))
+    comparison = _dict_or_empty(result.get("comparison_point"))
+    hidden = _dict_or_empty(result.get("hidden_conclusion"))
+    action_basis = _json_list(result.get("recommended_action_basis"))
+    common_refs = _json_list(common.get("evidence_card_ids"))
+    comparison_refs = _json_list(comparison.get("evidence_card_ids"))
+    hidden_refs = _json_list(hidden.get("evidence_card_ids"))
+    all_refs = _dedupe_keep_order(
+        [
+            *[str(ref) for ref in common_refs],
+            *[str(ref) for ref in comparison_refs],
+            *[str(ref) for ref in hidden_refs],
+            *[str(ref) for ref in _json_list(result.get("sources_used"))],
+        ]
+    )
+
+    def refs(*groups: list[object]) -> list[str]:
+        flattened: list[str] = []
+        for group in groups:
+            flattened.extend(str(item) for item in group if str(item))
+        return _dedupe_keep_order(flattened or all_refs)[:6]
+
+    common_evidence = _json_list(common.get("evidence"))
+    comparison_evidence = _json_list(comparison.get("evidence"))
+    hidden_evidence = _json_list(hidden.get("evidence"))
+    candidates = [
+        {
+            "action": clip_implication(
+                "SK AX는 입력 근거에서 성과 기준이 가장 분명한 고객군을 우선 공략군으로 정하고 "
+                "해당 고객군별 영업 책임 조직과 리스크 승인 권한을 먼저 배정한다. "
+                f"{_brief_action_basis(hidden.get('finding') or action_basis[:1])}"
+            ),
+            "why": clip_string(
+                hidden.get("rationale")
+                or "여러 이슈를 함께 볼 때 고객군 선택 기준이 대응 방향의 출발점이 되기 때문이다.",
+                260,
+            ),
+            "use_case": "고객군/영업전략",
+            "evidence": hidden_evidence[:3] or common_evidence[:3],
+            "evidence_card_ids": refs(hidden_refs, common_refs),
+        },
+        {
+            "action": clip_implication(
+                "SK AX는 하나의 AX 메시지로 묶기보다 공통 패턴이 가리키는 성과 기준별로 "
+                "오퍼링 패키지와 가격·계약 조건을 분리해 상품화한다. "
+                f"{_brief_action_basis(common.get('finding') or action_basis[1:2])}"
+            ),
+            "why": clip_string(
+                common.get("rationale")
+                or (
+                    "반복 신호가 단순 기술 관심이 아니라 구매 판단 기준으로 "
+                    "연결될 수 있기 때문이다."
+                ),
+                260,
+            ),
+            "use_case": "오퍼링/상품화",
+            "evidence": common_evidence[:3],
+            "evidence_card_ids": refs(common_refs),
+        },
+        {
+            "action": clip_implication(
+                "SK AX는 카드별 접근 차이가 큰 영역은 동일한 투자 우선순위로 보지 말고 "
+                "수주 전환 가능성, 운영 KPI, 적용 범위 중 확인된 지표를 자원 배분 게이트로 둔다. "
+                f"{_brief_action_basis(comparison.get('finding') or action_basis[2:3])}"
+            ),
+            "why": clip_string(
+                comparison.get("rationale")
+                or "같은 흐름 안에서도 실제 적용 장면과 성과 기준이 다르게 나타나기 때문이다.",
+                260,
+            ),
+            "use_case": "자원 배분",
+            "evidence": comparison_evidence[:3] or common_evidence[:3],
+            "evidence_card_ids": refs(comparison_refs, common_refs),
+        },
+        {
+            "action": clip_implication(
+                "SK AX는 자체 역량만으로 레퍼런스 확보가 느린 영역을 따로 분리하고 "
+                "적용 현장, 운영 데이터, 고객 접점을 보완할 파트너십 후보를 우선 검증한다. "
+                f"{_brief_action_basis(comparison.get('rationale') or common.get('rationale'))}"
+            ),
+            "why": clip_string(
+                "반복 신호가 실제 사업 전환으로 이어지려면 기술 보유보다 적용 현장과 "
+                "고객 설득 근거가 먼저 확보되어야 합니다.",
+                260,
+            ),
+            "use_case": "파트너십/시장 대응",
+            "evidence": comparison_evidence[:3] or hidden_evidence[:3],
+            "evidence_card_ids": refs(comparison_refs, hidden_refs),
+        },
+        {
+            "action": clip_implication(
+                "SK AX는 전망·추정·계획 성격의 근거와 확정 사실을 분리해 "
+                "확정 투자, 영업 메시지, 리스크 공지를 서로 다른 의사결정 게이트로 관리한다. "
+                f"{_brief_action_basis(hidden.get('rationale') or action_basis[3:4])}"
+            ),
+            "why": clip_string(
+                "정확 분석에서는 반복 신호의 방향뿐 아니라 근거의 확정 수준까지 구분해야 "
+                "과잉 투자와 과소 대응을 줄일 수 있기 때문입니다.",
+                260,
+            ),
+            "use_case": "리스크/거버넌스",
+            "evidence": hidden_evidence[:3] or common_evidence[:3],
+            "evidence_card_ids": refs(hidden_refs, common_refs),
+        },
+    ]
+    merged: list[dict] = []
+    seen_actions: set[str] = set()
+    for item in [*existing, *candidates]:
+        action = clip_implication(item.get("action") if isinstance(item, dict) else "")
+        if not action or action in seen_actions:
+            continue
+        seen_actions.add(action)
+        merged.append(
+            {
+                "action": action,
+                "why": clip_string(item.get("why") or "", 260),
+                "use_case": clip_string(item.get("use_case") or "실행 전략", 80),
+                "evidence": _json_list(item.get("evidence"))[:3],
+                "evidence_card_ids": refs(_json_list(item.get("evidence_card_ids"))),
+            }
+        )
+    return merged[:5]
 
 
 def _brief_action_basis(value: object) -> str:
@@ -1811,7 +2053,7 @@ def _build_follow_up_questions(result: dict, cards: list[dict]) -> list[str]:
 
 
 def _build_follow_up_checks(result: dict, cards: list[dict]) -> list[dict]:
-    """다음 분석에서 확인해야 할 정보 공백을 목적·근거와 함께 생성."""
+    """다음 분석 질문과 현재 근거만으로 답할 수 있는 초안을 함께 생성."""
     comparison = _dict_or_empty(result.get("comparison_point"))
     hidden = _dict_or_empty(result.get("hidden_conclusion"))
     common = _dict_or_empty(result.get("common_pattern"))
@@ -1825,26 +2067,39 @@ def _build_follow_up_checks(result: dict, cards: list[dict]) -> list[dict]:
     peer_phrase = "와 ".join(peers[:3]) if peers else "선택한 Peer"
     checks: list[dict] = []
     if str(hidden.get("finding") or "").strip():
+        hidden_refs = _json_list(hidden.get("evidence_card_ids"))
+        hidden_answer = (
+            f"현재 근거만 보면 이 신호는 {len(hidden_refs) or len(cards)}개 카드에서 연결되는 "
+            "반복 판단 기준으로 보는 편이 타당합니다. "
+            f"{str(hidden.get('rationale') or hidden.get('finding') or '').strip()}"
+        )
         checks.append(
             {
                 "question": (
                     f"‘{clip_string(str(hidden['finding']).strip(), 70)}’ 신호가 "
                     "일회성 이벤트인지 반복 신호인지 확인할 후속 근거는 무엇인가?"
                 ),
+                "answer": clip_string(hidden_answer, 260),
                 "purpose": (
                     "숨은 결론이 단일 카드 해석이 아니라 반복되는 시장 판단 기준인지 "
                     "검증하기 위한 확인 포인트입니다."
                 ),
-                "evidence_refs": _json_list(hidden.get("evidence_card_ids")),
+                "evidence_refs": hidden_refs,
             }
         )
     if str(comparison.get("finding") or "").strip():
+        comparison_answer = (
+            f"현재 답은 {peer_phrase}가 같은 흐름 안에서도 서로 다른 성과 기준이나 적용 맥락을 "
+            "앞세운다는 점입니다. "
+            f"{str(comparison.get('rationale') or comparison.get('finding') or '').strip()}"
+        )
         checks.append(
             {
                 "question": (
                     f"{peer_phrase}의 서로 다른 접근 중 어느 고객군·업무 맥락에 "
                     "먼저 적용할 수 있는 차이인가?"
                 ),
+                "answer": clip_string(comparison_answer, 260),
                 "purpose": (
                     "비교 포인트가 단순 회사별 차이가 아니라 고객군 선택이나 오퍼링 "
                     "우선순위로 이어질 수 있는지 판단하기 위한 질문입니다."
@@ -1855,12 +2110,29 @@ def _build_follow_up_checks(result: dict, cards: list[dict]) -> list[dict]:
     if _json_list(result.get("recommended_action_basis")) or _json_list(
         result.get("recommended_actions")
     ):
+        action_text = "; ".join(
+            clip_implication(str(action))
+            for action in _json_list(result.get("recommended_actions"))[:2]
+            if str(action or "").strip()
+        )
+        basis_text = "; ".join(
+            clip_implication(str(basis))
+            for basis in _json_list(result.get("recommended_action_basis"))[:2]
+            if str(basis or "").strip()
+        )
+        action_focus = action_text or basis_text or "추천 액션의 우선순위를 실행 조건별로 나누는 것"
+        action_answer = (
+            f"현재 답은 {action_focus}입니다. "
+            "실행 전에는 고객군, 적용 업무, 수익화 수치, 리스크 게이트를 "
+            "분리해 우선순위를 정해야 합니다."
+        )
         checks.append(
             {
                 "question": (
                     "대응 방향을 실행 판단으로 바꾸려면 어떤 수치·고객·리스크 "
                     "조건이 추가로 필요한가?"
                 ),
+                "answer": clip_string(action_answer, 280),
                 "purpose": (
                     "권고가 선언으로 끝나지 않고 투자, 파트너십, 리스크 게이트 결정으로 "
                     "이어지려면 부족한 근거를 분리해야 합니다."
@@ -1893,13 +2165,16 @@ def _build_analysis_depth(result: dict, cards: list[dict], analysis_mode: str) -
             "mode": "deep",
             "label": "정확 분석",
             "summary": (
-                f"선택 카드 {card_count}장을 1차 믹스 분석한 뒤 문장 품질 보강, "
-                "믹스 단위 시사점 보강, 단계별 근거 재구성을 추가로 수행했습니다."
+                f"선택 카드 {card_count}장을 최신 고정밀 모델로 1차 믹스 분석한 뒤 문장 품질 보강, "
+                "믹스 단위 시사점 보강, 레이더 축 해석 정교화, "
+                "단계별 근거 재구성을 추가로 수행했습니다."
             ),
             "included_steps": [
-                "LLM 1차 믹스 분석",
+                f"{_model_for_mode('deep')} 기반 LLM 1차 믹스 분석",
                 "공통 패턴·비교 포인트·숨은 결론 품질 보강",
                 "믹스 단위 ImplicationAgent 보강",
+                "6축 레이더별 본문 해석 질문과 답변 정교화",
+                "고객군·오퍼링·자원 배분·파트너십·리스크 게이트별 실행안 보강",
                 "근거 카드와 실행 조건 상세 정리",
             ],
             "omitted_steps": [],
@@ -1909,10 +2184,19 @@ def _build_analysis_depth(result: dict, cards: list[dict], analysis_mode: str) -
         "label": "빠른 실행",
         "summary": (
             f"선택 카드 {card_count}장의 핵심 연결만 빠르게 산출했습니다. "
-            "정확 분석보다 짧게 끝나도록 추가 품질 보강 호출은 생략합니다."
+            "정확 분석보다 짧게 끝나도록 고정밀 모델 재검증과 추가 품질 보강 호출은 생략합니다."
         ),
-        "included_steps": ["LLM 1차 믹스 분석", "기본 근거 연결", "기본 대응 방향 정리"],
-        "omitted_steps": ["문장 품질 보강", "믹스 단위 ImplicationAgent 보강"],
+        "included_steps": [
+            f"{_model_for_mode('quick')} 기반 LLM 1차 믹스 분석",
+            "기본 근거 연결",
+            "기본 대응 방향 정리",
+        ],
+        "omitted_steps": [
+            f"{_model_for_mode('deep')} 기반 고정밀 재검증",
+            "문장 품질 보강",
+            "믹스 단위 ImplicationAgent 보강",
+            "6축 레이더별 본문 해석 정교화",
+        ],
     }
 
 
@@ -1958,8 +2242,8 @@ def _build_deep_dive_sections(result: dict, cards: list[dict]) -> list[dict]:
                 "title": title,
                 "summary": finding,
                 "details": [
-                    {"label": "판단", "text": finding, "evidence_refs": refs},
-                    {"label": "검증 및 근거", "text": rationale, "evidence_refs": refs},
+                    {"label": "핵심 판단", "text": finding, "evidence_refs": refs},
+                    {"label": "판단 근거", "text": rationale, "evidence_refs": refs},
                     {"label": "참조 카드", "text": evidence_summary(refs), "evidence_refs": refs},
                 ],
             }
@@ -1969,14 +2253,24 @@ def _build_deep_dive_sections(result: dict, cards: list[dict]) -> list[dict]:
         item for item in _json_list(result.get("action_details")) if isinstance(item, dict)
     ]
     detail_items: list[dict] = []
-    for item in action_details[:4]:
+    for item in action_details[:5]:
         refs = [str(ref) for ref in _json_list(item.get("evidence_card_ids")) if str(ref)]
         action = str(item.get("action") or "").strip()
         why = str(item.get("why") or "").strip()
         use_case = str(item.get("use_case") or "").strip()
-        text = "\n".join(part for part in (action, why, use_case) if part)
+        text = "\n".join(
+            part
+            for part in (
+                f"실행안: {action}" if action else "",
+                f"판단 이유: {why}" if why else "",
+                f"적용 맥락: {use_case}" if use_case else "",
+            )
+            if part
+        )
         if text:
-            detail_items.append({"label": "실행 조건", "text": text, "evidence_refs": refs})
+            detail_items.append(
+                {"label": use_case or "실행 조건", "text": text, "evidence_refs": refs}
+            )
     if detail_items:
         sections.append(
             {
@@ -2000,7 +2294,7 @@ def _repair_mixer_result_quality(
         json.dumps(_mixer_result_for_repair(result), ensure_ascii=False, indent=2),
     )
     try:
-        response = _get_llm().invoke(
+        response = _get_llm("deep").invoke(
             prompt,
             config=tracing_config(
                 agent="MixerAnalysisAgent",
@@ -2221,7 +2515,9 @@ def _sources_from_cards(cards: list[dict]) -> list[dict]:
     return sources[:20]
 
 
-def _recommended_actions_from_implication(implication: dict, *, result: dict) -> list[str]:
+def _recommended_actions_from_implication(
+    implication: dict, *, result: dict, limit: int = 3
+) -> list[str]:
     skax = implication.get("skax_implication")
     candidates: list[str] = []
     if isinstance(skax, dict):
@@ -2233,10 +2529,10 @@ def _recommended_actions_from_implication(implication: dict, *, result: dict) ->
         for item in _dedupe_keep_order(candidates)
         if item and _is_action_grounded(str(item), grounding_text)
     ]
-    return grounded[:3]
+    return grounded[:limit]
 
 
-def _recommended_actions_from_basis(result: dict) -> list[str]:
+def _recommended_actions_from_basis(result: dict, *, limit: int = 3) -> list[str]:
     actions: list[str] = []
     for item in _json_list(result.get("recommended_action_basis")):
         text_value = str(item or "").strip()
@@ -2245,7 +2541,7 @@ def _recommended_actions_from_basis(result: dict) -> list[str]:
         if not text_value.endswith(("다.", "요.", ".")):
             text_value = f"{text_value}."
         actions.append(clip_implication(text_value))
-    return _dedupe_keep_order(actions)[:3]
+    return _dedupe_keep_order(actions)[:limit]
 
 
 def _grounding_text_for_actions(result: dict) -> str:

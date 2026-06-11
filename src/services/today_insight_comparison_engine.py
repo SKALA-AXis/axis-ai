@@ -1188,6 +1188,46 @@ def build_primary_headline(comparison_facts: dict[str, Any] | None) -> str:
     return _clip(title, 120)
 
 
+def _execution_terms_for_title(title: str) -> tuple[str, str]:
+    lowered = str(title or "").lower()
+    if "gpu" in lowered:
+        return (
+            "GPU 확보, 클라우드 운영, 보안 운영을 묶은 실행 역량",
+            "GPU 기반 서비스 개시 일정, 운영 SLA, 보안 모니터링 체계",
+        )
+    if any(token in lowered for token in ("클라우드", "cloud", "msp")):
+        return (
+            "클라우드 운영 안정성, 비용 구조, 보안 책임 범위",
+            "서비스 전환 일정, 운영 SLA, 보안·비용 검증 지표",
+        )
+    if any(token in lowered for token in ("보안", "security", "제로트러스트")):
+        return (
+            "보안 운영 역량, 탐지·대응 체계, 감사 대응 기준",
+            "모니터링 범위, 대응 SLA, 고객별 보안 운영 기준",
+        )
+    if any(
+        token in lowered
+        for token in (
+            "ai",
+            "llm",
+            "생성형",
+            "에이전트",
+            "agent",
+            "anthropic",
+            "openai",
+            "클로드",
+        )
+    ):
+        return (
+            "AI 기능보다 운영 책임, 데이터 보안, 검증 지표",
+            "PoC 검증 지표, 운영 SLA, 보안·감사 대응 기준",
+        )
+    return (
+        "고객 대응 레퍼런스, 운영 KPI, 검증 지표",
+        "고객별 대응 기준, 운영 SLA, PoC 검증 항목",
+    )
+
+
 def build_executive_summary_from_facts(
     comparison_facts: dict[str, Any] | None,
     *,
@@ -1199,34 +1239,29 @@ def build_executive_summary_from_facts(
     title = str(lead.get("title") or "")
     short_title = _short_title(title, limit=56)
     label = str(lead.get("label") or "")
-    keyword_line = ""
-    trends = _list(comparison_facts.get("keyword_trends")) if comparison_facts else []
-    if trends and isinstance(trends[0], dict):
-        group_name = str(trends[0].get("group_name") or "")
-        ratio_delta = trends[0].get("ratio_delta")
-        if group_name and ratio_delta is not None:
-            sign = "+" if float(ratio_delta) > 0 else ""
-            keyword_line = (
-                f" {group_name} 검색지수는 전일 대비 {sign}{float(ratio_delta):.1f}pt입니다."
-            )
-    stats = change_stats or {}
-    window_days = stats.get("window_days", 60)
-    count = int(stats.get("today_issue_count", 0) or 0) + int(
-        stats.get("recent_card_count", 0) or 0
-    )
+    del change_stats
+    customer_terms, action_terms = _execution_terms_for_title(title)
     if label == "low_visibility_definite_event":
-        base = (
-            f"오늘 {count}건 신호 중 '{short_title}'은 영향은 크지만 "
-            f"보도가 아직 적은 단건 이벤트입니다."
+        return _clip(
+            (
+                f"'{short_title}'은 고객 비교 기준을 실행 역량 중심으로 "
+                f"옮길 수 있습니다: {customer_terms}. "
+                f"SK AX는 {action_terms}를 오늘 고객별 대응 기준에 반영해야 합니다."
+            ),
+            320,
         )
     elif label == "high_salience_visible":
-        base = (
-            f"오늘 {count}건 신호 중 '{short_title}'이 사업 영향과 보도 확산 모두에서 핵심입니다."
+        return _clip(
+            f"'{short_title}'은 보도 확산과 사업 영향이 함께 큰 신호입니다. "
+            f"SK AX는 {action_terms}가 고객 대응 패키지에 반영돼 있는지 확인해야 합니다.",
+            320,
         )
     else:
-        base = f"오늘 {count}건 신호 중 '{short_title}'을 우선 볼 만합니다."
-    window_line = f" 최근 {window_days}일 패턴과 비교하면 오늘 판단 순서가 달라질 수 있습니다."
-    return _clip(f"{base}{window_line}{keyword_line}".strip(), 320)
+        return _clip(
+            f"'{short_title}'은 오늘 대응 우선순위를 다시 좁힐 신호입니다. "
+            f"SK AX는 다음 실행 기준으로 고객별 확인 항목을 정해야 합니다: {customer_terms}.",
+            320,
+        )
 
 
 def build_executive_implication_from_facts(comparison_facts: dict[str, Any] | None) -> str:
@@ -1235,19 +1270,22 @@ def build_executive_implication_from_facts(comparison_facts: dict[str, Any] | No
         return ""
     title = _short_title(str(lead.get("title") or ""), limit=48)
     label = str(lead.get("label") or "")
+    _, action_terms = _execution_terms_for_title(title)
     if label == "low_visibility_definite_event":
         return _clip(
-            f"SK AX는 '{title}'를 고객 대응 레퍼런스·수주 후속 맥락에서 먼저 대조해야 합니다.",
+            f"SK AX는 '{title}'를 단순 뉴스가 아니라 고객 비교 기준 변화로 봐야 합니다. "
+            f"{action_terms}를 포함한 고객별 대응 기준을 오늘 정해야 합니다.",
             280,
         )
     if label == "high_salience_visible":
         return _clip(
-            f"SK AX는 '{title}'를 범용 AX 메시지가 아니라 "
-            "고객 대응 패키지의 운영 KPI·검증 지표 변경 여부로 확인해야 합니다.",
+            f"SK AX는 '{title}'를 범용 AX 메시지가 아니라 실행 산출물 기준으로 확인해야 합니다. "
+            f"{action_terms}를 고객 대응 패키지에 반영할지 오늘 결정해야 합니다.",
             280,
         )
     return _clip(
-        f"SK AX는 '{title}'가 단건 뉴스인지 반복 패턴인지 구분한 뒤 대응 우선순위를 정해야 합니다.",
+        f"SK AX는 '{title}'를 고객 대응 기준 변화로 볼지 먼저 판단해야 합니다. "
+        f"{action_terms} 중심으로 대응 우선순위를 정해야 합니다.",
         280,
     )
 
@@ -1259,7 +1297,7 @@ def build_primary_signal_value(comparison_facts: dict[str, Any] | None) -> str:
     title = _short_title(str(lead.get("title") or ""), limit=36)
     label = str(lead.get("label") or "")
     if label == "low_visibility_definite_event":
-        return _clip(f"영향 큰 단건 이벤트 — {title}", 96)
+        return _clip(f"고객 비교 기준 변화 — {title}", 96)
     if label == "high_salience_visible":
         return _clip(f"핵심 판단 축 — {title}", 96)
     return _clip(title, 96)
