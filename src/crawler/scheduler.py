@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -27,6 +29,7 @@ from src.db.crawl_state_store import (
 log = logging.getLogger(__name__)
 
 PEER_ALIASES: dict[str, list[str]] = dict(COMPANY_ALIASES)
+KEYWORD_RUNNER_PATH = Path(__file__).resolve().parents[2] / "keyword.py"
 
 _CrawlerFactory = Callable[[str, list[str]], Any]
 
@@ -258,9 +261,43 @@ async def _run_naver_research() -> None:
 
 
 async def _run_naver_datalab() -> None:
-    from src.crawler.sources.keyword import KeywordCrawler
+    today = datetime.now().astimezone().date()
+    run_id = create_crawl_run(
+        "naver_datalab",
+        today,
+        today,
+        run_type="realtime",
+    )
+    try:
+        inserted = await asyncio.to_thread(_run_keyword_sector_runner_sync, str(run_id))
+        mark_crawl_run_success(run_id, inserted_count=inserted, skipped_count=0)
+    except Exception as e:
+        mark_crawl_run_failed(run_id, f"{type(e).__name__}: {e}")
+        raise
 
-    await _run_shared_source("naver_datalab", KeywordCrawler())
+    log.info(
+        "Naver DataLab keyword.py 스케줄 실행 완료 | crawl_run_id=%s inserted=%s",
+        run_id,
+        inserted,
+    )
+
+
+def _run_keyword_sector_runner_sync(crawl_run_id: str) -> int:
+    spec = importlib.util.spec_from_file_location(
+        "axis_naver_datalab_keyword_sector_runner",
+        KEYWORD_RUNNER_PATH,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"keyword.py 로드 실패: {KEYWORD_RUNNER_PATH}")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    run_scheduled = getattr(module, "run_scheduled", None)
+    if not callable(run_scheduled):
+        raise RuntimeError("keyword.py에 run_scheduled()가 없습니다.")
+
+    return int(run_scheduled(crawl_run_id=crawl_run_id) or 0)
 
 
 async def _run_spri() -> None:
