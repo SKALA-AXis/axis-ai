@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.config.env_loader import load_profile  # noqa: E402
+from src.db.article_store import save_card_news  # noqa: E402
 from src.db.postgres import SessionLocal  # noqa: E402
 from src.pipeline.analysis_pipeline import AnalysisPipelineRunner  # noqa: E402
 from src.preprocessing.preprocessing import PreprocessingService  # noqa: E402
@@ -38,6 +39,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--published-until", required=True)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--replace-existing", action="store_true")
+    parser.add_argument(
+        "--update-existing-in-place",
+        action="store_true",
+        help="Regenerate with the current agent stack but keep the existing ACTIVE card id.",
+    )
+    parser.add_argument(
+        "--only-card-schema-version",
+        default=None,
+        help="Limit targets to clusters with an ACTIVE card using this schema version, e.g. v1.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -45,26 +56,36 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     profile = load_profile(args.env)
+    include_existing = bool(
+        args.replace_existing or args.update_existing_in_place or args.only_card_schema_version
+    )
     targets = _load_targets(
         published_since=args.published_since,
         published_until=args.published_until,
         limit=max(1, args.limit),
-        replace_existing=bool(args.replace_existing),
+        include_existing=include_existing,
+        only_card_schema_version=args.only_card_schema_version,
     )
     log.info(
-        "card_news backfill 대상 | profile=%s since=%s until=%s targets=%d replace_existing=%s",
+        (
+            "card_news backfill 대상 | profile=%s since=%s until=%s targets=%d "
+            "replace_existing=%s update_in_place=%s schema=%s"
+        ),
         profile,
         args.published_since,
         args.published_until,
         len(targets),
         args.replace_existing,
+        args.update_existing_in_place,
+        args.only_card_schema_version,
     )
     if args.dry_run:
         for target in targets[:20]:
             print(
                 f"cluster_id={target['cluster_id']} "
                 f"representative_id={target['representative_id']} "
-                f"articles={len(target['article_ids'])}"
+                f"articles={len(target['article_ids'])} "
+                f"existing_card_id={target.get('existing_card_id') or ''}"
             )
         return
 
@@ -78,6 +99,7 @@ def main() -> None:
         cluster_id = int(target["cluster_id"])
         article_ids = [int(value) for value in target["article_ids"]]
         representative_id = int(target["representative_id"])
+        existing_card_id = str(target.get("existing_card_id") or "")
         try:
             classified = service.classify_clusters(
                 representative_ids=[representative_id],
@@ -90,7 +112,7 @@ def main() -> None:
                     "card_news backfill skip | cluster_id=%s reason=no_classification", cluster_id
                 )
                 continue
-            if args.replace_existing:
+            if args.replace_existing and not args.update_existing_in_place:
                 _mark_existing_cards_deleted(cluster_id)
             result = runner.run_cluster(
                 cluster_id=cluster_id,
@@ -101,6 +123,34 @@ def main() -> None:
             )
             card = result.get("card_news") or {}
             if card:
+                if args.update_existing_in_place:
+                    if existing_card_id:
+                        transient_card_id = str(card.get("id") or "")
+                        card["id"] = existing_card_id
+                        saved_card_id = save_card_news(card)
+                        _sync_card_sources_for_cluster(cluster_id)
+                        if transient_card_id and transient_card_id != existing_card_id:
+                            _mark_card_deleted(transient_card_id)
+                        created += 1
+                        log.info(
+                            (
+                                "card_news backfill updated in place | %d/%d "
+                                "cluster_id=%s card_id=%s transient_id=%s title=%s"
+                            ),
+                            index,
+                            len(targets),
+                            cluster_id,
+                            saved_card_id or existing_card_id,
+                            transient_card_id,
+                            card.get("title"),
+                        )
+                        continue
+                    log.warning(
+                        "card_news backfill skip | cluster_id=%s reason=no_existing_card",
+                        cluster_id,
+                    )
+                    skipped += 1
+                    continue
                 created += 1
                 _sync_card_sources_for_cluster(cluster_id)
                 log.info(
@@ -126,11 +176,12 @@ def _load_targets(
     published_since: str,
     published_until: str,
     limit: int,
-    replace_existing: bool,
+    include_existing: bool,
+    only_card_schema_version: str | None,
 ) -> list[dict[str, Any]]:
     existing_filter = (
         ""
-        if replace_existing
+        if include_existing
         else """
       AND NOT EXISTS (
           SELECT 1 FROM card_news cn
@@ -138,6 +189,18 @@ def _load_targets(
             AND cn.cluster_id = cluster_rows.cluster_id
       )
     """
+    )
+    schema_filter = (
+        """
+      AND EXISTS (
+          SELECT 1 FROM card_news cn
+          WHERE cn.status = 'ACTIVE'
+            AND cn.cluster_id = cluster_rows.cluster_id
+            AND cn.card_schema_version = :only_card_schema_version
+      )
+    """
+        if only_card_schema_version
+        else ""
     )
     with SessionLocal() as db:
         rows = db.execute(
@@ -174,9 +237,18 @@ def _load_targets(
                     GROUP BY ra.cluster_id
                 )
                 SELECT cluster_id, article_ids, representative_id
+                     , (
+                          SELECT cn.id
+                          FROM card_news cn
+                          WHERE cn.status = 'ACTIVE'
+                            AND cn.cluster_id = cluster_rows.cluster_id
+                          ORDER BY cn.created_at DESC
+                          LIMIT 1
+                       ) AS existing_card_id
                 FROM cluster_rows
                 WHERE TRUE
                   {existing_filter}
+                  {schema_filter}
                 ORDER BY min_published, cluster_id
                 LIMIT :limit
                 """
@@ -185,6 +257,7 @@ def _load_targets(
                 "published_since": published_since,
                 "published_until": published_until,
                 "limit": limit,
+                "only_card_schema_version": only_card_schema_version,
             },
         ).mappings()
         return [dict(row) for row in rows]
@@ -200,6 +273,20 @@ def _mark_existing_cards_deleted(cluster_id: int) -> int:
                   AND cluster_id = :cluster_id
             """),
             {"cluster_id": cluster_id},
+        )
+        db.commit()
+        return int(getattr(result, "rowcount", 0) or 0)
+
+
+def _mark_card_deleted(card_id: str) -> int:
+    with SessionLocal() as db:
+        result = db.execute(
+            text("""
+                UPDATE card_news
+                SET status = 'DELETED'
+                WHERE id = :card_id
+            """),
+            {"card_id": card_id},
         )
         db.commit()
         return int(getattr(result, "rowcount", 0) or 0)
