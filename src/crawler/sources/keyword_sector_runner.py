@@ -154,7 +154,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--days", type=int, default=14, help="DB 섹터/원인 후보를 찾을 기간")
     parser.add_argument("--lookback-days", type=int, default=14, help="DataLab 조회 기간")
     parser.add_argument("--min-mentions", type=int, default=5, help="자동 추가 최소 등장 횟수")
-    parser.add_argument("--min-sources", type=int, default=2, help="자동 추가 최소 source_name 개수")
+    parser.add_argument(
+        "--min-sources", type=int, default=2, help="자동 추가 최소 source_name 개수"
+    )
     parser.add_argument("--candidate-limit", type=int, default=15, help="자동 추가 후보 최대 개수")
     parser.add_argument(
         "--sectors",
@@ -210,9 +212,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=",".join(DEFAULT_FIXED_HOME_KEYWORDS),
         help="홈 화면에 우선 고정할 groupName 목록. 쉼표로 구분합니다.",
     )
-    parser.add_argument("--cause-window-days", type=int, default=1, help="급등일 직전부터 당일까지 원인 후보를 탐색할 기간")
-    parser.add_argument("--cause-baseline-days", type=int, default=14, help="급등 전 baseline 기사량 비교 기간")
-    parser.add_argument("--max-cause-evidence", type=int, default=5, help="급등 원인 후보 근거 최대 출력 개수")
+    parser.add_argument(
+        "--cause-window-days",
+        type=int,
+        default=1,
+        help="급등일 직전부터 당일까지 원인 후보를 탐색할 기간",
+    )
+    parser.add_argument(
+        "--cause-baseline-days", type=int, default=14, help="급등 전 baseline 기사량 비교 기간"
+    )
+    parser.add_argument(
+        "--max-cause-evidence", type=int, default=5, help="급등 원인 후보 근거 최대 출력 개수"
+    )
     parser.add_argument(
         "--max-driver-keywords",
         type=int,
@@ -279,46 +290,54 @@ def fetch_active_sector_ids(*, days: int) -> list[str]:
     cutoff = datetime.now(KST) - timedelta(days=days)
     candidates: list[str] = []
 
-    candidates.extend(_query_scalar_values(
-        """
+    candidates.extend(
+        _query_scalar_values(
+            """
         SELECT DISTINCT primary_keyword_category AS sector
         FROM card_news
         WHERE created_at >= :cutoff
           AND primary_keyword_category IS NOT NULL
           AND primary_keyword_category <> ''
         """,
-        {"cutoff": cutoff},
-    ))
-    candidates.extend(_query_scalar_values(
-        """
+            {"cutoff": cutoff},
+        )
+    )
+    candidates.extend(
+        _query_scalar_values(
+            """
         SELECT DISTINCT unnest(sectors) AS sector
         FROM integrated_issues
         WHERE created_at >= :cutoff
           AND is_current = TRUE
           AND sectors IS NOT NULL
         """,
-        {"cutoff": cutoff},
-    ))
-    candidates.extend(_query_scalar_values(
-        """
+            {"cutoff": cutoff},
+        )
+    )
+    candidates.extend(
+        _query_scalar_values(
+            """
         SELECT DISTINCT jsonb_array_elements_text(matched_sectors) AS sector
         FROM raw_articles
         WHERE collected_at >= :cutoff
           AND jsonb_typeof(matched_sectors) = 'array'
           AND jsonb_array_length(matched_sectors) > 0
         """,
-        {"cutoff": cutoff},
-    ))
-    candidates.extend(_query_scalar_values(
-        """
+            {"cutoff": cutoff},
+        )
+    )
+    candidates.extend(
+        _query_scalar_values(
+            """
         SELECT DISTINCT sector
         FROM sector_pulse
         WHERE week_start >= CAST(:cutoff AS date)
           AND sector IS NOT NULL
           AND sector <> ''
         """,
-        {"cutoff": cutoff},
-    ))
+            {"cutoff": cutoff},
+        )
+    )
 
     sector_ids: list[str] = []
     for candidate in candidates:
@@ -351,7 +370,9 @@ def build_sector_keyword_groups(sector_ids: list[str]) -> list[dict[str, Any]]:
         if not sector:
             continue
 
-        group_name = SECTOR_GROUP_DISPLAY_NAMES.get(sector_id) or str(sector.get("name_ko") or sector_id)
+        group_name = SECTOR_GROUP_DISPLAY_NAMES.get(sector_id) or str(
+            sector.get("name_ko") or sector_id
+        )
         keywords = dedupe_texts(sector.get("keywords", []))[:NAVER_DATALAB_MAX_KEYWORDS_PER_GROUP]
         if not keywords:
             continue
@@ -655,8 +676,7 @@ def annotate_home_display(
     home_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     home_by_key = {
-        (str(row.get("group_name") or ""), str(row.get("period") or "")): row
-        for row in home_rows
+        (str(row.get("group_name") or ""), str(row.get("period") or "")): row for row in home_rows
     }
     annotated: list[dict[str, Any]] = []
     for row in rows:
@@ -673,7 +693,9 @@ def annotate_home_display(
     return annotated
 
 
-def annotate_group_metadata(rows: list[dict[str, Any]], groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def annotate_group_metadata(
+    rows: list[dict[str, Any]], groups: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     groups_by_name = {str(group.get("groupName") or ""): group for group in groups}
     annotated: list[dict[str, Any]] = []
 
@@ -801,8 +823,12 @@ def build_cause_analysis(
 
     baseline_daily_avg = raw_baseline_count / max(baseline_days, 1)
     window_daily_avg = raw_window_count / max((end_date - start_date).days + 1, 1)
-    evidence_count = len(raw_evidence) + len(card_evidence) + len(issue_evidence) + len(signal_evidence)
-    driver_evidence_count = sum(int(driver.get("evidence_count") or 0) for driver in keyword_drivers)
+    evidence_count = (
+        len(raw_evidence) + len(card_evidence) + len(issue_evidence) + len(signal_evidence)
+    )
+    driver_evidence_count = sum(
+        int(driver.get("evidence_count") or 0) for driver in keyword_drivers
+    )
 
     status = "candidate" if evidence_count or driver_evidence_count else "insufficient_db_evidence"
     summary = build_cause_summary(
@@ -976,11 +1002,11 @@ def build_keyword_drivers(
         baseline_daily_avg = raw_baseline_count / max(baseline_days, 1)
         window_daily_avg = raw_window_count / window_days
         raw_lift = (
-            round(window_daily_avg / baseline_daily_avg, 3)
-            if baseline_daily_avg > 0
-            else None
+            round(window_daily_avg / baseline_daily_avg, 3) if baseline_daily_avg > 0 else None
         )
-        evidence_count = len(raw_evidence) + len(card_evidence) + len(issue_evidence) + len(signal_evidence)
+        evidence_count = (
+            len(raw_evidence) + len(card_evidence) + len(issue_evidence) + len(signal_evidence)
+        )
         expected_window_count = baseline_daily_avg * window_days
         raw_delta = raw_window_count - expected_window_count
         score = raw_delta + evidence_count * 3
@@ -1024,7 +1050,7 @@ def build_keyword_drivers(
             str(item.get("keyword") or ""),
         )
     )
-    return drivers[:max(3, min(max_evidence, 5))]
+    return drivers[: max(3, min(max_evidence, 5))]
 
 
 def format_keyword_driver_summary(drivers: list[dict[str, Any]]) -> str:
@@ -1130,7 +1156,9 @@ def query_card_news_evidence(
     max_evidence: int,
     include_sector_match: bool = True,
 ) -> list[dict[str, Any]]:
-    match_sql, params = keyword_match_clause(["title", "array_to_string(summary_lines, ' ')"], keywords, "card_kw")
+    match_sql, params = keyword_match_clause(
+        ["title", "array_to_string(summary_lines, ' ')"], keywords, "card_kw"
+    )
     if not match_sql:
         return []
     sector_checks = [
@@ -1138,7 +1166,11 @@ def query_card_news_evidence(
         "LOWER(COALESCE(primary_keyword_category, '')) = :sector_name",
         "LOWER(COALESCE(primary_keyword_category, '')) = :group_name",
     ]
-    filters = f"({' OR '.join(sector_checks)} OR ({match_sql}))" if include_sector_match else f"({match_sql})"
+    filters = (
+        f"({' OR '.join(sector_checks)} OR ({match_sql}))"
+        if include_sector_match
+        else f"({match_sql})"
+    )
     sql = f"""
         SELECT id, title, event_type, primary_keyword_category AS sector,
                importance_score, created_at
@@ -1148,14 +1180,16 @@ def query_card_news_evidence(
         ORDER BY importance_score DESC NULLS LAST, created_at DESC
         LIMIT :limit
     """
-    params.update({
-        "sector_id": sector_id.lower(),
-        "sector_name": sector_name.lower(),
-        "group_name": sector_name.lower(),
-        "start_date": start_date,
-        "end_date": end_date,
-        "limit": max_evidence,
-    })
+    params.update(
+        {
+            "sector_id": sector_id.lower(),
+            "sector_name": sector_name.lower(),
+            "group_name": sector_name.lower(),
+            "start_date": start_date,
+            "end_date": end_date,
+            "limit": max_evidence,
+        }
+    )
     return query_dicts(sql, params)
 
 
@@ -1169,7 +1203,9 @@ def query_integrated_issue_evidence(
     max_evidence: int,
     include_sector_match: bool = True,
 ) -> list[dict[str, Any]]:
-    match_sql, params = keyword_match_clause(["headline", "one_line_summary", "content_summary"], keywords, "issue_kw")
+    match_sql, params = keyword_match_clause(
+        ["headline", "one_line_summary", "content_summary"], keywords, "issue_kw"
+    )
     if not match_sql:
         return []
     filters = (
@@ -1187,13 +1223,15 @@ def query_integrated_issue_evidence(
         ORDER BY confidence DESC NULLS LAST, created_at DESC
         LIMIT :limit
     """
-    params.update({
-        "sector_id": sector_id,
-        "sector_name": sector_name,
-        "start_date": start_date,
-        "end_date": end_date,
-        "limit": max_evidence,
-    })
+    params.update(
+        {
+            "sector_id": sector_id,
+            "sector_name": sector_name,
+            "start_date": start_date,
+            "end_date": end_date,
+            "limit": max_evidence,
+        }
+    )
     return query_dicts(sql, params)
 
 
@@ -1225,7 +1263,9 @@ def query_business_signal_evidence(
     return query_dicts(sql, params)
 
 
-def keyword_match_clause(columns: list[str], keywords: list[str], prefix: str) -> tuple[str, dict[str, Any]]:
+def keyword_match_clause(
+    columns: list[str], keywords: list[str], prefix: str
+) -> tuple[str, dict[str, Any]]:
     clauses: list[str] = []
     params: dict[str, Any] = {}
 
@@ -1314,7 +1354,9 @@ def print_home_rows(rows: list[dict[str, Any]]) -> None:
         ratio = row.get("ratio")
         reason = str(row.get("home_reason") or "")
         peak = "Y" if row.get("is_peak_candidate") else ""
-        print(f"{rank:>4s} {group_name[:24]:24s} {period:12s} {format_ratio(ratio):>8s} {reason:12s} {peak}")
+        print(
+            f"{rank:>4s} {group_name[:24]:24s} {period:12s} {format_ratio(ratio):>8s} {reason:12s} {peak}"
+        )
 
 
 def latest_row_per_group(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

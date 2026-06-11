@@ -298,15 +298,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate Peer+ comparison and SWOT snapshots.")
     parser.add_argument("--env", choices=["local", "cloud"], default=None)
     parser.add_argument("--company", action="append", choices=COMPETITOR_PEER_IDS, default=None)
-    parser.add_argument("--overall-only", action="store_true", help="Generate only the overall competitor snapshot.")
+    parser.add_argument(
+        "--overall-only", action="store_true", help="Generate only the overall competitor snapshot."
+    )
     parser.add_argument("--days", type=int, default=180)
     parser.add_argument("--fallback-days", type=int, default=365)
     parser.add_argument("--signal-limit", type=int, default=12)
     parser.add_argument("--metric-limit", type=int, default=6)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--dry-run", action="store_true", help="Build evidence packs only.")
-    parser.add_argument("--estimate-tokens", action="store_true", help="Estimate prompt tokens only.")
-    parser.add_argument("--save-db", action="store_true", help="Persist results to peer_llm_analysis_snapshots.")
+    parser.add_argument(
+        "--estimate-tokens", action="store_true", help="Estimate prompt tokens only."
+    )
+    parser.add_argument(
+        "--save-db", action="store_true", help="Persist results to peer_llm_analysis_snapshots."
+    )
     parser.add_argument("--output", default=None, help="Optional JSON output file path.")
     args = parser.parse_args()
 
@@ -322,7 +328,9 @@ def main() -> None:
     if args.overall_only and args.company:
         raise RuntimeError("--overall-only cannot be used with --company")
 
-    target_ids = COMPETITOR_PEER_IDS if args.overall_only else tuple(args.company or COMPETITOR_PEER_IDS)
+    target_ids = (
+        COMPETITOR_PEER_IDS if args.overall_only else tuple(args.company or COMPETITOR_PEER_IDS)
+    )
     packs = build_evidence_packs(
         target_ids,
         include_overall=args.overall_only or args.company is None,
@@ -510,7 +518,9 @@ def build_pack(
         "prompt_version": PROMPT_VERSION,
         "comparison_input": {
             "purpose": "recent observed movements only; no financial numbers",
-            "allowed_comparison_evidence_refs": [item["evidence_id"] for item in comparison_signals],
+            "allowed_comparison_evidence_refs": [
+                item["evidence_id"] for item in comparison_signals
+            ],
             "signals": comparison_signals,
             "overall_rules": build_overall_rules(peer, companies),
             "overall_peer_coverage": build_peer_coverage(companies),
@@ -785,16 +795,26 @@ def build_diagnostic_evidence(
 ) -> list[dict[str, Any]]:
     peer_id = str(peer["id"])
     profile_text = summarize_profile(peer.get("profile_snapshot"))
-    business_signals = unique_evidence_items([s for s in signals if str(s.get("signal_type")) not in {"rd", "risk"}])
-    tech_signals = unique_evidence_items([s for s in signals if str(s.get("signal_type")) == "rd" or has_tech_term(s)])
-    risk_signals = unique_evidence_items([s for s in signals if str(s.get("signal_type")) == "risk" or has_risk_term(s)])
-    external_signals = unique_evidence_items([
-        s for s in signals
-        if str(s.get("signal_type")) in {"forecast", "investment", "valuation", "risk"}
-        or str(s.get("source_type")) == "securities_report"
-    ])
+    business_signals = unique_evidence_items(
+        [s for s in signals if str(s.get("signal_type")) not in {"rd", "risk"}]
+    )
+    tech_signals = unique_evidence_items(
+        [s for s in signals if str(s.get("signal_type")) == "rd" or has_tech_term(s)]
+    )
+    risk_signals = unique_evidence_items(
+        [s for s in signals if str(s.get("signal_type")) == "risk" or has_risk_term(s)]
+    )
+    external_signals = unique_evidence_items(
+        [
+            s
+            for s in signals
+            if str(s.get("signal_type")) in {"forecast", "investment", "valuation", "risk"}
+            or str(s.get("source_type")) == "securities_report"
+        ]
+    )
     weakness_metrics = [
-        m for m in metrics
+        m
+        for m in metrics
         if has_negative_metric_signal(m) or str(m.get("metric_name", "")).startswith("operating")
     ]
 
@@ -842,12 +862,25 @@ def build_diagnostic_evidence(
     ]
 
     diagnostics: list[dict[str, Any]] = []
-    for label, slug, diagnosis_type, diagnostic_question, judgment_basis, selected_signals, selected_metrics, profile in specs:
+    for (
+        label,
+        slug,
+        diagnosis_type,
+        diagnostic_question,
+        judgment_basis,
+        selected_signals,
+        selected_metrics,
+        profile,
+    ) in specs:
         source_refs = [item["evidence_id"] for item in selected_signals + selected_metrics]
         digest = hashlib.sha1(
-            json.dumps([peer_id, label, source_refs, profile], ensure_ascii=False, sort_keys=True).encode("utf-8")
+            json.dumps(
+                [peer_id, label, source_refs, profile], ensure_ascii=False, sort_keys=True
+            ).encode("utf-8")
         ).hexdigest()[:10]
-        basis_points = build_diagnostic_basis_points(label, selected_signals, selected_metrics, profile)
+        basis_points = build_diagnostic_basis_points(
+            label, selected_signals, selected_metrics, profile
+        )
         source_signal_citations = [build_signal_source_citation(item) for item in selected_signals]
         source_metric_citations = [build_metric_source_citation(item) for item in selected_metrics]
         source_citations = [*source_signal_citations, *source_metric_citations]
@@ -862,8 +895,12 @@ def build_diagnostic_evidence(
                 "judgment_basis": judgment_basis,
                 "basis_points": basis_points,
                 "source_citations": [citation for citation in source_citations if citation],
-                "source_signal_citations": [citation for citation in source_signal_citations if citation],
-                "source_metric_citations": [citation for citation in source_metric_citations if citation],
+                "source_signal_citations": [
+                    citation for citation in source_signal_citations if citation
+                ],
+                "source_metric_citations": [
+                    citation for citation in source_metric_citations if citation
+                ],
                 "factor_type": SWOT_FACTOR_TYPE_BY_LABEL[label],
                 "profile_hint": compact_text(profile, 320),
                 "source_signal_refs": [item["evidence_id"] for item in selected_signals],
@@ -872,7 +909,11 @@ def build_diagnostic_evidence(
                     compact_text(
                         " / ".join(
                             str(value or "")
-                            for value in (item.get("business_area"), item.get("signal_type"), item.get("summary"))
+                            for value in (
+                                item.get("business_area"),
+                                item.get("signal_type"),
+                                item.get("summary"),
+                            )
                         ),
                         260,
                     )
@@ -904,7 +945,9 @@ class PeerSwotAgent:
         self.llm = ChatOpenAI(model=model, temperature=0.1, max_completion_tokens=1800)
 
     def generate(self, evidence_pack: dict[str, Any]) -> dict[str, Any]:
-        comparison_raw = self._invoke_json(COMPARISON_PROMPT, build_comparison_prompt_pack(evidence_pack))
+        comparison_raw = self._invoke_json(
+            COMPARISON_PROMPT, build_comparison_prompt_pack(evidence_pack)
+        )
         comparison_points = normalize_comparison_points(comparison_raw, evidence_pack)
         evidence_pack["_normalized_comparison_points"] = comparison_points
 
@@ -974,7 +1017,9 @@ def build_swot_prompt_pack(
             "Threat": "recent issue가 아니라 회사가 통제하기 어려운 외부 압박",
         },
         "forbidden_recent_event_texts": [
-            compact_text(" / ".join(str(item.get(key) or "") for key in ("change_object", "body")), 220)
+            compact_text(
+                " / ".join(str(item.get(key) or "") for key in ("change_object", "body")), 220
+            )
             for item in comparison_points
         ],
         "observed_comparison_points_for_non_repetition": [
@@ -1011,7 +1056,9 @@ def filter_swot_diagnostics_for_comparison(
         filtered = dict(diagnosis)
         source_signal_refs = [str(ref) for ref in diagnosis.get("source_signal_refs") or []]
         signal_summaries = [str(summary) for summary in diagnosis.get("signal_summaries") or []]
-        signal_citations = [str(citation) for citation in diagnosis.get("source_signal_citations") or []]
+        signal_citations = [
+            str(citation) for citation in diagnosis.get("source_signal_citations") or []
+        ]
         kept_refs: list[str] = []
         kept_summaries: list[str] = []
         kept_signal_citations: list[str] = []
@@ -1060,7 +1107,9 @@ def filter_swot_diagnostics_for_comparison(
 def content_overlaps_comparison(value: str, comparison_texts: list[str]) -> bool:
     if not value:
         return False
-    return any(is_semantically_close(value, comparison_text) for comparison_text in comparison_texts)
+    return any(
+        is_semantically_close(value, comparison_text) for comparison_text in comparison_texts
+    )
 
 
 def is_overall_pack(evidence_pack: dict[str, Any]) -> bool:
@@ -1096,11 +1145,21 @@ def ensure_overall_multi_peer_signal_refs(
 
 def signals_for_label(label: str, signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if label == "기술 신호":
-        selected = [signal for signal in signals if str(signal.get("signal_type")) == "rd" or has_tech_term(signal)]
+        selected = [
+            signal
+            for signal in signals
+            if str(signal.get("signal_type")) == "rd" or has_tech_term(signal)
+        ]
     elif label == "리스크":
-        selected = [signal for signal in signals if str(signal.get("signal_type")) == "risk" or has_risk_term(signal)]
+        selected = [
+            signal
+            for signal in signals
+            if str(signal.get("signal_type")) == "risk" or has_risk_term(signal)
+        ]
     else:
-        selected = [signal for signal in signals if str(signal.get("signal_type")) not in {"rd", "risk"}]
+        selected = [
+            signal for signal in signals if str(signal.get("signal_type")) not in {"rd", "risk"}
+        ]
     return selected or signals
 
 
@@ -1193,12 +1252,14 @@ def extract_theme_terms(text_value: str) -> list[str]:
 
 def count_distinct_peers_for_refs(refs: list[str], signals: list[dict[str, Any]]) -> int:
     by_ref = {str(signal.get("evidence_id")): signal for signal in signals}
-    return len({
-        str(signal.get("peer_id"))
-        for ref in refs
-        for signal in [by_ref.get(ref)]
-        if signal and signal.get("peer_id")
-    })
+    return len(
+        {
+            str(signal.get("peer_id"))
+            for ref in refs
+            for signal in [by_ref.get(ref)]
+            if signal and signal.get("peer_id")
+        }
+    )
 
 
 def sanitize_overall_company_names(value: str) -> str:
@@ -1208,7 +1269,9 @@ def sanitize_overall_company_names(value: str) -> str:
     return re.sub(r"(일부 기업[,·/ ]*){2,}", "일부 기업 ", text_value).strip()
 
 
-def normalize_comparison_points(raw: dict[str, Any], evidence_pack: dict[str, Any]) -> list[dict[str, Any]]:
+def normalize_comparison_points(
+    raw: dict[str, Any], evidence_pack: dict[str, Any]
+) -> list[dict[str, Any]]:
     raw_items = raw.get("comparison_points") if isinstance(raw, dict) else []
     if not isinstance(raw_items, list):
         raw_items = []
@@ -1236,7 +1299,9 @@ def normalize_comparison_points(raw: dict[str, Any], evidence_pack: dict[str, An
         if is_overall_pack(evidence_pack):
             refs = ensure_overall_multi_peer_signal_refs(label, refs, signals)
         source_urls = collect_urls_for_refs(refs, signals)
-        change_object = compact_text(item.get("change_object"), 80) or infer_change_object(label, refs, signals)
+        change_object = compact_text(item.get("change_object"), 80) or infer_change_object(
+            label, refs, signals
+        )
         if is_generic_change_object(change_object):
             change_object = GENERIC_CHANGE_OBJECT_BY_LABEL[label]
         evidence_summary = build_comparison_evidence_summary(label, refs, signals)
@@ -1424,7 +1489,9 @@ def diagnostic_for_label(label: str, diagnostics: list[dict[str, Any]]) -> dict[
     return next((item for item in diagnostics if item.get("label") == label), {})
 
 
-def build_comparison_evidence_summary(label: str, refs: list[str], signals: list[dict[str, Any]]) -> str:
+def build_comparison_evidence_summary(
+    label: str, refs: list[str], signals: list[dict[str, Any]]
+) -> str:
     by_ref = {item.get("evidence_id"): item for item in signals}
     picked = [by_ref[ref] for ref in refs if ref in by_ref]
     if not picked:
@@ -1446,14 +1513,17 @@ def build_comparison_reasoning_summary(
 ) -> str:
     by_ref = {item.get("evidence_id"): item for item in signals}
     picked = [by_ref[ref] for ref in refs if ref in by_ref]
-    checked = compact_text(
-        " / ".join(
-            str(value or "")
-            for item in picked[:1]
-            for value in (item.get("business_area"), item.get("summary"))
-        ),
-        110,
-    ) or change_object
+    checked = (
+        compact_text(
+            " / ".join(
+                str(value or "")
+                for item in picked[:1]
+                for value in (item.get("business_area"), item.get("summary"))
+            ),
+            110,
+        )
+        or change_object
+    )
     lens = {
         "사업 신호": "사업·고객·서비스 실행 움직임",
         "기술 신호": "기술·플랫폼·제품 적용 움직임",
@@ -1504,10 +1574,18 @@ def build_swot_evidence_summary(diagnosis: dict[str, Any]) -> str:
 
 
 def build_swot_reasoning_summary(label: str, title: str, diagnosis: dict[str, Any]) -> str:
-    question = compact_text(diagnosis.get("diagnostic_question") if isinstance(diagnosis, dict) else "", 90)
-    basis = compact_text(diagnosis.get("judgment_basis") if isinstance(diagnosis, dict) else "", 110)
+    question = compact_text(
+        diagnosis.get("diagnostic_question") if isinstance(diagnosis, dict) else "", 90
+    )
+    basis = compact_text(
+        diagnosis.get("judgment_basis") if isinstance(diagnosis, dict) else "", 110
+    )
     basis_points = diagnosis.get("basis_points") if isinstance(diagnosis, dict) else None
-    checked = compact_text(str(basis_points[0]), 120) if isinstance(basis_points, list) and basis_points else title
+    checked = (
+        compact_text(str(basis_points[0]), 120)
+        if isinstance(basis_points, list) and basis_points
+        else title
+    )
     label_lens = {
         "Strength": "내부 통제 가능한 경쟁 역량",
         "Weakness": "내부에서 개선해야 할 제약",
@@ -1594,7 +1672,9 @@ def separate_swot_body_from_comparison(
 def build_diagnostic_swot_body(label: str, title: str, diagnosis: dict[str, Any]) -> str:
     summaries = diagnosis.get("signal_summaries") if isinstance(diagnosis, dict) else None
     basis_points = diagnosis.get("basis_points") if isinstance(diagnosis, dict) else None
-    profile_hint = compact_text(diagnosis.get("profile_hint") if isinstance(diagnosis, dict) else "", 120)
+    profile_hint = compact_text(
+        diagnosis.get("profile_hint") if isinstance(diagnosis, dict) else "", 120
+    )
     checked = ""
     if isinstance(summaries, list) and summaries:
         checked = compact_text(str(summaries[0]), 130)
@@ -1603,7 +1683,9 @@ def build_diagnostic_swot_body(label: str, title: str, diagnosis: dict[str, Any]
     else:
         checked = profile_hint or title
 
-    object_name = extract_specific_phrase(" ".join(str(item) for item in (summaries or [])) or profile_hint or title)
+    object_name = extract_specific_phrase(
+        " ".join(str(item) for item in (summaries or [])) or profile_hint or title
+    )
     if is_generic_change_object(object_name):
         object_name = title
 
@@ -1681,7 +1763,10 @@ def build_overall_check_point(
     objects = [item.get("change_object") for item in comparison_points if item.get("change_object")]
     titles = [item.get("title") for item in swot_items if item.get("title")]
     values = [str(value) for value in [*objects, *titles] if value]
-    return compact_text(" / ".join(values[:4]), 180) or "다음 분기에도 사업, 기술, 리스크, SWOT 진단 근거를 분리해 확인합니다."
+    return (
+        compact_text(" / ".join(values[:4]), 180)
+        or "다음 분기에도 사업, 기술, 리스크, SWOT 진단 근거를 분리해 확인합니다."
+    )
 
 
 def save_results_to_db(
@@ -1706,18 +1791,28 @@ def save_results_to_db(
     return saved_count
 
 
-def save_result_to_db(db: Any, evidence_pack: dict[str, Any], result: dict[str, Any], *, model: str) -> None:
+def save_result_to_db(
+    db: Any, evidence_pack: dict[str, Any], result: dict[str, Any], *, model: str
+) -> None:
     peer = evidence_pack["peer"]
     peer_id = str(peer["id"])
-    comparison_mode = str(evidence_pack.get("comparison_mode") or result.get("comparison_mode") or "peer_vs_sk_ax")
+    comparison_mode = str(
+        evidence_pack.get("comparison_mode") or result.get("comparison_mode") or "peer_vs_sk_ax"
+    )
     scope = "all" if peer_id == "all" else "company"
     evidence_refs = collect_evidence_ids_from_result(result)
-    source_signal_ids = sorted(extract_numeric_ids(evidence_refs, "signal:") | collect_signal_ids(evidence_pack))
-    source_metric_ids = sorted(extract_numeric_ids(evidence_refs, "metric:") | collect_metric_ids(evidence_pack))
+    source_signal_ids = sorted(
+        extract_numeric_ids(evidence_refs, "signal:") | collect_signal_ids(evidence_pack)
+    )
+    source_metric_ids = sorted(
+        extract_numeric_ids(evidence_refs, "metric:") | collect_metric_ids(evidence_pack)
+    )
     source_raw_article_ids = sorted(collect_raw_article_ids(evidence_pack))
     peer_ids = collect_peer_ids(evidence_pack)
     confidence = average_confidence(result)
-    analysis_trace = result.get("analysis_trace") if isinstance(result.get("analysis_trace"), list) else []
+    analysis_trace = (
+        result.get("analysis_trace") if isinstance(result.get("analysis_trace"), list) else []
+    )
     params = {
         "scope": scope,
         "peer_id": peer_id,
@@ -1868,7 +1963,11 @@ def collect_signal_ids(evidence_pack: dict[str, Any]) -> set[int]:
             if raw_id.isdigit():
                 ids.add(int(raw_id))
         for ref in item.get("source_signal_refs") or []:
-            if isinstance(ref, str) and ref.startswith("signal:") and ref.removeprefix("signal:").isdigit():
+            if (
+                isinstance(ref, str)
+                and ref.startswith("signal:")
+                and ref.removeprefix("signal:").isdigit()
+            ):
                 ids.add(int(ref.removeprefix("signal:")))
     return ids
 
@@ -1882,7 +1981,11 @@ def collect_metric_ids(evidence_pack: dict[str, Any]) -> set[int]:
             if raw_id.isdigit():
                 ids.add(int(raw_id))
         for ref in item.get("source_metric_refs") or []:
-            if isinstance(ref, str) and ref.startswith("metric:") and ref.removeprefix("metric:").isdigit():
+            if (
+                isinstance(ref, str)
+                and ref.startswith("metric:")
+                and ref.removeprefix("metric:").isdigit()
+            ):
                 ids.add(int(ref.removeprefix("metric:")))
     return ids
 
@@ -1915,7 +2018,12 @@ def iter_evidence_items(evidence_pack: dict[str, Any]):
     for company in evidence_pack.get("companies") or []:
         if not isinstance(company, dict):
             continue
-        for key in ("comparison_signals", "swot_source_signals", "financial_metrics", "diagnostic_evidence"):
+        for key in (
+            "comparison_signals",
+            "swot_source_signals",
+            "financial_metrics",
+            "diagnostic_evidence",
+        ):
             for item in company.get(key) or []:
                 if isinstance(item, dict):
                     yield item
@@ -1992,7 +2100,7 @@ def parse_json_object(content: str) -> dict[str, Any]:
         end = cleaned.rfind("}")
         if start < 0 or end < start:
             raise
-        value = json.loads(cleaned[start:end + 1])
+        value = json.loads(cleaned[start : end + 1])
     if not isinstance(value, dict):
         raise ValueError("LLM response must be a JSON object")
     return value
@@ -2100,7 +2208,10 @@ def extract_specific_phrase(text_value: str | None) -> str:
     text_value = compact_text(text_value, 90)
     if not text_value:
         return ""
-    quoted = re.findall(r"[A-Za-z][A-Za-z0-9+.#/-]{2,}|[가-힣A-Za-z0-9+.#/-]{2,}(?:AI|AX|DX|클라우드|플랫폼|서비스|솔루션|팩토리|자동화)", text_value)
+    quoted = re.findall(
+        r"[A-Za-z][A-Za-z0-9+.#/-]{2,}|[가-힣A-Za-z0-9+.#/-]{2,}(?:AI|AX|DX|클라우드|플랫폼|서비스|솔루션|팩토리|자동화)",
+        text_value,
+    )
     if quoted:
         return compact_text(quoted[0], 60)
     parts = re.split(r"[,/·\s]+", text_value)
@@ -2204,7 +2315,19 @@ def has_tech_term(item: dict[str, Any]) -> bool:
     text_value = joined_item_text(item).lower()
     return any(
         term in text_value
-        for term in ("ai", "ax", "dx", "cloud", "클라우드", "플랫폼", "데이터", "보안", "자동화", "llm", "생성형")
+        for term in (
+            "ai",
+            "ax",
+            "dx",
+            "cloud",
+            "클라우드",
+            "플랫폼",
+            "데이터",
+            "보안",
+            "자동화",
+            "llm",
+            "생성형",
+        )
     )
 
 
@@ -2212,7 +2335,20 @@ def has_risk_term(item: dict[str, Any]) -> bool:
     text_value = joined_item_text(item).lower()
     return any(
         term in text_value
-        for term in ("risk", "리스크", "위험", "부담", "지연", "둔화", "경쟁", "규제", "수익성", "비용", "하락", "감소")
+        for term in (
+            "risk",
+            "리스크",
+            "위험",
+            "부담",
+            "지연",
+            "둔화",
+            "경쟁",
+            "규제",
+            "수익성",
+            "비용",
+            "하락",
+            "감소",
+        )
     )
 
 
@@ -2220,7 +2356,10 @@ def has_negative_metric_signal(metric: dict[str, Any]) -> bool:
     text_value = joined_item_text(metric).lower()
     value = metric.get("value_numeric")
     return (
-        any(term in text_value for term in ("감소", "하락", "둔화", "적자", "손실", "마진", "수익성"))
+        any(
+            term in text_value
+            for term in ("감소", "하락", "둔화", "적자", "손실", "마진", "수익성")
+        )
         or bool(re.search(r"(?i)(yoy|qoq|전년|전분기).{0,20}-\d", text_value))
         or (isinstance(value, int | float) and value < 0)
     )
@@ -2229,7 +2368,15 @@ def has_negative_metric_signal(metric: dict[str, Any]) -> bool:
 def joined_item_text(item: dict[str, Any]) -> str:
     return " ".join(
         str(item.get(key) or "")
-        for key in ("business_area", "signal_type", "summary", "evidence_text", "title", "metric_name", "metric_label")
+        for key in (
+            "business_area",
+            "signal_type",
+            "summary",
+            "evidence_text",
+            "title",
+            "metric_name",
+            "metric_label",
+        )
     )
 
 
@@ -2243,7 +2390,13 @@ def summarize_profile(profile_snapshot: Any) -> str:
             return compact_text(profile_snapshot, 360)
     if isinstance(profile_snapshot, dict):
         parts: list[str] = []
-        for key in ("summary", "businessOverview", "business_overview", "description", "mainBusiness"):
+        for key in (
+            "summary",
+            "businessOverview",
+            "business_overview",
+            "description",
+            "mainBusiness",
+        ):
             value = profile_snapshot.get(key)
             if isinstance(value, str) and value.strip():
                 parts.append(value.strip())

@@ -41,9 +41,7 @@ SCHEMA_VERSION = "peer_overview_keywords_v1"
 ANALYSIS_TYPE = "peer_overview_keywords"
 COMPARISON_MODE = "quarterly_keyword_selection"
 DEFAULT_MODEL = (
-    os.getenv("PEER_OVERVIEW_KEYWORD_MODEL")
-    or os.getenv("OPENAI_CHAT_MODEL")
-    or "gpt-4o-mini"
+    os.getenv("PEER_OVERVIEW_KEYWORD_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o-mini"
 )
 
 TARGET_PEER_IDS = (
@@ -398,13 +396,25 @@ VALIDATION_RETRY_PROMPT_TEMPLATE = """\
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate Peer+ overview keywords.")
     parser.add_argument("--env", choices=["local", "cloud"], default=None)
-    parser.add_argument("--period", default=None, help="Quarter such as 2026Q1. Defaults to latest 5-peer common signal quarter.")
+    parser.add_argument(
+        "--period",
+        default=None,
+        help="Quarter such as 2026Q1. Defaults to latest 5-peer common signal quarter.",
+    )
     parser.add_argument("--company", action="append", choices=TARGET_PEER_IDS, default=None)
     parser.add_argument("--signal-limit", type=int, default=20)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--dry-run", action="store_true", help="Build evidence packs only.")
-    parser.add_argument("--estimate-tokens", action="store_true", help="Estimate prompt tokens without calling the LLM.")
-    parser.add_argument("--save-db", action="store_true", help="Persist validated results to peer_llm_analysis_snapshots.")
+    parser.add_argument(
+        "--estimate-tokens",
+        action="store_true",
+        help="Estimate prompt tokens without calling the LLM.",
+    )
+    parser.add_argument(
+        "--save-db",
+        action="store_true",
+        help="Persist validated results to peer_llm_analysis_snapshots.",
+    )
     parser.add_argument("--output", default=None, help="Optional JSON output file path.")
     args = parser.parse_args()
 
@@ -429,7 +439,10 @@ def main() -> None:
             raise RuntimeError("--save-db cannot be used with --dry-run or --estimate-tokens")
         if args.estimate_tokens:
             agent = PeerOverviewKeywordAgent(model=args.model)
-            estimates = [agent.estimate_prompt_tokens(pack) | {"peer_id": pack["peer"]["id"]} for pack in packs]
+            estimates = [
+                agent.estimate_prompt_tokens(pack) | {"peer_id": pack["peer"]["id"]}
+                for pack in packs
+            ]
             payload: dict[str, Any] = {
                 "mode": "estimate_tokens",
                 "period": period,
@@ -468,9 +481,10 @@ def main() -> None:
 
 
 def resolve_latest_common_signal_period(db: Any) -> str | None:
-    row = db.execute(
-        text(
-            """
+    row = (
+        db.execute(
+            text(
+                """
             SELECT period
             FROM raw_article_business_signals
             WHERE peer_id IN ('sk_ax', 'samsung_sds', 'lg_cns', 'hyundai_autoever', 'posco_dx')
@@ -483,8 +497,11 @@ def resolve_latest_common_signal_period(db: Any) -> str | None:
                 period DESC
             LIMIT 1
             """
+            )
         )
-    ).mappings().first()
+        .mappings()
+        .first()
+    )
     return str(row["period"]) if row else None
 
 
@@ -537,7 +554,9 @@ def fetch_peers(db: Any, peer_ids: tuple[str, ...]) -> list[dict[str, Any]]:
     ]
 
 
-def fetch_business_signals(db: Any, peer_id: str, *, period: str, limit: int) -> list[dict[str, Any]]:
+def fetch_business_signals(
+    db: Any, peer_id: str, *, period: str, limit: int
+) -> list[dict[str, Any]]:
     rows = db.execute(
         text(
             """
@@ -777,7 +796,9 @@ def is_it_relevant_text(value: str) -> bool:
 def compact_profile_scalar(value: Any, max_chars: int) -> str:
     text_value = compact_text(value, max_chars)
     lowered = text_value.lower()
-    if any(term in lowered for term in NON_IT_DOMAIN_TERMS) and not any(term in lowered for term in PROFILE_STRONG_IT_TERMS):
+    if any(term in lowered for term in NON_IT_DOMAIN_TERMS) and not any(
+        term in lowered for term in PROFILE_STRONG_IT_TERMS
+    ):
         return ""
     return text_value
 
@@ -844,7 +865,9 @@ class PeerOverviewKeywordAgent:
                     ("human", request_prompt),
                 ]
             )
-            content = response.content if isinstance(response.content, str) else str(response.content)
+            content = (
+                response.content if isinstance(response.content, str) else str(response.content)
+            )
             result = parse_json_response(content)
             normalize_result(result, evidence_pack, model=self.model)
             try:
@@ -852,13 +875,20 @@ class PeerOverviewKeywordAgent:
                 return result
             except ValueError as exc:
                 validation_error = exc
-                log.warning("LLM keyword validation failed | peer=%s attempt=%s errors=%s", evidence_pack["peer"]["id"], attempt + 1, exc)
+                log.warning(
+                    "LLM keyword validation failed | peer=%s attempt=%s errors=%s",
+                    evidence_pack["peer"]["id"],
+                    attempt + 1,
+                    exc,
+                )
         if validation_error is not None:
             raise validation_error
         raise RuntimeError("LLM response validation failed")
 
     def estimate_prompt_tokens(self, evidence_pack: dict[str, Any]) -> dict[str, int]:
-        return {"prompt_tokens": estimate_text_tokens(self._build_prompt(evidence_pack), self.model)}
+        return {
+            "prompt_tokens": estimate_text_tokens(self._build_prompt(evidence_pack), self.model)
+        }
 
     def _build_prompt(self, evidence_pack: dict[str, Any]) -> str:
         peer = evidence_pack["peer"]
@@ -892,8 +922,14 @@ def normalize_result(result: dict[str, Any], evidence_pack: dict[str, Any], *, m
     result["schema_version"] = SCHEMA_VERSION
     result["evidence_hash"] = evidence_pack.get("evidence_hash")
 
-    business = result.get("business_keyword") if isinstance(result.get("business_keyword"), dict) else {}
-    technology = result.get("technology_keyword") if isinstance(result.get("technology_keyword"), dict) else {}
+    business = (
+        result.get("business_keyword") if isinstance(result.get("business_keyword"), dict) else {}
+    )
+    technology = (
+        result.get("technology_keyword")
+        if isinstance(result.get("technology_keyword"), dict)
+        else {}
+    )
     business_label = clean_label(business.get("label"))
     technology_label = clean_label(technology.get("label"))
     business["label"] = business_label
@@ -902,8 +938,13 @@ def normalize_result(result: dict[str, Any], evidence_pack: dict[str, Any], *, m
     normalize_keyword_reasoning_fields(technology)
     result["business_keyword"] = business
     result["technology_keyword"] = technology
-    result["top_keyword"] = "\n".join(label for label in (business_label, technology_label) if label) or None
-    result.setdefault("top_keyword_reason", f"{evidence_pack['period']} 원문 기반 사업 신호에서 사업 방향과 기술 구현 축을 분리해 선택했습니다.")
+    result["top_keyword"] = (
+        "\n".join(label for label in (business_label, technology_label) if label) or None
+    )
+    result.setdefault(
+        "top_keyword_reason",
+        f"{evidence_pack['period']} 원문 기반 사업 신호에서 사업 방향과 기술 구현 축을 분리해 선택했습니다.",
+    )
     result.setdefault("top_keyword_basis", build_basis(result, evidence_pack))
     result["top_keyword_evidence"] = normalize_evidence_lines(result, evidence_pack)
     result["top_keyword_evidence_urls"] = normalize_evidence_urls(result)
@@ -960,7 +1001,9 @@ def validate_result(result: dict[str, Any], evidence_pack: dict[str, Any]) -> No
         confidence = safe_float(item.get("confidence"))
         if confidence is not None and not 0 <= confidence <= 1:
             errors.append(f"{key}.confidence is out of range")
-    trace_steps = [item.get("step") for item in result.get("analysis_trace") or [] if isinstance(item, dict)]
+    trace_steps = [
+        item.get("step") for item in result.get("analysis_trace") or [] if isinstance(item, dict)
+    ]
     for expected_step in ("근거 확인", "후보 정제", "최종 판단"):
         if expected_step not in trace_steps:
             errors.append(f"analysis_trace missing step: {expected_step}")
@@ -971,7 +1014,9 @@ def validate_result(result: dict[str, Any], evidence_pack: dict[str, Any]) -> No
             errors.append(f"analysis_trace/{item.get('step')} reasoning is empty")
         if not item.get("evidence"):
             errors.append(f"analysis_trace/{item.get('step')} evidence is empty")
-    evidence_lines = [str(line).strip() for line in result.get("top_keyword_evidence") or [] if str(line).strip()]
+    evidence_lines = [
+        str(line).strip() for line in result.get("top_keyword_evidence") or [] if str(line).strip()
+    ]
     if len(evidence_lines) < 2:
         errors.append("top_keyword_evidence must include business and technology explanation lines")
     if errors:
@@ -982,8 +1027,7 @@ def validate_sk_ax_it_relevance(label: str | None, item: dict[str, Any]) -> str 
     if not label:
         return None
     text = " ".join(
-        str(item.get(key) or "")
-        for key in ("label", "reason", "reasoning", "evidence_summary")
+        str(item.get(key) or "") for key in ("label", "reason", "reasoning", "evidence_summary")
     ).lower()
     has_non_it_domain = any(term in text for term in NON_IT_DOMAIN_TERMS)
     has_it_relevance = any(term in text for term in IT_RELEVANCE_TERMS)
@@ -997,20 +1041,30 @@ def validate_sk_ax_it_relevance(label: str | None, item: dict[str, Any]) -> str 
 
 
 def normalize_evidence_lines(result: dict[str, Any], evidence_pack: dict[str, Any]) -> list[str]:
-    lines = [str(line).strip() for line in result.get("top_keyword_evidence") or [] if str(line).strip()]
+    lines = [
+        str(line).strip() for line in result.get("top_keyword_evidence") or [] if str(line).strip()
+    ]
     peer_name = evidence_pack["peer"]["name"]
     generated = []
-    for axis_index, (axis_name, key) in enumerate((("사업", "business_keyword"), ("기술", "technology_keyword"))):
+    for axis_index, (axis_name, key) in enumerate(
+        (("사업", "business_keyword"), ("기술", "technology_keyword"))
+    ):
         item = result.get(key) if isinstance(result.get(key), dict) else {}
         label = clean_label(item.get("label")) or "-"
         refs = [ref for ref in item.get("evidence_refs") or [] if isinstance(ref, str)]
         evidence_details = [lookup_evidence_detail(evidence_pack, ref) for ref in refs[:2]]
         evidence_details = [detail for detail in evidence_details if detail]
         evidence_texts = [format_evidence_detail(detail) for detail in evidence_details]
-        evidence_summary = str(item.get("evidence_summary") or " / ".join(filter(None, evidence_texts)) or "근거 요약 없음")
+        evidence_summary = str(
+            item.get("evidence_summary")
+            or " / ".join(filter(None, evidence_texts))
+            or "근거 요약 없음"
+        )
         reason = str(item.get("reason") or "")
         reasoning = str(item.get("reasoning") or "")
-        source_basis = compact_text(" / ".join(filter(None, evidence_texts)) or evidence_summary, 260)
+        source_basis = compact_text(
+            " / ".join(filter(None, evidence_texts)) or evidence_summary, 260
+        )
         fallback_reason = (
             reason
             or reasoning
@@ -1033,7 +1087,9 @@ def normalize_evidence_urls(result: dict[str, Any]) -> list[str]:
     urls: list[str] = []
     for key in ("business_keyword", "technology_keyword"):
         item = result.get(key) if isinstance(result.get(key), dict) else {}
-        source_urls = [str(url).strip() for url in item.get("source_urls") or [] if str(url).strip()]
+        source_urls = [
+            str(url).strip() for url in item.get("source_urls") or [] if str(url).strip()
+        ]
         urls.append(source_urls[0] if source_urls else "")
     return urls
 
@@ -1054,7 +1110,9 @@ def lookup_evidence_detail(evidence_pack: dict[str, Any], ref: str) -> dict[str,
             return {
                 "date": compact_text(item.get("date") or "날짜 미확인", 20),
                 "title": compact_text(item.get("title") or "제목 미확인", 120),
-                "summary": compact_text(item.get("summary") or item.get("evidence_text") or "원문 요약 없음", 260),
+                "summary": compact_text(
+                    item.get("summary") or item.get("evidence_text") or "원문 요약 없음", 260
+                ),
             }
     return {}
 
@@ -1063,7 +1121,11 @@ def format_evidence_detail(detail: dict[str, str]) -> str:
     date_value = detail.get("date") or "날짜 미확인"
     title = detail.get("title") or "제목 미확인"
     summary = detail.get("summary") or "원문 요약 없음"
-    date_prefix = f"[{date_value}]" if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", date_value) else f"[{date_value}]"
+    date_prefix = (
+        f"[{date_value}]"
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", date_value)
+        else f"[{date_value}]"
+    )
     return compact_text(f"{date_prefix} {title} - {summary}", 320)
 
 
@@ -1075,7 +1137,9 @@ def collect_evidence_ids(evidence_pack: dict[str, Any]) -> set[str]:
     }
 
 
-def save_results_to_db(evidence_packs: list[dict[str, Any]], results: list[dict[str, Any]], *, model: str) -> int:
+def save_results_to_db(
+    evidence_packs: list[dict[str, Any]], results: list[dict[str, Any]], *, model: str
+) -> int:
     pack_by_peer_id = {str(pack.get("peer", {}).get("id")): pack for pack in evidence_packs}
     saved_count = 0
     with SessionLocal() as db:
@@ -1092,12 +1156,16 @@ def save_results_to_db(evidence_packs: list[dict[str, Any]], results: list[dict[
     return saved_count
 
 
-def save_result_to_db(db: Any, evidence_pack: dict[str, Any], result: dict[str, Any], *, model: str) -> None:
+def save_result_to_db(
+    db: Any, evidence_pack: dict[str, Any], result: dict[str, Any], *, model: str
+) -> None:
     evidence_refs = collect_evidence_ids_from_result(result)
     source_signal_ids = sorted(extract_numeric_ids(evidence_refs, "signal:"))
     source_raw_article_ids = sorted(collect_raw_article_ids(evidence_pack, source_signal_ids))
     confidence = average_confidence(result)
-    analysis_trace = result.get("analysis_trace") if isinstance(result.get("analysis_trace"), list) else []
+    analysis_trace = (
+        result.get("analysis_trace") if isinstance(result.get("analysis_trace"), list) else []
+    )
     peer_id = str(result["peer_id"])
     params = {
         "analysis_type": ANALYSIS_TYPE,
@@ -1260,7 +1328,9 @@ def extract_numeric_ids(evidence_refs: set[str], prefix: str) -> set[int]:
     return ids
 
 
-def collect_raw_article_ids(evidence_pack: dict[str, Any], source_signal_ids: list[int]) -> list[int]:
+def collect_raw_article_ids(
+    evidence_pack: dict[str, Any], source_signal_ids: list[int]
+) -> list[int]:
     signal_ids = set(source_signal_ids)
     article_ids: set[int] = set()
     for item in evidence_pack.get("business_signals") or []:
@@ -1284,7 +1354,13 @@ def average_confidence(result: dict[str, Any]) -> float | None:
 
 def build_basis(result: dict[str, Any], evidence_pack: dict[str, Any]) -> str:
     confidence = average_confidence(result)
-    article_count = len({item.get("raw_article_id") for item in evidence_pack.get("business_signals") or [] if item.get("raw_article_id")})
+    article_count = len(
+        {
+            item.get("raw_article_id")
+            for item in evidence_pack.get("business_signals") or []
+            if item.get("raw_article_id")
+        }
+    )
     return (
         f"LLM grounded selection · signals {len(evidence_pack.get('business_signals') or [])} "
         f"· articles {article_count}"
