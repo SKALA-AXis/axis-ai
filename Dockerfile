@@ -19,16 +19,18 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /usr/local/bin/
 COPY pyproject.toml uv.lock ./
 
 ENV UV_LINK_MODE=copy
-# --extra-index-url: torch==+cpu 휠은 PyPI 가 아닌 PyTorch CPU 인덱스에만 존재
-# (pyproject [tool.uv.sources] 참조 — CUDA 동봉 휠 ~2.5GB 제거)
-# --index-strategy unsafe-best-match: PyTorch 인덱스가 certifi 등 공용 패키지 사본을
-# 가져 first-match 가 버전 충돌함. 모든 패키지가 == 핀이라 결정성은 유지됨.
+# torch==+cpu 휠은 PyPI 가 아닌 PyTorch CPU 인덱스에만 존재 (CUDA 동봉 휠 ~2.5GB 제거,
+# pyproject [tool.uv.sources] 참조). PyTorch 인덱스를 extra-index 로 섞으면 uv 가
+# 모든 패키지를 그 인덱스에도 조회해 503 등에 빌드가 좌초함 (2026-06-11 실사고) —
+# torch 만 PyTorch 인덱스에서 선설치하고 나머지는 PyPI 단독으로 격리.
 RUN uv export --frozen --no-emit-project --no-hashes --format requirements-txt -o /tmp/requirements.txt \
+    && TORCH_PIN="$(grep -oE '^torch==[^ ;]+\+cpu' /tmp/requirements.txt | head -1)" \
+    && test -n "$TORCH_PIN" \
     && uv pip install --system --no-cache \
-        --extra-index-url https://download.pytorch.org/whl/cpu \
-        --index-strategy unsafe-best-match \
-        -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt
+        --index-url https://download.pytorch.org/whl/cpu "$TORCH_PIN" \
+    && grep -vE '^torch==' /tmp/requirements.txt > /tmp/requirements-notorch.txt \
+    && uv pip install --system --no-cache -r /tmp/requirements-notorch.txt \
+    && rm /tmp/requirements*.txt
 
 # ── runtime: Playwright system libs + 앱 코드만 ───────────────────────────────
 FROM python:3.11-slim AS runtime
