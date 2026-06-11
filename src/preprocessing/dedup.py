@@ -1838,6 +1838,8 @@ def _same_company_business_issue(left: dict[str, Any], right: dict[str, Any]) ->
         right_entities["proper_terms"],
     )
     shared_numbers = set(left_entities["numbers"]) & set(right_entities["numbers"])
+    if not shared_numbers and shared_proper_terms:
+        shared_numbers = set(_number_terms(left)) & set(_number_terms(right))
     if shared_proper_terms and shared_numbers:
         return True
 

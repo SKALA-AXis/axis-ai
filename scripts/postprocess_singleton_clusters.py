@@ -18,7 +18,7 @@ import logging
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -73,10 +73,10 @@ class SourceCluster:
     cluster_id: int
     article_ids: list[int]
     titles: list[str]
-    snippets: list[str]
     title: str
     article_count: int
     event_at: datetime | None
+    snippets: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -84,9 +84,9 @@ class Cluster:
     cluster_id: int
     article_count: int
     titles: list[str]
-    snippets: list[str]
     article_ids: list[int]
     latest_event_at: datetime | None
+    snippets: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
