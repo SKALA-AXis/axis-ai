@@ -279,12 +279,26 @@ def _deduplicate_by_title(articles: list[dict[str, Any]]) -> tuple[dict[int, lis
     return cluster_map, representative_ids
 
 
+# 제목 키 비교용 문장부호 정규화 — 매체마다 곱슬따옴표(''""), 가운뎃점, 대시가
+# 섞여 들어와 동일 제목이 다른 키로 갈라졌음 (DB 검증: sim=1.00 분리 11쌍, 2026-06-11).
+_TITLE_KEY_QUOTES_RE = re.compile(r"[\"'‘’‚`“”„「」『』]")
+_TITLE_KEY_SPACERS_RE = re.compile(r"[·‧ㆍ…]")
+_TITLE_KEY_DASHES_RE = re.compile(r"[–—―]")
+
+
+def _normalize_title_key(title: str) -> str:
+    folded = _TITLE_KEY_QUOTES_RE.sub("", title)  # 따옴표류는 의미 없음 — 제거 후 비교
+    folded = _TITLE_KEY_SPACERS_RE.sub(" ", folded)
+    folded = _TITLE_KEY_DASHES_RE.sub("-", folded)
+    return " ".join(folded.lower().split())
+
+
 def _fallback_dedup_key(article: dict[str, Any]) -> str:
     issue_key = _issue_dedup_key(article)
     if issue_key:
         return issue_key
 
-    title = " ".join(str(article.get("title") or "").lower().split())
+    title = _normalize_title_key(str(article.get("title") or ""))
     if title:
         return title
     return str(article.get("url_hash") or article.get("url") or article.get("id"))
