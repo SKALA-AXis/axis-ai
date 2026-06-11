@@ -14,10 +14,11 @@ import logging
 import os
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 from zoneinfo import ZoneInfo
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
 from src.api.today_insight_schemas import (
@@ -82,6 +83,8 @@ def _llm_max_completion_tokens() -> int:
 
 
 def _get_llm() -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     global _llm
     if _llm is None:
         llm_kwargs: dict[str, Any] = {

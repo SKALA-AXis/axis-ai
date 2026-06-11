@@ -11,9 +11,10 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
 from src.agents.implication_agent import ImplicationAgent
@@ -901,6 +902,8 @@ class StrategicInsightAgent:
         return result
 
     def _get_llm(self) -> ChatOpenAI:
+        from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
         if self._llm is None:
             self._llm = ChatOpenAI(
                 model=_LLM_MODEL,

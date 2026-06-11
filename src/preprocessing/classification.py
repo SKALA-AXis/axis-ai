@@ -1,11 +1,14 @@
 """분류 전처리 v4 — 섹터 태깅 + 노출도 점수 + event_type 규칙 기반 분류."""
 
+from __future__ import annotations
+
 import json
 import logging
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 
 from src.config.companies import company_aliases
 from src.config.event_types import (
@@ -350,6 +353,8 @@ class ClusterClassifier:
 
 
 def _get_llm() -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     global _llm
     if _llm is None:
         _llm = ChatOpenAI(model="gpt-4o", temperature=0.1, max_completion_tokens=400)

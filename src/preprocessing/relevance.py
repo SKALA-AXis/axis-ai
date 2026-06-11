@@ -13,9 +13,10 @@ import json
 import logging
 import os
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
 from src.config.companies import COMPANY_ALIASES, COMPANY_IDS
@@ -69,6 +70,8 @@ _LLM_ALLOWED_SOURCE_NAMES = {
 
 
 def _get_llm() -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     global _llm
 
     if _llm is None:
