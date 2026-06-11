@@ -16,7 +16,11 @@ from src.preprocessing.dedup import (
     _same_issue,
     _should_merge_articles,
 )
-from src.preprocessing.preprocessing import PreprocessingResult
+from src.preprocessing.preprocessing import (
+    LinkCheckResult,
+    PreprocessingResult,
+    PreprocessingService,
+)
 from src.preprocessing.relevance import (
     _core_company_role_reject_result,
     _fast_pass_result,
@@ -60,6 +64,46 @@ def test_reprocess_news_clusters_supports_published_until_filter():
     assert params["published_until"] == "2026-06-01T00:00:00+00:00"
     assert "published_at >= CAST(:published_since AS timestamptz)" in where_sql
     assert "published_at < CAST(:published_until AS timestamptz)" in where_sql
+
+
+def test_preprocessing_skips_dead_news_links_before_relevance(monkeypatch):
+    marked: list[tuple[int, str, int | None]] = []
+
+    def fake_mark(article_id, url, result):  # noqa: ANN001
+        marked.append((article_id, url, result.http_code))
+
+    monkeypatch.setattr(
+        "src.preprocessing.preprocessing._mark_dead_link_article",
+        fake_mark,
+    )
+
+    def fake_link_checker(url: str) -> LinkCheckResult:
+        if "dead.example" in url:
+            return LinkCheckResult(status="dead", http_code=404, final_url=url)
+        return LinkCheckResult(status="live", http_code=200, final_url=url)
+
+    service = PreprocessingService(
+        verify_news_links=True,
+        link_checker=fake_link_checker,
+    )
+    skipped = service.skip_dead_news_links(
+        [
+            {
+                "id": 1,
+                "source_type": "news",
+                "url": "https://dead.example/news/1",
+            },
+            {
+                "id": 2,
+                "source_type": "news",
+                "url": "https://live.example/news/2",
+            },
+        ],
+        [1, 2],
+    )
+
+    assert skipped == [1]
+    assert marked == [(1, "https://dead.example/news/1", 404)]
 
 
 def test_same_issue_does_not_merge_on_customer_name_only():
