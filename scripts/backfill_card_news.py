@@ -162,6 +162,21 @@ def main() -> None:
                     card.get("title"),
                 )
             else:
+                if args.update_existing_in_place and existing_card_id:
+                    deleted = _mark_card_deleted(existing_card_id)
+                    skipped += 1
+                    log.info(
+                        (
+                            "card_news backfill deleted stale existing card | %d/%d "
+                            "cluster_id=%s card_id=%s reason=no_card deleted=%d"
+                        ),
+                        index,
+                        len(targets),
+                        cluster_id,
+                        existing_card_id,
+                        deleted,
+                    )
+                    continue
                 skipped += 1
                 log.info("card_news backfill skip | cluster_id=%s reason=no_card", cluster_id)
         except Exception as exc:
