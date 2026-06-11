@@ -17,9 +17,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Final, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
 from src.config.sectors import SECTOR_IDS, SECTOR_KEYWORDS, sector_name_ko
@@ -460,6 +461,8 @@ skax_contexts:
 
 
 def _get_llm() -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     global _llm
 
     if _llm is None:
@@ -473,6 +476,8 @@ def _get_llm() -> ChatOpenAI:
 
 
 def _get_viewpoint_llm() -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     global _viewpoint_llm
 
     if _viewpoint_llm is None:

@@ -12,9 +12,10 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 
 from src.analysis.implication import ImplicationGenerator
 from src.analysis.models import (
@@ -186,6 +187,8 @@ class ImplicationAgent:
     # Internals
     # ──────────────────────────────────────────────────────────────────────
     def _get_llm(self) -> ChatOpenAI:
+        from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
         if self._llm is None:
             self._llm = ChatOpenAI(
                 model=_LLM_MODEL,

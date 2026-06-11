@@ -4,14 +4,17 @@ AnalysisPackage를 사용자에게 보여줄 카드뉴스/API 응답 형태로 �
 기존 raw cluster 기반 생성 메서드는 호환용으로 유지한다.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 
 from src.analysis.models import AnalysisPackage
 from src.config.companies import company_name_ko
@@ -148,6 +151,8 @@ _ISSUE_CARD_PROMPT = """\
 
 
 def _get_llm() -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     global _llm
     if _llm is None:
         _llm = ChatOpenAI(model="gpt-4o", temperature=0.3, max_completion_tokens=1024)

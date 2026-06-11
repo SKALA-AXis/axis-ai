@@ -20,3 +20,4 @@ dist/
 src/crawler/crawler_results/
 dryruns/
 .secrets/
+*.egg-info/
