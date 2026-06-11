@@ -13,7 +13,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
@@ -1181,6 +1181,10 @@ def unique_urls(urls: list[str]) -> list[str]:
 def datetime_sort_value(value: datetime | None) -> float:
     if not value:
         return 0.0
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
 
     return value.timestamp()
 
@@ -1362,14 +1366,18 @@ class _SyncGlobalNewsroomCrawler:
         in_window_candidates: list[LinkCandidate],
     ) -> None:
         dated_candidates = [candidate for candidate in candidates if candidate.published_at]
-        oldest = min(
-            (candidate.published_at for candidate in dated_candidates),
+        oldest_candidate = min(
+            dated_candidates,
+            key=lambda candidate: datetime_sort_value(candidate.published_at),
             default=None,
         )
-        latest = max(
-            (candidate.published_at for candidate in dated_candidates),
+        latest_candidate = max(
+            dated_candidates,
+            key=lambda candidate: datetime_sort_value(candidate.published_at),
             default=None,
         )
+        oldest = oldest_candidate.published_at if oldest_candidate else None
+        latest = latest_candidate.published_at if latest_candidate else None
         log.info(
             "글로벌 뉴스룸 후보 범위 | company=%s source=%s total=%s "
             "in_window=%s oldest=%s latest=%s window=%s~%s",
