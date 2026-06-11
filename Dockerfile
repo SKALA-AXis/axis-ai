@@ -19,8 +19,15 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /usr/local/bin/
 COPY pyproject.toml uv.lock ./
 
 ENV UV_LINK_MODE=copy
+# --extra-index-url: torch==+cpu 휠은 PyPI 가 아닌 PyTorch CPU 인덱스에만 존재
+# (pyproject [tool.uv.sources] 참조 — CUDA 동봉 휠 ~2.5GB 제거)
+# --index-strategy unsafe-best-match: PyTorch 인덱스가 certifi 등 공용 패키지 사본을
+# 가져 first-match 가 버전 충돌함. 모든 패키지가 == 핀이라 결정성은 유지됨.
 RUN uv export --frozen --no-emit-project --no-hashes --format requirements-txt -o /tmp/requirements.txt \
-    && uv pip install --system --no-cache -r /tmp/requirements.txt \
+    && uv pip install --system --no-cache \
+        --extra-index-url https://download.pytorch.org/whl/cpu \
+        --index-strategy unsafe-best-match \
+        -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 
 # ── runtime: Playwright system libs + 앱 코드만 ───────────────────────────────
