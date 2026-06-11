@@ -2,6 +2,7 @@
 
 import numpy as np
 
+from scripts import reprocess_news_clusters
 from scripts.reprocess_news_clusters import _params, _target_where_sql
 from src.preprocessing import dedup
 from src.preprocessing.dedup import (
@@ -148,6 +149,49 @@ def test_same_company_security_action_articles_merge_across_bucket_noise():
     assert _rule_prefilter_key(left) == _rule_prefilter_key(right)
     assert _event_bucket(left) != _event_bucket(right)
     assert _should_merge_articles(left, right, similarity=0.82, threshold=0.8) is True
+
+
+def test_same_company_product_access_articles_merge_with_particle_normalization():
+    left = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, OpenAI와 손잡고 챗GPT 에듀 확대",
+        "content": "",
+        "published_at": "2026-04-27T08:00:00+09:00",
+    }
+    right = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, 교육기관 대상 '챗GPT 에듀' 판매권 확보",
+        "content": "",
+        "published_at": "2026-04-27T08:10:00+09:00",
+    }
+
+    assert "openai" in dedup._title_event_tokens(left)
+    assert _should_merge_articles(left, right, similarity=0.72, threshold=0.8) is True
+
+
+def test_title_llm_post_merge_allows_concrete_product_overlap():
+    article_by_id = {
+        1: {
+            "id": 1,
+            "title": "삼성SDS, ‘챗GPT 에듀’ 판매 확대…교육용 생성형 AI 시장 공략",
+            "matched_companies": ["samsung_sds"],
+            "published_at": "2026-04-27T10:00:00+09:00",
+        },
+        2: {
+            "id": 2,
+            "title": "삼성SDS, '챗GPT 에듀' 리셀러 권한 추가 확보…OpenAI와 협력 강화",
+            "matched_companies": ["samsung_sds"],
+            "published_at": "2026-04-27T10:10:00+09:00",
+        },
+    }
+
+    left = reprocess_news_clusters._title_cluster_features([1], article_by_id)
+    right = reprocess_news_clusters._title_cluster_features([2], article_by_id)
+
+    assert "openai" in reprocess_news_clusters._title_merge_tokens(article_by_id[2]["title"])
+    assert reprocess_news_clusters._title_clusters_related(left, right) is True
 
 
 def test_security_action_articles_do_not_merge_on_security_only():
@@ -324,17 +368,43 @@ def test_relevance_rejects_pure_market_price_article():
 
 
 def test_relevance_rejects_multi_company_roundup_news_title():
-    result = _noise_reject_result(
-        title="[#시큐리티 포커스] 유락 '디파스 프로 맥' 출시·삼성SDS 'AI 클라우드 ...",
-        content="여러 보안 기업과 IT 기업의 소식을 묶어 전한다.",
-        source_type="news",
-        matched_companies=["samsung_sds"],
-        matched_sectors=["security"],
-    )
+    titles = [
+        "[#시큐리티 포커스] 유락 '디파스 프로 맥' 출시·삼성SDS 'AI 클라우드 ...",
+        "[전자·IT 레이더] 삼성SDS·한컴·카페24, 보안·AI·커머스 핵심 사업",
+        "[민주 IT] LG CNS·LG유플러스·KT",
+    ]
 
-    assert result is not None
-    assert result["relevance_label"] == "irrelevant"
-    assert "섹션형" in result["reason"]
+    for title in titles:
+        result = _noise_reject_result(
+            title=title,
+            content="여러 보안 기업과 IT 기업의 소식을 묶어 전한다.",
+            source_type="news",
+            matched_companies=["samsung_sds"],
+            matched_sectors=["security"],
+        )
+
+        assert result is not None
+        assert result["relevance_label"] == "irrelevant"
+        assert "섹션형" in result["reason"]
+
+
+def test_relevance_rejects_operational_campaign_news_title():
+    titles = [
+        "현대오토에버, 차량 5부제 확대 시행…에너지 절약 동참",
+        "A그룹, 차량 5부제 확대 시행…에너지 절약 정책 동참",
+    ]
+
+    for title in titles:
+        result = _noise_reject_result(
+            title=title,
+            content="그룹 차원의 에너지 절약 캠페인에 참여한다.",
+            source_type="news",
+            matched_companies=["hyundai_autoever"],
+            matched_sectors=["ax"],
+        )
+
+        assert result is not None
+        assert result["relevance_label"] == "irrelevant"
 
 
 def test_relevance_keeps_event_driven_market_article_for_analysis():

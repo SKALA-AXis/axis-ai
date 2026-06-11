@@ -877,6 +877,34 @@ _WEAK_PEER_CONTEXT_NOISE_KEYWORDS = [
     "보스턴다이나믹스",
     "보스턴 다이나믹스",
 ]
+_OPERATIONAL_CAMPAIGN_NOISE_KEYWORDS = (
+    "차량 5부제",
+    "5부제",
+    "에너지 절약",
+    "에너지절약",
+    "에너지 절감",
+    "에너지절감",
+    "절전",
+    "캠페인",
+    "동참",
+)
+_BUSINESS_EVENT_TITLE_KEYWORDS = (
+    "수주",
+    "계약",
+    "공급",
+    "협약",
+    "제휴",
+    "맞손",
+    "투자",
+    "인수",
+    "합병",
+    "출시",
+    "공개",
+    "도입",
+    "구축",
+    "선정",
+    "개발",
+)
 _EXECUTIVE_ROLE_KEYWORDS = (
     "대표",
     "대표이사",
@@ -990,6 +1018,15 @@ def _noise_reject_result(
             companies=matched_companies,
             sectors=matched_sectors,
             reason="피어사가 제목의 핵심 주체가 아니고 그룹/주가/레퍼런스 맥락에 그쳐 제외",
+        )
+
+    if _is_operational_campaign_noise(title=title, matched_companies=matched_companies):
+        return _result(
+            label="irrelevant",
+            score=0.25,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason=("에너지 절감·캠페인 등 그룹 운영성 기사라 피어사 사업 이벤트 근거가 약해 제외"),
         )
 
     has_market_listing_noise = _is_market_listing_noise(title=title, content=content)
@@ -1146,6 +1183,27 @@ def _is_weak_peer_context_noise(
         for company_id in matched_companies
         for alias in ALL_COMPANY_ALIASES.get(company_id, [company_id])
         if _compact(alias)
+    )
+
+
+def _is_operational_campaign_noise(*, title: str, matched_companies: list[str]) -> bool:
+    if not matched_companies:
+        return False
+
+    title_compact = _compact(title)
+    if not title_compact:
+        return False
+
+    has_campaign_context = any(
+        _compact(keyword) and _compact(keyword) in title_compact
+        for keyword in _OPERATIONAL_CAMPAIGN_NOISE_KEYWORDS
+    )
+    if not has_campaign_context:
+        return False
+
+    return not any(
+        _compact(keyword) and _compact(keyword) in title_compact
+        for keyword in _BUSINESS_EVENT_TITLE_KEYWORDS
     )
 
 
@@ -1696,7 +1754,7 @@ def _is_low_value_news_noise(*, title: str, content: str) -> bool:
 
 
 def _is_roundup_news_title(title: str) -> bool:
-    compact_title = _compact(title)
+    compact_title = _compact_for_title_marker(title)
     if not compact_title:
         return False
 
@@ -1715,7 +1773,35 @@ def _is_roundup_news_title(title: str) -> bool:
     if any(marker in compact_title for marker in markers):
         return True
 
+    if _is_bracketed_multi_item_listing_title(title):
+        return True
+
     return bool(re.match(r"^\[?#?[가-힣a-z0-9]*(?:포커스|레이더|브리프|스냅샷)\]?", compact_title))
+
+
+def _compact_for_title_marker(value: str) -> str:
+    compacted = _compact(value)
+    return re.sub(r"[^0-9a-z가-힣]", "", compacted)
+
+
+def _is_bracketed_multi_item_listing_title(title: str) -> bool:
+    match = re.match(r"^\[[^\]]{1,18}\]\s*(.+)$", title.strip())
+    if not match:
+        return False
+
+    body = match.group(1).strip()
+    if not body:
+        return False
+
+    if any(_compact(keyword) in _compact(body) for keyword in STRATEGIC_ACTION_KEYWORDS):
+        return False
+
+    items = [item.strip() for item in re.split(r"[·ㆍ,]", body) if item.strip()]
+    if len(items) < 3:
+        return False
+
+    short_item_count = sum(1 for item in items if len(item) <= 16)
+    return short_item_count >= 3
 
 
 def _is_non_korean_news_title(*, title: str, source_type: str | None) -> bool:

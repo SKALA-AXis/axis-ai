@@ -1285,6 +1285,7 @@ def _title_has_event_action(article: dict[str, Any]) -> bool:
             "투자",
             "인수",
             "확대",
+            "확보",
         )
     )
 
@@ -1372,7 +1373,7 @@ def _normalize_title_token(token: str) -> str:
 
 
 def _strip_korean_particle(token: str) -> str:
-    if len(token) < 4 or not re.fullmatch(r"[가-힣]+", token):
+    if len(token) < 4:
         return token
     for suffix in ("으로", "에게", "에서", "과", "와", "은", "는", "이", "가", "을", "를", "의"):
         if token.endswith(suffix) and len(token) - len(suffix) >= 3:
