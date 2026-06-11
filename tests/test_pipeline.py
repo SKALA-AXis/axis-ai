@@ -2,6 +2,7 @@
 
 import numpy as np
 
+from scripts import reprocess_news_clusters
 from scripts.reprocess_news_clusters import _params, _target_where_sql
 from src.preprocessing import dedup
 from src.preprocessing.dedup import (
@@ -10,11 +11,16 @@ from src.preprocessing.dedup import (
     _event_bucket,
     _event_signature,
     _existing_cluster_candidate_window,
+    _reset_cluster_llm_run_state,
     _rule_prefilter_key,
     _same_issue,
     _should_merge_articles,
 )
-from src.preprocessing.preprocessing import PreprocessingResult
+from src.preprocessing.preprocessing import (
+    LinkCheckResult,
+    PreprocessingResult,
+    PreprocessingService,
+)
 from src.preprocessing.relevance import (
     _core_company_role_reject_result,
     _fast_pass_result,
@@ -58,6 +64,46 @@ def test_reprocess_news_clusters_supports_published_until_filter():
     assert params["published_until"] == "2026-06-01T00:00:00+00:00"
     assert "published_at >= CAST(:published_since AS timestamptz)" in where_sql
     assert "published_at < CAST(:published_until AS timestamptz)" in where_sql
+
+
+def test_preprocessing_skips_dead_news_links_before_relevance(monkeypatch):
+    marked: list[tuple[int, str, int | None]] = []
+
+    def fake_mark(article_id, url, result):  # noqa: ANN001
+        marked.append((article_id, url, result.http_code))
+
+    monkeypatch.setattr(
+        "src.preprocessing.preprocessing._mark_dead_link_article",
+        fake_mark,
+    )
+
+    def fake_link_checker(url: str) -> LinkCheckResult:
+        if "dead.example" in url:
+            return LinkCheckResult(status="dead", http_code=404, final_url=url)
+        return LinkCheckResult(status="live", http_code=200, final_url=url)
+
+    service = PreprocessingService(
+        verify_news_links=True,
+        link_checker=fake_link_checker,
+    )
+    skipped = service.skip_dead_news_links(
+        [
+            {
+                "id": 1,
+                "source_type": "news",
+                "url": "https://dead.example/news/1",
+            },
+            {
+                "id": 2,
+                "source_type": "news",
+                "url": "https://live.example/news/2",
+            },
+        ],
+        [1, 2],
+    )
+
+    assert skipped == [1]
+    assert marked == [(1, "https://dead.example/news/1", 404)]
 
 
 def test_same_issue_does_not_merge_on_customer_name_only():
@@ -116,6 +162,18 @@ def test_same_contract_domain_uses_general_signature_without_event_hardcoding(mo
     assert _should_merge_articles(left, right, similarity=0.82, threshold=0.8) is True
 
 
+def test_cluster_llm_state_resets_per_dedup_run():
+    dedup._cluster_llm_calls = 30
+    dedup._cluster_llm_cache = {("left", "right", "reason"): None}
+    dedup._cluster_llm_approved_pairs = {frozenset({1, 2})}
+
+    _reset_cluster_llm_run_state()
+
+    assert dedup._cluster_llm_calls == 0
+    assert dedup._cluster_llm_cache == {}
+    assert dedup._cluster_llm_approved_pairs == set()
+
+
 def test_same_company_security_action_articles_merge_across_bucket_noise():
     left = {
         "company": ["samsung_sds"],
@@ -135,6 +193,49 @@ def test_same_company_security_action_articles_merge_across_bucket_noise():
     assert _rule_prefilter_key(left) == _rule_prefilter_key(right)
     assert _event_bucket(left) != _event_bucket(right)
     assert _should_merge_articles(left, right, similarity=0.82, threshold=0.8) is True
+
+
+def test_same_company_product_access_articles_merge_with_particle_normalization():
+    left = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, OpenAI와 손잡고 챗GPT 에듀 확대",
+        "content": "",
+        "published_at": "2026-04-27T08:00:00+09:00",
+    }
+    right = {
+        "company": ["samsung_sds"],
+        "matched_companies": ["samsung_sds"],
+        "title": "삼성SDS, 교육기관 대상 '챗GPT 에듀' 판매권 확보",
+        "content": "",
+        "published_at": "2026-04-27T08:10:00+09:00",
+    }
+
+    assert "openai" in dedup._title_event_tokens(left)
+    assert _should_merge_articles(left, right, similarity=0.72, threshold=0.8) is True
+
+
+def test_title_llm_post_merge_allows_concrete_product_overlap():
+    article_by_id = {
+        1: {
+            "id": 1,
+            "title": "삼성SDS, ‘챗GPT 에듀’ 판매 확대…교육용 생성형 AI 시장 공략",
+            "matched_companies": ["samsung_sds"],
+            "published_at": "2026-04-27T10:00:00+09:00",
+        },
+        2: {
+            "id": 2,
+            "title": "삼성SDS, '챗GPT 에듀' 리셀러 권한 추가 확보…OpenAI와 협력 강화",
+            "matched_companies": ["samsung_sds"],
+            "published_at": "2026-04-27T10:10:00+09:00",
+        },
+    }
+
+    left = reprocess_news_clusters._title_cluster_features([1], article_by_id)
+    right = reprocess_news_clusters._title_cluster_features([2], article_by_id)
+
+    assert "openai" in reprocess_news_clusters._title_merge_tokens(article_by_id[2]["title"])
+    assert reprocess_news_clusters._title_clusters_related(left, right) is True
 
 
 def test_security_action_articles_do_not_merge_on_security_only():
@@ -308,6 +409,46 @@ def test_relevance_rejects_pure_market_price_article():
 
     assert result is not None
     assert result["relevance_label"] == "irrelevant"
+
+
+def test_relevance_rejects_multi_company_roundup_news_title():
+    titles = [
+        "[#시큐리티 포커스] 유락 '디파스 프로 맥' 출시·삼성SDS 'AI 클라우드 ...",
+        "[전자·IT 레이더] 삼성SDS·한컴·카페24, 보안·AI·커머스 핵심 사업",
+        "[민주 IT] LG CNS·LG유플러스·KT",
+    ]
+
+    for title in titles:
+        result = _noise_reject_result(
+            title=title,
+            content="여러 보안 기업과 IT 기업의 소식을 묶어 전한다.",
+            source_type="news",
+            matched_companies=["samsung_sds"],
+            matched_sectors=["security"],
+        )
+
+        assert result is not None
+        assert result["relevance_label"] == "irrelevant"
+        assert "섹션형" in result["reason"]
+
+
+def test_relevance_rejects_operational_campaign_news_title():
+    titles = [
+        "현대오토에버, 차량 5부제 확대 시행…에너지 절약 동참",
+        "A그룹, 차량 5부제 확대 시행…에너지 절약 정책 동참",
+    ]
+
+    for title in titles:
+        result = _noise_reject_result(
+            title=title,
+            content="그룹 차원의 에너지 절약 캠페인에 참여한다.",
+            source_type="news",
+            matched_companies=["hyundai_autoever"],
+            matched_sectors=["ax"],
+        )
+
+        assert result is not None
+        assert result["relevance_label"] == "irrelevant"
 
 
 def test_relevance_keeps_event_driven_market_article_for_analysis():

@@ -6,6 +6,7 @@ from scripts.postprocess_singleton_clusters import (
     _cluster_relation,
     _filter_group_candidates_after_target_merges,
     _find_candidates,
+    _is_list_like,
     _is_stock_noise,
 )
 
@@ -25,6 +26,11 @@ def test_contract_stock_article_is_not_stock_noise_without_event_hardcoding() ->
     title = "[특징주] 플래티어, 현대오토에버와 24억 규모 추가 공급계약 체결"
 
     assert _is_stock_noise(title) is False
+
+
+def test_multi_company_roundup_title_is_list_like_noise() -> None:
+    assert _is_list_like("[#시큐리티 포커스] 유락 '디파스 프로 맥' 출시·삼성SDS 'AI 클라우드 ...")
+    assert _is_list_like("[전자·IT 레이더] 삼성SDS·한컴·카페24, 보안·AI·커머스 핵심 사업")
 
 
 def test_small_lg_cns_anthropic_cluster_merges_to_large_cluster() -> None:
