@@ -21,54 +21,32 @@ axis-ai가 하는 일:
 
 ---
 
-## 프로젝트 구조
+## 프로젝트 구조 (2026-06-11 실측)
 
 ```
 axis-ai/
-├── CLAUDE.md
-├── pyproject.toml               ← uv로 의존성 관리
-├── uv.lock                      ← 반드시 커밋
-├── .env.example
+├── pyproject.toml / uv.lock     ← uv 관리 (pip 금지). torch 는 CPU 인덱스 핀
+├── Dockerfile                   ← API 서버 (torch+cpu, Playwright). builder 스테이지는 PR CI 가 스모크
+├── Dockerfile.cron              ← CronJob 경량 이미지 (--only-group cron, ~80MB)
 ├── src/
-│   ├── api/
-│   │   └── router.py            ← FastAPI 엔드포인트
-│   ├── agents/
-│   │   ├── crawler_agent.py
-│   │   ├── credibility_agent.py
-│   │   ├── dedup_agent.py
-│   │   ├── classification_agent.py     ← sector(5종) + event_type(6종) + 결정적 노출도
-│   │   ├── issue_card_agent.py
-│   │   ├── evidence_agent.py           ← v3: 검증 첨부 4종 부착
-│   │   ├── financial_linker_agent.py   ← v3: 카드 ↔ peer_financials segment 매칭
-│   │   ├── ir_parser_agent.py          ← v3: PyMuPDF로 IR PDF 텍스트 추출 (W5)
-│   │   ├── weak_signal_agent.py
-│   │   └── email_agent.py              ← v4: 본문 데이터 빌더 (HTML/text 반환) — 발송은 backend SES SDK
-│   ├── pipeline/
-│   │   ├── ingestion_graph.py   ← 수집 파이프라인 (1시간마다)
-│   │   └── delivery_graph.py    ← 전달 파이프라인 (오전 8:30)
-│   ├── rag/
-│   │   ├── embedder.py          ← BGE-M3 임베딩
-│   │   ├── hybrid_search.py     ← Qdrant RRF 검색
-│   │   └── reranker.py          ← BGE-reranker-v2-m3
-│   ├── crawler/
-│   │   ├── base_crawler.py
-│   │   ├── naver_crawler.py
-│   │   ├── dart_crawler.py
-│   │   ├── rss_crawler.py
-│   │   └── job_crawler.py
-│   ├── db/
-│   │   ├── postgres.py          ← SQLAlchemy 연결
-│   │   └── qdrant_client.py     ← Qdrant 클라이언트
-│   └── schemas.py               ← Pydantic 모델 (ai-internal-api.yaml에서 자동 생성)
-├── data/
-│   └── peer_financials/         ← v3 stub 재무 데이터 (peer_financials 테이블 마이그 후 DB 조회로 전환)
-│       ├── samsung_sds.json
-│       └── lg_cns.json
-└── tests/
-    ├── test_crawler.py
-    ├── test_search.py
-    └── test_pipeline.py
+│   ├── api/                     ← FastAPI router(898줄) + 도메인별 *_schemas.py
+│   ├── agents/                  ← LLM 에이전트 (주요: strategic_insight 9.2k줄·briefing_generation 7.3k줄
+│   │   │                          ·mixer 2.7k·today_insight 2.6k·chat_orchestrator 2.4k·it_trend 1.5k·integration 1.2k)
+│   │   └── context/             ← capability_evolution, weekly_digest 등 보조 에이전트
+│   ├── pipeline/                ← analysis_flow_graph(분석 DAG)·delivery_graph(브리핑 본문)·supervisor_graph
+│   ├── rag/                     ← embedder(BGE-M3)·hybrid_search·reranker·문서 인덱스
+│   ├── crawler/                 ← base + sources/(매체별)·parsers/·monitors/
+│   ├── preprocessing/           ← relevance(신뢰도)·dedup(클러스터링)·classification(섹터/노출도)
+│   ├── analysis/ services/ composers/ extractors/ evaluators/ parsers/
+│   ├── db/                      ← postgres·article_store·qdrant_client 등
+│   ├── config/                  ← companies·sectors·event_types·openai_policy·env_loader
+│   ├── middleware/ observability/
+│   └── schemas.py
+├── scripts/                     ← cron 진입점 (evaluate_recent_cards, postprocess_singleton_clusters) 외
+└── tests/                       ← 36+ 파일. 표적 실행 권장 (전체는 CI)
 ```
+
+> 분해 계획: 거대 에이전트 2개는 axis-infra/docs/structure-tasks/agent-split-design.md 참조.
 
 ---
 
@@ -77,8 +55,8 @@ axis-ai/
 ```
 Python           3.11+
 패키지 관리       uv (pip 사용 금지)
-웹 프레임워크     FastAPI 0.115.x
-AI 파이프라인     LangGraph 1.1.x
+웹 프레임워크     FastAPI 0.13x (lock 실측)
+AI 파이프라인     LangGraph 1.2.x (lock 실측)
 LangChain        langchain 1.2.x + langchain-core 1.2.x
 LLM 연동         langchain-openai 1.1.x (GPT-4o)
 LLM 모델         OpenAI GPT-4o (gpt-4o)
@@ -94,34 +72,41 @@ Raw DB           PostgreSQL 16.x via SQLAlchemy 2.x
 
 ---
 
-## FastAPI 내부 엔드포인트
+## FastAPI 내부 엔드포인트 (2026-06-11 실측)
 
 SpringBoot에서만 호출합니다. 외부 직접 접근 불가 (8001 포트 외부 노출 금지).
 
 ```
-POST /pipeline/run          수집 파이프라인 실행
-POST /pipeline/delivery     전달 파이프라인 실행 (브리핑 생성)
-POST /search                하이브리드 검색 (RAG)
-POST /gen-search            Generative Search
-POST /weak-signal/run       약한 신호 감지기 실행 (주 1회)
-GET  /health                헬스체크
+GET  /healthz /health                          헬스체크 (경량/상세)
+POST /pipeline/run                             수집 파이프라인 (매시간, 202 비동기)
+POST /pipeline/delivery                        브리핑 본문 데이터 (발송은 backend SES)
+POST /briefing/generate                        브리핑 생성
+GET  /api/cards /api/cards/today               카드 조회
+POST /chat /chat/pdf                           어시스턴트 (RAG 실구현 경로)
+POST /today-insight/generate /insight/generate 인사이트
+POST /mixer/analyze /mixer/analyze/stream      믹서 (SSE)
+POST /global/trends/run                        글로벌 트렌드 (ITTrendAgent 5-phase)
+POST /link/verify                              링크 검증
+POST /weak-signal/run                          약한 신호 (주 1회)
+POST /search /gen-search                       ⚠️ TODO 스텁 (빈 응답 — 실검색은 /chat 경로)
 ```
 
 ---
 
 ## LangGraph 에이전트 구조
 
-### 수집 파이프라인 (ingestion_graph.py — v3 5노드)
+### 분석 파이프라인 (pipeline/analysis_flow_graph.py — 실측 8노드)
+
 ```
-crawl       → 뉴스·공시·채용공고 수집 (PostgreSQL 전량 보관)
-credibility → 출처 신뢰도 분류 (High/Medium/Low/Unverified)
-dedup       → 중복 제거 + 이슈 클러스터링 (BGE-M3 코사인 0.80, 기존 클러스터 매칭 0.84 — src/preprocessing/dedup.py)
-classify    → 트렌드 섹터(5종) + event_type(6종) + 결정적 노출도 산식 — LLM 호출
-card_news   → 카드 뉴스 생성 (3줄 요약·시사점) — LLM 호출 (구 issue_card_node)
-evidence    → 검증 첨부 4종 자동 부착 (source_links / provenance / financial_refs / mbb_refs)
-              → FinancialLinkerAgent: 카드 sector·event·title 키워드로 segment 매칭 → QoQ/YoY delta
-              → IRParserAgent: PyMuPDF로 IR PDF 텍스트 추출 (W5 활성)
+issue_integrate → profile_context → build_analysis_context → strategic_insight → validate
+  validate pass → assemble → card_writer → END
+  validate fail → human_review → END
+
+LLM 노드(issue_integrate/strategic_insight/card_writer)만 retry (1s 시작, 2배 backoff, 최대 2회)
+수집(크롤링→relevance→dedup→classification)은 preprocessing/ 모듈이 담당, /pipeline/run 이 트리거
 ```
+
+> ⚠️ 과거 문서의 "ingestion_graph.py 5노드"는 v3 설계안 — 해당 파일은 존재하지 않음 (2026-06-11 확인).
 
 ### 전달 파이프라인 (delivery_graph.py — v4: backend SES 통합)
 
@@ -210,7 +195,7 @@ payload = {
     "rdb_id": int,              # PostgreSQL FK (원문 조회용)
     "peer_id": str,             # samsung_sds | lg_cns | hyundai_autoever | posco_dx
     "event_type": str,          # 6개 taxonomy
-    "sector": str,              # v3 트렌드 섹터: security | ai_tech | large_deal | sk_ax_biz | other
+    "sector": str,              # 트렌드 섹터(코드 정본): ax | security | infra | deal | other
     "exposure_score": float,    # v3 결정적 산식 (0~1)
     "exposure_band": str,       # v3 노출도 밴드: high | medium | low
     "credibility_score": float,
@@ -285,29 +270,15 @@ Gate 3 (중복):
 
 ---
 
-## 노출도 산식 (v3 — 1차 미팅 확정 결정적 산식)
-
-LLM 점수가 아닌 결정적 입력값 기반 — 추적 가능·재현 가능.
+## 노출도 산식 (구현 실측 — 2026-06-11)
 
 ```
-exposure_score = 0.40·cluster_size_norm
-               + 0.30·credibility_max
-               + 0.20·peer_mention_rate
-               + 0.10·tier1_diversity
-
-high     ≥ 0.70
-medium   0.40 ~ 0.70
-low      < 0.40
+exposure_score = 0.70·cluster_size_score + 0.30·company_mention_score
+high ≥ 0.65   (src/preprocessing/classification.py)
 ```
 
-| 입력값 | 가중치 | 정의 |
-|---|---|---|
-| cluster_size_norm | 40% | 클러스터 기사 수 / 7일 최대값 |
-| credibility_max | 30% | 클러스터 내 최고 신뢰도 |
-| peer_mention_rate | 20% | Peer사 직접 언급 비율 |
-| tier1_diversity | 10% | Tier1 출처 종 수 / 5 |
-
-> v1의 LLM 5개 축(긴급/주목/참고)은 폐기. API 스키마는 호환을 위해 importance를 deprecated 표시 유지.
+> ⚠️ 1차 미팅 확정 스펙(0.40~0.50/0.30/0.20 다항)과 다름 — "코드가 맞다(문서 갱신)" vs
+> "스펙 이탈(코드 수정)" **팀 결정 대기** (axis-infra PROJECT_STRUCTURE_PLAN §2.6).
 
 ---
 
@@ -447,11 +418,19 @@ MLFLOW_TRACKING_URI=http://localhost:5000
 ## 코드 스타일
 
 ```
-린트·포맷:    ruff check . && ruff format .
-타입 체크:    mypy src/ --ignore-missing-imports
-테스트:       pytest tests/ -v --cov=src
+push 전 CI 게이트 (전부 통과 후 push — 일부만 돌리고 push 금지):
+  ruff check src/ && ruff format --check src/
+  mypy src/ --ignore-missing-imports
+  lint-imports                  # 모듈 경계 (agents→api 신규 유입 차단)
+  pytest tests/<관련 파일> -v   # 표적 실행 (전체는 CI)
 패키지 추가:  uv add 패키지명 (pip install 금지)
 ```
+
+### 무거운 임포트 규칙 (2026-06-11 도입)
+
+`from langchain_openai import ChatOpenAI` 를 **모듈 레벨에 두지 말 것** — langchain_core 가
+transformers 풀체인(분 단위)을 끌어옴. ChatOpenAI 를 호출하는 함수 안에서 지연 임포트하고,
+타입 어노테이션은 `if TYPE_CHECKING:` 블록 사용 (기존 17개 파일 전환 완료, FlagEmbedding 도 동일 패턴).
 
 ### Docstring 스타일 (Google 스타일)
 ```python
@@ -538,6 +517,9 @@ strict_optional = true
 ## 절대 하지 말 것
 
 - `pip install` 사용 금지 → `uv add` 사용
+- 모듈 레벨 `from langchain_openai import ...` 금지 (위 지연 임포트 규칙)
+- `git add -A` 금지 — 명시적 파일 목록만 (untracked WIP 휩쓸림 사고 2026-06-11)
+- CronJob 신설 시 23:00–07:00 KST 창 금지 (노드 야간 셧다운 — infra ADR 0007)
 - `uv.lock` 커밋 건너뛰기 금지
 - Qdrant 페이로드에 원문 전체 텍스트 저장 금지
 - 수집 파이프라인과 전달 파이프라인 같은 그래프에 묶기 금지
