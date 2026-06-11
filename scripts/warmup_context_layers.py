@@ -1,4 +1,4 @@
-"""Warm up unified context layers (capability evolution, today insight, optional cards).
+"""Warm up unified context layers (today insight, weekly digest, optional cards).
 
 Usage:
   uv run python scripts/warmup_context_layers.py --env cloud
@@ -28,7 +28,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-llm",
         action="store_true",
-        help="Capability evolution / today insight LLM 호출 생략 (deterministic only).",
+        help="Today insight / weekly digest LLM 호출 생략.",
     )
     parser.add_argument(
         "--card-clusters",
@@ -42,35 +42,11 @@ def _parse_args() -> argparse.Namespace:
         help="Today's Insight 생성 생략 (기본은 1회 생성·저장).",
     )
     parser.add_argument(
-        "--no-capability",
-        action="store_true",
-        help="Capability evolution 갱신 생략.",
-    )
-    parser.add_argument(
         "--weekly-digest",
         action="store_true",
         help="Weekly digest 갱신 실행 (card_news 7일 기준).",
     )
     return parser.parse_args()
-
-
-def _warmup_capability(*, use_llm: bool) -> None:
-    from src.agents.context.capability_evolution_agent import CapabilityEvolutionAgent
-    from src.config.companies import COMPANY_IDS
-
-    agent = CapabilityEvolutionAgent()
-    for company_id in COMPANY_IDS:
-        log.info("capability evolution | peer=%s llm=%s", company_id, use_llm)
-        result = agent.run(peer_id=company_id, use_llm=use_llm)
-        agent.persist(company_id, result)
-        if result.get("skipped"):
-            log.warning("capability skipped | peer=%s reason=%s", company_id, result.get("reason"))
-        else:
-            log.info(
-                "capability done | peer=%s windows=%s",
-                company_id,
-                len(result.get("windows") or []),
-            )
 
 
 async def _warmup_today_insight(*, use_llm: bool) -> None:
@@ -183,10 +159,6 @@ def main() -> None:
     if preserve_database_url:
         os.environ["DATABASE_URL"] = preserve_database_url
     use_llm = not args.skip_llm
-
-    if not args.no_capability:
-        log.info("=== capability evolution warmup (llm=%s) ===", use_llm)
-        _warmup_capability(use_llm=use_llm)
 
     if args.card_clusters > 0:
         log.info("=== card pipeline warmup | clusters=%s ===", args.card_clusters)
