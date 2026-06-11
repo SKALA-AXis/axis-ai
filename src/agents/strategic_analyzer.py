@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 
 log = logging.getLogger(__name__)
 
@@ -21,6 +22,8 @@ _llm: ChatOpenAI | None = None
 
 
 def _get_llm() -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     global _llm
 
     if _llm is None:

@@ -26,9 +26,10 @@ import os
 import re
 import time
 import uuid
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 
 from src.agents.implication_agent import ImplicationAgent
 from src.middleware.analysis_ledger import with_ledger_writeback
@@ -112,6 +113,8 @@ _llm: ChatOpenAI | None = None
 
 
 def _get_llm() -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     global _llm
     if _llm is None:
         ensure_llm_env_loaded()

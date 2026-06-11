@@ -23,8 +23,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+from typing import TYPE_CHECKING
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
 from src.db.postgres import SessionLocal
@@ -50,6 +52,8 @@ _llm: ChatOpenAI | None = None
 
 
 def _get_llm() -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     global _llm
     if _llm is None:
         _llm = ChatOpenAI(
