@@ -1590,12 +1590,19 @@ def _build_extracted_facts(
         if _is_duplicate_extracted_fact(facts, article_id, text, evidence):
             return
         counters[article_id] = counters.get(article_id, 0) + 1
+        activity = activity_type or cluster_event_type
         inferred_type = _normalize_fact_type(
             fact_type=fact_type,
             text=f"{text} {evidence}",
-            activity_type=activity_type or cluster_event_type,
+            activity_type=activity,
         )
         normalized_role = _normalize_summary_role(summary_role, fact_type=inferred_type)
+        normalized_role = _coerce_summary_role(
+            role=normalized_role,
+            fact_type=inferred_type,
+            text=f"{text} {evidence}",
+            activity_type=activity,
+        )
         facts.append(
             {
                 "fact_id": f"c{cluster_id}_a{article_id}_f{counters[article_id]}",
@@ -1922,8 +1929,13 @@ def _add_article_fallback_facts(
 
 
 def _normalize_fact_type(*, fact_type: str, text: str, activity_type: str) -> str:
-    del text, activity_type
-    return _normalize_fact_type_value(fact_type)
+    normalized = _normalize_fact_type_value(fact_type)
+    if normalized == "numeric_fact" and _has_business_scope_terms(text):
+        if _normalize_event_type(activity_type) in {"contract", "partnership"}:
+            return "application_fact"
+        if _normalize_event_type(activity_type) in {"launch", "technology_update", "general_update"}:
+            return "application_fact"
+    return normalized
 
 
 def _normalize_fact_type_value(value: Any) -> str:
@@ -1936,6 +1948,46 @@ def _normalize_summary_role(value: Any, *, fact_type: str) -> str:
     if role in _SUMMARY_ROLES:
         return role
     return _default_summary_role(fact_type)
+
+
+def _coerce_summary_role(*, role: str, fact_type: str, text: str, activity_type: str) -> str:
+    event_type = _normalize_event_type(activity_type)
+    if role == "numeric_effect" and _has_business_scope_terms(text):
+        if event_type in {"contract", "partnership"} and re.search(
+            r"계약|수주|공급\s*계약|공급계약|협약|MOU", text
+        ):
+            return "main_event"
+        if re.search(r"업무|시스템|전환|구축|플랫폼|솔루션|서비스|AI|에이전트", text, re.I):
+            return "service_function"
+        return "application_case"
+    if fact_type == "numeric_fact":
+        return role
+    if role == "main_event" and re.search(
+        r"기능|역할|지원|자동화|분석|검증|운영|적용|연계", text
+    ):
+        return "service_function"
+    return role
+
+
+def _has_business_scope_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"계약|수주|공급|협약|사업|프로젝트|업무|시스템|전환|구축|"
+            r"플랫폼|솔루션|서비스|AI|에이전트|자동화|검증|운영|고객|"
+            r"ERP|MES|단말|클라우드|데이터센터|모빌리티|소프트웨어|SW",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _is_financial_only_fact(text: str) -> bool:
+    value = str(text or "")
+    if _has_business_scope_terms(value):
+        return False
+    return bool(
+        re.search(r"매출|영업이익|순이익|주가|시가총액|증가|감소|흑자|적자|억원|조원|%", value)
+    )
 
 
 def _default_summary_role(fact_type: str) -> str:
@@ -2077,6 +2129,17 @@ def _line_summary_role_preferences(
 
 def _fact_selection_score(fact: dict[str, Any]) -> int:
     score = 0
+    role = str(fact.get("summary_role") or "")
+    score += {
+        "main_event": 8,
+        "product_definition": 7,
+        "service_function": 7,
+        "application_case": 6,
+        "uncertainty_detail": 2,
+        "risk_detail": 2,
+        "numeric_effect": 1,
+        "market_reaction": 0,
+    }.get(role, 0)
     score += (
         3 if fact.get("confidence") == "high" else 2 if fact.get("confidence") == "medium" else 1
     )
@@ -2093,6 +2156,8 @@ def _fact_selection_score(fact: dict[str, Any]) -> int:
         score += 2
     if re.search(r"외부\s*기업|기업\s*고객|사업\s*영역|사업\s*확장|고객으로|고객에게", text):
         score += 5
+    if role == "numeric_effect" and _is_financial_only_fact(text):
+        score -= 8
     score += min(len(str(fact.get("normalized_fact") or "")) // 30, 3)
     return score
 
@@ -2566,6 +2631,20 @@ def _validate_fact_id_summary(
     if lines and company_start_count == len(lines):
         warnings.append("summary_lines 모든 문장이 company_name으로 시작함")
 
+    role_counts = _summary_line_role_counts(line_items, fact_by_id)
+    cluster_event_type = _normalize_event_type(result.get("cluster_event_type"))
+    if cluster_event_type not in {"earnings", "stock_market", "analyst_report"}:
+        business_role_count = sum(
+            role_counts.get(role, 0)
+            for role in ("main_event", "product_definition", "service_function", "application_case")
+        )
+        numeric_role_count = role_counts.get("numeric_effect", 0) + role_counts.get(
+            "market_reaction", 0
+        )
+        if numeric_role_count >= 2 and business_role_count < 2:
+            warnings.append("비실적 이슈 요약이 수치/시장반응 중심으로 치우침")
+            actions.append("numeric_heavy_summary_detected")
+
     bad_korean = [line for line in result["fact_summary"] if _has_bad_korean_join(line)]
     if bad_korean:
         warnings.append("한국어 조사/띄어쓰기 오류가 남아 있음")
@@ -2596,6 +2675,19 @@ def _validate_fact_id_summary(
             [*_normalize_string_list(result.get("repair_actions")), *actions]
         )
     return result
+
+
+def _summary_line_role_counts(
+    line_items: list[dict[str, Any]],
+    fact_by_id: dict[str, dict[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in line_items:
+        for fact_id in _normalize_string_list(item.get("fact_ids")):
+            role = str((fact_by_id.get(fact_id) or {}).get("summary_role") or "")
+            if role:
+                counts[role] = counts.get(role, 0) + 1
+    return counts
 
 
 def _sync_summary_line_item_texts(

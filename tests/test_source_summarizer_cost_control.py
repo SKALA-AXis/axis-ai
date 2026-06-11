@@ -105,6 +105,108 @@ def test_candidate_peer_companies_uses_preprocessing_targets_not_body_mentions()
     assert summarizer._candidate_peer_companies(articles) == ["samsung_sds"]
 
 
+def test_contract_summary_prefers_business_scope_over_numeric_only_facts() -> None:
+    facts = [
+        {
+            "fact_id": "f1",
+            "article_id": 1,
+            "summary_role": "numeric_effect",
+            "normalized_fact": "계약금액은 총 24억4674만원이다.",
+            "evidence_text": "계약금액은 총 24억4674만원이며 최근 매출 대비 6.30%다.",
+            "numbers": ["24억4674만원", "6.30%"],
+            "dates": [],
+            "entities": [],
+            "event_verbs": [],
+            "confidence": "high",
+        },
+        {
+            "fact_id": "f2",
+            "article_id": 1,
+            "summary_role": "main_event",
+            "normalized_fact": "플래티어는 현대오토에버와 차량 서비스 플랫폼 공급계약을 체결했다.",
+            "evidence_text": "플래티어가 현대오토에버와 차량 서비스 플랫폼 공급계약을 체결했다.",
+            "numbers": [],
+            "dates": [],
+            "entities": ["차량 서비스 플랫폼 공급계약"],
+            "event_verbs": ["체결"],
+            "confidence": "high",
+        },
+        {
+            "fact_id": "f3",
+            "article_id": 1,
+            "summary_role": "service_function",
+            "normalized_fact": "공급 범위는 고객 서비스 운영 시스템과 플랫폼 고도화 업무다.",
+            "evidence_text": "공급 범위는 고객 서비스 운영 시스템과 플랫폼 고도화 업무다.",
+            "numbers": [],
+            "dates": [],
+            "entities": ["고객 서비스 운영 시스템"],
+            "event_verbs": [],
+            "confidence": "medium",
+        },
+    ]
+
+    selected = summarizer._select_fact_ids_for_summary_lines(
+        extracted_facts=facts,
+        cluster_event_type="contract",
+    )
+
+    assert selected["1"] == ["f2"]
+    assert selected["2"] == ["f3"]
+    assert selected["3"] == ["f1"]
+
+
+def test_non_financial_summary_rejects_numeric_only_lines() -> None:
+    facts = [
+        {
+            "fact_id": "f1",
+            "article_id": 1,
+            "summary_role": "numeric_effect",
+            "fact_type": "numeric_fact",
+            "normalized_fact": "계약금액은 총 24억4674만원이다.",
+            "evidence_text": "계약금액은 총 24억4674만원이다.",
+            "numbers": ["24억4674만원"],
+        },
+        {
+            "fact_id": "f2",
+            "article_id": 1,
+            "summary_role": "numeric_effect",
+            "fact_type": "numeric_fact",
+            "normalized_fact": "최근 매출 대비 6.30%에 해당한다.",
+            "evidence_text": "최근 매출 대비 6.30%에 해당한다.",
+            "numbers": ["6.30%"],
+        },
+        {
+            "fact_id": "f3",
+            "article_id": 1,
+            "summary_role": "numeric_effect",
+            "fact_type": "numeric_fact",
+            "normalized_fact": "연간 운영계약에 이은 추가 수주 건이다.",
+            "evidence_text": "연간 운영계약에 이은 추가 수주 건이다.",
+            "numbers": [],
+        },
+    ]
+    result = {
+        "is_valid_summary": True,
+        "cluster_event_type": "contract",
+        "fact_summary": [fact["normalized_fact"] for fact in facts],
+        "summary_lines_with_fact_ids": [
+            {"line_index": 1, "text": facts[0]["normalized_fact"], "fact_ids": ["f1"]},
+            {"line_index": 2, "text": facts[1]["normalized_fact"], "fact_ids": ["f2"]},
+            {"line_index": 3, "text": facts[2]["normalized_fact"], "fact_ids": ["f3"]},
+        ],
+    }
+
+    checked = summarizer._validate_fact_id_summary(
+        result=result,
+        extracted_facts=facts,
+        source_article_ids=[],
+        main_company="hyundai_autoever",
+    )
+
+    assert checked["is_valid_summary"] is False
+    assert "수치/시장반응 중심" in checked["reason"]
+
+
 def test_large_cluster_selects_diverse_articles_from_majority_event(monkeypatch) -> None:
     monkeypatch.setattr(summarizer, "_MIN_ANALYZED_ARTICLES", 8)
     monkeypatch.setattr(summarizer, "_MAX_ANALYZED_ARTICLES", 20)
