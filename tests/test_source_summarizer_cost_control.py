@@ -66,6 +66,31 @@ def test_format_articles_uses_rule_based_snippets_and_dedupes_repeated_content(
     assert "삼성SDS는 플랫폼 A를 금융권 고객 PoC에 적용" in article_103
 
 
+def test_format_articles_drops_article_ui_boilerplate(monkeypatch) -> None:
+    monkeypatch.setattr(summarizer, "_SNIPPETS_PER_ARTICLE", 4)
+
+    text = summarizer._format_articles(
+        articles=[
+            {
+                "id": 201,
+                "title": "삼성SDS, 오픈AI와 챗GPT 리셀러 계약 체결",
+                "content": (
+                    "뉴스 듣기 글자 크기 가 보통 가 크게 기사 공유 페이스북 "
+                    "카카오톡 이메일 주소복사 북마크 다크모드 프린트 네이버 채널구독. "
+                    "삼성SDS는 오픈AI와 챗GPT 엔터프라이즈 리셀러 계약을 체결했다."
+                ),
+                "matched_companies": ["samsung_sds"],
+            }
+        ],
+        target_companies=["samsung_sds"],
+        representative_id=201,
+    )
+
+    assert "뉴스 듣기" not in text
+    assert "주소복사" not in text
+    assert "챗GPT 엔터프라이즈 리셀러 계약" in text
+
+
 def test_candidate_peer_companies_uses_preprocessing_targets_not_body_mentions() -> None:
     articles = [
         {

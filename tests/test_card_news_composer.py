@@ -248,3 +248,75 @@ def test_card_news_from_cluster_summary_uses_source_published_date(monkeypatch):
 
     assert card["id"] == "CN-20260304-25771"
     assert card["published_date"] == "2026-03-04"
+
+
+def test_financial_only_card_title_adds_business_context():
+    card = CardNewsComposer().generate(
+        summary={
+            "cluster_id": 36061,
+            "main_company": "samsung_sds",
+            "cluster_event_type": "earnings",
+            "headline": "삼성SDS, 지난해 매출과 영업이익 증가",
+            "fact_summary": [
+                "삼성SDS는 지난해 매출 13조9299억원과 영업이익 9571억원을 기록했다.",
+                "클라우드&AI 부문 매출은 3조5872억원으로 전년 대비 7% 증가했다.",
+                "AI 솔루션 영역에서 생성형 AI 서비스 확산을 추진한다.",
+            ],
+            "source_article_ids": [36061],
+            "is_valid_summary": True,
+        },
+        classification={"event_type": "earnings", "sector": "infra"},
+        articles=[
+            {
+                "id": 36061,
+                "title": "삼성SDS, 지난해 영업익 9571억",
+                "published_at": "2026-01-22T00:00:00+09:00",
+                "source_name": "news",
+                "url": "https://example.com/36061",
+            }
+        ],
+    )
+
+    assert card["title"] == "삼성SDS, 클라우드·AI 인프라·AI·AX 사업 중심 실적 변화"
+    assert card["display"]["background_asset_url"] == "/png.png"
+
+
+def test_card_cover_uses_best_cluster_image_not_first_placeholder():
+    card = CardNewsComposer().generate(
+        summary={
+            "cluster_id": 36301,
+            "main_company": "samsung_sds",
+            "headline": "삼성SDS, 구미에 AI 데이터센터 건립",
+            "fact_summary": [
+                "삼성SDS가 구미에 AI 데이터센터를 건립하기로 했다.",
+                "구미 AI 데이터센터 건립을 위한 양해각서를 체결했다.",
+                "AI 인프라 경쟁력을 강화할 계획이다.",
+            ],
+            "source_article_ids": [1, 2],
+            "is_valid_summary": True,
+        },
+        classification={"event_type": "investment", "sector": "infra"},
+        articles=[
+            {
+                "id": 1,
+                "title": "삼성SDS, 신규 구미 AI 데이터센터 건립에 4273억원 투자",
+                "published_at": "2026-01-02T00:00:00+09:00",
+                "source_name": "news",
+                "url": "https://example.com/a",
+                "metadata": {"image_urls": ["https://static.sedaily.com/img/1X1.png"]},
+            },
+            {
+                "id": 2,
+                "title": "삼성SDS, 경상북도와 AI 데이터센터 건립 MOU 체결",
+                "content": "삼성SDS와 경상북도, 구미시 관계자가 협약식 현장에서 기념 촬영했다.",
+                "published_at": "2026-01-08T00:00:00+09:00",
+                "source_name": "news",
+                "url": "https://example.com/b",
+                "metadata": {
+                    "image_urls": ["https://cdn.example.com/news/photo/20260108/datacenter-mou.jpg"]
+                },
+            },
+        ],
+    )
+
+    assert card["display"]["background_asset_url"].endswith("datacenter-mou.jpg")

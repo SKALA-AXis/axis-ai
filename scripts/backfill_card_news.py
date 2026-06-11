@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.config.env_loader import load_profile  # noqa: E402
-from src.db.article_store import save_card_news  # noqa: E402
+from src.db.article_store import save_card_news, sync_card_sources_for_cluster  # noqa: E402
 from src.db.postgres import SessionLocal  # noqa: E402
 from src.pipeline.analysis_pipeline import AnalysisPipelineRunner  # noqa: E402
 from src.preprocessing.preprocessing import PreprocessingService  # noqa: E402
@@ -128,7 +128,7 @@ def main() -> None:
                         transient_card_id = str(card.get("id") or "")
                         card["id"] = existing_card_id
                         saved_card_id = save_card_news(card)
-                        _sync_card_sources_for_cluster(cluster_id)
+                        sync_card_sources_for_cluster(cluster_id)
                         if transient_card_id and transient_card_id != existing_card_id:
                             _mark_card_deleted(transient_card_id)
                         created += 1
@@ -152,7 +152,7 @@ def main() -> None:
                     skipped += 1
                     continue
                 created += 1
-                _sync_card_sources_for_cluster(cluster_id)
+                sync_card_sources_for_cluster(cluster_id)
                 log.info(
                     "card_news backfill created | %d/%d cluster_id=%s card_id=%s title=%s",
                     index,
@@ -287,91 +287,6 @@ def _mark_card_deleted(card_id: str) -> int:
                 WHERE id = :card_id
             """),
             {"card_id": card_id},
-        )
-        db.commit()
-        return int(getattr(result, "rowcount", 0) or 0)
-
-
-def _sync_card_sources_for_cluster(cluster_id: int) -> int:
-    with SessionLocal() as db:
-        result = db.execute(
-            text(
-                """
-                WITH ranked_articles AS (
-                    SELECT
-                        ra.cluster_id,
-                        ra.id,
-                        ra.title,
-                        ra.url,
-                        ra.source_name,
-                        ra.publisher,
-                        ra.published_at,
-                        ra.collected_at,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY ra.cluster_id
-                            ORDER BY
-                                ra.published_at DESC NULLS LAST,
-                                ra.collected_at DESC NULLS LAST,
-                                ra.id DESC
-                        ) AS rn
-                    FROM raw_articles ra
-                    WHERE ra.cluster_id = :cluster_id
-                      AND ra.processing_status = 'PROCESSED'
-                      AND ra.relevance_label = 'relevant'
-                ),
-                cluster_sources AS (
-                    SELECT
-                        cluster_id,
-                        ARRAY_AGG(
-                            id
-                            ORDER BY
-                                published_at DESC NULLS LAST,
-                                collected_at DESC NULLS LAST,
-                                id DESC
-                        ) AS raw_ids,
-                        JSONB_AGG(
-                            JSONB_BUILD_OBJECT(
-                                'index', rn,
-                                'raw_article_id', id,
-                                'title', COALESCE(title, ''),
-                                'source_name', COALESCE(source_name, publisher, ''),
-                                'url', COALESCE(url, ''),
-                                'published_at', published_at,
-                                'collected_at', collected_at
-                            )
-                            ORDER BY
-                                published_at DESC NULLS LAST,
-                                collected_at DESC NULLS LAST,
-                                id DESC
-                        ) AS sources,
-                        JSONB_AGG(
-                            JSONB_BUILD_OBJECT(
-                                'id', id,
-                                'title', COALESCE(title, ''),
-                                'url', COALESCE(url, ''),
-                                'source_name', COALESCE(source_name, ''),
-                                'publisher', COALESCE(publisher, ''),
-                                'published_at', published_at,
-                                'collected_at', collected_at
-                            )
-                            ORDER BY
-                                published_at DESC NULLS LAST,
-                                collected_at DESC NULLS LAST,
-                                id DESC
-                        ) AS source_articles
-                    FROM ranked_articles
-                    GROUP BY cluster_id
-                )
-                UPDATE card_news cn
-                SET source_raw_article_ids = cs.raw_ids,
-                    sources = cs.sources,
-                    source_articles = cs.source_articles
-                FROM cluster_sources cs
-                WHERE cn.status = 'ACTIVE'
-                  AND cn.cluster_id = cs.cluster_id
-            """
-            ),
-            {"cluster_id": cluster_id},
         )
         db.commit()
         return int(getattr(result, "rowcount", 0) or 0)

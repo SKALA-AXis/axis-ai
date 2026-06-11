@@ -114,6 +114,21 @@ _SUMMARY_ROLES = {
 _NUMBER_TOKEN_PATTERN = re.compile(
     r"\d[\d,]*(?:\.\d+)?\s*(?:억원|조원|만원|원|달러|%|퍼센트|건|명|개|대|년|월|일|분기|개월|주|일|시간|배|곳|개사)?"
 )
+_ARTICLE_UI_BOILERPLATE_MARKERS = (
+    "뉴스 듣기",
+    "글자 크기",
+    "기사 공유",
+    "주소복사",
+    "다크모드",
+    "프린트",
+    "채널구독",
+    "네이버 채널구독",
+    "다음 채널구독",
+    "페이스북",
+    "카카오톡",
+    "이메일 주소복사",
+    "북마크",
+)
 _PEER_ALIASES = {
     company_id: aliases
     for company_id, aliases in {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}.items()
@@ -811,6 +826,7 @@ def _article_prompt_snippets(
             ),
         ]
     )
+    sentences = [sentence for sentence in sentences if not _is_article_ui_boilerplate(sentence)]
     scored = sorted(
         (
             (_snippet_score(sentence, article=article, target_companies=target_companies), sentence)
@@ -1256,7 +1272,7 @@ def _rule_based_article_fact_notes(
                     *_split_evidence_sentences(article.get("content") or "", limit=8),
                 ]
             )
-            if sentence
+            if sentence and not _is_article_ui_boilerplate(sentence)
         ]
         if not article_id or not sentences:
             continue
@@ -2935,16 +2951,45 @@ def _text_similarity(left: str, right: str) -> float:
 
 
 def _split_evidence_sentences(text: str, limit: int = 80) -> list[str]:
-    chunks = re.split(r"(?<=[.!?。！？])\s+|(?<=[다요죠임음])\.\s*|\n+", str(text or ""))
+    chunks = re.split(
+        r"(?<=[.!?。！？])\s+|(?<=[다요죠임음])\.\s*|\n+",
+        _strip_article_ui_boilerplate(str(text or "")),
+    )
     sentences: list[str] = []
     for chunk in chunks:
         sentence = re.sub(r"\s+", " ", chunk).strip()
         if len(sentence) < 8:
             continue
+        if _is_article_ui_boilerplate(sentence):
+            continue
         sentences.append(sentence[:500])
         if len(sentences) >= limit:
             break
     return sentences
+
+
+def _strip_article_ui_boilerplate(text: str) -> str:
+    value = str(text or "")
+    for marker in _ARTICLE_UI_BOILERPLATE_MARKERS:
+        value = value.replace(marker, " ")
+    value = re.sub(r"\b[가]?\s*(?:작게|보통|크게|아주\s*크게)\s*[가]?\b", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
+def _is_article_ui_boilerplate(sentence: str) -> bool:
+    compact = re.sub(r"\s+", "", str(sentence or ""))
+    if not compact:
+        return True
+    marker_hits = sum(
+        1 for marker in _ARTICLE_UI_BOILERPLATE_MARKERS if marker.replace(" ", "") in compact
+    )
+    if marker_hits >= 2:
+        return True
+    if marker_hits and len(compact) < 120:
+        return True
+    share_markers = ("기사공유", "주소복사", "다크모드", "프린트", "채널구독")
+    return sum(1 for marker in share_markers if marker in compact) >= 2
 
 
 def _number_tokens(text: str) -> list[str]:
