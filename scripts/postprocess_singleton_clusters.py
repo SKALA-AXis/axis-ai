@@ -888,13 +888,14 @@ def _title_llm_same_event(
     _title_llm_calls += 1
     payload = {
         "instruction": (
-            "Decide whether these Korean news article groups describe the same concrete news event "
-            "and should be merged into one cluster. Use titles, lead snippets, and shared keywords; "
-            "ignore sector labels."
+            "Decide whether these Korean news article groups describe the same narrow business "
+            "news issue and should be merged into one cluster. Use titles, lead snippets, and "
+            "shared keywords; ignore sector labels."
         ),
         "criteria": [
             "same_event=true when titles use different wording for the same underlying announcement, deal, launch, deployment, or collaboration.",
             "same_event=true when title wording differs but lead snippets and keywords indicate the same concrete event.",
+            "same_event=true when both articles are focused analysis/strategy coverage of the same company and the same narrow set of anchors such as product line, market, executive, partner, financial figures, or operational initiative.",
             "same_event=false when articles share only a broad theme, company, technology category, earnings season, or industry trend.",
             "same_event=false when the titles have different concrete anchors, even if snippets share broad AI, cloud, platform, or business terms.",
             "Do not require identical company labels if the titles indicate the same event.",
@@ -928,7 +929,10 @@ def _title_llm_same_event(
         )
         parsed = json.loads(response.choices[0].message.content or "{}")
         decision = bool(parsed.get("same_event")) and float(parsed.get("confidence") or 0) >= 0.7
-        if decision and not _has_title_anchor_overlap(left_titles, right_titles):
+        if decision and not (
+            _has_title_anchor_overlap(left_titles, right_titles)
+            or _has_context_anchor_overlap(left_titles, right_titles, left_snippets, right_snippets)
+        ):
             log.info(
                 "title LLM merge vetoed by title anchors | reason=%s",
                 parsed.get("reason", ""),
@@ -959,7 +963,15 @@ def _should_consult_title_llm(
         return False
     if _TITLE_LLM_MAX_CALLS <= 0:
         return False
-    if not (_has_event_action(left_titles) or _has_event_action(right_titles)):
+    same_company = _same_company_family(left_titles, right_titles)
+    has_event_action = _has_event_action(left_titles) or _has_event_action(right_titles)
+    has_context_overlap = _has_context_anchor_overlap(
+        left_titles,
+        right_titles,
+        left_snippets,
+        right_snippets,
+    )
+    if not (has_event_action or same_company and has_context_overlap):
         return False
 
     left_tokens = _cluster_context_tokens(left_titles, left_snippets)
@@ -972,6 +984,25 @@ def _should_consult_title_llm(
     jaccard = len(shared_tokens) / max(1, len(left_tokens | right_tokens))
     coverage = len(shared_tokens) / max(1, min(len(left_tokens), len(right_tokens)))
     return jaccard >= 0.25 or coverage >= 0.40
+
+
+def _has_context_anchor_overlap(
+    left_titles: list[str],
+    right_titles: list[str],
+    left_snippets: list[str] | None = None,
+    right_snippets: list[str] | None = None,
+) -> bool:
+    left_tokens = _cluster_context_tokens(left_titles, left_snippets) - _company_anchor_tokens()
+    right_tokens = _cluster_context_tokens(right_titles, right_snippets) - _company_anchor_tokens()
+    shared = left_tokens & right_tokens
+    if len(shared) < 3:
+        return False
+    distinctive = {
+        token
+        for token in shared
+        if len(token) >= 3 and token not in {"ai", "ax", "dx", "시장", "사업", "기업", "기술", "서비스"}
+    }
+    return len(distinctive) >= 2
 
 
 def _cluster_context_tokens(titles: list[str], snippets: list[str] | None = None) -> set[str]:
