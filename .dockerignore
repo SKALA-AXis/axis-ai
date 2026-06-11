@@ -11,6 +11,10 @@ venv/
 .ruff_cache/
 tests/
 docs/
+dryruns/
+src/crawler/crawler_results/
+.secrets/
+.DS_Store
 .env
 .env.*
 !.env.example
