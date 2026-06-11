@@ -78,7 +78,10 @@ class UrgentVerifier:
     """FastFilter urgent 판정 기사를 GPT-4o로 2차 검증."""
 
     def __init__(self) -> None:
-        from langchain_openai import ChatOpenAI  # 지연 임포트 — transformers/torch 체인 회피 (import ~분 단위)
+        from langchain_openai import (
+            ChatOpenAI,
+        )  # 지연 임포트 — transformers/torch 체인 회피 (import ~분 단위)
+
         self._llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=300)
 
     async def verify(self, article: RawArticle) -> VerifyResult:
