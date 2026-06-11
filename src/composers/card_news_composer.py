@@ -20,7 +20,7 @@ from src.analysis.models import AnalysisPackage
 from src.config.companies import company_name_ko
 from src.config.global_companies import global_company_name_ko
 from src.config.sectors import SECTOR_KEYWORDS, match_sectors
-from src.db.article_store import _generate_card_id, get_articles_by_ids
+from src.db.article_store import get_articles_by_ids
 
 log = logging.getLogger(__name__)
 
@@ -444,6 +444,8 @@ class CardNewsComposer:
 
         articles_text = _format_articles(articles)
         prompt = _ISSUE_CARD_PROMPT.replace("{articles_text}", articles_text)
+        created_at = _now_iso()
+        published_date = _published_date(articles, created_at)
 
         try:
             from src.observability import tracing_config
@@ -463,10 +465,11 @@ class CardNewsComposer:
             card_data = _parse_json(content)
 
             card = {
-                "id": _generate_card_id(company),
+                "id": _card_news_id(cluster_id, published_date),
                 "company": company,
                 "cluster_id": cluster_id,
                 "representative_id": representative_id,
+                "published_date": published_date,
                 "title": card_data.get("title", articles[0]["title"][:100]),
                 "summary_lines": card_data.get("summary_lines", []),
                 "event_type": card_data.get(
@@ -543,12 +546,15 @@ def _card_from_summary(
         classification.get("title"),
         articles[0].get("title"),
     )
+    created_at = _now_iso()
+    published_date = _published_date(articles, created_at)
 
     card = {
-        "id": _generate_card_id(effective_company),
+        "id": _card_news_id(cluster_id, published_date),
         "company": effective_company,
         "cluster_id": cluster_id,
         "representative_id": representative_id,
+        "published_date": published_date,
         "title": title[:100],
         "summary_lines": summary_lines,
         "event_type": classification.get("event_type", "tech"),
@@ -595,6 +601,7 @@ def _attach_card_news_schema_fields(card: dict[str, Any]) -> None:
         "id": card.get("id"),
         "company": card.get("company"),
         "cluster_id": card.get("cluster_id"),
+        "published_date": card.get("published_date"),
         "title": card.get("title"),
         "summary_lines": card.get("summary_lines", []),
         "event_type": card.get("event_type", "tech"),

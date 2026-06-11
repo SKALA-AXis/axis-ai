@@ -213,3 +213,38 @@ def test_card_news_from_analysis_package_adds_grounded_display_sections(monkeypa
     assert card["analysis_package"]["profile_linkage"] == package["profile_linkage"]
     assert card["analysis_package"]["skax_response_linkage"] == package["skax_response_linkage"]
     assert card["analysis_package"]["grounding_summary"] == package["grounding_summary"]
+
+
+def test_card_news_from_cluster_summary_uses_source_published_date(monkeypatch):
+    import src.composers.card_news_composer as composer_module
+
+    monkeypatch.setattr(
+        composer_module,
+        "get_articles_by_ids",
+        lambda article_ids: [
+            {
+                "id": 25771,
+                "title": "포스코DX, AI와 사람의 협업 시대를 선도",
+                "content": "포스코DX가 AI 협업 기술을 소개했다.",
+                "source_name": "naver_news",
+                "url": "https://example.com/25771",
+                "published_at": "2026-03-04T09:00:00+09:00",
+            }
+        ],
+    )
+
+    card = CardNewsComposer().generate_from_cluster(
+        cluster_id=25771,
+        representative_id=25771,
+        company="posco_dx",
+        classification={"event_type": "tech_release", "sector": "ax"},
+        summary={
+            "is_valid_summary": True,
+            "main_company": "posco_dx",
+            "headline": "포스코DX, AI와 사람의 협업 시대를 선도",
+            "fact_summary": ["포스코DX가 AI 협업 기술을 소개했다."],
+        },
+    )
+
+    assert card["id"] == "CN-20260304-25771"
+    assert card["published_date"] == "2026-03-04"
