@@ -157,6 +157,12 @@ def test_briefing_input_output_contract_for_integrated_issue_basis():
     assert response.weeklySnapshot["sections"][0]["title"] == "이번 주 핵심 변화"
     assert response.history[0]["primaryCount"] >= 1
     assert response.interpretation_flow["title"] == "해석 흐름 — 관찰부터 시사까지"
+    assert response.briefingReport["label"] == "일간"
+    assert response.briefingReport["briefingLead"] == response.briefing_lead
+    assert response.briefingReport["selectedCards"][0]["id"] == "CN-1"
+    assert response.briefingReport["signalCards"][0]["relatedCardIds"] == ["CN-1"]
+    assert response.briefingReport["flowSteps"][0]["id"].startswith("generated-")
+    assert response.flowSteps == response.briefingReport["flowSteps"]
     assert (
         response.interpretation_flow["reasoning_summary"]["disclosure_level"]
         == "summarized_intermediate_artifacts"

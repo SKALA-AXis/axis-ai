@@ -145,7 +145,7 @@ def test_mixer_accepts_integrated_issue_ids_and_exposes_sources(monkeypatch):
         return units
 
     monkeypatch.setattr(mixer_module, "load_analysis_units_by_integrated_issue_ids", _load)
-    monkeypatch.setattr(mixer_module, "_get_llm", lambda: fake_llm)
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: fake_llm)
     monkeypatch.setattr(
         mixer_module,
         "_repair_mixer_result_quality",
@@ -161,7 +161,10 @@ def test_mixer_accepts_integrated_issue_ids_and_exposes_sources(monkeypatch):
     assert result["provenance"]["source_integrated_issue_ids"] == issue_ids
     assert result["radar_axes"][0]["calculation"]
     assert result["radar_axes"][0]["meaning"]
+    assert result["radar_axes"][0]["analysis_prompt"]
+    assert result["radar_axes"][0]["prompted_interpretation"]
     assert isinstance(result["follow_up_checks"], list)
+    assert result["follow_up_checks"][0]["answer"]
     assert "통합 상세" in fake_llm.prompts[0]
     assert "표시 요약(최하위 보조)" in fake_llm.prompts[0]
     assert "임원/의사결정자" in fake_llm.prompts[0]
@@ -194,7 +197,7 @@ def test_mixer_card_ids_are_interpreted_as_analysis_units(monkeypatch):
     units = [_unit("CN-1", issue_ids[0]), _unit("CN-2", issue_ids[1])]
 
     monkeypatch.setattr(mixer_module, "load_analysis_units_by_card_ids", lambda ids: units)
-    monkeypatch.setattr(mixer_module, "_get_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: _FakeLLM())
     monkeypatch.setattr(
         mixer_module,
         "_repair_mixer_result_quality",
@@ -217,7 +220,7 @@ def test_mixer_quick_mode_skips_mix_level_implication(monkeypatch):
     monkeypatch.setattr(
         mixer_module, "load_analysis_units_by_integrated_issue_ids", lambda ids: units
     )
-    monkeypatch.setattr(mixer_module, "_get_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: _FakeLLM())
     monkeypatch.setattr(
         mixer_module,
         "_repair_mixer_result_quality",
@@ -239,6 +242,7 @@ def test_mixer_quick_mode_skips_mix_level_implication(monkeypatch):
 
     assert result["provenance"]["analysis_mode"] == "quick"
     assert result["provenance"]["analysis_quality"] == "fast"
+    assert result["provenance"]["llm_model"] == mixer_module._QUICK_LLM_MODEL
     assert result["analysis_depth"]["mode"] == "quick"
     assert result["analysis_depth"]["omitted_steps"]
     assert result["deep_dive_sections"] == []
@@ -256,7 +260,7 @@ def test_mixer_deep_mode_runs_quality_and_implication(monkeypatch):
     monkeypatch.setattr(
         mixer_module, "load_analysis_units_by_integrated_issue_ids", lambda ids: units
     )
-    monkeypatch.setattr(mixer_module, "_get_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: _FakeLLM())
 
     def _repair(**kwargs):
         calls["repair"] += 1
@@ -277,6 +281,7 @@ def test_mixer_deep_mode_runs_quality_and_implication(monkeypatch):
     assert calls == {"repair": 1, "implication": 1}
     assert result["provenance"]["analysis_mode"] == "deep"
     assert result["provenance"]["analysis_quality"] == "detailed"
+    assert result["provenance"]["llm_model"] == mixer_module._DEEP_LLM_MODEL
     assert result["analysis_depth"]["mode"] == "deep"
     assert result["deep_dive_sections"]
 
@@ -296,7 +301,7 @@ def test_mixer_quality_flags_lower_confidence_and_warn(monkeypatch):
         "load_analysis_units_by_integrated_issue_ids",
         lambda ids: units,
     )
-    monkeypatch.setattr(mixer_module, "_get_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: _FakeLLM())
     monkeypatch.setattr(
         mixer_module,
         "_repair_mixer_result_quality",
@@ -336,7 +341,7 @@ def test_mixer_missing_credentials_error_is_sanitized(monkeypatch):
                 "environment variable."
             )
 
-    monkeypatch.setattr(mixer_module, "_get_llm", lambda: _MissingCredentialLLM())
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: _MissingCredentialLLM())
 
     result = asyncio.run(
         MixerAnalysisAgent().analyze(integrated_issue_ids=issue_ids, analysis_mode="quick")
