@@ -748,6 +748,37 @@ def test_logistics_robotics_partner_articles_can_merge_with_llm(monkeypatch):
     assert _should_merge_articles(first, second, 0.80, 0.80) is True
 
 
+def test_title_similarity_llm_can_merge_across_company_and_sector_labels(monkeypatch):
+    left = {
+        "company": ["lg_cns"],
+        "matched_companies": ["lg_cns"],
+        "matched_sectors": ["infra"],
+        "title": "LG CNS·LX판토스, 물류센터 자동화 로봇 도입 협력",
+        "content": "",
+        "published_at": "2026-06-11T01:10:00+00:00",
+    }
+    right = {
+        "company": ["lx_pantos"],
+        "matched_companies": ["lx_pantos"],
+        "matched_sectors": ["logistics"],
+        "title": "LX판토스 물류 거점에 자동화 로봇 배치…LG CNS와 실증",
+        "content": "",
+        "published_at": "2026-06-11T01:20:00+00:00",
+    }
+
+    calls = []
+
+    def fake_judge(*args, **kwargs):
+        calls.append(args)
+        return True
+
+    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", fake_judge)
+
+    assert _should_merge_articles(left, right, 0.62, 0.80) is True
+    assert calls
+
+
 def test_prefilter_groups_same_day_event_without_company_split(monkeypatch):
     left = {
         "company": ["nvidia"],
