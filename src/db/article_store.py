@@ -1368,6 +1368,7 @@ _INSERT_CARD_NEWS_V2 = text("""
         CAST(:evaluation_payload AS jsonb)
     )
     ON CONFLICT (id) DO UPDATE SET
+        status = 'ACTIVE',
         title = EXCLUDED.title,
         summary_lines = EXCLUDED.summary_lines,
         event_type = EXCLUDED.event_type,
@@ -1417,6 +1418,7 @@ _INSERT_CARD_NEWS_V2_WITHOUT_INTEGRATED_ISSUE = text("""
         CAST(:evaluation_payload AS jsonb)
     )
     ON CONFLICT (id) DO UPDATE SET
+        status = 'ACTIVE',
         title = EXCLUDED.title,
         summary_lines = EXCLUDED.summary_lines,
         event_type = EXCLUDED.event_type,

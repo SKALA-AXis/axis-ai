@@ -170,7 +170,11 @@ ACTION_REPAIR_USER_PROMPT_TEMPLATE = """\
    일정 조건, 검증 기준, 리스크, 운영 조건, 후속 모니터링 항목을 구조화합니다.
 7. "역량 강화", "경쟁력 강화", "기회 확대", "전략적 방향성 제시" 같은 명사구로
    끝내지 않습니다. 무엇을 기준으로 비교하고 무엇을 내부적으로 바꿀지 동사까지 씁니다.
-8. 2~3개 항목을 출력하되, 각 항목은 하나의 완성된 문장입니다.
+8. "제안서", "PoC", "검증표", "레퍼런스 자료", "사전 검증"처럼
+   산출물 템플릿이나 영업 문서 작성 지시로 들리는 표현은 쓰지 않습니다.
+   현재 사건의 사업 범위, 운영 책임, 고객군, 전환 리스크, 후속 모니터링 기준을
+   SK AX 내부 판단 문장으로 바꿔 씁니다.
+9. 2~3개 항목을 출력하되, 각 항목은 하나의 완성된 문장입니다.
 
 ## 출력
 {{
@@ -5523,6 +5527,12 @@ def _recommended_action_quality_violation(
     if not text or not label.startswith("skax_implication.recommended_actions"):
         return ""
     evidence_text = _integrated_grounding_text(integrated_issue or {})
+    if re.search(r"제안서|PoC|검증표|레퍼런스\s*자료|사전\s*검증", text, flags=re.IGNORECASE):
+        return (
+            "대응방향이 제안서/PoC/검증표 같은 산출물 템플릿 표현을 사용했습니다. "
+            "현재 사건의 사업 범위, 운영 책임, 고객군, 전환 리스크, 후속 모니터링 기준을 "
+            "SK AX 내부 판단 문장으로 바꿔야 합니다."
+        )
     if re.search(r"주가|거래를\s*마쳤|시장\s*반응|투자자\s*반응", text):
         return (
             "대응방향이 주가/시장 반응을 실행 근거로 사용했습니다. 전략 대응은 현재 사건의 "
