@@ -61,6 +61,43 @@ jobs:
       - name: Test
         run: uv run pytest tests/ -v
 
+  # 메인 이미지의 의존성 설치 레이어(builder)는 develop 머지 후 build-and-push 에서만
+  # 빌드돼 PR 단계 검증이 없었음 — 2026-06-11 torch CPU 인덱스 사고가 머지 후에야 발견됨.
+  # 빌드 영향 파일(Dockerfile/pyproject/uv.lock) 변경 PR 에서만 builder 스테이지를 빌드.
+  docker-main-deps-smoke:
+    name: Docker build smoke (main image deps)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect build-affecting changes
+        id: chg
+        run: |
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
+              | grep -qE '^(Dockerfile|pyproject\.toml|uv\.lock)$'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.chg.outputs.changed == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build main image builder stage
+        if: steps.chg.outputs.changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: builder
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=main-builder
+          cache-to: type=gha,scope=main-builder,mode=max
+
   docker-smoke:
     name: Docker build smoke (cron image)
     runs-on: ubuntu-latest
