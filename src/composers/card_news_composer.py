@@ -29,6 +29,9 @@ _DEFAULT_COVER_IMAGE_ALT = "카드뉴스 대표 이미지"
 _SUMMARY_LINE_MIN = 3
 _SUMMARY_LINE_MAX = 5
 _CARD_DETAIL_MAX = 3
+_DISPLAY_ITEM_MIN = 1
+_DISPLAY_ITEM_PREFERRED = 3
+_DISPLAY_ITEM_MAX = 5
 
 _FRONTEND_PEER_IDS = {
     "samsung_sds",
@@ -74,6 +77,22 @@ _FACT_BASIS_EVIDENCE_TYPES = {
     "numeric_fact",
     "market_reaction_fact",
     "risk_fact",
+}
+_SUMMARY_ACTION_TOKENS = {
+    "선정",
+    "확정",
+    "수주",
+    "계약",
+    "체결",
+    "협약",
+    "출시",
+    "공개",
+    "구축",
+    "운영",
+    "도입",
+    "전환",
+    "투자",
+    "참여",
 }
 
 _EVENT_TO_FACT_BASIS_TYPE = {
@@ -217,6 +236,15 @@ class CardNewsComposer:
         insights = _list_string(analysis.get("strategic_meaning")) or _list_string(
             summary.get("fact_summary")
         )
+        display_sections = _display_sections_from_strategy_result(
+            summary=summary,
+            analysis=analysis,
+            implication={},
+            strategic_root={"analysis": analysis},
+            sentence_grounding={},
+            sources=sources,
+            summary_lines=summary_lines,
+        )
         return {
             **db_record,
             "peer_id": peer_id,
@@ -230,7 +258,14 @@ class CardNewsComposer:
             "trust_score": trust_score,
             "source_count": len(sources),
             "financial_context": None,
-            "slides": _slides(title, summary_lines, insights, sources, media_assets),
+            "display_sections": display_sections,
+            "slides": _slides_from_display_sections(
+                title=title,
+                display_sections=display_sections,
+                sources=sources,
+                media_assets=media_assets,
+            )
+            or _slides(title, summary_lines, insights, sources, media_assets),
             "display": _display_meta(sector, cover_image),
             "is_human_reviewed": False,
             "is_bookmarked": False,
@@ -274,6 +309,13 @@ class CardNewsComposer:
         if not card:
             return {}
         implication_result = package.get("implication") or {}
+        sentence_grounding = (
+            package.get("sentence_grounding")
+            or (package.get("evidence_payload") or {})
+            .get("analysis_package", {})
+            .get("sentence_grounding")
+            or {}
+        )
         is_llm_valid = bool(
             isinstance(implication_result, dict)
             and implication_result.get("is_valid_implication")
@@ -300,17 +342,47 @@ class CardNewsComposer:
             card.setdefault(
                 "frontend_implication", _frontend_implication(package.get("analysis") or {})
             )
+        literal_summary_lines = _literal_summary_lines(integrated_issue)
+        if literal_summary_lines:
+            card["summary_lines"] = literal_summary_lines
+            if isinstance(card.get("db_record"), dict):
+                card["db_record"]["summary_lines"] = literal_summary_lines
+        display_sections = _display_sections_from_strategy_result(
+            summary=integrated_issue,
+            analysis=package.get("analysis") or {},
+            implication=implication_result,
+            strategic_root=package,
+            sentence_grounding=sentence_grounding,
+            sources=card.get("sources") or [],
+            summary_lines=literal_summary_lines or _list_string(card.get("summary_lines")),
+        )
+        card["frontend_implication"] = _sync_frontend_implication_from_display_sections(
+            card.get("frontend_implication"),
+            display_sections=display_sections,
+        )
+        card["implication"] = _sync_implication_frontend_from_display_sections(
+            card.get("implication"),
+            frontend=card["frontend_implication"],
+        )
+        card["display_sections"] = display_sections
+        card["slides"] = _slides_from_display_sections(
+            title=str(card.get("title") or ""),
+            display_sections=display_sections,
+            sources=card.get("sources") or [],
+            media_assets=_media_assets(input_bundle.get("items") or []),
+        ) or card.get("slides", [])
         card["analysis_package"] = {
             "bundle_id": package.get("bundle_id"),
             "integrated_issue": integrated_issue,
             "summary": integrated_issue,
+            "issue_understanding": package.get("issue_understanding") or {},
+            "profile_linkage": package.get("profile_linkage") or {},
+            "skax_response_linkage": package.get("skax_response_linkage") or {},
+            "grounding_summary": package.get("grounding_summary") or {},
+            "claim_strength": package.get("claim_strength"),
             "analysis": package.get("analysis") or {},
             "implication": implication_result,
-            "sentence_grounding": package.get("sentence_grounding")
-            or (package.get("evidence_payload") or {})
-            .get("analysis_package", {})
-            .get("sentence_grounding")
-            or {},
+            "sentence_grounding": sentence_grounding,
             "validation": validation,
         }
         return card
@@ -615,30 +687,10 @@ def _card_news_id(cluster_id: int | None, created_at: str) -> str:
 
 
 def _plain_summary_lines(summary: dict[str, Any], *, use_llm: bool = False) -> list[str]:
-    lines = _list_string(summary.get("fact_summary"))[:_SUMMARY_LINE_MAX]
-    if lines:
-        return _display_summary_lines(lines, summary, use_llm=use_llm)
-    lines = _list_string(summary.get("summary_lines"))[:_SUMMARY_LINE_MAX]
-    if lines:
-        return _display_summary_lines(lines, summary, use_llm=use_llm)
-    facts = [
-        str(fact.get("fact") or "").strip()
-        for fact in _list_dicts(summary.get("consolidated_facts"))
-        if str(fact.get("fact") or "").strip()
-    ][:_SUMMARY_LINE_MAX]
-    if facts:
-        return _display_summary_lines(facts, summary, use_llm=use_llm)
-    integrated_text = str(summary.get("integrated_text") or "").strip()
-    if integrated_text:
-        split_lines = [
-            item.strip()
-            for item in re.split(r"(?<=[.!?。！？])\s+|(?<=다)\.\s*", integrated_text)
-            if item.strip()
-        ][:_SUMMARY_LINE_MAX]
-        if split_lines:
-            return _display_summary_lines(split_lines, summary, use_llm=use_llm)
-    one_line = str(summary.get("one_line_summary") or "").strip()
-    return _display_summary_lines([one_line], summary, use_llm=use_llm) if one_line else []
+    # Summary is a factual section: preserve IntegrationAgent copy and avoid
+    # display-time rewriting, ranking, or LLM re-summary.
+    del use_llm
+    return _literal_summary_lines(summary)
 
 
 def _display_summary_lines(
@@ -667,24 +719,34 @@ def _display_summary_lines(
     selected: list[str] = []
     skipped: list[str] = []
     selected_roles: set[str] = set()
+    selected_keys: set[str] = set()
     for _, _, text in ranked:
         if len(selected) >= _SUMMARY_LINE_MAX:
             break
         role = _summary_line_role(text, summary)
+        if role == "market_reaction":
+            continue
         if role in selected_roles and role != "context" and len(selected) < _SUMMARY_LINE_MIN:
             skipped.append(text)
             continue
         if any(_summary_lines_too_similar(text, existing) for existing in selected):
             skipped.append(text)
             continue
+        key = re.sub(r"\s+", " ", text).casefold()
         selected.append(text)
+        selected_keys.add(key)
         selected_roles.add(role)
     for text in skipped:
         if len(selected) >= _SUMMARY_LINE_MIN:
             break
-        if text not in selected:
-            selected.append(text)
-    return selected[:_SUMMARY_LINE_MIN] if len(selected) >= _SUMMARY_LINE_MIN else selected
+        key = re.sub(r"\s+", " ", text).casefold()
+        if key in selected_keys:
+            continue
+        if any(_summary_lines_too_similar(text, existing) for existing in selected):
+            continue
+        selected.append(text)
+        selected_keys.add(key)
+    return selected[:_SUMMARY_LINE_MAX] if len(selected) >= _SUMMARY_LINE_MIN else selected
 
 
 def _summary_candidate_lines(lines: list[str], summary: dict[str, Any]) -> list[str]:
@@ -827,7 +889,11 @@ def _summary_lines_too_similar(left: str, right: str) -> bool:
     if len(left_tokens) < 3 or len(right_tokens) < 3:
         return False
     overlap = len(left_tokens & right_tokens)
-    return overlap / min(len(left_tokens), len(right_tokens)) >= 0.72
+    ratio = overlap / min(len(left_tokens), len(right_tokens))
+    if ratio >= 0.72:
+        return True
+    shared_actions = (left_tokens & right_tokens) & _SUMMARY_ACTION_TOKENS
+    return bool(shared_actions) and ratio >= 0.6
 
 
 def _summary_similarity_tokens(text: str) -> set[str]:
@@ -845,7 +911,45 @@ def _summary_similarity_tokens(text: str) -> set[str]:
         "계획",
         "예정",
     }
-    return {token for token in tokens if token not in stopwords}
+    normalized_stopwords = {_normalize_summary_similarity_token(token) for token in stopwords}
+    normalized_tokens: set[str] = set()
+    for token in tokens:
+        pieces = [token, *re.split(r"[·/&+_-]+", token)]
+        for piece in pieces:
+            normalized = _normalize_summary_similarity_token(piece)
+            if normalized and normalized not in normalized_stopwords:
+                normalized_tokens.add(normalized)
+    return normalized_tokens
+
+
+def _normalize_summary_similarity_token(token: str) -> str:
+    value = str(token or "").strip()
+    if not value:
+        return ""
+    if value.isascii():
+        return value.casefold()
+    value = re.sub(
+        r"(으로서|으로써|로서|로써|으로|에게서|에게|에서|부터|까지|보다|처럼|"
+        r"은|는|이|가|을|를|의|에|와|과|도|만|로)$",
+        "",
+        value,
+    )
+    suffix_replacements = (
+        (r"선정(?:됐다|되었다|했다|하였다)$", "선정"),
+        (r"체결(?:됐다|되었다|했다|하였다)$", "체결"),
+        (r"확정(?:됐다|되었다|했다|하였다)$", "확정"),
+        (r"구축(?:됐다|되었다|했다|하였다)$", "구축"),
+        (r"운영(?:됐다|되었다|했다|하였다)$", "운영"),
+        (r"상승(?:했다|하였다)$", "상승"),
+        (r"하락(?:했다|하였다)$", "하락"),
+        (r"(?:했다|하였다|됐다|되었다|한다|됩니다|합니다|입니다|이다)$", ""),
+    )
+    for pattern, replacement in suffix_replacements:
+        updated = re.sub(pattern, replacement, value)
+        if updated != value:
+            value = updated
+            break
+    return value if len(value) >= 2 else ""
 
 
 def _summary_focus_tokens(summary: dict[str, Any]) -> set[str]:
@@ -1175,6 +1279,1567 @@ def _implication_from_result(
     return payload
 
 
+def _display_sections_from_strategy_result(
+    *,
+    summary: dict[str, Any],
+    analysis: dict[str, Any],
+    implication: dict[str, Any],
+    strategic_root: dict[str, Any],
+    sentence_grounding: dict[str, Any] | None,
+    sources: list[dict[str, Any]],
+    summary_lines: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    del sources
+    summary_items = _literal_summary_lines(summary, fallback=summary_lines)
+    insight_candidates = [
+        *_editorial_insight_candidates_from_strategy(
+            summary=summary,
+            analysis=analysis,
+            implication=implication,
+            strategic_root=strategic_root,
+        ),
+        *_insight_candidates_from_strategy(
+            analysis=analysis,
+            implication=implication,
+            strategic_root=strategic_root,
+        ),
+    ]
+    insight_items = _select_display_items(
+        insight_candidates,
+        sentence_grounding=sentence_grounding,
+        summary=summary,
+        strategic_root=strategic_root,
+        max_items=2,
+        preferred=2,
+        section_type="insight",
+    )
+    action_candidates = [
+        *_editorial_action_candidates_from_strategy(
+            summary=summary,
+            implication=implication,
+            strategic_root=strategic_root,
+        ),
+        *_action_candidates_from_strategy(
+            implication=implication,
+            strategic_root=strategic_root,
+        ),
+    ]
+    action_items = _select_display_items(
+        action_candidates,
+        sentence_grounding=sentence_grounding,
+        summary=summary,
+        strategic_root=strategic_root,
+        max_items=2,
+        preferred=2,
+        section_type="action",
+    )
+    return [
+        {"type": "summary", "title": "요약", "items": summary_items},
+        {"type": "insight", "title": "시사점", "items": insight_items},
+        {"type": "action", "title": "대응방안", "items": action_items},
+    ]
+
+
+def _sync_frontend_implication_from_display_sections(
+    frontend: Any,
+    *,
+    display_sections: list[dict[str, Any]],
+) -> dict[str, Any]:
+    payload = dict(frontend) if isinstance(frontend, dict) else {}
+    sections = {
+        str(section.get("type") or ""): _list_string(section.get("items"))
+        for section in display_sections
+        if isinstance(section, dict)
+    }
+    insight_items = sections.get("insight") or []
+    action_items = sections.get("action") or []
+    if insight_items:
+        payload["key_implications"] = insight_items
+        payload["peer_implications"] = insight_items
+        payload["potential_impact"] = insight_items[0]
+        payload["why_important"] = insight_items[1] if len(insight_items) > 1 else insight_items[0]
+    if action_items:
+        payload["response_directions"] = action_items
+        payload["suggested_actions"] = action_items
+    return payload
+
+
+def _sync_implication_frontend_from_display_sections(
+    implication: Any,
+    *,
+    frontend: dict[str, Any],
+) -> dict[str, Any]:
+    payload = dict(implication) if isinstance(implication, dict) else {}
+    payload["frontend"] = frontend
+    if frontend.get("suggested_actions"):
+        payload["recommended_actions"] = frontend["suggested_actions"]
+        skax = payload.get("skax_implication")
+        if isinstance(skax, dict):
+            skax["recommended_actions"] = frontend["suggested_actions"]
+    return payload
+
+
+def _editorial_insight_candidates_from_strategy(
+    *,
+    summary: dict[str, Any],
+    analysis: dict[str, Any],
+    implication: dict[str, Any],
+    strategic_root: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Recompose strategy output into card-news insight copy.
+
+    StrategicInsightAgent keeps analysis fields separated for traceability. The
+    card surface needs fewer, denser lines that show why the implication follows:
+    confirmed fact -> peer profile touchpoint -> meaning of the change.
+    """
+
+    peer = implication.get("peer_implication") or {}
+    if not isinstance(peer, dict):
+        peer = {}
+    peer_name = _first_text(peer.get("company_name_ko"), peer.get("company_id"), "피어사")
+    peer_topic = _with_particle(peer_name, "은", "는")
+    subject = _display_subject_from_summary(summary)
+    profile_phrase = _profile_phrase_from_linkage(strategic_root) or _profile_phrase_from_peer_copy(
+        _first_text(peer.get("peer_meaning"), peer.get("capability_change"))
+    )
+    profile_specificity_note = _profile_specificity_note(strategic_root)
+    profile_level = _profile_linkage_level(strategic_root)
+    detail_phrase = _issue_execution_detail_phrase(summary)
+    execution_focus = _profile_connection_execution_phrase(summary)
+    candidates: list[dict[str, Any]] = []
+    if profile_phrase:
+        if profile_level in {"low", "none"}:
+            text = (
+                f"{peer_topic} 이번 {subject}에서 {profile_phrase} 사업과의 접점이 "
+                "확인됩니다. 다만 현재 확인되는 사업 정보만으로 피어사의 역할 확대나 수행 "
+                "범위를 단정하기는 어렵기 때문에, 기존 사업 맥락과 이번 사건이 어디까지 "
+                "연결되는지가 후속 단계의 핵심 변수로 남습니다."
+            )
+        else:
+            detail_sentence = (
+                f" 특히 {detail_phrase}까지 함께 확인되므로, 피어사의 기존 사업 기반이 "
+                "실제 과제의 수행 조건과 어디까지 맞닿는지 보는 것이 중요합니다."
+                if detail_phrase
+                else (
+                    " 피어사의 기존 사업 기반이 이번 사건의 수행 범위와 후속 역할 공개로 "
+                    "어떻게 이어지는지 확인하는 것이 중요합니다."
+                )
+            )
+            text = (
+                f"이번 {subject}은 {peer_name}의 {profile_phrase} 사업 기반이 "
+                f"{execution_focus}와 연결되는 장면입니다."
+                f"{detail_sentence}{profile_specificity_note}"
+            )
+        candidates.append(
+            {
+                "text": text,
+                "path": "card_editorial.insight.peer_business_state",
+                "priority": 130,
+                "allow_without_grounding": True,
+                "semantic_role": "peer_business_meaning",
+            }
+        )
+    else:
+        primary_fact = _first_text(
+            _first_list_item(summary.get("fact_summary")),
+            summary.get("one_line_summary"),
+            summary.get("main_event"),
+            summary.get("headline"),
+        )
+        candidates.append(
+            {
+                "text": (
+                    f"{_ensure_card_sentence(primary_fact)} 현재 확인되는 사업 정보만으로는 "
+                    "피어사의 확정적 사업 확장까지 단정하기 어렵기 때문에, 이번 이슈는 "
+                    "대상 사업과 후속 역할 공개 여부가 핵심 변수로 남는 관찰 신호입니다."
+                ),
+                "path": "card_editorial.insight.event_signal",
+                "priority": 124,
+                "allow_without_grounding": True,
+                "semantic_role": "uncertainty_or_follow_up",
+            }
+        )
+
+    market_signal = _first_text(analysis.get("market_signal"))
+    criteria_phrase = _fact_based_competition_criteria_phrase(
+        summary
+    ) or _criteria_phrase_from_strategy(
+        analysis=analysis,
+        implication={},
+    )
+    if criteria_phrase:
+        competition_variable = _event_frame_competition_variable(
+            summary,
+            peer_name=peer_name,
+        )
+        text = (
+            f"유사 사업의 비교 기준도 단순 선정 여부보다 {criteria_phrase} 중심으로 "
+            f"좁혀질 수 있습니다. 후속 단계에서 공개되는 {competition_variable}은 "
+            "피어사의 실제 실행력을 판단하는 핵심 변수로 남습니다."
+        )
+    elif market_signal:
+        text = _ensure_card_sentence(_clean_card_editorial_text(market_signal))
+    else:
+        text = ""
+    if text:
+        candidates.append(
+            {
+                "text": text,
+                "path": "card_editorial.insight.market_signal",
+                "priority": 126,
+                "allow_without_grounding": True,
+                "semantic_role": "competition_standard_change",
+            }
+        )
+
+    return candidates
+
+
+def _editorial_action_candidates_from_strategy(
+    *,
+    summary: dict[str, Any],
+    implication: dict[str, Any],
+    strategic_root: dict[str, Any],
+) -> list[dict[str, Any]]:
+    subject = _display_subject_from_summary(summary)
+    skax = implication.get("skax_implication") or {}
+    if not isinstance(skax, dict):
+        skax = {}
+    skax_phrase = _skax_business_phrase_from_linkage(strategic_root) or (
+        _skax_business_phrase_from_implication(skax)
+    )
+    skax_specificity_note = _skax_specificity_note(strategic_root)
+    has_specific_skax_link = _has_specific_skax_linkage(strategic_root)
+    criteria_phrase = _fact_based_competition_criteria_phrase(
+        summary
+    ) or _criteria_phrase_from_strategy(
+        analysis={},
+        implication=implication,
+    )
+    if _generic_criteria_phrase(criteria_phrase):
+        criteria_phrase = _default_strategy_criteria_phrase(summary)
+    criteria_phrase = criteria_phrase or _default_strategy_criteria_phrase(summary)
+    criteria_topic = _with_particle(criteria_phrase, "으로", "로")
+    monitoring_phrase = (
+        _fact_based_monitoring_phrase(summary)
+        or _monitoring_phrase_from_strategic_root(strategic_root)
+        or _monitoring_phrase_from_implication(implication)
+    )
+    monitoring_phrase = _normalize_monitoring_phrase_for_issue(summary, monitoring_phrase)
+    monitoring_phrase = _compact_repeated_subject_in_phrase(monitoring_phrase, subject)
+    monitoring_scope = _event_frame_action_monitoring_scope(summary)
+    monitoring_sentence = ""
+    if monitoring_phrase:
+        monitoring_sentence = (
+            f" 이후 {_with_particle(monitoring_phrase, '을', '를')} 모니터링해야 합니다."
+        )
+    candidates: list[dict[str, Any]] = []
+    if skax_phrase:
+        certainty_clause = (
+            "자사 관련 사업 기반이 확인되더라도 "
+            if has_specific_skax_link
+            else (f"현재 SK AX의 관련 접점이 넓은 {skax_phrase} 사업명 수준으로 확인되는 만큼 ")
+        )
+        first = (
+            f"SK AX는 {_with_particle(subject, '과', '와')} 유사한 사업을 검토할 때 "
+            f"{_with_particle(skax_phrase, '과', '와')} 연결되는 자사 사업 기반이 "
+            f"{criteria_phrase} 중 어디까지 감당할 수 있는지 먼저 구분해야 합니다. "
+            f"{certainty_clause}확인 항목이 구체적일수록 관련 역량 보유 여부보다 "
+            "수행 범위와 리스크 부담 가능 범위가 중요해집니다."
+            f"{skax_specificity_note} 따라서 직접 담당 가능한 범위와 외부 보완이 "
+            "필요한 범위를 구분해야 후속 사업에서 운영 책임과 리스크 수준을 "
+            "현실적으로 판단할 수 있습니다."
+        )
+    else:
+        first = (
+            f"SK AX는 {subject}와 유사한 사업에서 현재 확인되는 사업 정보상 직접 연결되는 자사 "
+            "사업 기반이 충분한지 먼저 확인해야 합니다. 확인 항목이 "
+            f"{criteria_topic} 구체화되는 상황에서는 일반적인 대응 의지만으로는 "
+            "수행 가능한 범위와 보완해야 할 영역이 드러나지 않습니다. 따라서 직접 "
+            "담당 가능한 범위와 외부 보완이 필요한 범위를 나눠 내부 대응 범위를 "
+            "정리해야 후속 사업에서 리스크와 운영 조건을 판단할 수 있습니다."
+        )
+    candidates.append(
+        {
+            "text": first,
+            "path": "card_editorial.action.skax_gap_response",
+            "priority": 130,
+            "allow_without_grounding": True,
+            "semantic_role": "skax_capability_gap_check",
+        }
+    )
+    if monitoring_sentence:
+        scope_sentence = (
+            f" 이때 {monitoring_scope}도 함께 봐야 합니다."
+            if monitoring_scope and monitoring_scope not in monitoring_phrase
+            else ""
+        )
+        candidates.append(
+            {
+                "text": (
+                    f"SK AX는{monitoring_sentence}{scope_sentence} 이 정보가 확인되어야 앞서 나눈 "
+                    "내부 대응 범위, 외부 보완 필요성, 리스크 기준을 후속 상황에 맞게 "
+                    "조정할 수 있습니다."
+                ),
+                "path": "card_editorial.action.monitoring_response",
+                "priority": 126,
+                "allow_without_grounding": True,
+                "semantic_role": "monitoring_response",
+            }
+        )
+    return candidates
+
+
+def _insight_candidates_from_strategy(
+    *,
+    analysis: dict[str, Any],
+    implication: dict[str, Any],
+    strategic_root: dict[str, Any],
+) -> list[dict[str, Any]]:
+    peer = implication.get("peer_implication") or {}
+    profile_linkage = strategic_root.get("profile_linkage") or {}
+    candidates: list[dict[str, Any]] = [
+        {
+            "text": analysis.get("analysis_summary"),
+            "path": "analysis.analysis_summary",
+            "priority": 60,
+            "semantic_role": "peer_business_meaning",
+        },
+        {
+            "text": peer.get("peer_meaning") if isinstance(peer, dict) else None,
+            "path": "peer_implication.peer_meaning",
+            "priority": 58,
+            "semantic_role": "peer_business_meaning",
+        },
+        {
+            "text": peer.get("capability_change") if isinstance(peer, dict) else None,
+            "path": "peer_implication.capability_change",
+            "priority": 56,
+            "semantic_role": "competition_standard_change",
+        },
+        {
+            "text": analysis.get("market_signal"),
+            "path": "analysis.market_signal",
+            "priority": 54,
+            "semantic_role": "competition_standard_change",
+        },
+    ]
+    for index, item in enumerate(_list_string(analysis.get("strategic_meaning"))):
+        candidates.append(
+            {
+                "text": item,
+                "path": f"analysis.strategic_meaning[{index}]",
+                "priority": 57 - index,
+                "semantic_role": (
+                    "peer_business_meaning" if index == 0 else "competition_standard_change"
+                ),
+            }
+        )
+    if isinstance(profile_linkage, dict):
+        candidates.append(
+            {
+                "text": profile_linkage.get("reason"),
+                "path": "profile_linkage.reason",
+                "priority": 45,
+                "allow_watch_point": True,
+                "semantic_role": "uncertainty_or_follow_up",
+            }
+        )
+    return candidates
+
+
+def _action_candidates_from_strategy(
+    *,
+    implication: dict[str, Any],
+    strategic_root: dict[str, Any],
+) -> list[dict[str, Any]]:
+    skax = implication.get("skax_implication") or {}
+    skax_linkage = strategic_root.get("skax_response_linkage") or {}
+    candidates: list[dict[str, Any]] = []
+    if isinstance(skax, dict):
+        for index, item in enumerate(_list_string(skax.get("recommended_actions"))):
+            candidates.append(
+                {
+                    "text": _clean_card_editorial_text(item),
+                    "path": f"skax_implication.recommended_actions[{index}]",
+                    "priority": 60 - (index * 5),
+                    "semantic_role": _action_semantic_role_for_index(index),
+                }
+            )
+    if isinstance(skax_linkage, dict):
+        for field, priority, allow_watch in (
+            ("internal_checkpoints", 90, False),
+            ("recommended_focus", 86, False),
+            ("monitoring_points", 84, True),
+        ):
+            for index, item in enumerate(_list_string(skax_linkage.get(field))):
+                candidates.append(
+                    {
+                        "text": item,
+                        "path": f"skax_response_linkage.{field}[{index}]",
+                        "priority": priority - index,
+                        "allow_watch_point": allow_watch,
+                        "semantic_role": _action_semantic_role_for_linkage_field(field),
+                    }
+                )
+    return candidates
+
+
+def _action_semantic_role_for_index(index: int) -> str:
+    if index == 0:
+        return "skax_capability_gap_check"
+    if index == 1:
+        return "skax_operating_response"
+    return "monitoring_response"
+
+
+def _action_semantic_role_for_linkage_field(field: str) -> str:
+    if field == "internal_checkpoints":
+        return "skax_capability_gap_check"
+    if field == "recommended_focus":
+        return "skax_operating_response"
+    if field == "monitoring_points":
+        return "monitoring_response"
+    return ""
+
+
+def _literal_summary_lines(
+    summary: dict[str, Any],
+    *,
+    fallback: list[str] | None = None,
+) -> list[str]:
+    """Return IntegratedIssue summary copy without display rewriting."""
+    lines = _list_string(summary.get("fact_summary"))
+    if not lines:
+        lines = _list_string(summary.get("summary_lines"))
+    if not lines:
+        lines = [
+            str(fact.get("fact") or "").strip()
+            for fact in _list_dicts(summary.get("consolidated_facts"))
+            if str(fact.get("fact") or "").strip()
+        ]
+    if not lines:
+        lines = _list_string(summary.get("one_line_summary"))
+    if not lines:
+        lines = _list_string(summary.get("integrated_text"))
+    if not lines:
+        lines = fallback or []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        text = str(line or "").strip()
+        key = re.sub(r"\s+", " ", text).casefold()
+        if not text or key in seen:
+            continue
+        out.append(text)
+        seen.add(key)
+        if len(out) >= _SUMMARY_LINE_MAX:
+            break
+    return out
+
+
+def _first_list_item(value: Any) -> str:
+    items = _list_string(value)
+    return items[0] if items else ""
+
+
+def _display_subject_from_summary(summary: dict[str, Any]) -> str:
+    intelligence = summary.get("cluster_fact_intelligence") or {}
+    if isinstance(intelligence, dict):
+        products = _list_string(intelligence.get("products_or_services"))
+        if products:
+            product = re.sub(r"\s+", " ", products[0]).strip(" .")
+            amount = _first_amount_like_term(_list_string(intelligence.get("numbers_and_dates")))
+            if amount and amount not in product:
+                return _clean_subject_phrase(f"{amount} 규모의 {product}", summary)
+            return _clean_subject_phrase(product, summary)
+    subject = _first_text(
+        summary.get("main_issue"),
+        summary.get("main_event"),
+        summary.get("headline"),
+        summary.get("one_line_summary"),
+        _first_list_item(summary.get("fact_summary")),
+        "현재 이슈",
+    )
+    subject = re.sub(r"\s+", " ", subject).strip(" .")
+    subject = re.sub(r"^(이번|해당)\s*", "", subject)
+    return _clean_subject_phrase(subject, summary)
+
+
+def _clean_subject_phrase(subject: str, summary: dict[str, Any]) -> str:
+    value = re.sub(r"\s+", " ", str(subject or "")).strip(" .,")
+    if not value:
+        return "현재 이슈"
+    company_names = _subject_company_names(summary)
+    for company_name in company_names:
+        escaped = re.escape(company_name)
+        value = re.sub(
+            rf"^{escaped}\s*(?:,|·|와|과|및|이|가|은|는)?\s*",
+            "",
+            value,
+        ).strip(" ,.")
+    value = re.sub(r"^(이번|해당)\s*", "", value).strip(" ,.")
+    value = re.sub(r"^(?:,|·|와|과|및)\s*", "", value).strip(" ,.")
+    value = re.sub(
+        r"^(?:[가-힣A-Za-z0-9&._-]{2,30}(?:와|과|및)\s+){1,4}함께\s+",
+        "",
+        value,
+    ).strip(" ,.")
+    if not value:
+        value = "현재 이슈"
+    return value[:90] if len(value) > 90 else value
+
+
+def _subject_company_names(summary: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for company_id in _list_string(summary.get("mentioned_peer_companies")):
+        names.extend(
+            [
+                company_id,
+                company_name_ko(company_id),
+                global_company_name_ko(company_id),
+            ]
+        )
+    main_company = str(summary.get("main_company") or "").strip()
+    if main_company:
+        names.extend(
+            [
+                main_company,
+                company_name_ko(main_company),
+                global_company_name_ko(main_company),
+            ]
+        )
+    return [
+        name
+        for name in _unique_nonempty(names)
+        if name and name not in {"피어사", "unknown", "None"}
+    ]
+
+
+def _first_amount_like_term(values: list[str]) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if re.search(r"\d", text) and re.search(r"조|억|만|천|원", text):
+            return text
+    return ""
+
+
+def _issue_execution_detail_phrase(summary: dict[str, Any]) -> str:
+    intelligence = summary.get("cluster_fact_intelligence") or {}
+    facts = " ".join(_list_string(summary.get("fact_summary")))
+    numbers: list[str] = []
+    if isinstance(intelligence, dict):
+        numbers.extend(_list_string(intelligence.get("numbers_and_dates")))
+    numbers.extend(
+        re.findall(
+            r"(?<![A-Za-z0-9])\d[\d,]*(?:조|억|만|천)?\s*(?:원|장|대|개|년|월|일)(?![A-Za-z0-9])",
+            facts,
+        )
+    )
+    cleaned_numbers: list[str] = []
+    for value in numbers:
+        text = re.sub(r"\s+", "", str(value or "")).strip(" ,.")
+        if text and text not in cleaned_numbers:
+            cleaned_numbers.append(text)
+        if len(cleaned_numbers) >= 3:
+            break
+    details: list[str] = []
+    if cleaned_numbers:
+        details.append(", ".join(cleaned_numbers))
+    if re.search(r"서비스\s*개시|오픈|운영\s*시작|구축\s*완료", facts):
+        details.append("서비스 개시 또는 구축 완료 일정")
+    if re.search(r"협약|계약|선정|컨소시엄|SPC|주주간", facts, flags=re.IGNORECASE):
+        details.append("추진 구조")
+    return ", ".join(details[:3])
+
+
+def _skax_business_phrase_from_implication(skax: dict[str, Any]) -> str:
+    mapped = _list_string(skax.get("business_line_mapping"))
+    if mapped:
+        return "·".join(mapped[:2])
+    text = " ".join(
+        [
+            str(skax.get("why_important") or ""),
+            str(skax.get("potential_impact") or ""),
+            " ".join(_list_string(skax.get("recommended_actions"))),
+        ]
+    )
+    patterns = (
+        r"SK\s*AX의\s*([가-힣A-Za-z0-9&·/+_\-\s]{2,50}?)(?:\s*접점|과|와)",
+        r"SK\s*AX도\s*([가-힣A-Za-z0-9&·/+_\-\s]{2,50}?)(?:\s*사업|역량)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        phrase = re.sub(r"\s+", " ", match.group(1)).strip(" ,.")
+        if phrase:
+            return phrase
+    return ""
+
+
+def _profile_phrase_from_linkage(strategic_root: dict[str, Any]) -> str:
+    linkage = strategic_root.get("profile_linkage") or {}
+    records = _linkage_area_records(linkage, field="matched_profile_areas")
+    return _linkage_priority_phrase(records)
+
+
+def _profile_reason_from_linkage(strategic_root: dict[str, Any]) -> str:
+    linkage = strategic_root.get("profile_linkage") or {}
+    records = _linkage_area_records(linkage, field="matched_profile_areas")
+    reasons = _unique_nonempty(
+        _first_text(record.get("why_relevant_to_issue"), record.get("reason")) for record in records
+    )
+    if reasons:
+        return reasons[0]
+    return ""
+
+
+def _profile_linkage_level(strategic_root: dict[str, Any]) -> str:
+    linkage = strategic_root.get("profile_linkage") or {}
+    if isinstance(linkage, dict):
+        level = str(linkage.get("linkage_level") or "").strip().casefold()
+        if level in {"high", "medium", "low", "none"}:
+            return level
+    return ""
+
+
+def _skax_business_phrase_from_linkage(strategic_root: dict[str, Any]) -> str:
+    linkage = strategic_root.get("skax_response_linkage") or {}
+    records = _linkage_area_records(linkage, field="matched_skax_areas")
+    return _linkage_priority_phrase(records, max_terms=2)
+
+
+def _skax_reason_from_linkage(strategic_root: dict[str, Any]) -> str:
+    linkage = strategic_root.get("skax_response_linkage") or {}
+    records = _linkage_area_records(linkage, field="matched_skax_areas")
+    reasons = _unique_nonempty(
+        _first_text(record.get("why_relevant_to_issue"), record.get("reason")) for record in records
+    )
+    if reasons:
+        return reasons[0]
+    return ""
+
+
+def _has_specific_skax_linkage(strategic_root: dict[str, Any]) -> bool:
+    linkage = strategic_root.get("skax_response_linkage") or {}
+    if not isinstance(linkage, dict):
+        return False
+    if _linkage_area_records(linkage, field="matched_skax_areas"):
+        return True
+    mode = str(linkage.get("response_mode") or "").strip()
+    return mode == "profile_based_action"
+
+
+def _linkage_area_records(linkage: Any, *, field: str) -> list[dict[str, Any]]:
+    data = linkage if isinstance(linkage, dict) else {}
+    records: list[dict[str, Any]] = []
+    for item in _list_value(data.get(field)):
+        if isinstance(item, dict):
+            records.append(item)
+    return records
+
+
+def _linkage_priority_phrase(records: list[dict[str, Any]], *, max_terms: int = 3) -> str:
+    products = _unique_nonempty(
+        term
+        for record in records
+        for term in _linkage_record_terms(
+            record,
+            "matched_products_or_services",
+            "products_or_services",
+            "product_or_service",
+            "services",
+        )
+    )
+    if products:
+        return _join_context_terms(products[:max_terms])
+
+    capabilities = _unique_nonempty(
+        term
+        for record in records
+        for term in _linkage_record_terms(
+            record,
+            "matched_capabilities",
+            "profile_capability",
+            "capability",
+            "capabilities",
+            "core_capabilities",
+        )
+    )
+    if capabilities:
+        return _join_context_terms(capabilities[:max_terms])
+
+    business_areas = _unique_nonempty(
+        _first_text(
+            record.get("business_area"),
+            record.get("profile_area_name"),
+            record.get("name"),
+        )
+        for record in records
+        if _record_specificity_level(record) == "business_area"
+        and _business_area_record_has_issue_overlap(record)
+    )
+    if business_areas:
+        return _join_context_terms(business_areas[:max_terms])
+
+    business_lines = _unique_nonempty(record.get("business_line") for record in records)
+    return _join_context_terms(business_lines[:1])
+
+
+def _linkage_record_terms(record: dict[str, Any], *fields: str) -> list[str]:
+    terms: list[str] = []
+    for field in fields:
+        value = record.get(field)
+        if isinstance(value, str) and "," in value:
+            terms.extend(part.strip() for part in value.split(",") if part.strip())
+        else:
+            terms.extend(_list_string(value))
+    return _unique_nonempty(terms)
+
+
+def _record_specificity_level(record: dict[str, Any]) -> str:
+    level = str(record.get("specificity_level") or "").strip().casefold()
+    if level:
+        return level
+    if _linkage_record_terms(record, "matched_products_or_services", "products_or_services"):
+        return "product_or_service"
+    if _linkage_record_terms(record, "matched_capabilities", "profile_capability", "capability"):
+        return "core_capability"
+    if _first_text(
+        record.get("business_area"),
+        record.get("profile_area_name"),
+        record.get("name"),
+    ):
+        return "business_area"
+    if record.get("business_line"):
+        return "business_line"
+    return "profile_context"
+
+
+def _business_area_record_has_issue_overlap(record: dict[str, Any]) -> bool:
+    area = _first_text(
+        record.get("business_area"),
+        record.get("profile_area_name"),
+        record.get("name"),
+    )
+    if not area:
+        return False
+    matched_terms = {
+        term
+        for raw_term in _linkage_record_terms(record, "matched_issue_terms", "matched_terms")
+        for term in _display_token_pieces(raw_term)
+        if not _low_specificity_display_match_term(term)
+    }
+    area_terms = {
+        term
+        for raw_term in re.findall(
+            r"[가-힣A-Za-z0-9][가-힣A-Za-z0-9&+·_-]{1,}",
+            area,
+        )
+        for term in _display_token_pieces(raw_term)
+        if not _low_specificity_display_match_term(term)
+    }
+    return bool(area_terms & matched_terms)
+
+
+def _display_token_pieces(text: str) -> list[str]:
+    pieces: list[str] = []
+    for piece in re.split(r"[·/&+_\-\s]+", str(text or "")):
+        normalized = _normalize_display_token(piece)
+        if normalized and len(normalized) >= 2:
+            pieces.append(normalized)
+    return pieces
+
+
+def _low_specificity_display_match_term(term: str) -> bool:
+    return term in {
+        "서비스",
+        "사업",
+        "지원",
+        "기업",
+        "관련",
+        "기반",
+        "summary",
+        "역량",
+        "도입",
+        "제공",
+        "확보",
+    }
+
+
+def _normalize_display_token(text: str) -> str:
+    token = re.sub(r"\s+", "", str(text or "")).strip(" ,.")
+    if len(token) > 3:
+        token = re.sub(r"(으로|에서|에게|과|와|은|는|이|가|을|를|의)$", "", token)
+    return token.casefold() if token.isascii() else token
+
+
+def _linkage_has_concrete_profile_detail(records: list[dict[str, Any]]) -> bool:
+    for record in records:
+        if _linkage_record_terms(
+            record,
+            "matched_products_or_services",
+            "products_or_services",
+            "product_or_service",
+        ):
+            return True
+        if _linkage_record_terms(
+            record,
+            "matched_capabilities",
+            "profile_capability",
+            "capability",
+            "capabilities",
+        ):
+            return True
+    return False
+
+
+def _profile_specificity_note(strategic_root: dict[str, Any]) -> str:
+    linkage = strategic_root.get("profile_linkage") or {}
+    records = _linkage_area_records(linkage, field="matched_profile_areas")
+    if records and not _linkage_has_concrete_profile_detail(records):
+        return (
+            " 다만 현재 확인되는 사업 정보는 상위 사업명 수준이므로, 세부 "
+            "서비스·역량 또는 수행 범위는 후속 단계에서 확인되어야 합니다."
+        )
+    return ""
+
+
+def _skax_specificity_note(strategic_root: dict[str, Any]) -> str:
+    linkage = strategic_root.get("skax_response_linkage") or {}
+    records = _linkage_area_records(linkage, field="matched_skax_areas")
+    if records and not _linkage_has_concrete_profile_detail(records):
+        return (
+            " 다만 현재 확인되는 SK AX의 관련 사업은 상위 사업명 수준이므로, "
+            "세부 수행 역량은 별도로 확인해야 합니다."
+        )
+    return ""
+
+
+def _unique_nonempty(values: Any) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = re.sub(r"\s+", " ", str(value or "")).strip(" ,.")
+        key = text.casefold()
+        if text and key not in seen:
+            out.append(text)
+            seen.add(key)
+    return out
+
+
+def _join_context_terms(values: list[str]) -> str:
+    terms = _unique_nonempty(values)
+    return "·".join(terms[:4])
+
+
+def _default_strategy_criteria_phrase(summary: dict[str, Any]) -> str:
+    return ", ".join(_event_frame_criteria(summary))
+
+
+def _generic_criteria_phrase(text: str) -> bool:
+    value = re.sub(r"\s+", " ", str(text or "")).strip(" .,")
+    if not value:
+        return False
+    if len(value) <= 4:
+        return True
+    return value in {
+        "리스크",
+        "범위",
+        "책임",
+        "일정",
+        "검증",
+        "운영 조건",
+        "모니터링",
+    }
+
+
+def _fact_based_competition_criteria_phrase(summary: dict[str, Any]) -> str:
+    facts = " ".join(
+        [
+            " ".join(_list_string(summary.get("fact_summary"))),
+            " ".join(
+                _first_text(item.get("fact"))
+                for item in _list_value(summary.get("consolidated_facts"))
+                if isinstance(item, dict)
+            ),
+        ]
+    )
+    frame = _event_frame(summary)
+    criteria = _event_frame_criteria(summary)
+    if re.search(r"GPU|반도체|서버|컴퓨팅|데이터센터|용량|\d[\d,]*\s*장", facts, re.I):
+        criteria = _merge_front(criteria, ["자원 확보 규모", "구축 범위"])
+    if re.search(r"서비스\s*개시|오픈|제공\s*개시|상용화", facts):
+        criteria = _merge_front(criteria, ["서비스 개시 일정"])
+    if re.search(r"협약|컨소시엄|SPC|주주간", facts, re.I):
+        criteria = _merge_front(criteria, ["협약·운영 구조"])
+    if re.search(r"기간|20\d{2}년|월\s*\d{1,2}일", facts):
+        criteria = _merge_front(criteria, ["일정 조건"])
+    if frame in {"contract", "performance"} and re.search(r"규모|금액|매출액|원", facts):
+        criteria = _merge_front(criteria, ["사업 규모"])
+    return ", ".join(dict.fromkeys(criteria[:5]))
+
+
+def _event_frame(summary: dict[str, Any]) -> str:
+    event_type = str(
+        summary.get("cluster_event_type") or summary.get("event_type") or ""
+    ).casefold()
+    facts = _summary_fact_text(summary)
+    if event_type in {"earnings", "stock_market", "analyst_report"}:
+        return "performance"
+    if event_type in {"hiring", "organization", "personnel"}:
+        return "organization"
+    if event_type in {"regulation", "risk"}:
+        return "regulation_risk"
+    if event_type in {"partnership", "mou"} or re.search(
+        r"MOU|협력|협약|컨소시엄|SPC|공동\s*추진",
+        facts,
+        re.I,
+    ):
+        if re.search(r"선정|사업자|구축|GPU|인프라|센터", facts, re.I):
+            return "selection_build"
+        return "partnership"
+    if event_type in {"contract", "investment"} or re.search(
+        r"계약|수주|공급|투자|지분",
+        facts,
+    ):
+        if re.search(r"전환|현대화|시스템|단말|플랫폼|마이그레이션", facts):
+            return "contract_transition"
+        return "contract"
+    if event_type in {"launch", "technology_update", "tech"} or re.search(
+        r"출시|공개|서비스\s*개시|오픈|상용화",
+        facts,
+    ):
+        return "launch"
+    if re.search(r"선정|사업자|구축|운영|운용|GPU|인프라|센터", facts, re.I):
+        return "selection_build"
+    return "general"
+
+
+def _event_frame_criteria(summary: dict[str, Any]) -> list[str]:
+    frame = _event_frame(summary)
+    if frame == "selection_build":
+        return ["자원 확보 규모", "구축 범위", "운영 책임", "일정 조건"]
+    if frame == "contract_transition":
+        return ["계약 범위", "대상 시스템", "전환 리스크", "운영 안정화"]
+    if frame == "contract":
+        return ["계약 범위", "상대방 역할", "수행 기간", "사업 규모"]
+    if frame == "partnership":
+        return ["역할 분담", "공동 추진 범위", "후속 협약", "책임 구조"]
+    if frame == "launch":
+        return ["적용 대상", "기능 범위", "고객군", "확산 조건"]
+    if frame == "performance":
+        return ["실적 기여 사업", "수익성", "지속성", "재무 영향 범위"]
+    if frame == "organization":
+        return ["집중 역량", "실행 준비", "조직 확대", "후속 채용·운영 계획"]
+    if frame == "regulation_risk":
+        return ["영향받는 사업영역", "대응 책임", "리스크 관리", "후속 규제 변화"]
+    return ["적용 범위", "운영 책임", "일정 조건", "검증 기준"]
+
+
+def _merge_front(base: list[str], additions: list[str]) -> list[str]:
+    return list(dict.fromkeys([*additions, *base]))
+
+
+def _issue_execution_focus_phrase(summary: dict[str, Any]) -> str:
+    criteria = _fact_based_competition_criteria_phrase(summary)
+    if criteria:
+        return criteria
+    subject = _display_subject_from_summary(summary)
+    return f"{subject}의 실제 수행 조건"
+
+
+def _profile_connection_execution_phrase(summary: dict[str, Any]) -> str:
+    frame = _event_frame(summary)
+    if frame == "selection_build":
+        return "자원 확보와 구축 일정이 포함된 대형 인프라 과제"
+    if frame == "contract_transition":
+        return "계약 범위와 대상 시스템 전환 조건이 포함된 실행 과제"
+    if frame == "contract":
+        return "계약 범위와 수행 기간이 명시된 사업 과제"
+    if frame == "partnership":
+        return "역할 분담과 공동 추진 범위가 드러나는 협력 과제"
+    if frame == "launch":
+        return "적용 대상과 기능 범위가 공개되는 서비스 과제"
+    if frame == "performance":
+        return "실적 기여 사업과 지속성을 확인해야 하는 경영 신호"
+    if frame == "organization":
+        return "집중 역량과 실행 준비 수준을 확인해야 하는 조직 신호"
+    if frame == "regulation_risk":
+        return "영향받는 사업영역과 대응 책임을 확인해야 하는 리스크 신호"
+    return f"{_display_subject_from_summary(summary)}의 실제 수행 조건"
+
+
+def _event_frame_followup_focus(summary: dict[str, Any], *, peer_name: str) -> str:
+    frame = _event_frame(summary)
+    if frame == "selection_build":
+        return (
+            f"{peer_name}가 선정 이후 어떤 구축·운영 범위와 서비스 책임을 실제로 맡는지 확인하는 데"
+        )
+    if frame == "contract_transition":
+        return (
+            f"{peer_name}가 계약 이후 어떤 대상 시스템, 전환 범위, 운영 안정화 "
+            "책임을 맡는지 확인하는 데"
+        )
+    if frame == "contract":
+        return (
+            f"{peer_name}의 계약상 역할, 수행 기간, 사업 규모가 후속 실행에서 "
+            "어떻게 확정되는지 확인하는 데"
+        )
+    if frame == "partnership":
+        return (
+            f"{peer_name}의 역할 분담, 공동 추진 범위, 후속 협약 구조가 어떻게 "
+            "구체화되는지 확인하는 데"
+        )
+    if frame == "launch":
+        return (
+            f"{peer_name}의 적용 대상, 기능 범위, 고객군 확산 조건이 실제로 "
+            "어떻게 나타나는지 확인하는 데"
+        )
+    if frame == "performance":
+        return f"{peer_name}의 실적 기여 사업, 수익성, 지속성이 후속 지표에서 확인되는지 보는 데"
+    if frame == "organization":
+        return (
+            f"{peer_name}의 집중 역량, 실행 준비, 조직 확대가 후속 운영으로 이어지는지 확인하는 데"
+        )
+    if frame == "regulation_risk":
+        return (
+            f"{peer_name}의 영향받는 사업영역, 대응 책임, 리스크 관리 범위가 "
+            "구체화되는지 확인하는 데"
+        )
+    return f"{peer_name}의 후속 수행 범위와 책임이 어떻게 확정되는지 확인하는 데"
+
+
+def _event_frame_competition_variable(summary: dict[str, Any], *, peer_name: str) -> str:
+    frame = _event_frame(summary)
+    if frame == "selection_build":
+        return f"{peer_name}의 구축·운영 범위와 서비스 책임"
+    if frame == "contract_transition":
+        return f"{peer_name}의 대상 시스템, 전환 범위, 운영 안정화 책임"
+    if frame == "contract":
+        return f"{peer_name}의 계약상 역할, 수행 기간, 사업 범위"
+    if frame == "partnership":
+        return f"{peer_name}의 역할 분담, 공동 추진 범위, 후속 협약 구조"
+    if frame == "launch":
+        return f"{peer_name}의 적용 대상, 기능 범위, 고객군 확산 조건"
+    if frame == "performance":
+        return f"{peer_name}의 실적 기여 사업, 수익성, 지속성"
+    if frame == "organization":
+        return f"{peer_name}의 집중 역량, 실행 준비, 조직 확대 범위"
+    if frame == "regulation_risk":
+        return f"{peer_name}의 영향받는 사업영역, 대응 책임, 리스크 관리 범위"
+    return f"{peer_name}의 후속 수행 범위와 책임"
+
+
+def _event_frame_action_monitoring_scope(summary: dict[str, Any]) -> str:
+    frame = _event_frame(summary)
+    if frame == "selection_build":
+        return "사업자별 구축·운영 책임 범위와 추가 협약 구조"
+    if frame == "contract_transition":
+        return "대상 시스템별 전환 범위, 운영 안정화 책임, 전환 리스크"
+    if frame == "contract":
+        return "계약상 역할, 수행 범위, 책임 구조"
+    if frame == "partnership":
+        return "역할 분담, 공동 추진 범위, 후속 협약 구조"
+    if frame == "launch":
+        return "적용 대상, 기능 범위, 고객군 확산 조건"
+    if frame == "performance":
+        return "실적 기여 사업, 수익성, 지속성"
+    if frame == "organization":
+        return "집중 역량, 실행 준비 수준, 조직 확대 범위"
+    if frame == "regulation_risk":
+        return "영향받는 사업영역, 대응 책임, 리스크 관리 범위"
+    return "후속 수행 범위와 책임 구조"
+
+
+def _monitoring_phrase_from_implication(implication: dict[str, Any]) -> str:
+    watch_points = _list_string(implication.get("watch_points"))
+    if watch_points:
+        cleaned = [phrase for item in watch_points if (phrase := _monitoring_phrase_cleanup(item))]
+        if cleaned:
+            return ", ".join(cleaned[:2])
+    skax = implication.get("skax_implication") or {}
+    text = " ".join(_list_string(skax.get("recommended_actions"))) if isinstance(skax, dict) else ""
+    candidates: list[str] = []
+    for term in (
+        "사업자 선정",
+        "협약",
+        "서비스 개시",
+        "구축 완료",
+        "운영 책임",
+        "추가 계약",
+        "후속 일정",
+    ):
+        if term in text:
+            candidates.append(term)
+    if candidates:
+        return "·".join(dict.fromkeys(candidates[:4])) + " 여부"
+    return "후속 역할 공개와 실제 수행 범위"
+
+
+def _monitoring_phrase_from_strategic_root(strategic_root: dict[str, Any]) -> str:
+    linkage = strategic_root.get("skax_response_linkage") or {}
+    if not isinstance(linkage, dict):
+        return ""
+    cleaned = [
+        phrase
+        for item in _list_string(linkage.get("monitoring_points"))
+        if (phrase := _monitoring_phrase_cleanup(item))
+    ]
+    return ", ".join(cleaned[:2])
+
+
+def _fact_based_monitoring_phrase(summary: dict[str, Any]) -> str:
+    facts = _summary_fact_text(summary)
+    candidates: list[str] = []
+    if re.search(r"GPU|반도체|서버|컴퓨팅", facts, re.I) and re.search(
+        r"입고|구축|완료|확보",
+        facts,
+    ):
+        candidates.append("GPU 입고·구축 완료 시점")
+    for service_name in _service_start_names(facts):
+        candidates.append(f"{service_name} 서비스 개시 일정")
+    if not any("서비스 개시" in item for item in candidates) and re.search(
+        r"서비스\s*(?:개시|시작|오픈)|상용화",
+        facts,
+    ):
+        candidates.append("서비스 개시 일정")
+    if re.search(r"협약|계약|컨소시엄|SPC|주주간", facts, re.I):
+        candidates.append("협약·계약 구조")
+    if re.search(r"운영|운용|운용지원|운영지원|책임", facts):
+        candidates.append("운영 책임 범위")
+    return ", ".join(dict.fromkeys(candidates[:4]))
+
+
+def _service_start_names(text: str) -> list[str]:
+    names: list[str] = []
+    for match in re.finditer(
+        r"([A-Za-z0-9가-힣][A-Za-z0-9가-힣·+_-]{1,30})\s*서비스(?:를|가|는|의)?\s*"
+        r"(?:[가-힣A-Za-z0-9\s]{0,30})?(?:개시|시작|오픈|상용화)",
+        text,
+    ):
+        name = match.group(1).strip(" ,.")
+        if name and name not in names:
+            names.append(name)
+    return names[:3]
+
+
+def _normalize_monitoring_phrase_for_issue(summary: dict[str, Any], phrase: str) -> str:
+    value = re.sub(r"\s+", " ", str(phrase or "")).strip(" ,.")
+    if not value:
+        return value
+    facts = _summary_fact_text(summary)
+    if re.search(r"최종\s*선정|사업자(?:로)?\s*선정|참여\s*기업(?:으로)?\s*선정", facts):
+        value = re.sub(r"후속\s*선정[·,\s/]*", "후속 ", value)
+        value = re.sub(r"사업자\s*선정[·,\s/]*", "", value)
+    return re.sub(r"\s+", " ", value).strip(" ,.")
+
+
+def _monitoring_phrase_cleanup(text: str) -> str:
+    out = _clean_card_editorial_text(text).rstrip(".。!?！？ ")
+    out = re.sub(r"\s*(확인|모니터링)(합니다|해야\s*합니다|한다|할\s*필요가\s*있습니다)$", "", out)
+    out = re.sub(r"구체화되는지$", "구체화 여부", out)
+    out = re.sub(r"확인되는지$", "확인 여부", out)
+    out = re.sub(r"공개되는지$", "공개 여부", out)
+    out = re.sub(r"되는지$", " 여부", out)
+    out = re.sub(r"(구체화|확인|공개)여부", r"\1 여부", out)
+    out = re.sub(r"(.+?)(이|가)\s+구체화 여부$", r"\1 구체화 여부", out)
+    out = re.sub(r"(.+?)(이|가)\s+원문 근거로 확인 여부$", r"\1의 원문 근거 확인 여부", out)
+    out = re.sub(r"\s+", " ", out).strip(" ,.")
+    return out
+
+
+def _summary_fact_text(summary: dict[str, Any]) -> str:
+    return " ".join(
+        [
+            str(summary.get("headline") or ""),
+            str(summary.get("main_event") or ""),
+            str(summary.get("one_line_summary") or ""),
+            " ".join(_list_string(summary.get("fact_summary"))),
+            " ".join(_list_string(summary.get("summary_lines"))),
+            " ".join(
+                _first_text(item.get("fact"))
+                for item in _list_value(summary.get("consolidated_facts"))
+                if isinstance(item, dict)
+            ),
+        ]
+    )
+
+
+def _compact_repeated_subject_in_phrase(phrase: str, subject: str) -> str:
+    value = re.sub(r"\s+", " ", str(phrase or "")).strip()
+    topic = re.sub(r"\s+", " ", str(subject or "")).strip()
+    if not value or not topic:
+        return value
+    if not value.startswith(topic):
+        return value
+    rest = value[len(topic) :].lstrip()
+    if not rest:
+        return "해당 사업"
+    if rest.startswith("의"):
+        return f"해당 사업{rest}"
+    if rest[:1] in {"은", "는", "이", "가", "을", "를", "과", "와"}:
+        return f"해당 사업{rest}"
+    return f"해당 사업 {rest}"
+
+
+def _with_particle(text: str, consonant_particle: str, vowel_particle: str) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return value
+    return f"{value}{consonant_particle if _has_final_consonant(value[-1]) else vowel_particle}"
+
+
+def _has_final_consonant(char: str) -> bool:
+    value = str(char or "")[:1]
+    if not value:
+        return False
+    code = ord(value)
+    if 0xAC00 <= code <= 0xD7A3:
+        return (code - 0xAC00) % 28 != 0
+    return False
+
+
+def _ensure_card_sentence(text: str) -> str:
+    sentence = _clean_card_editorial_text(text)
+    if not sentence:
+        return ""
+    return sentence if sentence.endswith((".", "다.", "요.", "임.")) else f"{sentence}."
+
+
+def _clean_card_editorial_text(text: str) -> str:
+    out = re.sub(r"\s+", " ", str(text or "")).strip()
+    out = re.sub(r"^함께\s+", "", out)
+    out = re.sub(r"\s+함께\s+(?=\d+[조억만천]|\d+장|[A-Z0-9]+ 서비스)", " ", out)
+    out = re.sub(r"피어\s*프로필에서는\s*", "현재 확인되는 피어 사업 정보상 ", out)
+    out = re.sub(r"SK\s*AX\s*프로필에서는\s*", "현재 확인되는 SK AX 사업 정보상 ", out)
+    return out.strip()
+
+
+def _profile_phrase_from_peer_copy(text: str) -> str:
+    source = re.sub(r"\s+", " ", str(text or "")).strip()
+    patterns = (
+        r"프로필(?:상|에서는)?\s*([가-힣A-Za-z0-9&·/+_\-\s]{2,70}?)(?:가|이)\s",
+        r"피어의\s*([가-힣A-Za-z0-9&·/+_\-\s]{2,70}?)(?:\s*접점|과|와)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, source)
+        if not match:
+            continue
+        phrase = re.sub(r"\s+", " ", match.group(1)).strip(" ,.")
+        phrase = re.sub(r"^(에서는|상)\s*", "", phrase)
+        if phrase and not re.search(r"^(이번|현재|따라서|확인된)$", phrase):
+            return phrase
+    return ""
+
+
+def _criteria_phrase_from_strategy(
+    *,
+    analysis: dict[str, Any],
+    implication: dict[str, Any],
+) -> str:
+    text = " ".join(
+        [
+            str(analysis.get("market_signal") or ""),
+            str(analysis.get("impact_reason") or ""),
+            " ".join(_list_string(analysis.get("strategic_meaning"))[:5]),
+            " ".join(
+                _list_string(
+                    (implication.get("skax_implication") or {}).get("recommended_actions")
+                )[:5]
+                if isinstance(implication.get("skax_implication"), dict)
+                else []
+            ),
+        ]
+    )
+    criteria = []
+    for term in (
+        "구축 범위",
+        "운영 책임",
+        "운영 체계",
+        "단계별 일정",
+        "일정 조건",
+        "용량 기준",
+        "장애 대응",
+        "보안·권한 통제",
+        "검증 기준",
+        "리스크",
+        "후속 모니터링",
+    ):
+        if term in text and term not in criteria:
+            criteria.append(term)
+        if len(criteria) >= 4:
+            break
+    return ", ".join(criteria)
+
+
+def _select_display_items(
+    candidates: list[dict[str, Any]],
+    *,
+    sentence_grounding: dict[str, Any] | None,
+    summary: dict[str, Any] | None = None,
+    strategic_root: dict[str, Any] | None = None,
+    preferred: int = _DISPLAY_ITEM_PREFERRED,
+    max_items: int = _DISPLAY_ITEM_MAX,
+    min_items: int = _DISPLAY_ITEM_MIN,
+    section_type: str = "",
+) -> list[str]:
+    del preferred
+    ranked = sorted(
+        candidates,
+        key=lambda item: _optional_int(item.get("priority")) or 0,
+        reverse=True,
+    )
+    selected: list[str] = []
+    seen: set[str] = set()
+    seen_roles: set[str] = set()
+    for candidate in ranked:
+        text = _clean_display_section_text(
+            candidate.get("text"),
+            section_type=section_type,
+        )
+        if not text:
+            continue
+        if _display_internal_term_violation(text):
+            continue
+        semantic_role = str(candidate.get("semantic_role") or "").strip()
+        path = str(candidate.get("path") or "")
+        if section_type == "insight" and _is_summary_repeat_insight(text, summary or {}):
+            is_editorial_peer_meaning = (
+                semantic_role == "peer_business_meaning" and path.startswith("card_editorial.")
+            )
+            if not is_editorial_peer_meaning:
+                continue
+        if not candidate.get("allow_without_grounding") and _is_internal_analysis_copy(text):
+            continue
+        if semantic_role and semantic_role in seen_roles:
+            continue
+        if _section_role_violation(section_type, text):
+            continue
+        if candidate.get(
+            "allow_without_grounding"
+        ) and not _editorial_candidate_has_minimum_grounding(
+            text,
+            summary=summary or {},
+            strategic_root=strategic_root or {},
+            section_type=section_type,
+        ):
+            continue
+        if not candidate.get("allow_without_grounding") and not _is_grounded_display_candidate(
+            text,
+            path,
+            sentence_grounding or {},
+            allow_watch_point=bool(candidate.get("allow_watch_point")),
+        ):
+            continue
+        key = _detail_line_key(text)
+        if not key or key in seen or _is_near_duplicate_detail(text, selected):
+            continue
+        selected.append(text)
+        seen.add(key)
+        if semantic_role:
+            seen_roles.add(semantic_role)
+        if len(selected) >= max_items:
+            break
+    return selected if len(selected) >= min_items else []
+
+
+def _is_internal_analysis_copy(text: str) -> bool:
+    return bool(
+        re.search(
+            r"피어\s*프로필|프로필의|프로필상|맥락이|연결되는\s*신호|"
+            r"관찰할\s*수\s*있|해석할\s*수\s*있|변화\s*신호|"
+            r"현재\s*사건의\s*구축\s*범위와\s*추진\s*구조",
+            str(text or ""),
+        )
+    )
+
+
+def _is_summary_repeat_insight(text: str, summary: dict[str, Any]) -> bool:
+    line = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not line:
+        return False
+    first_sentence = re.split(r"(?<=[.!?。！？])\s+", line, maxsplit=1)[0]
+    summary_lines = _literal_summary_lines(summary)
+    for summary_line in summary_lines:
+        if _summary_lines_too_similar(first_sentence, summary_line):
+            return True
+    return False
+
+
+def _clean_display_section_text(value: Any, *, section_type: str) -> str:
+    text = _clean_card_editorial_text(value)
+    replacements = {
+        r"현재\s*입력에서": "현재 확인된 근거상",
+        r"현재\s*입력": "현재 확인된 근거",
+        r"프로필\s*근거": "현재 확인되는 사업 정보",
+        r"프로필\s*접점": "관련 사업 기반",
+        r"프로필상": "현재 확인되는 사업 정보상",
+        r"피어\s*프로필": "피어 사업 정보",
+        r"SK\s*AX\s*프로필": "SK AX 사업 정보",
+        r"관찰\s*지점": "후속 확인이 필요한 신호",
+        r"해석하는\s*것이\s*안전합니다": "단정하기보다 후속 확인이 필요합니다",
+        r"제안서": "구조화 자료",
+        r"PoC": "사전 검증",
+        r"고객에게\s*제시": "확인 가능하게 정리",
+        r"linkage_level|business_novelty_status|profile_based|event_based": "",
+    }
+    for pattern, replacement in replacements.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    text = _fix_display_particle_spacing(text)
+    text = re.sub(r"\s+", " ", text).strip(" ,.")
+    if section_type == "insight":
+        text = re.sub(
+            r"\bSK\s*AX\b[^.。!?！？]*(?:점검|보완|대응|모니터링)[^.。!?！？]*[.。!?！？]?",
+            "",
+            text,
+        )
+    return _ensure_card_sentence(text.strip())
+
+
+def _fix_display_particle_spacing(text: str) -> str:
+    def replace_confirmed(match: re.Match[str]) -> str:
+        term = match.group(1)
+        particle = "이" if _has_final_consonant(term[-1]) else "가"
+        return f"{term}{particle} 확인"
+
+    return re.sub(
+        r"([가-힣A-Za-z0-9&·+_-]{2,})[이가]\s+확인",
+        replace_confirmed,
+        str(text or ""),
+    )
+
+
+def _section_role_violation(section_type: str, text: str) -> bool:
+    value = str(text or "")
+    if section_type == "insight":
+        return bool(
+            re.search(
+                r"SK\s*AX|우리\s*회사|자사|내부적으로|점검해야|구분해야|보완해야|"
+                r"대응해야|모니터링해야|확인해야|맞춰야",
+                value,
+            )
+        )
+    if section_type == "action":
+        return not bool(
+            re.search(
+                r"SK\s*AX|자사|내부적으로|점검|보완|구분|대응|모니터링|비교",
+                value,
+            )
+        )
+    return False
+
+
+def _display_internal_term_violation(text: str) -> bool:
+    return bool(
+        re.search(
+            r"프로필\s*근거|프로필\s*접점|profile|linkage|현재\s*입력에서|matched_|"
+            r"business_novelty_status",
+            str(text or ""),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _editorial_candidate_has_minimum_grounding(
+    text: str,
+    *,
+    summary: dict[str, Any],
+    strategic_root: dict[str, Any],
+    section_type: str,
+) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    issue_tokens = _grounding_tokens(_summary_fact_text(summary))
+    issue_overlap = not issue_tokens or _has_token_overlap(value, issue_tokens)
+    if section_type == "insight":
+        profile_tokens = _grounding_tokens(_linkage_text(strategic_root.get("profile_linkage")))
+        if not issue_overlap and not _has_token_overlap(value, profile_tokens):
+            return False
+        if profile_tokens and _has_token_overlap(value, profile_tokens):
+            return True
+        return bool(re.search(r"관찰\s*신호|변화\s*신호|후속|프로필|기존\s*사업", value))
+    if section_type == "action":
+        if not re.search(r"SK\s*AX|자사", value):
+            return False
+        skax_tokens = _grounding_tokens(_linkage_text(strategic_root.get("skax_response_linkage")))
+        if not issue_overlap and not _has_token_overlap(value, skax_tokens):
+            return False
+        if skax_tokens and _has_token_overlap(value, skax_tokens):
+            return True
+        return bool(re.search(r"현재\s*입력|보완|모니터링|내부|점검|구분", value))
+    return True
+
+
+def _has_token_overlap(text: str, tokens: set[str]) -> bool:
+    if not tokens:
+        return True
+    return bool(_grounding_tokens(text) & tokens)
+
+
+def _grounding_tokens(text: str) -> set[str]:
+    tokens = _summary_similarity_tokens(str(text or ""))
+    return {token for token in tokens if len(token) >= 2}
+
+
+def _linkage_text(value: Any) -> str:
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key, item in value.items():
+            if key in {"matched_profile_areas", "matched_skax_areas"}:
+                for record in _list_value(item):
+                    if isinstance(record, dict):
+                        parts.extend(str(v) for v in record.values() if v)
+            elif isinstance(item, (str, int, float)):
+                parts.append(str(item))
+            elif isinstance(item, list):
+                parts.extend(str(v) for v in item if isinstance(v, (str, int, float)))
+        return " ".join(parts)
+    if isinstance(value, list):
+        return " ".join(_linkage_text(item) for item in value)
+    return str(value or "")
+
+
+def _is_grounded_display_candidate(
+    text: str,
+    path: str,
+    sentence_grounding: dict[str, Any],
+    *,
+    allow_watch_point: bool = False,
+) -> bool:
+    del text
+    entries = [
+        entry for entry in _list_value(sentence_grounding.get("entries")) if isinstance(entry, dict)
+    ]
+    if not entries:
+        return True
+    matched = [
+        entry for entry in entries if _grounding_path_matches(str(entry.get("path") or ""), path)
+    ]
+    if not matched:
+        return allow_watch_point
+    if allow_watch_point:
+        return True
+    return any(
+        str(entry.get("grounding_type") or "") in {"fact", "profile", "fact+profile"}
+        and not entry.get("needs_review")
+        for entry in matched
+    )
+
+
+def _grounding_path_matches(entry_path: str, candidate_path: str) -> bool:
+    if not entry_path or not candidate_path:
+        return False
+    return (
+        entry_path == candidate_path
+        or entry_path.startswith(f"{candidate_path}.")
+        or candidate_path.startswith(f"{entry_path}.")
+    )
+
+
 def _first_text(*values: Any) -> str:
     for value in values:
         if value is None:
@@ -1293,7 +2958,7 @@ def _statement_to_check_subject(text: str) -> str:
 def _looks_like_action(text: str) -> bool:
     return bool(
         re.search(
-            r"제안|검토|확인|설명|분리|검증|제시|반영|정리|설계|작성|구성|관리|추적|비교",
+            r"점검|검토|확인|비교|분석|모니터링|관리|추적|정리|구조화|구분|보완|반영",
             text,
         )
     )
@@ -1458,6 +3123,50 @@ def _slides(
                 "image_alt": media_assets[1]["alt"] if len(media_assets) > 1 else None,
                 "evidence_source_indexes": _source_indexes(sources),
                 "layout_type": "implication",
+            }
+        )
+    return slides
+
+
+def _slides_from_display_sections(
+    *,
+    title: str,
+    display_sections: list[dict[str, Any]],
+    sources: list[dict[str, Any]],
+    media_assets: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not display_sections:
+        return []
+    source_indexes = _source_indexes(sources)
+    cover_image = media_assets[0]["url"] if media_assets else _DEFAULT_COVER_IMAGE_URL
+    cover_alt = media_assets[0]["alt"] if media_assets else _DEFAULT_COVER_IMAGE_ALT
+    slides: list[dict[str, Any]] = []
+    for index, section in enumerate(display_sections, start=1):
+        items = _list_string(section.get("items"))
+        if not items:
+            continue
+        section_type = str(section.get("type") or "").strip() or "section"
+        section_title = str(section.get("title") or "").strip() or "카드뉴스"
+        image_url = (
+            cover_image
+            if index == 1
+            else (media_assets[index - 1]["url"] if len(media_assets) >= index else None)
+        )
+        image_alt = (
+            cover_alt
+            if index == 1
+            else (media_assets[index - 1]["alt"] if len(media_assets) >= index else None)
+        )
+        slides.append(
+            {
+                "order": len(slides) + 1,
+                "title": title if section_type == "summary" else section_title,
+                "section_title": section_title,
+                "body": "\n".join(items[:_DISPLAY_ITEM_MAX]) or None,
+                "image_url": image_url,
+                "image_alt": image_alt,
+                "evidence_source_indexes": source_indexes,
+                "layout_type": section_type,
             }
         )
     return slides

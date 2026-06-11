@@ -97,6 +97,34 @@ jobs:
           cache-from: type=registry,ref=${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/axis-ai-cron:buildcache
           cache-to: type=registry,ref=${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/axis-ai-cron:buildcache,mode=max
 
+      # 취약점 스캔 — Harbor 에 스캐너 권한이 없어 CI 에서 수행 (report-only).
+      # 1단계: 리포트만 출력, deploy 는 차단하지 않음 (continue-on-error).
+      # 노이즈 파악 후 CRITICAL gate (exit-code: 1) 전환 검토 — ci-cd-plan.md P8.
+      # 비공식 action 이라 commit SHA pin (setup-kustomize 와 동일 원칙).
+      - name: Trivy scan axis-ai (report-only)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.short }}
+          severity: CRITICAL,HIGH
+          format: table
+          exit-code: "0"
+        env:
+          TRIVY_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          TRIVY_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Trivy scan axis-ai-cron (report-only)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/axis-ai-cron:${{ steps.sha.outputs.short }}
+          severity: CRITICAL,HIGH
+          format: table
+          exit-code: "0"
+        env:
+          TRIVY_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          TRIVY_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+
       - name: Setup kustomize
         # 비공식 action 이라 mutable tag (v2) 가 아닌 commit SHA 로 pin —
         # public 전환 후 supply-chain 공격 (tag 재발급으로 악성 코드 주입) 방지.

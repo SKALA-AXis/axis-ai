@@ -1,6 +1,11 @@
 import asyncio
+import base64
+import binascii
+import hashlib
 import json
 import logging
+import os
+import re
 import uuid
 from collections.abc import Iterable, Mapping
 from contextlib import asynccontextmanager
@@ -12,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from src.api.briefing_schemas import BriefingGenerateRequest, BriefingGenerateResponse
-from src.api.chat_schemas import ChatTurnRequest, ChatTurnResponse
+from src.api.chat_schemas import ChatPdfRequest, ChatTurnRequest, ChatTurnResponse
 from src.api.global_trends_schemas import GlobalTrendsRequest, GlobalTrendsResponse
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
 from src.api.link_verification_schemas import LinkVerificationRequest, LinkVerificationResponse
@@ -38,6 +43,8 @@ KST = ZoneInfo("Asia/Seoul")
 SCHEDULED_PREPROCESS_LIMIT = 5000
 # Mixer SSE keepalive 주기(초) — nginx/ALB idle timeout(기본 60s)보다 충분히 짧게.
 _MIXER_SSE_HEARTBEAT_SEC = 10
+_CHAT_PDF_MAX_BYTES = 15 * 1024 * 1024
+_CHAT_PDF_MAX_TEXT_CHARS = 80_000
 
 
 def _count_result_items(results: Iterable[Mapping[str, object]], key: str) -> int:
@@ -553,6 +560,448 @@ async def chat(request: ChatTurnRequest) -> ChatTurnResponse:
     return ChatTurnResponse.model_validate(result)
 
 
+@app.post("/chat/pdf", response_model=ChatTurnResponse)
+async def chat_pdf(request: ChatPdfRequest) -> ChatTurnResponse:
+    """Analyze a user-uploaded PDF inside the floating assistant flow."""
+
+    try:
+        pdf_bytes = base64.b64decode(request.pdf_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="pdf_base64 is not valid base64") from exc
+
+    if len(pdf_bytes) > _CHAT_PDF_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="PDF file is too large")
+    if not _looks_like_pdf(request.file_name, request.content_type, pdf_bytes):
+        raise HTTPException(status_code=400, detail="Only PDF attachments are supported")
+
+    from src.crawler.parsers.pdf_payload import extract_pdf_payload
+
+    pdf_payload = extract_pdf_payload(
+        pdf_bytes,
+        max_text_chars=_CHAT_PDF_MAX_TEXT_CHARS,
+    )
+    file_hash = hashlib.sha256(pdf_bytes).hexdigest()
+    log.info(
+        "Assistant PDF chat 요청 | conversation=%s file=%s bytes=%s text_chars=%s",
+        request.request.conversation_id,
+        request.file_name,
+        len(pdf_bytes),
+        len(str(pdf_payload.get("text") or "")),
+    )
+    result = _build_pdf_chat_response(
+        request.request,
+        file_name=request.file_name,
+        content_type=request.content_type or "application/pdf",
+        file_hash=file_hash,
+        pdf_payload=pdf_payload,
+    )
+    return ChatTurnResponse.model_validate(result)
+
+
+def _looks_like_pdf(file_name: str, content_type: str | None, pdf_bytes: bytes) -> bool:
+    name_ok = (file_name or "").lower().endswith(".pdf")
+    type_ok = (content_type or "").lower() in {"application/pdf", "application/x-pdf"}
+    bytes_ok = pdf_bytes.startswith(b"%PDF")
+    return bytes_ok or (name_ok and type_ok)
+
+
+def _build_pdf_chat_response(
+    request: ChatTurnRequest,
+    *,
+    file_name: str,
+    content_type: str,
+    file_hash: str,
+    pdf_payload: Mapping[str, object],
+) -> dict[str, object]:
+    conversation_id = request.conversation_id or request.session_id or str(uuid.uuid4())
+    message_id = str(uuid.uuid4())
+    text = str(pdf_payload.get("text") or "").strip()
+    page_count = _safe_pdf_int(pdf_payload.get("page_count"))
+    parsed_page_count = _safe_pdf_int(pdf_payload.get("parsed_page_count"))
+    source_id = f"pdf:{file_hash[:16]}"
+
+    if not text:
+        return {
+            "conversation_id": conversation_id,
+            "session_id": conversation_id,
+            "message_id": message_id,
+            "reply": (
+                f"{file_name}에서 분석 가능한 텍스트를 추출하지 못했습니다. "
+                "스캔 이미지형 PDF라면 OCR 가능한 문서로 다시 업로드해 주세요."
+            ),
+            "intent": "pdf_attachment_analysis",
+            "scope": "uploaded_pdf",
+            "answer_blocks": [
+                {
+                    "type": "warning",
+                    "title": "PDF 분석 실패",
+                    "items": [
+                        f"파일명: {file_name}",
+                        f"파싱 전략: {pdf_payload.get('pdf_parse_strategy') or 'unknown'}",
+                    ],
+                }
+            ],
+            "sources": [],
+            "follow_up_suggestions": ["다른 PDF로 다시 분석해줘"],
+            "confidence": 0.15,
+            "blocked": True,
+            "blocked_reason": "pdf_text_extraction_failed",
+            "handoff": None,
+            "provenance": {
+                "retrieval_mode": "uploaded_pdf_text_extraction",
+                "attachment": {
+                    "file_name": file_name,
+                    "content_type": content_type,
+                    "sha256": file_hash,
+                    "page_count": page_count,
+                    "parsed_page_count": parsed_page_count,
+                },
+            },
+        }
+
+    title = _pdf_title(file_name, text)
+    bullets = _pdf_key_points(text, limit=4)
+    evidence = _pdf_evidence_lines(text, limit=4)
+    llm_payload = _try_pdf_llm_payload(
+        request=request,
+        file_name=file_name,
+        text=text,
+        bullets=bullets,
+        evidence=evidence,
+    )
+    if llm_payload:
+        bullets = _string_list_from_payload(
+            llm_payload.get("key_points"), fallback=bullets, limit=4
+        )
+        evidence = _string_list_from_payload(
+            llm_payload.get("evidence"), fallback=evidence, limit=4
+        )
+    question = (request.message or "첨부 PDF를 분석해줘").strip()
+    reply = str(llm_payload.get("reply") or "").strip() if llm_payload else ""
+    if not reply:
+        reply = (
+            f"{file_name}에서 {parsed_page_count or page_count}개 페이지의 텍스트를 확인했습니다. "
+            f"요청 '{question}' 기준으로 핵심은 {bullets[0] if bullets else title} 입니다."
+        )
+    raw_report_draft = llm_payload.get("report_draft") if llm_payload else None
+    report_draft_payload: Mapping[str, object] = (
+        raw_report_draft if isinstance(raw_report_draft, dict) else {}
+    )
+    report_draft = {
+        "title": str(report_draft_payload.get("title") or "").strip() or f"{title} 분석 보고서",
+        "sections": [
+            {
+                "title": "핵심 요약",
+                "body": _section_body(report_draft_payload, "핵심 요약")
+                or "\n".join(f"- {item}" for item in bullets),
+            },
+            {
+                "title": "문서 근거",
+                "body": _section_body(report_draft_payload, "문서 근거")
+                or "\n".join(f"- {item}" for item in evidence),
+            },
+            {
+                "title": "SK AX 관점 검토 포인트",
+                "body": _section_body(report_draft_payload, "SK AX 관점 검토 포인트")
+                or _pdf_skax_review_point(bullets, evidence),
+            },
+        ],
+    }
+    return {
+        "conversation_id": conversation_id,
+        "session_id": conversation_id,
+        "message_id": message_id,
+        "reply": reply,
+        "intent": "pdf_attachment_analysis",
+        "scope": "uploaded_pdf",
+        "answer_blocks": [
+            {"type": "summary", "title": "PDF 핵심 요약", "items": bullets},
+            {"type": "evidence", "title": "문서 근거", "items": evidence},
+        ],
+        "report_draft": report_draft,
+        "sources": [
+            {
+                "type": "pdf_attachment",
+                "id": source_id,
+                "title": file_name,
+                "snippet": _compact_text(text, limit=420),
+                "score": 1.0,
+                "source_name": "uploaded_pdf",
+            }
+        ],
+        "follow_up_suggestions": [
+            "이 PDF를 임원 보고서 형식으로 다시 정리해줘",
+            "문서에서 SK AX가 확인해야 할 리스크만 뽑아줘",
+        ],
+        "confidence": _safe_pdf_confidence(
+            llm_payload.get("confidence") if llm_payload else None, text
+        ),
+        "blocked": False,
+        "blocked_reason": None,
+        "handoff": None,
+        "provenance": {
+            "retrieval_mode": "uploaded_pdf_text_extraction",
+            "attachment": {
+                "file_name": file_name,
+                "content_type": content_type,
+                "sha256": file_hash,
+                "page_count": page_count,
+                "parsed_page_count": parsed_page_count,
+                "text_chars": len(text),
+                "parse_strategy": pdf_payload.get("pdf_parse_strategy"),
+                "llm_used": bool(llm_payload),
+            },
+        },
+    }
+
+
+def _try_pdf_llm_payload(
+    *,
+    request: ChatTurnRequest,
+    file_name: str,
+    text: str,
+    bullets: list[str],
+    evidence: list[str],
+) -> dict[str, object]:
+    if os.getenv("AXIS_CHAT_PDF_ENABLE_LLM", "1").lower() in {"0", "false", "no"}:
+        return {}
+    try:
+        from src.agents.chat_orchestrator_agent import _get_llm, _parse_json_object
+        from src.observability.langfuse_client import tracing_config, with_session
+
+        prompt = _pdf_llm_prompt(
+            request=request,
+            file_name=file_name,
+            text=text,
+            bullets=bullets,
+            evidence=evidence,
+        )
+        session_id = request.conversation_id or request.session_id or str(uuid.uuid4())
+        with with_session(session_id):
+            result = _get_llm().invoke(
+                prompt,
+                config=tracing_config(
+                    agent="ChatOrchestratorAgent",
+                    phase="pdf_attachment_analysis",
+                    prompt_version="chat-pdf-v1",
+                    session_id=session_id,
+                ),
+            )
+        parsed = _parse_json_object(str(getattr(result, "content", result) or ""))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception as exc:  # noqa: BLE001 - PDF chat must still answer without LLM.
+        log.debug("assistant PDF LLM compose skipped | file=%s error=%s", file_name, exc)
+        return {}
+
+
+def _pdf_llm_prompt(
+    *,
+    request: ChatTurnRequest,
+    file_name: str,
+    text: str,
+    bullets: list[str],
+    evidence: list[str],
+) -> str:
+    payload = {
+        "question": request.message,
+        "file_name": file_name,
+        "extracted_key_points": bullets,
+        "extracted_evidence": evidence,
+        "pdf_text": text[:18_000],
+    }
+    return f"""\
+당신은 SK AX AXIS 챗봇의 PDF 분석 모듈입니다.
+
+규칙:
+- 아래 입력 JSON의 pdf_text와 extracted_evidence에 있는 사실만 사용합니다.
+- 문서에 없는 고객명, 금액, 일정, 계약명은 만들지 않습니다.
+- 사용자의 질문에 먼저 답하고, 임원이 바로 출력할 수 있는 보고서 초안을 함께 작성합니다.
+- SK AX 관점은 "무엇을 확인/판단/조치해야 하는지"로 씁니다.
+- SK AX가 이미 알고 있을 내부 행동 묘사는 쓰지 않습니다.
+- 출력은 JSON object 하나만 반환합니다.
+
+입력 JSON:
+{json.dumps(payload, ensure_ascii=False)}
+
+출력 JSON:
+{{
+  "reply": "PDF 기반 답변 3~6문장",
+  "key_points": ["핵심 포인트 1", "핵심 포인트 2"],
+  "evidence": ["문서 안 근거 문장 또는 수치"],
+  "report_draft": {{
+    "title": "보고서 제목",
+    "sections": [
+      {{"title": "핵심 요약", "body": "출력 가능한 본문"}},
+      {{"title": "문서 근거", "body": "출력 가능한 본문"}},
+      {{"title": "SK AX 관점 검토 포인트", "body": "출력 가능한 본문"}}
+    ]
+  }},
+  "confidence": 0.0
+}}
+"""
+
+
+def _pdf_title(file_name: str, text: str) -> str:
+    for line in _pdf_lines(text):
+        cleaned = re.sub(r"^\[PAGE\s+\d+\]\s*", "", line, flags=re.IGNORECASE).strip()
+        if 8 <= len(cleaned) <= 80 and not cleaned.lower().startswith("page "):
+            return cleaned
+    return re.sub(r"\.pdf$", "", file_name, flags=re.IGNORECASE).strip() or "첨부 PDF"
+
+
+def _pdf_key_points(text: str, *, limit: int) -> list[str]:
+    lines = _rank_pdf_lines(text)
+    if not lines:
+        lines = _pdf_sentences(text)
+    return [_compact_text(line, limit=180) for line in lines[:limit]] or [
+        "문서에서 식별 가능한 핵심 문장이 부족합니다."
+    ]
+
+
+def _pdf_evidence_lines(text: str, *, limit: int) -> list[str]:
+    candidates = [
+        line
+        for line in _pdf_lines(text)
+        if re.search(
+            r"\d|%|억원|매출|영업|계약|투자|AI|AX|cloud|클라우드", line, flags=re.IGNORECASE
+        )
+    ]
+    if len(candidates) < limit:
+        candidates.extend(_pdf_sentences(text))
+    deduped = _dedupe_preserve_order(candidates)
+    return [_compact_text(line, limit=200) for line in deduped[:limit]] or [
+        "본문에서 직접 인용 가능한 근거 문장을 충분히 찾지 못했습니다."
+    ]
+
+
+def _pdf_skax_review_point(bullets: list[str], evidence: list[str]) -> str:
+    lead = bullets[0] if bullets else "문서의 핵심 변화"
+    basis = evidence[0] if evidence else "문서 근거"
+    return (
+        f"{lead}를 기준으로 고객·산업·기술 실행 영향이 SK AX의 제안, 운영, "
+        f"보안 검토 항목에 연결되는지 확인해야 합니다. 판단 근거는 '{basis}'이며, "
+        "후속 검토에서는 문서 안 수치와 일정이 실제 고객 대응 우선순위를 바꾸는지 분리해 보세요."
+    )
+
+
+def _string_list_from_payload(value: object, *, fallback: list[str], limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return fallback
+    normalized = [str(item).strip() for item in value if str(item).strip()]
+    return normalized[:limit] or fallback
+
+
+def _section_body(report_draft: object, title: str) -> str:
+    if not isinstance(report_draft, dict):
+        return ""
+    sections = report_draft.get("sections")
+    if not isinstance(sections, list):
+        return ""
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        if str(section.get("title") or "").strip() != title:
+            continue
+        return str(section.get("body") or "").strip()
+    return ""
+
+
+def _safe_pdf_confidence(value: object, text: str) -> float:
+    parsed = _safe_pdf_float(value)
+    if parsed is not None and 0.0 <= parsed <= 1.0:
+        return parsed
+    return 0.74 if len(text) >= 800 else 0.58
+
+
+def _safe_pdf_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, (str, bytes, bytearray)):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
+
+
+def _safe_pdf_float(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, (str, bytes, bytearray)):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _rank_pdf_lines(text: str) -> list[str]:
+    keywords = (
+        "AI",
+        "AX",
+        "cloud",
+        "클라우드",
+        "계약",
+        "투자",
+        "매출",
+        "전략",
+        "보안",
+        "운영",
+        "고객",
+    )
+    scored: list[tuple[int, str]] = []
+    for line in _pdf_lines(text):
+        keyword_score = sum(1 for keyword in keywords if keyword.lower() in line.lower())
+        digit_score = 1 if re.search(r"\d", line) else 0
+        length_score = 1 if 30 <= len(line) <= 180 else 0
+        score = keyword_score * 3 + digit_score + length_score
+        if score > 0:
+            scored.append((score, line))
+    scored.sort(key=lambda item: (-item[0], _pdf_lines(text).index(item[1])))
+    return _dedupe_preserve_order([line for _, line in scored])
+
+
+def _pdf_lines(text: str) -> list[str]:
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    return [
+        line
+        for line in lines
+        if len(line) >= 12 and not re.fullmatch(r"\[PAGE\s+\d+\]", line, flags=re.IGNORECASE)
+    ]
+
+
+def _pdf_sentences(text: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", text)
+    parts = re.split(r"(?<=[.!?。？！다])\s+", normalized)
+    return [part.strip() for part in parts if len(part.strip()) >= 20]
+
+
+def _compact_text(text: str, *, limit: int) -> str:
+    cleaned = re.sub(r"\s+", " ", text or "").strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 1)].rstrip() + "..."
+
+
+def _dedupe_preserve_order(items: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        normalized = re.sub(r"\s+", " ", item).strip()
+        key = normalized.lower()
+        if not normalized or key in seen:
+            continue
+        seen.add(key)
+        out.append(normalized)
+    return out
+
+
 @app.post("/today-insight/generate", response_model=TodayInsightGenerateResponse)
 async def generate_today_insight(
     request: TodayInsightGenerateRequest,
@@ -609,7 +1058,8 @@ async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
     from src.agents.mixer_analysis_agent import MixerAnalysisAgent
 
     log.info(
-        "Mixer 요청 | card_ids=%s integrated_issue_ids=%s",
+        "Mixer 요청 | mode=%s card_ids=%s integrated_issue_ids=%s",
+        request.analysis_mode,
         request.card_ids,
         request.integrated_issue_ids,
     )
@@ -618,6 +1068,7 @@ async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
         integrated_issue_ids=request.integrated_issue_ids,
         ratios=request.ratios,
         user_context=request.user_context,
+        analysis_mode=request.analysis_mode,
     )
     return MixerAnalysisResponse.model_validate(result)
 
@@ -656,6 +1107,7 @@ async def analyze_mixer_stream(request: MixerAnalysisRequest) -> StreamingRespon
                 integrated_issue_ids=request.integrated_issue_ids,
                 ratios=request.ratios,
                 user_context=request.user_context,
+                analysis_mode=request.analysis_mode,
                 progress=progress,
             )
         )

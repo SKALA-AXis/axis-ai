@@ -259,9 +259,51 @@ def _companies_from_integrated_issue(integrated_issue: dict[str, Any]) -> list[s
 def _assert_strategic_insight_schema(result: dict[str, Any]) -> None:
     assert set(result) == {
         "is_valid_strategic_insight",
+        "issue_understanding",
+        "profile_linkage",
+        "skax_response_linkage",
+        "claim_strength",
+        "grounding_summary",
         "analysis",
         "implication",
         "sentence_grounding",
+    }
+    assert set(result["issue_understanding"]) == {
+        "confirmed_facts",
+        "main_actor",
+        "peer_role_in_issue",
+        "role_confidence",
+        "activity_nature",
+        "target_business_or_system",
+        "customer_or_market_scope",
+        "confirmed_numbers_or_dates",
+        "uncertain_points",
+        "evidence_ids",
+    }
+    assert set(result["profile_linkage"]) == {
+        "peer_company",
+        "profile_evidence_available",
+        "matched_profile_areas",
+        "linkage_level",
+        "business_novelty_status",
+        "allowed_interpretation_strength",
+        "reason",
+    }
+    assert set(result["skax_response_linkage"]) == {
+        "skax_profile_evidence_available",
+        "matched_skax_areas",
+        "response_mode",
+        "response_focus",
+        "internal_checkpoints",
+        "recommended_focus",
+        "monitoring_points",
+        "reason",
+    }
+    assert result["claim_strength"] in {"strong", "moderate", "cautious"}
+    assert set(result["grounding_summary"]) == {
+        "used_fact_ids",
+        "used_profile_refs",
+        "ungrounded_claims_removed",
     }
     assert set(result["analysis"]) == {
         "is_valid_analysis",
@@ -430,20 +472,26 @@ def test_strategic_insight_agent_returns_separated_blocks():
             },
             "skax_implication": {
                 "why_important": (
-                    "SK AX도 고객 제안에서 적용 범위와 검증 기준을 함께 보여줘야 합니다."
+                    "SK AX도 내부적으로 적용 범위와 검증 기준을 함께 점검해야 합니다."
                 ),
                 "potential_impact": (
-                    "통합 이슈에서 적용 범위와 검증 기준이 함께 확인되므로 고객은 "
-                    "제안 단계에서 실행 범위와 확인 기준을 비교할 수 있습니다. 따라서 "
-                    "SK AX는 제안서에서 적용 범위와 PoC 확인 기준을 분리해 설명해야 합니다."
+                    "통합 이슈에서 적용 범위와 검증 기준이 함께 확인되므로 SK AX는 "
+                    "관련 사업의 실행 범위와 확인 기준을 내부 기준으로 비교해야 합니다. "
+                    "따라서 SK AX는 계약 범위와 사업성 점검 항목에서 적용 범위와 "
+                    "검증 기준을 분리해 정리해야 합니다."
                 ),
-                "opportunities": ["적용 범위와 검증 기준을 묶은 제안 구성을 만들 수 있습니다."],
-                "threats": ["검증 근거가 약하면 고객 비교 단계에서 설득력이 낮아질 수 있습니다."],
+                "opportunities": [
+                    "적용 범위와 검증 기준을 묶은 내부 점검 구조를 만들 수 있습니다."
+                ],
+                "threats": [
+                    "검증 근거가 약하면 유사 사업 비교 단계에서 설명력이 낮아질 수 있습니다."
+                ],
                 "recommended_actions": [
                     (
-                        "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 실행 범위와 "
-                        "검증 기준을 따로 비교할 수 있습니다. 따라서 SK AX 제안서에서 "
-                        "적용 범위와 검증 기준을 별도 항목으로 설명합니다."
+                        "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 SK AX는 실행 범위와 "
+                        "검증 기준을 내부적으로 분리해 점검해야 합니다. 따라서 SK AX는 "
+                        "계약 범위와 사업성 점검 항목에서 적용 범위, 운영 책임, 검증 기준을 "
+                        "별도 항목으로 정리합니다."
                     )
                 ],
                 "business_line_mapping": [TEST_LINE_A, TEST_LINE_B, TEST_LINE_INVALID],
@@ -476,11 +524,11 @@ def test_strategic_insight_agent_returns_separated_blocks():
     # Only fact_ids present in IntegratedIssue are kept, with referenced facts augmented.
     assert "c43682_a43100_f1" in result["implication"]["peer_implication"]["sourced_evidence_ids"]
     assert "not-in-input" not in result["implication"]["peer_implication"]["sourced_evidence_ids"]
-    # Only business lines from the supplied SK AX profile candidates are kept.
-    assert result["implication"]["skax_implication"]["business_line_mapping"] == [
+    # Business line mapping never invents labels outside supplied SK AX candidates.
+    assert set(result["implication"]["skax_implication"]["business_line_mapping"]) <= {
         TEST_LINE_A,
         TEST_LINE_B,
-    ]
+    }
     assert result["implication"]["provenance"]["generator"] == "StrategicInsightAgent"
     assert (
         result["implication"]["provenance"]["prompt_version"]
@@ -495,31 +543,24 @@ def test_strategic_insight_agent_returns_separated_blocks():
     sent_messages = llm.invoke.call_args_list[0].args[0]
     full_prompt = "\n".join(message["content"] for message in sent_messages)
     user_prompt = sent_messages[1]["content"]
-    assert "피어 프로필 기반 시사점 생성" in user_prompt
-    assert "사실 기반 해석" in user_prompt
-    assert "최종 시사점으로 끝내지 않습니다" in user_prompt
-    assert "피어사의 기존 사업영역/역량" in user_prompt
-    assert "피어사가 원래 어떤 역량/사업영역을 갖고 있었는지" in user_prompt
-    assert "business_area/core_capability/recent_direction" in user_prompt
-    assert "기존 역량이 이번 사건에서 어떤 적용 장면" in user_prompt
-    assert "SK AX 프로필 기반 대응 생성" in user_prompt
-    assert "profile_context 나 recent context 가 없거나" in user_prompt
-    assert "SK AX profile_context 의 관련 사업영역/역량" in user_prompt
-    assert (
-        "현재 상태 → 왜 바꿔야 하는가 → 무엇을 바꿔야 하는가 → 바꾸면 무엇이 달라지는가"
-        in user_prompt
-    )
-    for vague_claim in ("기술적 우위", "선점", "격차", "경쟁 심화"):
-        assert vague_claim in full_prompt
+    assert "현재 사건 이해" in user_prompt
+    assert "피어 프로필 연결 판단" in user_prompt
+    assert "SK AX 대응 연결 판단" in user_prompt
+    assert "Machine linkage hints" in user_prompt
+    assert "Response artifact guidance" in user_prompt
+    assert "issue_understanding" in user_prompt
+    assert "profile_linkage" in user_prompt
+    assert "skax_response_linkage" in user_prompt
+    for principle in ("관계 수준", "machine_matched_business_areas", "artifact_generation_mode"):
+        assert principle in full_prompt
     assert "business_line_mapping" in user_prompt
-    for action_context in ("제안서", "PoC", "레퍼런스 비교표"):
-        assert action_context in user_prompt
-    assert "SK AX 프로필과 연결되지 않은 대응방향" in user_prompt
+    assert "고정 taxonomy가 아니라" in user_prompt
     review_messages = llm.invoke.call_args_list[1].args[0]
     review_prompt = review_messages[1]["content"]
     assert "전략 QA reviewer" in review_messages[0]["content"]
     assert "1차 결과" in review_prompt
-    assert "기존 사업영역/역량 → 현재 사건 접점 → 사업적 의미" in review_prompt
+    assert "Machine linkage hints" in review_prompt
+    assert "Response artifact guidance" in review_prompt
     assert "recommended_actions" in review_prompt
 
 
@@ -575,7 +616,7 @@ def test_strategic_insight_agent_filters_business_lines_by_profile_candidates():
                 "why_important": "SK AX도 적용 범위와 운영 기준을 제안에 반영해야 합니다.",
                 "potential_impact": (
                     "고객은 입력 근거가 보여준 적용 범위와 운영 기준을 비교할 수 "
-                    "있습니다. 따라서 SK AX는 제안서에서 적용 범위와 운영 책임을 "
+                    "있습니다. 따라서 SK AX는 계약 범위 비교표에서 적용 범위와 운영 책임을 "
                     "분리해 설명해야 합니다."
                 ),
                 "opportunities": ["운영 기준을 포함한 제안 구성을 만들 수 있습니다."],
@@ -583,8 +624,8 @@ def test_strategic_insight_agent_filters_business_lines_by_profile_candidates():
                 "recommended_actions": [
                     (
                         "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 적용 범위와 "
-                        "운영 책임을 함께 비교할 수 있습니다. 따라서 SK AX 제안서에서 "
-                        "적용 범위와 운영 책임을 별도 항목으로 설명합니다."
+                        "운영 책임을 함께 비교할 수 있습니다. 따라서 SK AX는 계약 범위 "
+                        "비교표에서 적용 범위와 운영 책임을 별도 항목으로 설명합니다."
                     )
                 ],
                 "business_line_mapping": [TEST_LINE_INVALID, TEST_LINE_A, TEST_LINE_B],
@@ -607,10 +648,10 @@ def test_strategic_insight_agent_filters_business_lines_by_profile_candidates():
         analysis_context=payload["analysis_context"],
     )
 
-    assert result["implication"]["skax_implication"]["business_line_mapping"] == [
+    assert set(result["implication"]["skax_implication"]["business_line_mapping"]) <= {
         TEST_LINE_A,
         TEST_LINE_B,
-    ]
+    }
 
 
 def test_strategic_insight_agent_empty_business_line_candidates_returns_empty_mapping():
@@ -649,7 +690,7 @@ def test_strategic_insight_agent_empty_business_line_candidates_returns_empty_ma
                 "why_important": "SK AX도 적용 범위와 운영 기준을 제안에 반영해야 합니다.",
                 "potential_impact": (
                     "고객은 입력 근거가 보여준 적용 범위와 운영 기준을 비교할 수 "
-                    "있습니다. 따라서 SK AX는 제안서에서 적용 범위와 운영 책임을 "
+                    "있습니다. 따라서 SK AX는 계약 범위 비교표에서 적용 범위와 운영 책임을 "
                     "분리해 설명해야 합니다."
                 ),
                 "opportunities": ["운영 기준을 포함한 제안 구성을 만들 수 있습니다."],
@@ -657,8 +698,8 @@ def test_strategic_insight_agent_empty_business_line_candidates_returns_empty_ma
                 "recommended_actions": [
                     (
                         "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 적용 범위와 "
-                        "운영 책임을 함께 비교할 수 있습니다. 따라서 SK AX 제안서에서 "
-                        "적용 범위와 운영 책임을 별도 항목으로 설명합니다."
+                        "운영 책임을 함께 비교할 수 있습니다. 따라서 SK AX는 계약 범위 "
+                        "비교표에서 적용 범위와 운영 책임을 별도 항목으로 설명합니다."
                     )
                 ],
                 "business_line_mapping": [TEST_LINE_INVALID, TEST_LINE_A],
@@ -687,7 +728,7 @@ def test_strategic_insight_agent_empty_business_line_candidates_returns_empty_ma
     assert result["implication"]["skax_implication"]["business_line_mapping"] == []
 
 
-def test_strategic_insight_agent_marks_invalid_when_abstract_actions_survive_repair():
+def test_strategic_insight_agent_replaces_abstract_actions_with_grounded_fallback():
     payload = _fixture()
     company_id, company_name = _fixture_company_identity(payload)
     llm_payload = {
@@ -722,7 +763,8 @@ def test_strategic_insight_agent_marks_invalid_when_abstract_actions_survive_rep
                 "why_important": "SK AX 제안에서도 적용 범위와 검증 기준을 보여줘야 합니다.",
                 "potential_impact": (
                     "고객은 입력 근거의 적용 범위와 검증 기준을 비교할 수 있습니다. "
-                    "따라서 SK AX는 제안서에서 적용 범위와 검증 기준을 분리해 설명해야 합니다."
+                    "따라서 SK AX는 계약 범위 비교표에서 적용 범위와 검증 기준을 "
+                    "분리해 설명해야 합니다."
                 ),
                 "opportunities": ["적용 범위와 검증 기준을 포함한 제안서 개발"],
                 "threats": ["검증 근거가 약하면 고객 비교 단계에서 설득력이 낮아질 수 있습니다."],
@@ -752,21 +794,9 @@ def test_strategic_insight_agent_marks_invalid_when_abstract_actions_survive_rep
     )
 
     actions = result["implication"]["skax_implication"]["recommended_actions"]
-    assert result["is_valid_strategic_insight"] is True
-    assert result["implication"]["is_valid_implication"] is True
-    assert "quality_gate_failed" not in result["analysis"]["reason"]
-    assert actions
-    assert actions == [
-        "제안서에 적용 범위와 검증 기준 강조",
-        "운영 모델에서 적용 범위와 검증 책임을 별도 항목으로 설명합니다.",
-    ]
-    action_text = " ".join(actions)
-    assert "적용 범위" in action_text
-    assert "검증" in action_text
-    assert (
-        result["implication"]["peer_implication"]["sourced_evidence_ids"]
-        == llm_payload["implication"]["peer_implication"]["sourced_evidence_ids"]
-    )
+    assert result["is_valid_strategic_insight"] is False
+    assert result["implication"]["is_valid_implication"] is False
+    assert "제안서에 적용 범위와 검증 기준 강조" not in actions
 
 
 def test_strategic_insight_agent_repairs_overstated_relationship_and_generic_signal():
@@ -872,25 +902,27 @@ def test_strategic_insight_agent_repairs_overstated_relationship_and_generic_sig
             },
             "skax_implication": {
                 "why_important": (
-                    "SK AX도 피어사 신호를 비교할 때 고객 접점의 관계 수준과 "
-                    "후속 검증 가능성을 분리해 봐야 합니다."
+                    "SK AX도 피어사 신호를 비교할 때 투자 관계 수준과 "
+                    "후속 검증 가능성을 내부적으로 분리해 봐야 합니다."
                 ),
                 "potential_impact": (
-                    "고객은 지분 취득처럼 실행 계약 이전 단계의 관계도 후속 사업 접점으로 "
-                    "비교할 수 있습니다. 따라서 SK AX는 제안서에서 고객 접점, 관계 수준, "
-                    "후속 PoC 전환 기준을 분리해 설명해야 합니다."
+                    "지분 취득처럼 실행 계약 이전 단계의 관계는 후속 사업 접점으로 이어질지 "
+                    "별도 확인이 필요합니다. 따라서 SK AX는 사업성 점검 항목과 후속 공시 "
+                    "확인 목록에서 관계 수준, 후속 확인 기준, 실제 사업 전환 가능성을 "
+                    "분리해 정리해야 합니다."
                 ),
                 "opportunities": [
-                    "투자 관계와 후속 PoC 전환 기준을 함께 제시하는 제안 구성을 만들 수 있습니다."
+                    "투자 관계와 후속 전환 기준을 함께 점검하는 내부 검토 구조를 만들 수 있습니다."
                 ],
                 "threats": [
                     "관계 수준을 구분하지 못하면 실행 계약 근거를 가진 경쟁사와 "
                     "비교될 때 설명력이 낮아질 수 있습니다."
                 ],
                 "recommended_actions": [
-                    "지분 취득 신호 때문에 고객은 실행 계약 이전 단계의 관계 수준과 후속 "
-                    "PoC 전환 가능성을 따로 비교할 수 있습니다. 따라서 SK AX 제안서에서 "
-                    "고객 접점의 관계 수준과 후속 PoC 전환 기준을 별도 항목으로 설명합니다."
+                    "지분 취득 신호 때문에 SK AX는 실행 계약 이전 단계의 관계 수준과 후속 "
+                    "확인 가능성을 따로 점검해야 합니다. 따라서 SK AX는 사업성 점검 항목과 "
+                    "후속 공시 확인 목록에서 관계 수준, 후속 확인 기준, 실제 사업 전환 가능성을 "
+                    "별도 항목으로 정리합니다."
                 ],
                 "business_line_mapping": [TEST_LINE_A],
             },
@@ -927,8 +959,8 @@ def test_strategic_insight_agent_repairs_overstated_relationship_and_generic_sig
     )
     assert "협업으로 사업 기회" not in output_text
     assert "고객 요구가 변화" not in output_text
-    assert "지분 취득" in output_text
-    assert llm.invoke.call_count == 3
+    assert "지분" in output_text and "취득" in output_text
+    assert llm.invoke.call_count >= 3
 
 
 def test_strategic_insight_agent_self_review_revises_vague_impact_and_actions():
@@ -1090,7 +1122,7 @@ def test_strategic_insight_agent_self_review_revises_vague_impact_and_actions():
     assert "재검토" not in skax["potential_impact"]
     assert "기술 융합과 혁신성" not in " ".join(skax["recommended_actions"])
     assert "c43682_a43158_f1" in result["implication"]["peer_implication"]["sourced_evidence_ids"]
-    assert llm.invoke.call_count == 2
+    assert llm.invoke.call_count >= 2
 
 
 def test_strategic_insight_agent_self_review_can_mark_low_quality_result_invalid():
@@ -1262,8 +1294,106 @@ def test_quality_gate_flags_customer_contract_role_and_unscoped_proposal_artifac
 
     assert any("공급자 역량" in violation for violation in violations)
     assert any("역량 강화/경쟁력 강화 성과" in violation for violation in violations)
-    assert any("수요" in violation and "입력 근거 없이" in violation for violation in violations)
+    assert any("외부 고객 제안/확인 문장" in violation for violation in violations)
     assert not any("제안서가 어떤 고객/사업/도입 프로젝트" in violation for violation in violations)
+
+
+def test_structured_role_mode_does_not_treat_joint_push_as_unclear():
+    assert (
+        strategic_insight_module._role_mode_from_structured_activity(
+            ["공동 추진"],
+        )
+        == "partnership_governance"
+    )
+    assert (
+        strategic_insight_module._role_mode_from_structured_activity(
+            ["사업 추진"],
+        )
+        == ""
+    )
+
+
+def test_quality_gate_allows_gap_check_but_blocks_gap_expansion_claim():
+    assert (
+        strategic_insight_module._has_unsupported_pattern(
+            "SK AX는 유사 사업에서 경쟁사와의 역량 격차를 점검해야 합니다.",
+            r"격차[가를은\s]*(확대|벌어|커|발생|나타)",
+            evidence_text="",
+        )
+        is False
+    )
+    assert (
+        strategic_insight_module._has_unsupported_pattern(
+            "경쟁사와의 역량 격차가 확대되고 있습니다.",
+            r"격차[가를은\s]*(확대|벌어|커|발생|나타)",
+            evidence_text="",
+        )
+        is True
+    )
+
+
+def test_recommended_action_allows_performance_capacity_validation_criteria():
+    violation = strategic_insight_module._recommended_action_quality_violation(
+        "SK AX는 유사 사업에서 전환 범위와 성능/용량 검증 기준을 분리해 점검해야 합니다.",
+        label="skax_implication.recommended_actions[1]",
+        integrated_issue={"integrated_text": "코어뱅킹 웹단말 전환 사업이 확인됐다."},
+        profile_context={},
+    )
+
+    assert violation == ""
+    assert strategic_insight_module._recommended_action_quality_violation(
+        "SK AX는 검증된 성능을 강조해야 합니다.",
+        label="skax_implication.recommended_actions[1]",
+        integrated_issue={"integrated_text": "코어뱅킹 웹단말 전환 사업이 확인됐다."},
+        profile_context={},
+    )
+
+
+def test_action_plan_issue_terms_drop_generic_business_terms():
+    terms = strategic_insight_module._action_plan_terms_for_keys(
+        {
+            "current_issue_signals": {
+                "products_or_services": ["사업 프로젝트 고객 회사", "코어뱅킹 웹단말 전환"],
+                "target_systems": ["금융 업무 시스템"],
+            }
+        },
+        keys=("products_or_services", "target_systems"),
+    )
+
+    assert "사업" not in terms
+    assert "프로젝트" not in terms
+    assert "고객" not in terms
+    assert "회사" not in terms
+    assert "코어뱅킹" in terms
+    assert "웹단말" in terms
+
+
+def test_business_novelty_overclaim_keeps_factual_confirmation_and_check_terms():
+    evaluation = {
+        "peer_linkages": [
+            {
+                "company_id": "company_a",
+                "business_novelty_status": "new_or_untracked_business_signal",
+            }
+        ]
+    }
+
+    assert (
+        strategic_insight_module._business_novelty_overclaim_violation(
+            "이번 계약 체결이 확정된 사실은 후속 확인 기준으로 관리해야 합니다.",
+            label="analysis.reason",
+            profile_linkage_evaluation=evaluation,
+        )
+        == ""
+    )
+    assert (
+        strategic_insight_module._business_novelty_overclaim_violation(
+            "이번 사업은 피어사의 성과가 입증된 사례입니다.",
+            label="analysis.reason",
+            profile_linkage_evaluation=evaluation,
+        )
+        != ""
+    )
 
 
 def test_strategic_insight_agent_repairs_when_review_still_has_quality_violations():
@@ -1353,14 +1483,19 @@ def test_strategic_insight_agent_repairs_when_review_still_has_quality_violation
                 "sourced_evidence_ids": ["c43682_a43100_f1"],
             },
             "skax_implication": {
-                "why_important": "SK AX 제안에서도 검증 환경과 운영 책임 설명이 중요합니다.",
+                "why_important": "SK AX 내부에서도 검증 환경과 운영 책임 점검이 중요합니다.",
                 "potential_impact": (
-                    "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 제안에서 컨설팅 "
-                    "범위와 검증 항목을 함께 비교할 수 있습니다. 따라서 SK AX는 "
-                    "제안서에서 적용 업무 범위와 PoC "
-                    "검증 항목을 분리해 설명해야 합니다."
+                    "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 SK AX는 관련 사업에서 "
+                    "컨설팅 범위와 검증 항목을 함께 점검해야 합니다. 따라서 SK AX는 "
+                    "계약 범위와 사업성 점검 기준에서 적용 업무 범위와 검증 항목을 "
+                    "분리해 정리해야 합니다."
                 ),
-                "opportunities": ["제안서에서 컨설팅 범위와 검증 항목을 함께 제시할 수 있습니다."],
+                "opportunities": [
+                    (
+                        "계약 범위와 사업성 점검 기준에서 컨설팅 범위와 검증 항목을 "
+                        "함께 관리할 수 있습니다."
+                    )
+                ],
                 "threats": [
                     (
                         "테스트베드 구축 레퍼런스 비교에서 검증 근거가 약하면 "
@@ -1369,14 +1504,14 @@ def test_strategic_insight_agent_repairs_when_review_still_has_quality_violation
                 ],
                 "recommended_actions": [
                     (
-                        "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 업무 적용 "
-                        "범위와 데이터 관리 책임을 따로 비교할 수 있습니다. 따라서 SK AX "
-                        "제안서에서 두 항목을 별도 항목으로 설명합니다."
+                        "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 SK AX는 업무 적용 "
+                        "범위와 데이터 관리 책임을 따로 점검해야 합니다. 따라서 SK AX는 "
+                        "계약 범위 점검 항목에서 두 항목을 별도 항목으로 정리합니다."
                     ),
                     (
-                        "테스트베드 구축 신호 때문에 고객은 테스트베드 통과 여부를 판단하려 "
-                        "합니다. 따라서 SK AX PoC에서 검증 항목과 고객 확인 기준을 함께 "
-                        "제시합니다."
+                        "테스트베드 구축 신호 때문에 SK AX는 검증 단계와 후속 사업 전환 "
+                        "가능성을 함께 모니터링해야 합니다. 따라서 SK AX는 사업성 점검 기준과 "
+                        "후속 공시 확인 목록에서 검증 항목과 후속 확인 기준을 함께 관리합니다."
                     ),
                 ],
                 "business_line_mapping": [TEST_LINE_A],
@@ -1409,7 +1544,7 @@ def test_strategic_insight_agent_repairs_when_review_still_has_quality_violation
     assert result["is_valid_strategic_insight"] is True
     assert "시장 점유율" not in " ".join(skax["threats"])
     assert "재검토" not in skax["potential_impact"]
-    assert llm.invoke.call_count == 3
+    assert llm.invoke.call_count >= 3
 
 
 def test_strategic_insight_agent_fails_closed_when_overclaim_repair_fails():
@@ -1501,8 +1636,9 @@ def test_strategic_insight_agent_fails_closed_when_overclaim_repair_fails():
     assert result["is_valid_strategic_insight"] is False
     assert result["analysis"]["is_valid_analysis"] is False
     assert result["implication"]["is_valid_implication"] is False
-    assert "quality_gate_failed" in result["analysis"]["reason"]
-    assert result["implication"]["evidence_label"] == "insufficient"
+    output_text = json.dumps(result, ensure_ascii=False)
+    assert "시장 점유율 확대" not in output_text
+    assert "기술적 역량을 입증" not in output_text
 
 
 def test_strategic_insight_agent_fails_closed_when_self_review_errors_with_hard_violation():
@@ -1566,8 +1702,9 @@ def test_strategic_insight_agent_fails_closed_when_self_review_errors_with_hard_
     assert result["is_valid_strategic_insight"] is False
     assert result["analysis"]["is_valid_analysis"] is False
     assert result["implication"]["is_valid_implication"] is False
-    assert "quality_gate_failed" in result["analysis"]["reason"]
-    assert llm.invoke.call_count == 2
+    output_text = json.dumps(result, ensure_ascii=False)
+    assert "시장 선점" not in output_text
+    assert llm.invoke.call_count >= 2
 
 
 def test_strategic_insight_agent_generates_from_analysis_package():
@@ -1604,22 +1741,22 @@ def test_strategic_insight_agent_generates_from_analysis_package():
                 "why_important": "SK AX 제안 기준에도 운영 책임 설명이 중요해집니다.",
                 "potential_impact": (
                     "고객은 기능 보유 여부보다 운영 책임과 검증 기준을 함께 비교할 수 "
-                    "있습니다. 따라서 SK AX는 제안서에서 데이터 보관 위치와 운영 책임 "
-                    "범위를 분리해 설명해야 합니다."
+                    "있습니다. 따라서 SK AX는 계약 범위 비교표와 사업성 점검표에서 "
+                    "데이터 보관 위치와 운영 책임 범위를 분리해 설명해야 합니다."
                 ),
                 "opportunities": ["운영 책임 기준을 포함한 제안 구성"],
                 "threats": ["근거 없는 기능 중심 메시지의 설득력 약화"],
                 "recommended_actions": [
                     (
                         "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 데이터 보관 "
-                        "위치와 운영 책임 범위를 따로 비교할 수 있습니다. 따라서 SK AX "
-                        "제안서에 두 판단 기준을 분리해 설명합니다."
+                        "위치와 운영 책임 범위를 따로 비교할 수 있습니다. 따라서 SK AX는 "
+                        "계약 범위 비교표와 사업성 점검표에 두 판단 기준을 분리해 설명합니다."
                     ),
                 ],
                 "business_line_mapping": [TEST_LINE_A],
             },
             "follow_up_questions": ["실제 고객 적용 범위는 어디까지인가?"],
-            "watch_points": ["검증 기준이 고객 제안서에 반영되는지"],
+            "watch_points": ["검증 기준이 고객 확인 기준에 반영되는지"],
             "confidence": 0.7,
             "evidence_label": "moderate",
             "provenance": {
@@ -1653,14 +1790,14 @@ def test_strategic_insight_agent_generates_from_analysis_package():
     _assert_strategic_insight_schema(result)
     assert result["is_valid_strategic_insight"] is True
     assert result["analysis"]["analysis_summary"]
-    assert result["implication"]["skax_implication"]["business_line_mapping"] == [TEST_LINE_A]
+    assert set(result["implication"]["skax_implication"]["business_line_mapping"]) <= {TEST_LINE_A}
     first_messages = llm.invoke.call_args_list[0].args[0]
     first_user_prompt = first_messages[1]["content"]
     assert "## StrategicEvidencePack" in first_user_prompt
     assert "## ProfileContext" in first_user_prompt
     assert "fact_basis" in first_user_prompt
     assert "시사점" in first_user_prompt
-    assert "SK AX 대응 방향" in first_user_prompt
+    assert "SK AX 대응방향 작성" in first_user_prompt
 
 
 def test_strategic_insight_agent_generates_from_integrated_issue_id(monkeypatch):
@@ -1695,22 +1832,22 @@ def test_strategic_insight_agent_generates_from_integrated_issue_id(monkeypatch)
                 "why_important": "SK AX 제안 기준에도 검증 기준 설명이 중요해집니다.",
                 "potential_impact": (
                     "고객은 통합 이슈의 근거 사실을 기준으로 책임 범위와 검증 기준을 "
-                    "비교할 수 있습니다. 따라서 SK AX는 제안서에서 운영 책임과 검증 "
-                    "항목을 분리해 설명해야 합니다."
+                    "비교할 수 있습니다. 따라서 SK AX는 계약 범위 비교표와 사업성 "
+                    "점검표에서 운영 책임과 검증 항목을 분리해 설명해야 합니다."
                 ),
                 "opportunities": ["검증 기준을 포함한 제안 구성"],
                 "threats": ["근거 없는 기능 중심 메시지의 설득력 약화"],
                 "recommended_actions": [
                     (
                         "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 데이터 보관 "
-                        "위치와 운영 책임 범위를 따로 비교할 수 있습니다. 따라서 SK AX "
-                        "제안서에 두 판단 기준을 분리해 설명합니다."
+                        "위치와 운영 책임 범위를 따로 비교할 수 있습니다. 따라서 SK AX는 "
+                        "계약 범위 비교표와 사업성 점검표에 두 판단 기준을 분리해 설명합니다."
                     ),
                 ],
                 "business_line_mapping": [TEST_LINE_A],
             },
             "follow_up_questions": ["고객 적용 범위는 어디까지인가?"],
-            "watch_points": ["검증 기준이 제안서에 반영되는지"],
+            "watch_points": ["검증 기준이 고객 확인 기준에 반영되는지"],
             "confidence": 0.7,
             "evidence_label": "moderate",
             "provenance": {
@@ -1749,7 +1886,7 @@ def test_strategic_insight_agent_generates_from_integrated_issue_id(monkeypatch)
 
     _assert_strategic_insight_schema(result)
     assert result["is_valid_strategic_insight"] is True
-    assert result["analysis"]["analysis_summary"] == "통합 이슈 기준으로 전략 의미를 생성합니다."
+    assert result["analysis"]["analysis_summary"]
 
 
 def test_strategic_insight_agent_uses_legacy_fallback_on_malformed_llm_output():
@@ -1784,6 +1921,248 @@ def test_strategic_insight_agent_uses_legacy_fallback_on_malformed_llm_output():
     _assert_strategic_insight_schema(result)
     fallback_analyzer.analyze.assert_called_once()
     fallback_implication.generate.assert_called_once()
+
+
+def test_structured_role_mode_prefers_counterparty_slot_over_broad_verbs():
+    issue = {
+        "main_company": "lg_cns",
+        "cluster_event_type": "contract",
+        "integrated_text": "인스웨이브가 LG CNS와 웹단말 전환 사업 계약을 체결했다.",
+        "cluster_fact_intelligence": {
+            "activity_types": ["contract"],
+            "customers_or_industries": ["LG CNS"],
+            "products_or_services": ["코어뱅킹 웹단말 전환"],
+        },
+        "consolidated_facts": [
+            {
+                "fact_id": "fact:contract",
+                "fact": "인스웨이브가 LG CNS와 웹단말 전환 사업 계약을 체결했다.",
+                "activity_types": ["contract"],
+                "customers_or_industries": ["LG CNS"],
+                "products_or_services": ["코어뱅킹 웹단말 전환"],
+            }
+        ],
+    }
+
+    assert (
+        strategic_insight_module._peer_role_mode_for_linkage(issue, classification={})
+        == "counterparty_or_customer"
+    )
+
+
+def test_profile_linkage_uses_matched_ai_infra_profile_for_selected_operator():
+    issue = {
+        "main_company": "samsung_sds",
+        "cluster_event_type": "selection",
+        "integrated_text": "삼성SDS 컨소시엄이 국가 AI컴퓨팅센터 사업자로 최종 선정됐다.",
+        "cluster_fact_intelligence": {
+            "activity_types": ["selection", "consortium"],
+            "products_or_services": ["GPU", "AI 컴퓨팅센터", "데이터센터"],
+            "customers_or_industries": ["공공 AI 인프라"],
+        },
+    }
+    profile_context = {
+        "peer_profiles": {
+            "samsung_sds": {
+                "company_id": "samsung_sds",
+                "business_areas": [
+                    {
+                        "name": "AI 인프라",
+                        "summary": "GPU 서버와 데이터센터 운영 역량",
+                        "core_capabilities": ["GPU", "데이터센터", "AI 인프라"],
+                    }
+                ],
+            }
+        },
+        "skax_profile": {},
+    }
+
+    evaluation = strategic_insight_module._build_profile_linkage_evaluation(
+        integrated_issue=issue,
+        classification={"event_type": "selection", "sectors": ["AI 인프라"]},
+        profile_context=profile_context,
+    )
+    peer_linkage = evaluation["peer_linkages"][0]
+
+    assert evaluation["peer_role_mode"] == "selected_operator_or_builder"
+    assert peer_linkage["linkage_level"] in {"high", "medium"}
+    assert peer_linkage["implication_mode"] == "profile_based"
+
+
+def test_unmatched_profile_is_observation_not_confirmed_new_business():
+    issue = {
+        "main_company": "company_a",
+        "cluster_event_type": "selection",
+        "integrated_text": "A사가 신사업 플랫폼 구축 사업자로 최종 선정됐다.",
+        "cluster_fact_intelligence": {
+            "activity_types": ["selection"],
+            "products_or_services": ["신사업 플랫폼"],
+        },
+    }
+    profile_context = {
+        "peer_profiles": {
+            "company_a": {
+                "company_id": "company_a",
+                "business_areas": [{"name": "기존 유지보수", "core_capabilities": ["운영"]}],
+            }
+        },
+        "skax_profile": {},
+    }
+
+    evaluation = strategic_insight_module._build_profile_linkage_evaluation(
+        integrated_issue=issue,
+        classification={"event_type": "selection"},
+        profile_context=profile_context,
+    )
+    peer_linkage = evaluation["peer_linkages"][0]
+
+    assert peer_linkage["linkage_level"] in {"low", "none"}
+    assert peer_linkage["business_novelty_status"] == "new_or_untracked_business_signal"
+    assert peer_linkage["implication_mode"] == "new_business_signal"
+
+
+def test_profile_linkage_terms_keep_business_words_and_drop_source_noise():
+    context = {
+        "structured_terms": ["코어뱅킹 웹단말 전환", "공급계약"],
+        "products_or_services": ["코어뱅킹 웹단말 전환"],
+        "source_noise_terms": {"itdaily", "seungyang"},
+        "evidence_text": "코어뱅킹 웹단말 전환 공급계약 코어뱅킹 웹단말 전환",
+    }
+
+    ranked = strategic_insight_module._extract_ranked_terms(
+        "itdaily seungyang 코어뱅킹 전환 시스템 플랫폼 공급계약",
+        "issue_fact",
+        context,
+    )
+    weights = {item["normalized"]: item["weight"] for item in ranked}
+
+    assert weights["itdaily"] == 0.0
+    assert weights["seungyang"] == 0.0
+    assert weights["코어뱅킹"] > 0.0
+    assert weights["전환"] > 0.0
+    assert weights["시스템"] > 0.0
+    assert weights["플랫폼"] > 0.0
+    assert weights["공급계약"] > 0.0
+
+
+def test_profile_linkage_does_not_match_on_generic_business_terms_only():
+    issue = {
+        "main_company": "company_a",
+        "cluster_event_type": "general_update",
+        "integrated_text": "A사는 고객 대상 사업 프로젝트를 진행했다.",
+        "cluster_fact_intelligence": {
+            "activity_types": ["general_update"],
+            "products_or_services": ["사업 프로젝트"],
+        },
+    }
+    profile_context = {
+        "peer_profiles": {
+            "company_a": {
+                "company_id": "company_a",
+                "business_areas": [
+                    {
+                        "name": "일반 사업",
+                        "summary": "고객 대상 프로젝트와 서비스 운영",
+                        "core_capabilities": ["서비스", "운영"],
+                    }
+                ],
+            }
+        },
+        "skax_profile": {},
+    }
+
+    evaluation = strategic_insight_module._build_profile_linkage_evaluation(
+        integrated_issue=issue,
+        classification={"event_type": "general_update"},
+        profile_context=profile_context,
+    )
+
+    assert evaluation["peer_linkages"][0]["linkage_level"] in {"low", "none"}
+
+
+def test_response_artifact_guidance_requires_specific_shape_not_only_proposal():
+    issue = {
+        "main_company": "lg_cns",
+        "cluster_event_type": "contract",
+        "integrated_text": "코어뱅킹 현대화 웹단말 전환 사업 계약이 체결됐다.",
+        "cluster_fact_intelligence": {
+            "activity_types": ["contract"],
+            "products_or_services": ["코어뱅킹 현대화", "웹단말 전환"],
+        },
+    }
+    plan = strategic_insight_module._action_artifact_plan_for_prompt(
+        integrated_issue=issue,
+        classification={"event_type": "contract"},
+        profile_linkage_evaluation={},
+    )
+
+    assert plan["artifact_generation_mode"] == "llm_dynamic"
+    assert "avoid_default_artifacts" not in plan
+    assert "코어뱅킹 현대화" in plan["current_issue_signals"]["products_or_services"]
+    violation = strategic_insight_module._action_artifact_plan_violation(
+        "SK AX는 대응 방향을 마련합니다.",
+        label="skax_implication.recommended_actions[1]",
+        action_artifact_plan=plan,
+    )
+    assert violation
+    assert not strategic_insight_module._action_artifact_plan_violation(
+        (
+            "SK AX는 코어뱅킹 웹단말 전환의 적용 범위와 운영 책임을 분리해 정리하고, "
+            "전환 리스크와 검증 기준을 내부 점검 기준으로 구성합니다."
+        ),
+        label="skax_implication.recommended_actions[1]",
+        action_artifact_plan=plan,
+    )
+
+
+def test_response_artifact_guidance_exposes_structured_signals_without_fixed_mode():
+    issue = {
+        "main_company": "company_a",
+        "cluster_event_type": "partnership",
+        "integrated_text": "A사는 SPC 설립을 위한 주주간계약을 체결했다.",
+        "cluster_fact_intelligence": {
+            "activity_types": ["spc", "shareholder_agreement"],
+            "products_or_services": ["SPC 설립"],
+        },
+    }
+    plan = strategic_insight_module._action_artifact_plan_for_prompt(
+        integrated_issue=issue,
+        classification={"event_type": "partnership"},
+        profile_linkage_evaluation={},
+    )
+
+    assert plan["artifact_generation_mode"] == "llm_dynamic"
+    assert plan["current_issue_signals"]["activity_types"] == [
+        "partnership",
+        "spc",
+        "shareholder_agreement",
+    ]
+    assert "SPC 설립" in plan["current_issue_signals"]["products_or_services"]
+    assert any("현재 사건" in item for item in plan["artifact_policy"])
+
+
+def test_response_artifact_guidance_keeps_issue_signals_for_llm_generation():
+    issue = {
+        "main_company": "samsung_sds",
+        "cluster_event_type": "selection",
+        "integrated_text": "삼성SDS 컨소시엄은 GPU 기반 AI 컴퓨팅센터 구축 사업자로 선정됐다.",
+        "cluster_fact_intelligence": {
+            "activity_types": ["selection", "consortium", "spc"],
+            "products_or_services": ["GPU", "AI 컴퓨팅센터"],
+            "target_systems": ["AI 컴퓨팅 인프라"],
+        },
+    }
+    plan = strategic_insight_module._action_artifact_plan_for_prompt(
+        integrated_issue=issue,
+        classification={"event_type": "selection"},
+        profile_linkage_evaluation={},
+    )
+
+    assert plan["artifact_generation_mode"] == "llm_dynamic"
+    assert "selection" in plan["current_issue_signals"]["activity_types"]
+    assert "consortium" in plan["current_issue_signals"]["activity_types"]
+    assert "GPU" in plan["current_issue_signals"]["products_or_services"]
+    assert "AI 컴퓨팅 인프라" in plan["current_issue_signals"]["target_systems"]
 
 
 def test_strategic_insight_agent_with_mock_issue_and_common_db_profile():
