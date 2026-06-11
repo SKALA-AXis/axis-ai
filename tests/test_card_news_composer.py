@@ -215,6 +215,88 @@ def test_card_news_from_analysis_package_adds_grounded_display_sections(monkeypa
     assert card["analysis_package"]["grounding_summary"] == package["grounding_summary"]
 
 
+def test_card_news_action_section_filters_actions_without_issue_grounding() -> None:
+    package = {
+        "integrated_issue": {
+            "cluster_id": 2,
+            "main_company": "samsung_sds",
+            "cluster_event_type": "partnership",
+            "headline": "삼성SDS, 클라우드 보안 협력 강화",
+            "main_event": "삼성SDS가 클라우드 보안 협력을 강화했다.",
+            "fact_summary": [
+                "삼성SDS가 클라우드 보안 협력을 강화했다.",
+                "파트너 기술을 활용해 기업 고객의 보안 모니터링을 확대한다.",
+                "클라우드 환경의 취약점 점검과 후속 조치 체계를 보강한다.",
+            ],
+            "fact_basis": [
+                {
+                    "summary_line_index": 1,
+                    "fact_ids": ["fact:1"],
+                    "source_article_ids": [10],
+                }
+            ],
+            "representative_sources": [{"published_at": "2026-06-10T00:00:00+09:00"}],
+        },
+        "implication": {
+            "frontend": {
+                "suggested_actions": [
+                    "제안서에는 모델 기능 비교와 별도로 전사 적용 범위표를 둡니다.",
+                    "PoC 검증표는 답변 품질 중심이 아니라 업무 단위별 검증으로 바꿉니다.",
+                    (
+                        "SK AX는 클라우드 보안 협력 확대와 유사한 사업에서 "
+                        "운영 책임과 보안 모니터링 범위를 비교 점검해야 합니다."
+                    ),
+                ],
+            },
+            "skax_implication": {
+                "recommended_actions": [
+                    "제안서에는 모델 기능 비교와 별도로 전사 적용 범위표를 둡니다.",
+                    "PoC 검증표는 답변 품질 중심이 아니라 업무 단위별 검증으로 바꿉니다.",
+                    (
+                        "SK AX는 클라우드 보안 협력 확대와 유사한 사업에서 "
+                        "운영 책임과 보안 모니터링 범위를 비교 점검해야 합니다."
+                    ),
+                ],
+            },
+            "peer_implication": {
+                "peer_meaning": (
+                    "클라우드 보안 협력 확대는 기업 고객 보안 운영 범위가 넓어지는 신호입니다."
+                )
+            },
+        },
+        "sentence_grounding": {
+            "entries": [
+                {
+                    "path": "skax_implication.recommended_actions[0]",
+                    "grounding_type": "fact",
+                    "needs_review": False,
+                },
+                {
+                    "path": "skax_implication.recommended_actions[1]",
+                    "grounding_type": "fact",
+                    "needs_review": False,
+                },
+                {
+                    "path": "skax_implication.recommended_actions[2]",
+                    "grounding_type": "fact",
+                    "needs_review": False,
+                },
+            ]
+        },
+        "validation": {"classification": {"event_type": "partnership", "sector": "ax"}},
+    }
+
+    card = CardNewsComposer().generate_from_analysis_package(package)
+    sections = {section["type"]: section for section in card["display_sections"]}
+    action_text = " ".join(sections["action"]["items"])
+
+    assert "제안서" not in action_text
+    assert "PoC" not in action_text
+    assert "검증표" not in action_text
+    assert "SK AX" in action_text
+    assert "운영 책임" in action_text
+
+
 def test_card_news_from_cluster_summary_uses_source_published_date(monkeypatch):
     import src.composers.card_news_composer as composer_module
 

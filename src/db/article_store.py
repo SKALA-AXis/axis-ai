@@ -1729,6 +1729,7 @@ def sync_card_sources_for_cluster(cluster_id: Any) -> int:
                             ) AS rn
                         FROM raw_articles ra
                         WHERE ra.cluster_id = :cluster_id
+                          AND ra.source_type = 'news'
                           AND ra.processing_status = 'PROCESSED'
                           AND ra.relevance_label = 'relevant'
                     ),

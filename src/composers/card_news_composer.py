@@ -2749,8 +2749,6 @@ def _clean_display_section_text(value: Any, *, section_type: str) -> str:
         r"SK\s*AX\s*프로필": "SK AX 사업 정보",
         r"관찰\s*지점": "후속 확인이 필요한 신호",
         r"해석하는\s*것이\s*안전합니다": "단정하기보다 후속 확인이 필요합니다",
-        r"제안서": "구조화 자료",
-        r"PoC": "사전 검증",
         r"고객에게\s*제시": "확인 가능하게 정리",
         r"linkage_level|business_novelty_status|profile_based|event_based": "",
     }
@@ -2834,9 +2832,10 @@ def _editorial_candidate_has_minimum_grounding(
         if not re.search(r"SK\s*AX|자사", value):
             return False
         skax_tokens = _grounding_tokens(_linkage_text(strategic_root.get("skax_response_linkage")))
-        if not issue_overlap and not _has_token_overlap(value, skax_tokens):
+        skax_overlap = bool(skax_tokens and _has_token_overlap(value, skax_tokens))
+        if not issue_overlap and not skax_overlap:
             return False
-        if skax_tokens and _has_token_overlap(value, skax_tokens):
+        if skax_overlap:
             return True
         return bool(re.search(r"현재\s*입력|보완|모니터링|내부|점검|구분", value))
     return True
