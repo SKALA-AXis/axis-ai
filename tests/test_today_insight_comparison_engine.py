@@ -152,9 +152,10 @@ def test_dart_issue_gets_high_salience() -> None:
     candidate = facts["salience_candidates"][0]
     assert candidate["kind"] == "integrated_issue"
     assert float(candidate["salience_score"]) >= 0.80
-    assert "source_type:dart" in candidate["salience_triggers"] or "event_type:financial" in candidate[
-        "salience_triggers"
-    ]
+    assert (
+        "source_type:dart" in candidate["salience_triggers"]
+        or "event_type:financial" in candidate["salience_triggers"]
+    )
 
 
 def test_compute_keyword_trend_facts_from_db_rows() -> None:
@@ -217,10 +218,7 @@ def test_security_sector_pulls_cyber_keyword_groups(monkeypatch) -> None:
     assert "사이버보안" in captured["groups"]
     assert facts["keyword_trends"]
     assert facts["keyword_trends"][0]["group_name"] == "사이버보안"
-    assert any(
-        item.get("metric") == "keyword_search_ratio_delta"
-        for item in facts["structural"]
-    )
+    assert any(item.get("metric") == "keyword_search_ratio_delta" for item in facts["structural"])
 
 
 def test_format_evidence_change_lines_and_ui_chips() -> None:
@@ -273,7 +271,9 @@ def test_format_evidence_change_lines_and_ui_chips() -> None:
 
 def test_trim_comparison_facts_for_prompt_keeps_primary_lane() -> None:
     facts = {
-        "primary_selection": {"items": [{"title": "핵심 이벤트", "label": "high_salience_visible"}]},
+        "primary_selection": {
+            "items": [{"title": "핵심 이벤트", "label": "high_salience_visible"}]
+        },
         "salience_candidates": [
             {
                 "title": f"후보 {idx}",
@@ -349,7 +349,9 @@ def test_executive_summary_uses_plain_korean_not_internal_scores() -> None:
 
 def test_is_generic_executive_text_detects_boilerplate() -> None:
     assert is_generic_executive_text("SK AX의 경쟁 환경에 직접적인 영향을 미칩니다.")
-    assert not is_generic_executive_text("LG CNS 클로드 엔터프라이즈 도입 — 제안서 검증 지표 재점검")
+    assert not is_generic_executive_text(
+        "LG CNS 클로드 엔터프라이즈 도입 — 제안서 검증 지표 재점검"
+    )
 
 
 def test_polish_executive_output_rewrites_generic_llm_fields() -> None:
@@ -399,7 +401,11 @@ def test_polish_executive_output_rewrites_generic_llm_fields() -> None:
             "signals": [
                 {"id": "s1", "label": "주요 신호", "value": "경쟁 환경에 영향"},
                 {"id": "s2", "label": "관찰 포인트", "value": "보도량·sector 비중 맥락 확인"},
-                {"id": "s3", "label": "다음 판단", "value": "제안서·PoC·운영모델에서 무엇을 바꿀지 오늘 결정"},
+                {
+                    "id": "s3",
+                    "label": "다음 판단",
+                    "value": "제안서·PoC·운영모델에서 무엇을 바꿀지 오늘 결정",
+                },
             ],
             "provenance": {},
         },

@@ -62,7 +62,8 @@ def main() -> None:
     if args.dry_run:
         for target in targets[:20]:
             print(
-                f"cluster_id={target['cluster_id']} representative_id={target['representative_id']} "
+                f"cluster_id={target['cluster_id']} "
+                f"representative_id={target['representative_id']} "
                 f"articles={len(target['article_ids'])}"
             )
         return
@@ -85,7 +86,9 @@ def main() -> None:
             )
             if not classified:
                 skipped += 1
-                log.info("card_news backfill skip | cluster_id=%s reason=no_classification", cluster_id)
+                log.info(
+                    "card_news backfill skip | cluster_id=%s reason=no_classification", cluster_id
+                )
                 continue
             if args.replace_existing:
                 _mark_existing_cards_deleted(cluster_id)
@@ -125,13 +128,17 @@ def _load_targets(
     limit: int,
     replace_existing: bool,
 ) -> list[dict[str, Any]]:
-    existing_filter = "" if replace_existing else """
+    existing_filter = (
+        ""
+        if replace_existing
+        else """
       AND NOT EXISTS (
           SELECT 1 FROM card_news cn
           WHERE cn.status = 'ACTIVE'
             AND cn.cluster_id = cluster_rows.cluster_id
       )
     """
+    )
     with SessionLocal() as db:
         rows = db.execute(
             text(
@@ -230,7 +237,10 @@ def _sync_card_sources_for_cluster(cluster_id: int) -> int:
                         cluster_id,
                         ARRAY_AGG(
                             id
-                            ORDER BY published_at DESC NULLS LAST, collected_at DESC NULLS LAST, id DESC
+                            ORDER BY
+                                published_at DESC NULLS LAST,
+                                collected_at DESC NULLS LAST,
+                                id DESC
                         ) AS raw_ids,
                         JSONB_AGG(
                             JSONB_BUILD_OBJECT(
@@ -242,7 +252,10 @@ def _sync_card_sources_for_cluster(cluster_id: int) -> int:
                                 'published_at', published_at,
                                 'collected_at', collected_at
                             )
-                            ORDER BY published_at DESC NULLS LAST, collected_at DESC NULLS LAST, id DESC
+                            ORDER BY
+                                published_at DESC NULLS LAST,
+                                collected_at DESC NULLS LAST,
+                                id DESC
                         ) AS sources,
                         JSONB_AGG(
                             JSONB_BUILD_OBJECT(
@@ -254,7 +267,10 @@ def _sync_card_sources_for_cluster(cluster_id: int) -> int:
                                 'published_at', published_at,
                                 'collected_at', collected_at
                             )
-                            ORDER BY published_at DESC NULLS LAST, collected_at DESC NULLS LAST, id DESC
+                            ORDER BY
+                                published_at DESC NULLS LAST,
+                                collected_at DESC NULLS LAST,
+                                id DESC
                         ) AS source_articles
                     FROM ranked_articles
                     GROUP BY cluster_id

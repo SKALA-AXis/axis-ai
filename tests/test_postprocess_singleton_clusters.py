@@ -50,7 +50,7 @@ def test_title_anchor_overlap_accepts_same_event_surface_variants() -> None:
 def test_company_name_alone_does_not_create_generic_merge() -> None:
     relation = _cluster_relation(
         ['"현대오토에버, 그룹 AI 투자 확대 수혜 기대…목표가↑"-IBK'],
-        ['[특징주] 플래티어, 현대오토에버와 24억 규모 추가 공급계약 체결'],
+        ["[특징주] 플래티어, 현대오토에버와 24억 규모 추가 공급계약 체결"],
         target_size=6,
     )
 
