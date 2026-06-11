@@ -67,6 +67,7 @@ _TITLE_LLM_JUDGE_ENABLED = (
 )
 _TITLE_LLM_MAX_CALLS = int(os.getenv("POSTPROCESS_TITLE_LLM_MAX_CALLS", "80"))
 _TITLE_LLM_MODEL = os.getenv("POSTPROCESS_TITLE_LLM_MODEL", "gpt-4o-mini")
+_TITLE_LLM_MERGE_SCORE = float(os.getenv("POSTPROCESS_TITLE_LLM_MERGE_SCORE", "0.82"))
 _title_llm_calls = 0
 _title_llm_cache: dict[tuple[str, str], bool | None] = {}
 
@@ -414,11 +415,15 @@ def _find_candidates(
                 )
             )
 
-        scored.sort(key=lambda item: item.score, reverse=True)
+        scored.sort(key=lambda item: (item.score, item.target.article_count), reverse=True)
         if not scored:
             continue
         best = scored[0]
-        if len(scored) >= 2 and best.score - scored[1].score < 0.08:
+        if (
+            len(scored) >= 2
+            and best.score - scored[1].score < 0.08
+            and best.event_key != "title_content_llm"
+        ):
             log.info(
                 "ambiguous small-cluster merge skipped | cluster_id=%s best=%s second=%s",
                 source.cluster_id,
@@ -894,7 +899,7 @@ def _cluster_relation(
             _candidate_score(
                 left_context_tokens, right_context_tokens, shared_context_tokens, target_size
             ),
-            0.65,
+            _TITLE_LLM_MERGE_SCORE,
         )
         return "title_content_llm", shared_context_tokens, score
 
@@ -1123,9 +1128,11 @@ def _title_llm_same_event(
             temperature=0,
         )
         parsed = json.loads(response.choices[0].message.content or "{}")
-        decision = bool(parsed.get("same_event")) and float(parsed.get("confidence") or 0) >= 0.7
+        confidence = float(parsed.get("confidence") or 0)
+        decision = bool(parsed.get("same_event")) and confidence >= 0.7
         if decision and not (
-            _has_title_anchor_overlap(left_titles, right_titles)
+            confidence >= 0.85
+            or _has_title_anchor_overlap(left_titles, right_titles)
             or _has_context_anchor_overlap(left_titles, right_titles, left_snippets, right_snippets)
         ):
             log.info(
@@ -1137,7 +1144,7 @@ def _title_llm_same_event(
         log.info(
             "title LLM merge judge | decision=%s confidence=%s reason=%s",
             decision,
-            parsed.get("confidence"),
+            confidence,
             parsed.get("reason", ""),
         )
         return decision

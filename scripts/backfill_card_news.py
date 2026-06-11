@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,12 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
 log = logging.getLogger("backfill_card_news")
+
+_FINANCIAL_LIKE_TITLE_RE = re.compile(
+    r"영업이익|매출|순이익|실적|수익성|주가|목표가|투자의견|상승|하락|급등|급락|"
+    r"전년\s*동기|전분기|분기|배당|주주환원|R&D\s*지출"
+)
+_FINANCIAL_LIKE_EVENTS = {"financial", "earnings", "stock_market", "analyst_report"}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -54,6 +61,22 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Limit targets to clusters that currently have an ACTIVE card.",
     )
+    parser.add_argument(
+        "--only-needs-refresh",
+        action="store_true",
+        help=(
+            "Limit targets to ACTIVE cards with stale schema/provenance, empty/problematic "
+            "actions, or body-like titles."
+        ),
+    )
+    parser.add_argument(
+        "--include-financial-like",
+        action="store_true",
+        help=(
+            "Also regenerate financial/stock/earnings-like stale cards. "
+            "Default is to delete/skip them."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -62,7 +85,10 @@ def main() -> None:
     args = _parse_args()
     profile = load_profile(args.env)
     include_existing = bool(
-        args.replace_existing or args.update_existing_in_place or args.only_card_schema_version
+        args.replace_existing
+        or args.update_existing_in_place
+        or args.only_card_schema_version
+        or args.only_needs_refresh
     )
     targets = _load_targets(
         published_since=args.published_since,
@@ -71,6 +97,7 @@ def main() -> None:
         include_existing=include_existing,
         only_card_schema_version=args.only_card_schema_version,
         only_existing_active=args.only_existing_active,
+        only_needs_refresh=args.only_needs_refresh,
     )
     log.info(
         (
@@ -118,6 +145,25 @@ def main() -> None:
                     "card_news backfill skip | cluster_id=%s reason=no_classification", cluster_id
                 )
                 continue
+            if not args.include_financial_like and _is_financial_like_target(classified[0], target):
+                deleted = (
+                    _mark_existing_cards_deleted(cluster_id)
+                    if args.replace_existing or args.update_existing_in_place
+                    else 0
+                )
+                skipped += 1
+                log.info(
+                    (
+                        "card_news backfill skip financial-like | %d/%d "
+                        "cluster_id=%s event_type=%s deleted=%d"
+                    ),
+                    index,
+                    len(targets),
+                    cluster_id,
+                    classified[0].get("event_type"),
+                    deleted,
+                )
+                continue
             if args.replace_existing and not args.update_existing_in_place:
                 _mark_existing_cards_deleted(cluster_id)
             result = runner.run_cluster(
@@ -129,6 +175,27 @@ def main() -> None:
             )
             card = result.get("card_news") or {}
             if card:
+                if not args.include_financial_like and _is_problematic_generated_title(
+                    str(card.get("title") or "")
+                ):
+                    transient_card_id = str(card.get("id") or "")
+                    deleted = _mark_card_deleted(transient_card_id) if transient_card_id else 0
+                    if args.update_existing_in_place and existing_card_id:
+                        deleted += _mark_card_deleted(existing_card_id)
+                    skipped += 1
+                    log.info(
+                        (
+                            "card_news backfill deleted generated problematic card | "
+                            "%d/%d cluster_id=%s card_id=%s title=%s deleted=%d"
+                        ),
+                        index,
+                        len(targets),
+                        cluster_id,
+                        transient_card_id or existing_card_id,
+                        card.get("title"),
+                        deleted,
+                    )
+                    continue
                 if args.update_existing_in_place:
                     if existing_card_id:
                         transient_card_id = str(card.get("id") or "")
@@ -200,6 +267,7 @@ def _load_targets(
     include_existing: bool,
     only_card_schema_version: str | None,
     only_existing_active: bool,
+    only_needs_refresh: bool,
 ) -> list[dict[str, Any]]:
     existing_filter = (
         ""
@@ -235,6 +303,32 @@ def _load_targets(
         if only_existing_active
         else ""
     )
+    needs_refresh_filter = (
+        """
+      AND EXISTS (
+          SELECT 1 FROM card_news cn
+          WHERE cn.status = 'ACTIVE'
+            AND cn.cluster_id = cluster_rows.cluster_id
+            AND (
+                cn.card_schema_version IS DISTINCT FROM 'v2'
+                OR COALESCE(
+                    cn.evidence_payload->'analysis_package'->'implication'->'provenance'->>'prompt_version',
+                    ''
+                ) NOT LIKE 'strategic-insight-v1.61%'
+                OR cn.implication::text ILIKE '%제안서%'
+                OR cn.implication::text ILIKE '%PoC%'
+                OR cn.implication::text ILIKE '%검증표%'
+                OR cn.implication::text ILIKE '%데이터 없음%'
+                OR cn.title ILIKE '%사진=%'
+                OR cn.title ILIKE '%전자공시시스템%'
+                OR cn.title ILIKE '%따르면%'
+                OR length(cn.title) > 80
+            )
+      )
+    """
+        if only_needs_refresh
+        else ""
+    )
     with SessionLocal() as db:
         rows = db.execute(
             text(
@@ -249,6 +343,13 @@ def _load_targets(
                                 ra.collected_at DESC NULLS LAST,
                                 ra.id DESC
                         ) AS article_ids,
+                        ARRAY_AGG(
+                            COALESCE(ra.title, '')
+                            ORDER BY
+                                ra.published_at DESC NULLS LAST,
+                                ra.collected_at DESC NULLS LAST,
+                                ra.id DESC
+                        ) AS titles,
                         (
                             ARRAY_AGG(
                                 ra.id
@@ -269,7 +370,7 @@ def _load_targets(
                       AND ra.cluster_id IS NOT NULL
                     GROUP BY ra.cluster_id
                 )
-                SELECT cluster_id, article_ids, representative_id
+                SELECT cluster_id, article_ids, titles, representative_id
                      , (
                           SELECT cn.id
                           FROM card_news cn
@@ -283,6 +384,7 @@ def _load_targets(
                   {existing_filter}
                   {schema_filter}
                   {existing_active_filter}
+                  {needs_refresh_filter}
                 ORDER BY min_published, cluster_id
                 LIMIT :limit
                 """
@@ -295,6 +397,32 @@ def _load_targets(
             },
         ).mappings()
         return [dict(row) for row in rows]
+
+
+def _is_financial_like_target(classification: dict[str, Any], target: dict[str, Any]) -> bool:
+    event_type = str(classification.get("event_type") or "").strip().lower()
+    if event_type in _FINANCIAL_LIKE_EVENTS:
+        return True
+    titles = target.get("titles") or []
+    if isinstance(titles, str):
+        titles = [titles]
+    text = " ".join(str(title or "") for title in titles)
+    return _is_financial_like_text(text)
+
+
+def _is_financial_like_text(text: str) -> bool:
+    return bool(_FINANCIAL_LIKE_TITLE_RE.search(text))
+
+
+def _is_problematic_generated_title(title: str) -> bool:
+    stripped = title.strip()
+    if not stripped:
+        return True
+    if len(stripped) > 80:
+        return True
+    if any(fragment in stripped for fragment in ("사진=", "전자공시시스템", "따르면")):
+        return True
+    return _is_financial_like_text(stripped)
 
 
 def _mark_existing_cards_deleted(cluster_id: int) -> int:
