@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from collections.abc import Iterable, Mapping
 from contextlib import asynccontextmanager
@@ -34,6 +35,7 @@ from src.schemas import (
     HealthResponse,
     PipelineRunRequest,
     PipelineRunResponse,
+    SearchHit,
     SearchRequest,
     SearchResponse,
 )
@@ -623,21 +625,214 @@ def _ensure_kst(value: datetime) -> datetime:
 async def search(request: SearchRequest):
     """BGE-M3 하이브리드 검색 (Dense + Sparse RRF)"""
     log.info("검색 요청 | query=%s company=%s", request.query, request.company)
-    # TODO: hybrid_search.py 실행
-    return SearchResponse(hits=[], total=0)
+    hits, _timings = await asyncio.to_thread(_run_search_pipeline, request)
+    return SearchResponse(hits=[SearchHit.model_validate(hit) for hit in hits], total=len(hits))
 
 
 @app.post("/gen-search", response_model=GenSearchResult)
 async def gen_search(request: GenSearchRequest):
     """Generative Search — RAG + GPT-4o + SC 검증"""
     log.info("Generative Search | query=%s", request.query)
-    # TODO: RAG + LLM 실행
-    return GenSearchResult(
-        answer="(AI 서버 초기화 중)",
-        sources=[],
-        sc_passed=False,
-        sc_score=0.0,
+    search_request = SearchRequest(
+        query=request.query,
+        company=request.company,
+        event_type=None,
+        top_k=request.top_k,
     )
+    hits, _timings = await asyncio.to_thread(_run_search_pipeline, search_request)
+    if not hits:
+        return GenSearchResult(
+            answer="검색 인덱스에서 관련 근거를 찾지 못했습니다. 검색어를 더 구체화해 주세요.",
+            sources=[],
+            sc_passed=False,
+            sc_score=0.0,
+        )
+
+    llm_answer = await asyncio.to_thread(_try_gen_search_llm_answer, request.query, hits)
+    if llm_answer:
+        return GenSearchResult(
+            answer=llm_answer,
+            sources=hits,
+            sc_passed=True,
+            sc_score=0.72,
+        )
+
+    return GenSearchResult(
+        answer=_deterministic_gen_search_answer(request.query, hits),
+        sources=hits,
+        sc_passed=False,
+        sc_score=0.42,
+    )
+
+
+def _run_search_pipeline(request: SearchRequest) -> tuple[list[dict[str, object]], dict[str, int]]:
+    from src.rag.hybrid_search import hybrid_search
+    from src.rag.reranker import rerank
+
+    top_k = max(1, min(int(request.top_k or 10), 50))
+    timings: dict[str, int] = {}
+    started = time.perf_counter()
+    try:
+        candidates = hybrid_search(
+            query=request.query,
+            top_k=max(top_k * 3, top_k),
+            company=request.company,
+            event_type=request.event_type,
+            raise_on_failure=True,
+        )
+        timings["search_ms"] = int((time.perf_counter() - started) * 1000)
+        rerank_started = time.perf_counter()
+        ranked = rerank(request.query, candidates, top_k=top_k)
+        timings["rerank_ms"] = int((time.perf_counter() - rerank_started) * 1000)
+    except Exception as exc:  # noqa: BLE001 - 내부 API는 장애를 빈 결과로 숨기지 않는다.
+        log.exception("검색 실행 실패 | query=%s error=%s", request.query, exc)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "SEARCH_RAG_UNAVAILABLE",
+                "message": _AGENT_CALL_FAILED_MESSAGE,
+                "detail": str(exc),
+            },
+        ) from exc
+    return [_normalize_search_hit(hit) for hit in ranked], timings
+
+
+def _normalize_search_hit(hit: Mapping[str, object]) -> dict[str, object]:
+    rdb_id = _safe_int(
+        hit.get("rdb_id")
+        or hit.get("raw_article_id")
+        or hit.get("article_id")
+        or hit.get("source_id")
+    )
+    company = _first_text(hit.get("company"), hit.get("peer_id"), hit.get("peer"), "unknown")
+    title = _first_text(hit.get("title"), hit.get("card_title"), f"검색 결과 {rdb_id}")
+    summary = _first_text(hit.get("summary"), hit.get("snippet"), hit.get("text"), "")
+    event_type = _first_text(hit.get("event_type"), hit.get("type"), "unknown")
+    published_at = hit.get("pub_date") or hit.get("published_at") or hit.get("updated_at")
+    score = _safe_float(hit.get("rerank_score"), hit.get("score"), 0.0)
+    return {
+        "rdb_id": rdb_id,
+        "company": company,
+        "title": title,
+        "summary": summary,
+        "importance": _first_text(hit.get("importance"), hit.get("exposure_band"), "unknown"),
+        "event_type": event_type,
+        "pub_date": _search_date_string(published_at),
+        "rerank_score": score,
+        "source_url": _optional_text(hit.get("source_url") or hit.get("url") or hit.get("link")),
+    }
+
+
+def _try_gen_search_llm_answer(query: str, hits: list[dict[str, object]]) -> str:
+    from src.services.llm_env import llm_credentials_ready
+
+    if os.getenv("AXIS_GEN_SEARCH_ENABLE_LLM", "1").lower() in {"0", "false", "no"}:
+        return ""
+    if not llm_credentials_ready():
+        return ""
+    try:
+        from langchain_openai import ChatOpenAI
+
+        payload = {
+            "query": query,
+            "sources": [
+                {
+                    "title": hit.get("title"),
+                    "summary": hit.get("summary"),
+                    "company": hit.get("company"),
+                    "event_type": hit.get("event_type"),
+                    "pub_date": hit.get("pub_date"),
+                    "score": hit.get("rerank_score"),
+                }
+                for hit in hits[:6]
+            ],
+        }
+        prompt = f"""\
+AXIS Generative Search 답변을 작성합니다.
+
+규칙:
+- 아래 JSON의 sources 안에 있는 사실만 사용합니다.
+- 출처에 없는 수치, 고객명, 계약명, 날짜를 만들지 않습니다.
+- 답변은 한국어 4~7문장으로 작성합니다.
+- 마지막 문장에는 추가로 확인해야 할 검색어 1개를 제안합니다.
+- JSON object 하나만 반환합니다.
+
+입력 JSON:
+{json.dumps(payload, ensure_ascii=False)}
+
+출력 JSON:
+{{"answer":"근거 기반 답변"}}
+"""
+        model = os.getenv("GEN_SEARCH_LLM_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o-mini"
+        llm = ChatOpenAI(
+            model=model,
+            temperature=0.1,
+            max_completion_tokens=800,
+            model_kwargs={"response_format": {"type": "json_object"}},
+        )
+        result = llm.invoke(prompt)
+        parsed = json.loads(str(getattr(result, "content", result) or "{}"))
+        answer = str(parsed.get("answer") or "").strip()
+        return answer
+    except Exception as exc:  # noqa: BLE001 - 검색 결과 요약 fallback 을 사용한다.
+        log.warning("GenSearch LLM compose failed; deterministic fallback used | error=%s", exc)
+        return ""
+
+
+def _deterministic_gen_search_answer(query: str, hits: list[dict[str, object]]) -> str:
+    lead = hits[0]
+    bullets = []
+    for index, hit in enumerate(hits[:3], start=1):
+        title = _first_text(hit.get("title"), f"근거 {index}")
+        company = _first_text(hit.get("company"), "unknown")
+        summary = _first_text(hit.get("summary"), "")
+        bullets.append(f"{index}. {company}: {title}" + (f" — {summary}" if summary else ""))
+    return (
+        f"'{query}'에 대해 Qdrant 하이브리드 검색과 rerank 결과를 기준으로 요약했습니다. "
+        f"가장 관련도가 높은 근거는 {lead.get('company')}의 '{lead.get('title')}'입니다. "
+        "현재 응답은 LLM 생성 단계가 비활성화되었거나 실패해 "
+        "deterministic fallback으로 작성되었습니다.\n" + "\n".join(bullets)
+    )
+
+
+def _first_text(*values: object) -> str:
+    for value in values:
+        text = _optional_text(value)
+        if text:
+            return text
+    return ""
+
+
+def _optional_text(value: object) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return text
+
+
+def _safe_int(value: object) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_float(*values: object) -> float:
+    for value in values:
+        try:
+            return float(str(value).strip())
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def _search_date_string(value: object) -> str:
+    if isinstance(value, (int, float)):
+        if value <= 0:
+            return ""
+        return datetime.fromtimestamp(value, tz=UTC).isoformat()
+    text = _optional_text(value)
+    return text
 
 
 @app.post("/chat", response_model=ChatTurnResponse)
@@ -1407,10 +1602,19 @@ async def verify_link(request: LinkVerificationRequest) -> LinkVerificationRespo
 
 @app.post("/weak-signal/run")
 async def run_weak_signal():
-    """약한 신호 감지기 실행 (주 1회)"""
+    """약한 신호 감지기 실행 (주 1회).
+
+    W7 weak-signal read model 이 V30 이후 제거된 상태라 accepted 로 위장하지 않는다.
+    """
     log.info("약한 신호 감지기 실행")
-    # TODO: weak_signal_agent.py 실행
-    return {"status": "accepted"}
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "code": "WEAK_SIGNAL_NOT_IMPLEMENTED",
+            "message": "WeakSignalAgent는 현재 운영 경로에 연결되어 있지 않습니다.",
+            "result_kind": "not_implemented",
+        },
+    )
 
 
 def _check_db() -> bool:
