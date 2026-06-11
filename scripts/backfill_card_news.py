@@ -49,6 +49,11 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Limit targets to clusters with an ACTIVE card using this schema version, e.g. v1.",
     )
+    parser.add_argument(
+        "--only-existing-active",
+        action="store_true",
+        help="Limit targets to clusters that currently have an ACTIVE card.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -65,6 +70,7 @@ def main() -> None:
         limit=max(1, args.limit),
         include_existing=include_existing,
         only_card_schema_version=args.only_card_schema_version,
+        only_existing_active=args.only_existing_active,
     )
     log.info(
         (
@@ -193,6 +199,7 @@ def _load_targets(
     limit: int,
     include_existing: bool,
     only_card_schema_version: str | None,
+    only_existing_active: bool,
 ) -> list[dict[str, Any]]:
     existing_filter = (
         ""
@@ -215,6 +222,17 @@ def _load_targets(
       )
     """
         if only_card_schema_version
+        else ""
+    )
+    existing_active_filter = (
+        """
+      AND EXISTS (
+          SELECT 1 FROM card_news cn
+          WHERE cn.status = 'ACTIVE'
+            AND cn.cluster_id = cluster_rows.cluster_id
+      )
+    """
+        if only_existing_active
         else ""
     )
     with SessionLocal() as db:
@@ -264,6 +282,7 @@ def _load_targets(
                 WHERE TRUE
                   {existing_filter}
                   {schema_filter}
+                  {existing_active_filter}
                 ORDER BY min_published, cluster_id
                 LIMIT :limit
                 """

@@ -207,6 +207,55 @@ def test_non_financial_summary_rejects_numeric_only_lines() -> None:
     assert "수치/시장반응 중심" in checked["reason"]
 
 
+def test_extracted_facts_drop_article_body_noise_without_title_overlap() -> None:
+    facts = summarizer._build_extracted_facts(
+        cluster_id=46515,
+        article_fact_notes=[
+            {
+                "article_id": 46223,
+                "core_facts": [
+                    {
+                        "fact": (
+                            "젠슨 황은 출국길에 한국 기술 없이는 "
+                            "AI 슈퍼컴을 만들 수 없다고 언급했다."
+                        ),
+                        "evidence_text": (
+                            "젠슨 황은 출국길에 한국 기술 없이는 AI 슈퍼컴을 "
+                            "만들 수 없다고 언급했다."
+                        ),
+                        "activity_type": "general_update",
+                        "summary_role": "main_event",
+                    },
+                    {
+                        "fact": (
+                            "네이버클라우드, 삼성SDS, 엘리스그룹이 GPU 확보·구축 사업자로 선정됐다."
+                        ),
+                        "evidence_text": (
+                            "정부는 네이버클라우드, 삼성SDS, 엘리스그룹을 "
+                            "GPU 확보·구축 사업자로 선정했다."
+                        ),
+                        "activity_type": "contract",
+                        "summary_role": "main_event",
+                    },
+                ],
+            }
+        ],
+        articles=[
+            {
+                "id": 46223,
+                "title": "[속보]정부, 네이버클라우드·삼성SDS·엘리스그룹에 2조 규모 GPU 지원",
+                "matched_companies": ["samsung_sds"],
+            }
+        ],
+        cluster_event_type="contract",
+    )
+
+    texts = [fact["normalized_fact"] for fact in facts]
+
+    assert any("GPU 확보" in text for text in texts)
+    assert all("젠슨 황" not in text for text in texts)
+
+
 def test_large_cluster_selects_diverse_articles_from_majority_event(monkeypatch) -> None:
     monkeypatch.setattr(summarizer, "_MIN_ANALYZED_ARTICLES", 8)
     monkeypatch.setattr(summarizer, "_MAX_ANALYZED_ARTICLES", 20)
