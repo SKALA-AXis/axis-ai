@@ -221,7 +221,7 @@ class CardNewsComposer:
         )
 
         db_record = _db_record(
-            card_id=_card_news_id(cluster_id, created_at),
+            card_id=_card_news_id(cluster_id, published_date),
             company=peer_id,
             cluster_id=cluster_id,
             title=title,
@@ -685,8 +685,8 @@ def _load_source_articles(summary: dict[str, Any]) -> list[dict[str, Any]]:
     return get_articles_by_ids(article_ids) if article_ids else []
 
 
-def _card_news_id(cluster_id: int | None, created_at: str) -> str:
-    date_key = created_at[:10].replace("-", "")
+def _card_news_id(cluster_id: int | None, published_date: str) -> str:
+    date_key = published_date[:10].replace("-", "")
     suffix = f"{cluster_id:04d}" if cluster_id is not None else "0000"
     return f"CN-{date_key}-{suffix}"
 

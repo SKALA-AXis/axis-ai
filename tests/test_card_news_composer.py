@@ -189,6 +189,8 @@ def test_card_news_from_analysis_package_adds_grounded_display_sections(monkeypa
     card = CardNewsComposer().generate_from_analysis_package(package)
     sections = {section["type"]: section for section in card["display_sections"]}
 
+    assert card["id"] == "CN-20260610-0001"
+    assert card["published_date"] == "2026-06-10"
     assert list(sections) == ["summary", "insight", "action"]
     assert len(sections["summary"]["items"]) == 3
     insight_text = " ".join(sections["insight"]["items"])
