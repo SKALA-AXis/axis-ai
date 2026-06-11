@@ -33,8 +33,9 @@ logging.basicConfig(
 log = logging.getLogger("backfill_card_news")
 
 _FINANCIAL_LIKE_TITLE_RE = re.compile(
-    r"영업이익|매출|순이익|실적|수익성|주가|목표가|투자의견|상승|하락|급등|급락|"
-    r"전년\s*동기|전분기|분기|배당|주주환원|R&D\s*지출"
+    r"영업이익|순이익|수익성|주가|목표가|투자의견|상한가|하한가|"
+    r"주가.{0,12}(상승|하락|급등|급락)|전년\s*동기|전분기|"
+    r"분기\s*(매출|영업이익|실적)|배당|주주환원|R&D\s*지출"
 )
 _FINANCIAL_LIKE_EVENTS = {"financial", "earnings", "stock_market", "analyst_report"}
 
@@ -70,12 +71,25 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--only-deleted-needs-refresh",
+        action="store_true",
+        help=(
+            "Limit targets to clusters with DELETED stale cards and no ACTIVE card, so they can "
+            "be regenerated with the current agent stack."
+        ),
+    )
+    parser.add_argument(
         "--include-financial-like",
         action="store_true",
         help=(
             "Also regenerate financial/stock/earnings-like stale cards. "
             "Default is to delete/skip them."
         ),
+    )
+    parser.add_argument(
+        "--cluster-ids",
+        default=None,
+        help="Comma-separated cluster ids to process after the normal target filters.",
     )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -89,6 +103,7 @@ def main() -> None:
         or args.update_existing_in_place
         or args.only_card_schema_version
         or args.only_needs_refresh
+        or args.only_deleted_needs_refresh
     )
     targets = _load_targets(
         published_since=args.published_since,
@@ -98,6 +113,8 @@ def main() -> None:
         only_card_schema_version=args.only_card_schema_version,
         only_existing_active=args.only_existing_active,
         only_needs_refresh=args.only_needs_refresh,
+        only_deleted_needs_refresh=args.only_deleted_needs_refresh,
+        cluster_ids=_parse_cluster_ids(args.cluster_ids),
     )
     log.info(
         (
@@ -113,7 +130,7 @@ def main() -> None:
         args.only_card_schema_version,
     )
     if args.dry_run:
-        for target in targets[:20]:
+        for target in targets:
             print(
                 f"cluster_id={target['cluster_id']} "
                 f"representative_id={target['representative_id']} "
@@ -268,6 +285,8 @@ def _load_targets(
     only_card_schema_version: str | None,
     only_existing_active: bool,
     only_needs_refresh: bool,
+    only_deleted_needs_refresh: bool,
+    cluster_ids: list[int],
 ) -> list[dict[str, Any]]:
     existing_filter = (
         ""
@@ -329,6 +348,44 @@ def _load_targets(
         if only_needs_refresh
         else ""
     )
+    deleted_needs_refresh_filter = (
+        """
+      AND NOT EXISTS (
+          SELECT 1 FROM card_news cn
+          WHERE cn.status = 'ACTIVE'
+            AND cn.cluster_id = cluster_rows.cluster_id
+      )
+      AND EXISTS (
+          SELECT 1 FROM card_news cn
+          WHERE cn.status = 'DELETED'
+            AND cn.cluster_id = cluster_rows.cluster_id
+            AND (
+                cn.card_schema_version IS DISTINCT FROM 'v2'
+                OR COALESCE(
+                    cn.evidence_payload->'analysis_package'->'implication'->'provenance'->>'prompt_version',
+                    ''
+                ) NOT LIKE 'strategic-insight-v1.61%'
+                OR cn.implication::text ILIKE '%제안서%'
+                OR cn.implication::text ILIKE '%PoC%'
+                OR cn.implication::text ILIKE '%검증표%'
+                OR cn.implication::text ILIKE '%데이터 없음%'
+                OR cn.title ILIKE '%사진=%'
+                OR cn.title ILIKE '%전자공시시스템%'
+                OR cn.title ILIKE '%따르면%'
+                OR length(cn.title) > 80
+            )
+      )
+    """
+        if only_deleted_needs_refresh
+        else ""
+    )
+    cluster_ids_filter = (
+        """
+      AND cluster_rows.cluster_id = ANY(:cluster_ids)
+    """
+        if cluster_ids
+        else ""
+    )
     with SessionLocal() as db:
         rows = db.execute(
             text(
@@ -385,6 +442,8 @@ def _load_targets(
                   {schema_filter}
                   {existing_active_filter}
                   {needs_refresh_filter}
+                  {deleted_needs_refresh_filter}
+                  {cluster_ids_filter}
                 ORDER BY min_published, cluster_id
                 LIMIT :limit
                 """
@@ -394,9 +453,22 @@ def _load_targets(
                 "published_until": published_until,
                 "limit": limit,
                 "only_card_schema_version": only_card_schema_version,
+                "cluster_ids": cluster_ids,
             },
         ).mappings()
         return [dict(row) for row in rows]
+
+
+def _parse_cluster_ids(value: str | None) -> list[int]:
+    if not value:
+        return []
+    ids: list[int] = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        ids.append(int(item))
+    return ids
 
 
 def _is_financial_like_target(classification: dict[str, Any], target: dict[str, Any]) -> bool:
@@ -406,8 +478,11 @@ def _is_financial_like_target(classification: dict[str, Any], target: dict[str, 
     titles = target.get("titles") or []
     if isinstance(titles, str):
         titles = [titles]
-    text = " ".join(str(title or "") for title in titles)
-    return _is_financial_like_text(text)
+    normalized_titles = [str(title or "") for title in titles if str(title or "").strip()]
+    if not normalized_titles:
+        return False
+    financial_title_count = sum(1 for title in normalized_titles if _is_financial_like_text(title))
+    return financial_title_count >= max(2, int(len(normalized_titles) * 0.4))
 
 
 def _is_financial_like_text(text: str) -> bool:
