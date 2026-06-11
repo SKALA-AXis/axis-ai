@@ -45,6 +45,7 @@ SCHEDULED_PREPROCESS_LIMIT = 5000
 _MIXER_SSE_HEARTBEAT_SEC = 10
 _CHAT_PDF_MAX_BYTES = 15 * 1024 * 1024
 _CHAT_PDF_MAX_TEXT_CHARS = 80_000
+_AGENT_CALL_FAILED_MESSAGE = "호출에 실패했다"
 
 
 def _count_result_items(results: Iterable[Mapping[str, object]], key: str) -> int:
@@ -63,6 +64,96 @@ def _sum_result_ints(results: Iterable[Mapping[str, object]], key: str) -> int:
         if isinstance(value, int):
             total += value
     return total
+
+
+def _raise_if_agent_failure(agent: str, result: Mapping[str, object] | None) -> None:
+    reason = _agent_failure_reason(result)
+    if not reason:
+        return
+    raise HTTPException(
+        status_code=502,
+        detail={
+            "code": _agent_failure_code(agent, result),
+            "message": _AGENT_CALL_FAILED_MESSAGE,
+            "detail": reason,
+        },
+    )
+
+
+def _agent_failure_event(agent: str, result: Mapping[str, object] | None) -> dict[str, str]:
+    return {
+        "type": "error",
+        "message": _AGENT_CALL_FAILED_MESSAGE,
+        "error_code": _agent_failure_code(agent, result),
+        "detail": _agent_failure_reason(result) or "agent response failed",
+    }
+
+
+def _agent_failure_reason(result: Mapping[str, object] | None) -> str:
+    if not result:
+        return "empty_response"
+    status = str(result.get("status") or "").strip().lower()
+    if status in {"failed", "error"}:
+        return status
+    top_error = str(result.get("error") or "").strip()
+    if top_error:
+        return top_error
+
+    provenance = result.get("provenance")
+    provenance_error = ""
+    provenance_mode = ""
+    provenance_kind = ""
+    if isinstance(provenance, Mapping):
+        provenance_error = str(provenance.get("error") or "").strip()
+        provenance_mode = str(provenance.get("mode") or "").strip().lower()
+        provenance_kind = str(provenance.get("result_kind") or "").strip().lower()
+    if provenance_error:
+        return provenance_error
+
+    result_kind = str(result.get("result_kind") or provenance_kind).strip().lower()
+    if "unavailable" in result_kind or "empty_axis_ai_response" in result_kind:
+        return result_kind
+    if "fallback" in result_kind or "fallback" in provenance_mode:
+        return result_kind or provenance_mode
+
+    warning = str(result.get("warning") or "").strip()
+    warning_lower = warning.lower()
+    if (
+        "llm generation failed" in warning_lower
+        or "llm 호출 실패" in warning_lower
+        or "generation failed" in warning_lower
+        or "source data unavailable" in warning_lower
+    ):
+        return warning
+    return ""
+
+
+def _agent_failure_code(agent: str, result: Mapping[str, object] | None) -> str:
+    prefix = _normalize_error_code(agent)
+    if result:
+        top_code = str(result.get("error_code") or "").strip()
+        if top_code:
+            return _normalize_error_code(top_code)
+        provenance = result.get("provenance")
+        if isinstance(provenance, Mapping):
+            provenance_code = str(provenance.get("error_code") or "").strip()
+            if provenance_code:
+                return _normalize_error_code(provenance_code)
+            provenance_error = str(provenance.get("error") or "").strip()
+            if provenance_error:
+                return f"{prefix}_{_normalize_error_code(provenance_error)}"
+            provenance_kind = str(provenance.get("result_kind") or "").strip()
+            if provenance_kind:
+                return f"{prefix}_{_normalize_error_code(provenance_kind)}"
+        result_kind = str(result.get("result_kind") or "").strip()
+        if result_kind:
+            return f"{prefix}_{_normalize_error_code(result_kind)}"
+    return f"{prefix}_AI_RESPONSE_FAILED"
+
+
+def _normalize_error_code(value: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", value or "").strip("_").upper()
+    return normalized or "AI_RESPONSE_FAILED"
 
 
 PREPROCESS_SOURCE_TYPES_BY_SOURCE: dict[str, list[str]] = {
@@ -257,8 +348,16 @@ async def generate_briefing(request: BriefingGenerateRequest) -> BriefingGenerat
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         log.exception("BriefingGenerationAgent 실행 실패 | error=%s", exc)
-        raise HTTPException(status_code=500, detail="briefing generation failed") from exc
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "BRIEFING_GENERATION_FAILED",
+                "message": _AGENT_CALL_FAILED_MESSAGE,
+                "detail": str(exc),
+            },
+        ) from exc
 
+    _raise_if_agent_failure("BRIEFING", result)
     return BriefingGenerateResponse.model_validate(result)
 
 
@@ -621,13 +720,15 @@ def _build_pdf_chat_response(
     source_id = f"pdf:{file_hash[:16]}"
 
     if not text:
+        error_code = "ASSISTANT_PDF_TEXT_EXTRACTION_FAILED"
         return {
             "conversation_id": conversation_id,
             "session_id": conversation_id,
             "message_id": message_id,
             "reply": (
-                f"{file_name}에서 분석 가능한 텍스트를 추출하지 못했습니다. "
-                "스캔 이미지형 PDF라면 OCR 가능한 문서로 다시 업로드해 주세요."
+                "기능에 문제가 생겼습니다.\n"
+                f"에러코드: {error_code}\n"
+                "PDF에서 분석 가능한 텍스트를 추출하지 못했습니다."
             ),
             "intent": "pdf_attachment_analysis",
             "scope": "uploaded_pdf",
@@ -645,10 +746,12 @@ def _build_pdf_chat_response(
             "follow_up_suggestions": ["다른 PDF로 다시 분석해줘"],
             "confidence": 0.15,
             "blocked": True,
-            "blocked_reason": "pdf_text_extraction_failed",
+            "blocked_reason": error_code,
+            "error_code": error_code,
             "handoff": None,
             "provenance": {
                 "retrieval_mode": "uploaded_pdf_text_extraction",
+                "error_code": error_code,
                 "attachment": {
                     "file_name": file_name,
                     "content_type": content_type,
@@ -691,14 +794,41 @@ def _build_pdf_chat_response(
         "title": str(report_draft_payload.get("title") or "").strip() or f"{title} 분석 보고서",
         "sections": [
             {
-                "title": "핵심 요약",
+                "title": "목차 및 구성",
+                "body": "\n".join(
+                    [
+                        "1. Executive Summary",
+                        "2. 문서 주요 내용",
+                        "3. 문서 근거",
+                        "4. 해석 한계",
+                        "5. SK AX 관점 검토 포인트",
+                    ]
+                ),
+            },
+            {
+                "title": "Executive Summary",
                 "body": _section_body(report_draft_payload, "핵심 요약")
-                or "\n".join(f"- {item}" for item in bullets),
+                or _pdf_executive_summary(
+                    title=title, bullets=bullets, page_count=parsed_page_count or page_count
+                ),
+            },
+            {
+                "title": "문서 주요 내용",
+                "body": _section_body(report_draft_payload, "문서 주요 내용")
+                or "\n".join(f"{index}. {item}" for index, item in enumerate(bullets[:6], start=1)),
             },
             {
                 "title": "문서 근거",
                 "body": _section_body(report_draft_payload, "문서 근거")
-                or "\n".join(f"- {item}" for item in evidence),
+                or "\n".join(f"- {item}" for item in evidence[:8]),
+            },
+            {
+                "title": "해석 한계",
+                "body": (
+                    "이 초안은 업로드된 PDF에서 추출 가능한 텍스트만 바탕으로 작성되었습니다. "
+                    "표, 이미지, 각주, 스캔본 OCR 품질에 따라 일부 문맥이 누락될 수 있으므로 "
+                    "최종 보고 전 원문 페이지와 수치·고유명사를 대조해야 합니다."
+                ),
             },
             {
                 "title": "SK AX 관점 검토 포인트",
@@ -816,6 +946,9 @@ def _pdf_llm_prompt(
 - 아래 입력 JSON의 pdf_text와 extracted_evidence에 있는 사실만 사용합니다.
 - 문서에 없는 고객명, 금액, 일정, 계약명은 만들지 않습니다.
 - 사용자의 질문에 먼저 답하고, 임원이 바로 출력할 수 있는 보고서 초안을 함께 작성합니다.
+- report_draft는 내부적으로 "목차 및 구성 설계 → 초안 작성 → 문서 근거로 내용 채우기" 순서로
+  작성하되 내부 단계명은 출력하지 않고 완성본만 반환합니다.
+- report_draft는 5~7개 섹션으로 구성하고 각 body는 3~6문장 또는 3~5개 bullet을 포함합니다.
 - SK AX 관점은 "무엇을 확인/판단/조치해야 하는지"로 씁니다.
 - SK AX가 이미 알고 있을 내부 행동 묘사는 쓰지 않습니다.
 - 출력은 JSON object 하나만 반환합니다.
@@ -831,8 +964,10 @@ def _pdf_llm_prompt(
   "report_draft": {{
     "title": "보고서 제목",
     "sections": [
-      {{"title": "핵심 요약", "body": "출력 가능한 본문"}},
+      {{"title": "Executive Summary", "body": "출력 가능한 본문"}},
+      {{"title": "문서 주요 내용", "body": "출력 가능한 본문"}},
       {{"title": "문서 근거", "body": "출력 가능한 본문"}},
+      {{"title": "해석 한계", "body": "출력 가능한 본문"}},
       {{"title": "SK AX 관점 검토 포인트", "body": "출력 가능한 본문"}}
     ]
   }},
@@ -872,6 +1007,21 @@ def _pdf_evidence_lines(text: str, *, limit: int) -> list[str]:
     return [_compact_text(line, limit=200) for line in deduped[:limit]] or [
         "본문에서 직접 인용 가능한 근거 문장을 충분히 찾지 못했습니다."
     ]
+
+
+def _pdf_executive_summary(*, title: str, bullets: list[str], page_count: int) -> str:
+    lead = bullets[0] if bullets else title
+    supporting = bullets[1:4]
+    lines = [
+        f"이 보고서는 '{title}' 문서에서 추출한 텍스트를 기준으로 작성한 초안입니다.",
+        f"문서 범위는 약 {page_count or 1}개 페이지이며, 핵심 논점은 {lead}입니다.",
+        (
+            "주요 내용을 의사결정 관점에서 빠르게 검토할 수 있도록 문서 주요 내용, "
+            "근거, 해석 한계, SK AX 관점 검토 포인트로 재구성했습니다."
+        ),
+    ]
+    lines.extend(f"- {item}" for item in supporting)
+    return "\n".join(lines)
 
 
 def _pdf_skax_review_point(bullets: list[str], evidence: list[str]) -> str:
@@ -1022,6 +1172,7 @@ async def generate_today_insight(
         request.save,
     )
     result = await TodayInsightAgent().generate(request)
+    _raise_if_agent_failure("TODAY_INSIGHT", result)
     return TodayInsightGenerateResponse.model_validate(result)
 
 
@@ -1042,6 +1193,7 @@ async def generate_insight(request: InsightGenerateRequest) -> InsightGenerateRe
         card_ids=request.card_ids,
         context=request.context,
     )
+    _raise_if_agent_failure("INSIGHT", result)
     return InsightGenerateResponse.model_validate(result)
 
 
@@ -1070,6 +1222,7 @@ async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
         user_context=request.user_context,
         analysis_mode=request.analysis_mode,
     )
+    _raise_if_agent_failure("MIXER", result)
     return MixerAnalysisResponse.model_validate(result)
 
 
@@ -1115,11 +1268,26 @@ async def analyze_mixer_stream(request: MixerAnalysisRequest) -> StreamingRespon
     async def worker() -> None:
         try:
             result = await asyncio.to_thread(run_blocking)
+            failure_reason = _agent_failure_reason(result)
+            if failure_reason:
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    _agent_failure_event("MIXER", result),
+                )
+                return
             payload = MixerAnalysisResponse.model_validate(result).model_dump(mode="json")
             loop.call_soon_threadsafe(queue.put_nowait, {"type": "result", "data": payload})
         except Exception as e:  # noqa: BLE001 — 모든 실패를 SSE error 로 전달
             log.warning("Mixer stream 실패: %s", e)
-            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(e)})
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {
+                    "type": "error",
+                    "message": _AGENT_CALL_FAILED_MESSAGE,
+                    "error_code": "MIXER_STREAM_FAILED",
+                    "detail": str(e),
+                },
+            )
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
 
@@ -1196,6 +1364,7 @@ async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsRespons
     # ITTrendAgent.generate 는 sync (5-phase 합산 ~70s, LLM 3 calls + DB 호출) —
     # event loop 를 막으면 liveness probe /healthz 도 응답 못해 SIGKILL.
     result = await asyncio.to_thread(ITTrendAgent().generate, trend_input)
+    _raise_if_agent_failure("GLOBAL_TRENDS", result)
     return GlobalTrendsResponse.model_validate(
         {
             "analysis_id": result.get("analysis_id", ""),

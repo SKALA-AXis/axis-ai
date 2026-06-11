@@ -39,7 +39,8 @@ def test_pdf_chat_response_contains_printable_report_draft() -> None:
     assert response["scope"] == "uploaded_pdf"
     assert response["sources"][0]["type"] == "pdf_attachment"
     assert response["report_draft"]["title"]
-    assert len(response["report_draft"]["sections"]) == 3
+    assert len(response["report_draft"]["sections"]) >= 5
+    assert response["report_draft"]["sections"][0]["title"] == "목차 및 구성"
     assert response["answer_blocks"][0]["title"] == "PDF 핵심 요약"
     assert response["provenance"]["attachment"]["file_name"] == "axis-market.pdf"
 
@@ -72,5 +73,6 @@ async def test_chat_pdf_endpoint_extracts_uploaded_pdf(monkeypatch: pytest.Monke
 
     assert payload["intent"] == "pdf_attachment_analysis"
     assert payload["sources"][0]["type"] == "pdf_attachment"
-    assert payload["report_draft"]["sections"][0]["title"] == "핵심 요약"
+    assert payload["report_draft"]["sections"][0]["title"] == "목차 및 구성"
+    assert payload["report_draft"]["sections"][1]["title"] == "Executive Summary"
     assert payload["provenance"]["attachment"]["text_chars"] > 0

@@ -16,7 +16,7 @@ import os
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -73,6 +73,15 @@ _AXIS_SCOPE_HINTS = (
     "경쟁",
     "경쟁사",
     "peer",
+    "피어",
+    "피어사",
+    "lg cns",
+    "lgcns",
+    "엘지씨엔에스",
+    "삼성sds",
+    "samsung sds",
+    "현대오토에버",
+    "포스코dx",
     "금융",
     "제조",
     "클라우드",
@@ -108,10 +117,17 @@ _SEARCH_STOPWORDS = {
     "피디에프",
     "최근",
     "관련",
+    "내용",
+    "정보",
+    "피어",
+    "피어사",
     "위주",
     "만들어줘",
     "생성해줘",
     "출력해줘",
+    "설명",
+    "설명해줘",
+    "설ㅈ명해줘",
 }
 
 _PEER_ALIASES: tuple[tuple[str, str, str], ...] = (
@@ -315,6 +331,13 @@ class ChatOrchestratorAgent:
         }
 
     def _node_print_help_response(self, state: ChatGraphState) -> dict[str, Any]:
+        history_report = _history_report_response(
+            request=state["request"],
+            conversation_id=state["conversation_id"],
+            message_id=state["message_id"],
+        )
+        if history_report:
+            return {"response": history_report}
         return {
             "response": _print_help_response(
                 conversation_id=state["conversation_id"],
@@ -618,10 +641,20 @@ class ChatOrchestratorAgent:
 
     def _lexical_briefing_search(self, query: str, *, limit: int) -> list[RetrievalCandidate]:
         terms = _search_terms(query)
-        if not terms:
+        target_date = _relative_date_from_query(query)
+        if not terms and target_date is None:
             return []
-        where = " OR ".join([f"global_search_text ILIKE :kw{i}" for i, _ in enumerate(terms)])
+        filters = ["status IN ('completed', 'completed_partial')"]
         params: dict[str, Any] = {f"kw{i}": f"%{term}%" for i, term in enumerate(terms)}
+        if target_date is not None:
+            filters.append("COALESCE(report_date, date_to, date_from)::date = :target_date")
+            params["target_date"] = target_date.isoformat()
+        elif terms:
+            filters.append(
+                "("
+                + " OR ".join([f"global_search_text ILIKE :kw{i}" for i, _ in enumerate(terms)])
+                + ")"
+            )
         params["limit"] = int(limit)
         try:
             with SessionLocal() as db:
@@ -639,8 +672,7 @@ class ChatOrchestratorAgent:
                                COALESCE(report_date, date_to, date_from)::text AS report_date,
                                created_at
                           FROM briefing_reports
-                         WHERE status IN ('completed', 'completed_partial')
-                           AND ({where})
+                         WHERE {" AND ".join(filters)}
                          ORDER BY COALESCE(report_date, date_to, date_from) DESC, created_at DESC
                          LIMIT :limit
                         """
@@ -1015,6 +1047,14 @@ class ChatOrchestratorAgent:
         intent: str,
         candidates: list[RetrievalCandidate],
     ) -> dict[str, Any]:
+        if intent == "report_lookup" and (_is_history_report_request(request) or not candidates):
+            history_report = _history_report_response(
+                request=request,
+                conversation_id=conversation_id,
+                message_id=message_id,
+            )
+            if history_report:
+                return history_report
         if not candidates or not self._enable_llm:
             return _grounded_response(
                 conversation_id=conversation_id,
@@ -1228,6 +1268,19 @@ def _is_print_followup_request(message: str) -> bool:
     )
 
 
+def _is_history_report_request(request: ChatTurnRequest) -> bool:
+    if not request.history:
+        return False
+    if not _is_pdf_or_report_export_request(request.message):
+        return False
+    return bool(
+        re.search(
+            r"이\s*내용|위\s*내용|앞\s*내용|방금|직전|채팅|대화|이걸|이거|현재\s*답변",
+            request.message.lower(),
+        )
+    )
+
+
 def _is_card_news_report_request(message: str) -> bool:
     compact = message.lower()
     compact_no_space = re.sub(r"\s+", "", compact)
@@ -1286,7 +1339,10 @@ def _grounded_answer_prompt(
 - 답변에는 내부 추론 과정을 쓰지 말고, 사용자에게 보여도 되는 요약과 근거만 씁니다.
 - 후속 질문은 사용자가 AXIS 안에서 자연스럽게 이어갈 수 있는 버튼 문구로 씁니다.
 - intent가 report_lookup이면 답변과 함께 report_draft를 작성합니다.
-- report_draft는 보고서 제목과 2~4개 섹션으로 구성합니다.
+- report_draft는 내부적으로 "목차 및 구성 설계 → 초안 작성 → 근거로 내용 채우기" 순서로
+  작성하되, 내부 단계명은 출력하지 않고 완성된 보고서만 반환합니다.
+- report_draft는 5~7개 섹션으로 구성합니다. 각 섹션 body는 3~6문장 또는
+  3~5개 bullet을 포함해 A4 출력 시 빈 페이지처럼 보이지 않게 충분히 작성합니다.
 - intent가 market_trend이면 짧게 줄이지 말고 선정 peer사(삼성SDS, LG CNS,
   현대오토에버, 포스코DX)의 sources를 회사별로 분리해 설명합니다.
 - market_trend 답변은 공통 변화, peer별 차이, SK AX 관점의 시사점,
@@ -1307,7 +1363,7 @@ def _grounded_answer_prompt(
   "report_draft": {{
     "title": "보고서 제목. intent가 report_lookup이 아닐 때는 생략 가능",
     "sections": [
-      {{"title": "섹션 제목", "body": "sources 기반 본문"}}
+      {{"title": "섹션 제목", "body": "sources 기반 본문. 근거와 시사점을 채움"}}
     ]
   }},
   "follow_up_suggestions": ["후속 질문 1", "후속 질문 2"],
@@ -1356,6 +1412,8 @@ def _dict_list(value: Any) -> list[dict[str, Any]]:
 
 def _in_axis_scope(message: str, request: ChatTurnRequest) -> bool:
     compact = message.lower()
+    if _extract_peer(message):
+        return True
     if any(hint in compact for hint in _AXIS_SCOPE_HINTS):
         return True
     page = request.current_page
@@ -1381,6 +1439,21 @@ def _dedupe_strings(values: list[str]) -> list[str]:
         seen.add(value)
         out.append(value)
     return out
+
+
+def _relative_date_from_query(query: str) -> date | None:
+    compact = query.lower()
+    today = datetime.now(UTC).date()
+    if re.search(r"오늘|today", compact):
+        return today
+    if re.search(r"어제|yesterday", compact):
+        return today - timedelta(days=1)
+    match = re.search(r"(\d{1,2})\s*일\s*전", compact)
+    if match:
+        days = int(match.group(1))
+        if 0 <= days <= 31:
+            return today - timedelta(days=days)
+    return None
 
 
 def _dict_or_empty(value: Any) -> dict[str, Any]:
@@ -1709,6 +1782,73 @@ def _display_date(value: Any) -> str:
     return raw[:10]
 
 
+def _candidate_fact_lines(
+    candidates: list[RetrievalCandidate],
+    *,
+    limit: int,
+) -> list[str]:
+    lines: list[str] = []
+    for candidate in candidates[:limit]:
+        title = str(candidate.title or "").strip()
+        snippet = str(candidate.snippet or "").strip()
+        meta = candidate.metadata or {}
+        peer_id = str(meta.get("peer_id") or "").strip()
+        event_type = str(meta.get("event_type") or "").strip()
+        basis_at = _display_date(meta.get("published_at") or meta.get("created_at"))
+        labels = " · ".join(item for item in (peer_id, event_type, basis_at) if item)
+        prefix = f"[{labels}] " if labels else ""
+        if title and snippet:
+            line = f"{prefix}{title} — {snippet}"
+        else:
+            line = f"{prefix}{title or snippet}"
+        if line.strip():
+            lines.append(line[:520])
+    return lines
+
+
+def _candidate_peer_lines(candidates: list[RetrievalCandidate]) -> list[str]:
+    grouped: dict[str, list[str]] = {}
+    for candidate in candidates:
+        meta = candidate.metadata or {}
+        peer_id = str(meta.get("peer_id") or meta.get("main_company") or "").strip()
+        if not peer_id:
+            continue
+        label = _display_peer_label(peer_id)
+        grouped.setdefault(label, [])
+        if candidate.title:
+            grouped[label].append(str(candidate.title))
+    lines = []
+    for peer_label, titles in grouped.items():
+        unique_titles = _dedupe_strings([title for title in titles if title])[:3]
+        if unique_titles:
+            lines.append(
+                f"- {peer_label}: "
+                + " / ".join(unique_titles)
+                + (
+                    " 신호가 확인됩니다. 고객군, 적용 기술, 발표 시점을 "
+                    "분리해 추적할 필요가 있습니다."
+                )
+            )
+    return lines[:5]
+
+
+def _display_peer_label(peer_id: str) -> str:
+    normalized = peer_id.lower()
+    for known_id, label, _alias in _PEER_ALIASES:
+        if normalized == known_id.lower() or normalized == label.lower():
+            return label
+    return peer_id
+
+
+def _seed_report_body(sections: list[dict[str, str]]) -> str:
+    values = [
+        f"{section.get('title', '').strip()}: {section.get('body', '').strip()}"
+        for section in sections[:3]
+        if section.get("body", "").strip()
+    ]
+    return "\n".join(values)
+
+
 def _normalize_report_draft(
     value: Any, *, query: str, candidates: list[RetrievalCandidate]
 ) -> dict[str, Any] | None:
@@ -1724,14 +1864,25 @@ def _normalize_report_draft(
         if section_title and body:
             sections.append({"title": section_title, "body": body})
     if not sections and candidates:
-        return _report_draft_from_candidates(query, candidates)
+        return _report_draft_from_candidates(query, candidates, title_override=title)
     if not sections:
         return None
-    return {"title": title[:120], "sections": sections[:4]}
+    if candidates:
+        return _report_draft_from_candidates(
+            query,
+            candidates,
+            title_override=title,
+            seed_sections=sections,
+        )
+    return {"title": title[:120], "sections": sections[:7]}
 
 
 def _report_draft_from_candidates(
-    query: str, candidates: list[RetrievalCandidate]
+    query: str,
+    candidates: list[RetrievalCandidate],
+    *,
+    title_override: str | None = None,
+    seed_sections: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     title_seed = "AXIS 보고서 초안"
     if _is_card_news_report_request(query):
@@ -1740,11 +1891,10 @@ def _report_draft_from_candidates(
         title_seed = "AXIS 카드뉴스 요약 PDF"
     if re.search(r"브리핑|briefing", query, flags=re.IGNORECASE):
         title_seed = "AXIS 브리핑 초안"
-    evidence_lines = [
-        f"{candidate.title}: {candidate.snippet}".strip(": ")
-        for candidate in candidates[:6]
-        if candidate.title or candidate.snippet
-    ]
+    if title_override:
+        title_seed = title_override[:120]
+
+    evidence_lines = _candidate_fact_lines(candidates, limit=8)
     card_count = sum(1 for candidate in candidates if candidate.source_type == "card_news")
     date_lines = [
         _display_date((candidate.metadata or {}).get("created_at"))
@@ -1753,39 +1903,281 @@ def _report_draft_from_candidates(
     ]
     date_lines = [line for line in _dedupe_strings(date_lines) if line]
     period = ", ".join(date_lines[:3]) if date_lines else "확인된 기간"
+    peer_lines = _candidate_peer_lines(candidates)
+    seed_body = _seed_report_body(seed_sections or [])
+    outline_titles = [
+        "Executive Summary",
+        "핵심 신호 상세",
+        "피어/시장 영향",
+        "근거 및 해석 한계",
+        "SK AX 검토 포인트",
+        "후속 액션",
+    ]
     sections = [
         {
-            "title": "핵심 요약",
-            "body": _join_sentences(
-                [
-                    (
-                        f"{period} 카드뉴스 {card_count or len(candidates)}건을 기준으로 "
-                        "주요 변화 신호를 압축했습니다."
-                    ),
-                    *(
-                        evidence_lines[:3]
-                        or ["구체 근거가 더 확보되면 요약 정확도를 높일 수 있습니다."]
-                    ),
-                ],
-                limit=760,
+            "title": "목차 및 구성",
+            "body": "\n".join(
+                f"{index}. {title}" for index, title in enumerate(outline_titles, start=1)
             ),
         },
         {
-            "title": "판단 근거",
-            "body": _join_sentences(
-                evidence_lines[3:6] or evidence_lines[:3] or ["근거 후보가 부족합니다."],
-                limit=760,
+            "title": "Executive Summary",
+            "body": "\n".join(
+                [
+                    (
+                        f"{period} 기준 AXIS 근거 {len(candidates)}건"
+                        f"{f' 중 카드뉴스 {card_count}건' if card_count else ''}을 바탕으로 "
+                        "보고서 초안을 구성했습니다."
+                    ),
+                    "핵심 결론은 피어사의 고객 접점, 기술 적용 범위, 운영 역량 메시지가 "
+                    "함께 강화되고 있다는 점입니다.",
+                    "SK AX 관점에서는 동일 고객군에서 요구되는 레퍼런스, 보안/운영 안정성, "
+                    "산업별 적용 사례를 연결해 제안 우선순위를 재점검해야 합니다.",
+                    seed_body[:520] if seed_body else "",
+                ]
+            ),
+        },
+        {
+            "title": "핵심 신호 상세",
+            "body": "\n".join(
+                f"{index}. {line}"
+                for index, line in enumerate(
+                    evidence_lines or ["확인된 상세 신호가 부족합니다."],
+                    start=1,
+                )
+            ),
+        },
+        {
+            "title": "피어/시장 영향",
+            "body": "\n".join(
+                peer_lines
+                or [
+                    "피어사별 직접 식별 정보가 제한적이므로, 현재 근거에서는 "
+                    "개별 회사별 우열보다 시장 신호의 방향성을 우선 해석해야 합니다.",
+                    "고객사는 단일 기능보다 클라우드, 데이터, AI 운영, "
+                    "보안 대응을 묶은 실행 역량을 비교할 가능성이 큽니다.",
+                    "따라서 SK AX는 피어사가 강조하는 적용 사례와 고객군을 "
+                    "추적하며 자사 레퍼런스와 차별화 메시지를 나란히 정리해야 합니다.",
+                ]
+            ),
+        },
+        {
+            "title": "근거 및 해석 한계",
+            "body": "\n".join(
+                [
+                    f"- 활용 근거: {len(candidates)}건",
+                    f"- 확인 기간: {', '.join(date_lines[:5])}"
+                    if date_lines
+                    else "- 확인 기간: 근거별 생성일 기준",
+                    (
+                        "- 본 초안은 AXIS에 저장된 카드뉴스, 통합 이슈, 브리핑, "
+                        "피어 프로필 요약을 기반으로 합니다."
+                    ),
+                    (
+                        "- 계약 금액, 일정, 고객명은 근거에 명시된 경우에만 사용해야 하며, "
+                        "출력 전 원문 링크와 대조가 필요합니다."
+                    ),
+                    (
+                        "- 동일 사건이 여러 카드에 반복 수집됐을 수 있으므로, "
+                        "최종 보고서에서는 중복 이벤트를 통합해야 합니다."
+                    ),
+                ]
             ),
         },
         {
             "title": "SK AX 검토 포인트",
-            "body": (
-                "동일 고객군, 산업별 레퍼런스, 보안/운영 안정성 메시지와 연결해 "
-                "제안 우선순위를 점검할 필요가 있습니다."
+            "body": "\n".join(
+                [
+                    (
+                        "- 고객군별로 피어사의 메시지가 어디에 집중되는지 분리합니다. "
+                        "금융, 제조, 물류, 공공 등 산업별 요구가 다르면 "
+                        "제안 논리도 달라져야 합니다."
+                    ),
+                    (
+                        "- 보안/운영 안정성/AI 적용 범위를 하나의 제안 패키지로 "
+                        "설명할 수 있는지 점검합니다."
+                    ),
+                    (
+                        "- 피어사의 최신 레퍼런스가 실제 고객 전환, PoC, 플랫폼 계약, "
+                        "운영 고도화 중 어느 단계인지 구분합니다."
+                    ),
+                    (
+                        "- SK AX가 이미 보유한 사례와 비교해 즉시 방어할 메시지와 "
+                        "추가 확보가 필요한 근거를 나눕니다."
+                    ),
+                ]
+            ),
+        },
+        {
+            "title": "후속 액션",
+            "body": "\n".join(
+                [
+                    "- 원문 기사와 카드뉴스를 확인해 사실 관계와 날짜를 확정합니다.",
+                    (
+                        "- 피어사별 최근 30일 신호를 다시 조회해 반복 등장하는 "
+                        "고객군과 기술 키워드를 표로 정리합니다."
+                    ),
+                    (
+                        "- 내부 제안/영업 자료에 반영할 수 있는 메시지와, "
+                        "아직 근거가 부족해 보류해야 할 메시지를 분리합니다."
+                    ),
+                    (
+                        "- 필요하면 이 초안을 브리핑용 1페이지 요약과 "
+                        "임원 보고용 3페이지 버전으로 각각 재작성합니다."
+                    ),
+                ]
             ),
         },
     ]
     return {"title": title_seed, "sections": sections}
+
+
+def _history_report_response(
+    *,
+    request: ChatTurnRequest,
+    conversation_id: str,
+    message_id: str,
+) -> dict[str, Any] | None:
+    report_draft = _report_draft_from_history(request)
+    if not report_draft:
+        return None
+    response = _base_response(
+        conversation_id=conversation_id,
+        message_id=message_id,
+        reply=(
+            "직전 대화 내용을 바탕으로 보고서 초안을 만들었습니다.\n\n"
+            "아래 보고서 초안의 'PDF 저장/출력' 버튼으로 바로 저장하거나 출력할 수 있습니다."
+        ),
+        intent="report_lookup",
+        scope="assistant_history",
+        sources=[],
+        confidence=0.58,
+        follow_up=["근거 카드뉴스까지 포함해서 다시 만들어줘", "임원 보고용으로 더 짧게 정리해줘"],
+        retrieval_mode="chat_history_report",
+        answer_blocks=_answer_blocks_from_report_draft(report_draft),
+        report_draft=report_draft,
+    )
+    response["provenance"]["export_requested"] = "pdf"
+    return response
+
+
+def _report_draft_from_history(request: ChatTurnRequest) -> dict[str, Any] | None:
+    assistant_turns = [
+        _clean_history_content(turn.content)
+        for turn in request.history[-8:]
+        if turn.role == "assistant"
+    ]
+    assistant_turns = [
+        content
+        for content in assistant_turns
+        if content
+        and not content.startswith("안녕하세요")
+        and "기능에 문제가 생겼습니다" not in content
+    ]
+    if not assistant_turns:
+        return None
+
+    user_turns = [
+        _clean_history_content(turn.content) for turn in request.history[-8:] if turn.role == "user"
+    ]
+    user_turns = [content for content in user_turns if content]
+    recent_assistant_turns = assistant_turns[-5:]
+    key_points = _history_key_points(recent_assistant_turns, limit=7)
+    source_text = "\n\n".join(recent_assistant_turns)
+    title = "AXIS 대화 기반 보고서"
+    if re.search(r"pdf|피디에프|출력|프린트|인쇄|다운로드", request.message, re.IGNORECASE):
+        title = "AXIS 대화 기반 PDF"
+    if re.search(r"브리핑|briefing", request.message, re.IGNORECASE):
+        title = "AXIS 대화 기반 브리핑"
+
+    sections = [
+        {
+            "title": "목차 및 구성",
+            "body": "\n".join(
+                [
+                    "1. Executive Summary",
+                    "2. 상세 정리",
+                    "3. 대화 맥락",
+                    "4. 해석 한계",
+                    "5. SK AX 관점 후속 검토",
+                ]
+            ),
+        },
+        {
+            "title": "Executive Summary",
+            "body": "\n".join(f"- {point}" for point in key_points[:5])
+            or _join_sentences([source_text], limit=950),
+        },
+        {
+            "title": "상세 정리",
+            "body": _numbered_lines(recent_assistant_turns, limit=2_200),
+        },
+        {
+            "title": "대화 맥락",
+            "body": _join_sentences(
+                [f"사용자 요청: {turn}" for turn in user_turns[-3:]]
+                or ["최근 챗봇 답변 내용을 보고서 형식으로 재구성했습니다."],
+                limit=650,
+            ),
+        },
+        {
+            "title": "해석 한계",
+            "body": (
+                "이 초안은 직전 대화의 표시 내용만 바탕으로 작성되었습니다. "
+                "따라서 원문 기사, 카드뉴스, 브리핑 원본, 생성 시각이 필요한 수치 정보는 "
+                "최종 제출 전에 별도로 확인해야 합니다. 대화 중 축약된 표현은 보고서에서 "
+                "맥락을 보강했지만, 근거에 없는 고객명·금액·확정 일정은 추가하지 않았습니다."
+            ),
+        },
+        {
+            "title": "SK AX 관점 후속 검토",
+            "body": (
+                "외부 제출 전 원문 카드뉴스, 관련 기사, 수치 근거를 함께 확인하고 "
+                "고객군/산업별 제안 메시지와 연결해 우선순위를 점검해 주세요. "
+                "특히 경쟁사 신호가 기술 역량 홍보인지, 실제 고객 적용인지, 운영 고도화인지 "
+                "구분해야 SK AX의 대응 메시지가 과장 없이 정리됩니다."
+            ),
+        },
+    ]
+    return {"title": title, "sections": sections}
+
+
+def _history_key_points(values: list[str], *, limit: int) -> list[str]:
+    points: list[str] = []
+    for value in values:
+        for item in re.split(r"(?<=[.!?。])\s+|(?:\s*[•]\s*)|(?:\s+-\s+)", value):
+            cleaned = item.strip(" -•\t\n")
+            if len(cleaned) < 8:
+                continue
+            points.append(cleaned[:260])
+            if len(points) >= limit:
+                return points
+    return points
+
+
+def _numbered_lines(values: list[str], *, limit: int) -> str:
+    text_value = "\n".join(
+        f"{index}. {value}" for index, value in enumerate(values, start=1) if value
+    )
+    return text_value[:limit]
+
+
+def _answer_blocks_from_report_draft(report_draft: dict[str, Any]) -> list[dict[str, Any]]:
+    sections = report_draft.get("sections")
+    if not isinstance(sections, list):
+        return []
+    items = []
+    for section in sections[:2]:
+        if not isinstance(section, dict):
+            continue
+        body = str(section.get("body") or "").strip()
+        if body:
+            items.append(body[:140])
+    return [{"type": "summary", "title": "보고서 구성", "items": items}] if items else []
+
+
+def _clean_history_content(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
 def _answer_blocks_from_candidates(candidates: list[RetrievalCandidate]) -> list[dict[str, Any]]:

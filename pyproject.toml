@@ -11,6 +11,9 @@ dependencies = [
     "langchain-openai>=0.1",
     "langgraph>=0.1",
     "FlagEmbedding>=1.2",
+    # torch 는 FlagEmbedding 전이 의존성이지만 CPU 인덱스 핀([tool.uv.sources]) 적용을
+    # 위해 직접 의존성으로 선언 (uv sources 는 직접 의존성에만 적용됨).
+    "torch>=2.0",
     "qdrant-client>=1.9",
     "sqlalchemy>=2.0",
     "psycopg2-binary>=2.9",
@@ -54,6 +57,7 @@ dev = [
     "pre-commit>=3.0",
     "types-requests>=2.33.0.20260503",
     "types-python-dateutil>=2.9.0.20260408",
+    "import-linter>=2.11",
 ]
 
 [tool.ruff]
@@ -81,3 +85,30 @@ ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+# GPU 없는 노드(m4.xlarge)에서 CUDA 동봉 torch 휠(~2GB)을 받지 않도록 CPU 전용 인덱스 고정.
+# 효과: axis-ai 이미지 대폭 슬림 → 빌드/푸시/풀(매일 아침 노드 재생성) 전부 단축.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+# ── import-linter — 모듈 경계 가드 (PROJECT_STRUCTURE_PLAN Phase 2-A1) ──
+# agents → api 방향 의존이 순환(api ↔ agents)을 만든다. 기존 위반 2건은
+# allowlist 로 두고 신규 유입만 차단. 스키마가 필요하면 src/api 가 아니라
+# 중립 모듈(향후 src/contracts)로 옮길 것.
+[tool.importlinter]
+root_packages = ["src"]
+
+[[tool.importlinter.contracts]]
+name = "agents must not import api"
+type = "forbidden"
+source_modules = ["src.agents"]
+forbidden_modules = ["src.api"]
+ignore_imports = [
+    "src.agents.chat_orchestrator_agent -> src.api.chat_schemas",
+    "src.agents.today_insight_agent -> src.api.today_insight_schemas",
+]
