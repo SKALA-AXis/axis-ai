@@ -72,6 +72,10 @@ jobs:
           tags: axis-ai-cron:ci-smoke
           platforms: linux/amd64
           push: false
+          # GHA 레이어 캐시 — 의존성 미변경 PR 의 smoke 빌드를 분→초 단위로.
+          # (registry buildcache 와 달리 Harbor 인증 불필요)
+          cache-from: type=gha,scope=cron-smoke
+          cache-to: type=gha,scope=cron-smoke,mode=max
 
       - name: Verify cron imports
         run: |
