@@ -3,6 +3,13 @@ name: CI
 on:
   push:
     branches: [main, develop, 'feat/**', 'fix/**']
+    # 문서만 바뀐 push 는 CI 를 skip → build-and-push(workflow_run) 도 미발동
+    # = 불필요한 이미지 재빌드·재배포 방지. 문서+코드 혼합 push 는 정상 실행.
+    # pull_request 에는 미적용 (required check 가 pending 으로 머지 막는 것 방지).
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'design/**'
   pull_request:
     branches: [main, develop]
   workflow_dispatch:

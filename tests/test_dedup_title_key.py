@@ -40,7 +40,9 @@ def test_different_titles_keep_different_keys():
 
 
 def test_normalize_title_key_collapses_whitespace_and_case():
-    assert _normalize_title_key("LG  CNS,   AWS와\t협력") == _normalize_title_key("lg cns, aws와 협력")
+    assert _normalize_title_key("LG  CNS,   AWS와\t협력") == _normalize_title_key(
+        "lg cns, aws와 협력"
+    )
 
 
 def test_empty_title_falls_back_to_url_hash():
