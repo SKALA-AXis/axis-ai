@@ -115,7 +115,7 @@ GET  /health                헬스체크
 ```
 crawl       → 뉴스·공시·채용공고 수집 (PostgreSQL 전량 보관)
 credibility → 출처 신뢰도 분류 (High/Medium/Low/Unverified)
-dedup       → 중복 제거 + 이슈 클러스터링 (BGE-M3 코사인 0.90)
+dedup       → 중복 제거 + 이슈 클러스터링 (BGE-M3 코사인 0.80, 기존 클러스터 매칭 0.84 — src/preprocessing/dedup.py)
 classify    → 트렌드 섹터(5종) + event_type(6종) + 결정적 노출도 산식 — LLM 호출
 card_news   → 카드 뉴스 생성 (3줄 요약·시사점) — LLM 호출 (구 issue_card_node)
 evidence    → 검증 첨부 4종 자동 부착 (source_links / provenance / financial_refs / mbb_refs)
@@ -275,7 +275,7 @@ Gate 2 (신뢰도):
   - Qdrant 미삽입, PostgreSQL만 보관
 
 Gate 3 (중복):
-  - 코사인 유사도 ≥ 0.90 → 클러스터링
+  - 코사인 유사도 ≥ 0.80 → 클러스터링 (rule-first 키 + 이벤트 버킷/시그니처 게이트 + LLM judge 병행)
   - 클러스터 내 대표 기사 1건만 Qdrant 삽입
   - 나머지는 cluster_id 부여 후 PostgreSQL만 보관
 

@@ -6,10 +6,13 @@ RAW 처리 대상 조회부터 source_type별 전처리 라우팅, 문서 분석
 
 import json
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, TypedDict
+from dataclasses import dataclass
+from typing import Any, Callable, TypedDict
 
+import httpx
 from sqlalchemy import text
 
 from src.analysis.document_analysis_materializer import materialize_document_analysis
@@ -36,6 +39,12 @@ from src.preprocessing.dedup import ArticleDeduplicator
 from src.preprocessing.relevance import RelevanceEvaluator
 
 log = logging.getLogger(__name__)
+
+_LINK_VERIFY_TIMEOUT_SECONDS = float(os.getenv("PREPROCESS_LINK_VERIFY_TIMEOUT_SECONDS", "4.0"))
+_LINK_VERIFY_USER_AGENT = os.getenv(
+    "PREPROCESS_LINK_VERIFY_USER_AGENT",
+    "Mozilla/5.0 (compatible; AxisPreprocessor/1.0)",
+)
 
 RELEVANCE_SOURCE_TYPES = NEWS_SOURCE_TYPES
 OFFICIAL_RELEVANCE_SOURCE_TYPES: set[str] = set()
@@ -69,6 +78,18 @@ _LOAD_SQL = text("""
     ORDER BY ra.published_at DESC NULLS LAST
     LIMIT :limit
 """)
+
+
+@dataclass(frozen=True)
+class LinkCheckResult:
+    status: str
+    http_code: int | None = None
+    final_url: str | None = None
+    error: str | None = None
+
+    @property
+    def is_dead(self) -> bool:
+        return self.status == "dead"
 
 
 class PreprocessingResult(TypedDict):
@@ -124,11 +145,20 @@ class PreprocessingService:
         deduplicator: ArticleDeduplicator | None = None,
         classifier: ClusterClassifier | None = None,
         max_workers: int = DEFAULT_GPT_WORKERS,
+        verify_news_links: bool | None = None,
+        link_checker: Callable[[str], LinkCheckResult] | None = None,
     ) -> None:
         self.relevance_evaluator = relevance_evaluator or RelevanceEvaluator(enable_llm=False)
         self.deduplicator = deduplicator or ArticleDeduplicator()
         self.classifier = classifier or ClusterClassifier(enable_llm=False)
         self.max_workers = max_workers
+        self.verify_news_links = (
+            verify_news_links
+            if verify_news_links is not None
+            else os.getenv("PREPROCESS_VERIFY_NEWS_LINKS", "true").lower()
+            not in {"0", "false", "no"}
+        )
+        self.link_checker = link_checker or check_article_link
 
     def run(
         self,
@@ -325,6 +355,14 @@ class PreprocessingService:
             for source_type in RELEVANCE_SOURCE_TYPES
             for article_id in by_source.get(source_type, [])
         ]
+        dead_link_ids = self.skip_dead_news_links(articles, relevance_ids)
+        if dead_link_ids:
+            dead_link_id_set = set(dead_link_ids)
+            skipped_ids.extend(dead_link_ids)
+            relevance_ids = [
+                article_id for article_id in relevance_ids if article_id not in dead_link_id_set
+            ]
+
         if relevance_ids:
             passed, skipped = self.relevance_evaluator.filter(relevance_ids)
             relevant_ids.extend(passed)
@@ -500,6 +538,33 @@ class PreprocessingService:
             "skipped_preprocess_ids": skipped_ids,
             "human_review_flags": list(dict.fromkeys(review_ids)),
         }
+
+    def skip_dead_news_links(
+        self,
+        articles: list[dict[str, Any]],
+        relevance_ids: list[int],
+    ) -> list[int]:
+        """Exclude news rows whose original URL is confirmed dead before relevance."""
+        if not self.verify_news_links or not relevance_ids:
+            return []
+
+        relevance_id_set = set(relevance_ids)
+        skipped_ids: list[int] = []
+        for article in articles:
+            article_id = int(article["id"])
+            if article_id not in relevance_id_set:
+                continue
+            url = str(article.get("url") or "").strip()
+            result = self.link_checker(url)
+            if not result.is_dead:
+                continue
+
+            skipped_ids.append(article_id)
+            _mark_dead_link_article(article_id, url, result)
+
+        if skipped_ids:
+            log.info("뉴스 dead link 전처리 제외 | count=%d ids=%s", len(skipped_ids), skipped_ids)
+        return skipped_ids
 
     def analyze_documents(self, parsed_document_ids: list[int]) -> dict[str, Any]:
         """파싱 완료 문서를 분석 테이블로 정규화한다."""
@@ -678,6 +743,97 @@ def _article_for_agent(article: dict) -> dict:
     item["metadata"] = metadata if isinstance(metadata, dict) else {}
     item["extra"] = item["metadata"]
     return item
+
+
+def check_article_link(url: str) -> LinkCheckResult:
+    """Return dead only for deterministic 404/410 responses.
+
+    Many publishers block HEAD/automation, so 403, timeout, and transient server errors are
+    treated as unknown instead of being excluded from preprocessing.
+    """
+    if not url:
+        return LinkCheckResult(status="unknown", error="empty_url")
+
+    headers = {"User-Agent": _LINK_VERIFY_USER_AGENT}
+    try:
+        with httpx.Client(
+            timeout=_LINK_VERIFY_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            headers=headers,
+        ) as client:
+            response = client.head(url)
+            if response.status_code in {404, 410}:
+                return LinkCheckResult(
+                    status="dead",
+                    http_code=response.status_code,
+                    final_url=str(response.url),
+                )
+            if 200 <= response.status_code < 400:
+                return LinkCheckResult(
+                    status="live",
+                    http_code=response.status_code,
+                    final_url=str(response.url),
+                )
+            if response.status_code in {405, 501}:
+                response = client.get(url)
+                if response.status_code in {404, 410}:
+                    return LinkCheckResult(
+                        status="dead",
+                        http_code=response.status_code,
+                        final_url=str(response.url),
+                    )
+                if 200 <= response.status_code < 400:
+                    return LinkCheckResult(
+                        status="live",
+                        http_code=response.status_code,
+                        final_url=str(response.url),
+                    )
+            return LinkCheckResult(
+                status="unknown",
+                http_code=response.status_code,
+                final_url=str(response.url),
+            )
+    except (httpx.TimeoutException, httpx.RequestError) as exc:
+        return LinkCheckResult(status="unknown", error=f"{type(exc).__name__}: {exc}")
+
+
+def _mark_dead_link_article(article_id: int, url: str, result: LinkCheckResult) -> None:
+    with SessionLocal() as db:
+        db.execute(
+            text("""
+                UPDATE raw_articles
+                SET crawl_status = 'failed',
+                    processing_status = :processing_status,
+                    relevance_label = 'irrelevant',
+                    relevance_score = 0.0,
+                    relevance_reason = :reason,
+                    error_message = :reason,
+                    cluster_id = NULL,
+                    is_representative = FALSE,
+                    metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:metadata_patch AS jsonb)
+                WHERE id = :id
+            """),
+            {
+                "id": article_id,
+                "processing_status": STATUS_SKIPPED,
+                "reason": "원문 URL이 404/410 dead link로 확인되어 전처리 제외",
+                "metadata_patch": json.dumps(
+                    {
+                        "status_detail": "dead_link",
+                        "skip_reason": "dead_link",
+                        "link_check": {
+                            "url": url,
+                            "status": result.status,
+                            "http_code": result.http_code,
+                            "final_url": result.final_url,
+                            "error": result.error,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        )
+        db.commit()
 
 
 def _company_for_context(article: dict, requested_companies: list[str]) -> str:

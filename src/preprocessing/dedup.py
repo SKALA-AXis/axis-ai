@@ -44,7 +44,7 @@ _MAX_BRIDGE_TOPIC_TERMS = 1
 _MIN_RELATED_TERM_LENGTH = 6
 _TERM_NGRAM_SIMILARITY = 0.40
 _CLUSTER_LLM_JUDGE_ENABLED = os.getenv("DEDUP_CLUSTER_LLM_JUDGE_ENABLED", "true").lower() == "true"
-_CLUSTER_LLM_MAX_CALLS = int(os.getenv("DEDUP_CLUSTER_LLM_MAX_CALLS", "30"))
+_CLUSTER_LLM_MAX_CALLS = int(os.getenv("DEDUP_CLUSTER_LLM_MAX_CALLS", "80"))
 _CLUSTER_LLM_MODEL = os.getenv("DEDUP_CLUSTER_LLM_MODEL", "gpt-4o-mini")
 _CLUSTER_LLM_CONTENT_CHARS = int(os.getenv("DEDUP_CLUSTER_LLM_CONTENT_CHARS", "280"))
 _ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
@@ -188,6 +188,8 @@ class ArticleDeduplicator:
         if not articles:
             return {}, []
 
+        _reset_cluster_llm_run_state()
+
         cluster_map = _cluster_rule_first(
             articles=articles,
             threshold=DEDUP_THRESHOLD,
@@ -237,6 +239,8 @@ def deduplicate_articles(
     if not articles:
         return {}, []
 
+    _reset_cluster_llm_run_state()
+
     normalized = [_normalize_local_article(article, id_key) for article in articles]
 
     try:
@@ -279,12 +283,26 @@ def _deduplicate_by_title(articles: list[dict[str, Any]]) -> tuple[dict[int, lis
     return cluster_map, representative_ids
 
 
+# 제목 키 비교용 문장부호 정규화 — 매체마다 곱슬따옴표(''""), 가운뎃점, 대시가
+# 섞여 들어와 동일 제목이 다른 키로 갈라졌음 (DB 검증: sim=1.00 분리 11쌍, 2026-06-11).
+_TITLE_KEY_QUOTES_RE = re.compile(r"[\"'‘’‚`“”„「」『』]")
+_TITLE_KEY_SPACERS_RE = re.compile(r"[·‧ㆍ…]")
+_TITLE_KEY_DASHES_RE = re.compile(r"[–—―]")
+
+
+def _normalize_title_key(title: str) -> str:
+    folded = _TITLE_KEY_QUOTES_RE.sub("", title)  # 따옴표류는 의미 없음 — 제거 후 비교
+    folded = _TITLE_KEY_SPACERS_RE.sub(" ", folded)
+    folded = _TITLE_KEY_DASHES_RE.sub("-", folded)
+    return " ".join(folded.lower().split())
+
+
 def _fallback_dedup_key(article: dict[str, Any]) -> str:
     issue_key = _issue_dedup_key(article)
     if issue_key:
         return issue_key
 
-    title = " ".join(str(article.get("title") or "").lower().split())
+    title = _normalize_title_key(str(article.get("title") or ""))
     if title:
         return title
     return str(article.get("url_hash") or article.get("url") or article.get("id"))
@@ -332,7 +350,6 @@ def _build_embedding_text(article: dict[str, Any]) -> str:
 
     entity_lines = [
         _entity_line("companies", entities["companies"]),
-        _entity_line("sectors", entities["sectors"]),
         _entity_line("issues", entities["canonical_issues"]),
         _entity_line("products", entities["quoted_terms"]),
         _entity_line("proper_terms", entities["proper_terms"]),
@@ -503,6 +520,19 @@ def _cluster(
     return {cluster_id: ids for cluster_id, ids in enumerate(cluster_values)}
 
 
+def _reset_cluster_llm_run_state() -> None:
+    """Reset LLM judge accounting for each dedup run.
+
+    The API server is long-lived. If call count/cache survives across scheduled
+    runs, one noisy batch can exhaust the cap and silently disable LLM review
+    for later batches.
+    """
+    global _cluster_llm_calls, _cluster_llm_cache, _cluster_llm_approved_pairs
+    _cluster_llm_calls = 0
+    _cluster_llm_cache = {}
+    _cluster_llm_approved_pairs = set()
+
+
 def _with_representative_cluster_ids(
     cluster_map: dict[int, list[int]],
     representative_ids: list[int],
@@ -661,10 +691,14 @@ def _should_merge_articles(
     threshold: float,
 ) -> bool:
     same_cross_company_title_issue = _same_cross_company_title_issue(left, right)
-    if not _same_company_context(left, right) and not same_cross_company_title_issue:
+    if not _within_cluster_time_window(left, right):
         return False
 
-    if not _within_cluster_time_window(left, right):
+    title_llm_decision = _cluster_llm_same_event(left, right, similarity, "title_similarity")
+    if title_llm_decision is True:
+        return True
+
+    if not _same_company_context(left, right) and not same_cross_company_title_issue:
         return False
 
     if not _event_buckets_compatible(left, right):
@@ -844,6 +878,10 @@ def _event_signature(article: dict[str, Any]) -> str:
         if contract_key:
             return f"contract_deal:{contract_key}"
 
+    title_event_key = _title_event_issue_key(article)
+    if title_event_key:
+        return f"{bucket}:title_event:{title_event_key}"
+
     title_terms = sorted(_title_topic_terms(article))
     if title_terms:
         return f"{bucket}:{title_terms[0]}"
@@ -927,6 +965,15 @@ def _should_consult_cluster_llm(
     similarity: float,
     reason: str,
 ) -> bool:
+    if reason == "title_similarity":
+        return (
+            _CLUSTER_LLM_JUDGE_ENABLED
+            and openai_calls_enabled()
+            and _CLUSTER_LLM_MAX_CALLS > 0
+            and similarity >= 0.55
+            and _within_cluster_time_window(left, right)
+            and _title_llm_candidate(left, right)
+        )
     if reason == "event_signature_conflict" and _security_signature_conflict_without_action(
         left, right
     ):
@@ -966,6 +1013,7 @@ def _invoke_cluster_llm_judge(
         ),
         "criteria": [
             "same_event=true when one article is a market reaction to the same contract/deal/news.",
+            "For reason=title_similarity, judge from titles first; do not require same sector.",
             (
                 "same_event=false when they are only broad themes, background mentions, "
                 "or different deals."
@@ -1022,7 +1070,6 @@ def _cluster_llm_article_payload(article: dict[str, Any]) -> dict[str, Any]:
         "title": str(article.get("title") or "")[:240],
         "published_at": str(article.get("published_at") or article.get("collected_at") or ""),
         "companies": _company_key(article),
-        "sectors": _sector_key(article),
         "event_bucket": _event_bucket(article),
         "event_signature": _event_signature(article),
     }
@@ -1090,6 +1137,11 @@ def _same_cross_company_title_issue(left: dict[str, Any], right: dict[str, Any])
     right_bucket = _event_bucket(right)
     if left_bucket != right_bucket or left_bucket in {"market_reaction", "industry_theme"}:
         return False
+
+    left_title_key = _title_event_issue_key(left)
+    right_title_key = _title_event_issue_key(right)
+    if left_title_key and left_title_key == right_title_key:
+        return True
 
     left_terms = _title_topic_terms(left)
     right_terms = _title_topic_terms(right)
@@ -1187,6 +1239,28 @@ def _title_tokens_related(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return jaccard >= 0.35 or coverage >= 0.55
 
 
+def _title_llm_candidate(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_bucket = _event_bucket(left)
+    right_bucket = _event_bucket(right)
+    if left_bucket != right_bucket or left_bucket in {"market_reaction", "industry_theme"}:
+        return False
+    if not (_title_has_event_action(left) or _title_has_event_action(right)):
+        return False
+
+    left_tokens = _title_event_tokens(left) - _company_title_tokens(left)
+    right_tokens = _title_event_tokens(right) - _company_title_tokens(right)
+    if len(left_tokens) < 2 or len(right_tokens) < 2:
+        return False
+
+    shared = left_tokens & right_tokens
+    if len(shared) >= 2:
+        return True
+
+    jaccard = len(shared) / max(1, len(left_tokens | right_tokens))
+    coverage = len(shared) / max(1, min(len(left_tokens), len(right_tokens)))
+    return jaccard >= 0.25 or coverage >= 0.40
+
+
 def _same_company_action_topic(left: dict[str, Any], right: dict[str, Any]) -> bool:
     if not _same_company_action_candidate(left, right):
         return False
@@ -1268,6 +1342,7 @@ def _title_has_event_action(article: dict[str, Any]) -> bool:
             "투자",
             "인수",
             "확대",
+            "확보",
         )
     )
 
@@ -1355,7 +1430,7 @@ def _normalize_title_token(token: str) -> str:
 
 
 def _strip_korean_particle(token: str) -> str:
-    if len(token) < 4 or not re.fullmatch(r"[가-힣]+", token):
+    if len(token) < 4:
         return token
     for suffix in ("으로", "에게", "에서", "과", "와", "은", "는", "이", "가", "을", "를", "의"):
         if token.endswith(suffix) and len(token) - len(suffix) >= 3:
@@ -1463,7 +1538,6 @@ def _issue_entities(article: dict[str, Any]) -> dict[str, list[str]]:
     title_text = _title_text(article)
     return {
         "companies": _company_key(article),
-        "sectors": _sector_key(article),
         "canonical_issues": _matched_alias_keys(_CANONICAL_ISSUE_TERMS, title_text),
         "quoted_terms": _normalize_quoted_product_terms(
             _quoted_terms_from_text(str(article.get("title") or ""))
@@ -1484,7 +1558,6 @@ def _title_issue_entities(article: dict[str, Any]) -> dict[str, list[str]]:
     title_text = _compact_text(title)
     return {
         "companies": _company_key(article),
-        "sectors": _sector_key(article),
         "canonical_issues": _matched_alias_keys(_CANONICAL_ISSUE_TERMS, title_text),
         "quoted_terms": _normalize_quoted_product_terms(_quoted_terms_from_text(title)),
         "proper_terms": _proper_terms_from_text(title),
@@ -1779,9 +1852,9 @@ def _same_company_business_issue(left: dict[str, Any], right: dict[str, Any]) ->
         right_entities["proper_terms"],
     )
     shared_numbers = set(left_entities["numbers"]) & set(right_entities["numbers"])
-    if shared_proper_terms and (
-        shared_numbers or _shared(left_entities["sectors"], right_entities["sectors"])
-    ):
+    if not shared_numbers and shared_proper_terms:
+        shared_numbers = set(_number_terms(left)) & set(_number_terms(right))
+    if shared_proper_terms and shared_numbers:
         return True
 
     return False
@@ -1833,6 +1906,27 @@ def _same_operational_event(left: dict[str, Any], right: dict[str, Any]) -> bool
 def _event_terms(article: dict[str, Any], *, include_lead: bool = False) -> set[str]:
     text = _title_with_short_lead_text(article) if include_lead else _title_text(article)
     return _topic_terms_from_text(text)
+
+
+def _title_event_issue_key(article: dict[str, Any]) -> str:
+    """Title-only concrete event key.
+
+    This deliberately ignores matched sector/company metadata. Crawlers often
+    label the same article under adjacent sectors or companies, while the title
+    carries the actual event shape users expect to cluster by.
+    """
+    tokens = _title_event_tokens(article) - _company_title_tokens(article)
+    anchors = sorted(token for token in tokens if _is_title_event_key_token(token))
+    if len(anchors) >= 3 and _title_has_event_action(article):
+        return "_".join(anchors[:5])
+
+    return ""
+
+
+def _is_title_event_key_token(token: str) -> bool:
+    if len(token) < 3:
+        return False
+    return token not in {"기업용", "서비스", "플랫폼", "솔루션", "사업자"}
 
 
 def _has_operational_action(compact_text: str) -> bool:

@@ -19,14 +19,16 @@ import sys
 from datetime import UTC, date, datetime, time, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from langchain_openai import ChatOpenAI  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
 from src.config.env_loader import load_profile  # noqa: E402
@@ -68,6 +70,8 @@ _llm: ChatOpenAI | None = None
 
 
 def _get_llm() -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     global _llm
     if _llm is None:
         _llm = ChatOpenAI(

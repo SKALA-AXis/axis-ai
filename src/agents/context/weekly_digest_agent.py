@@ -9,11 +9,13 @@ import json
 import logging
 import re
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
 from src.analysis.prompts.weekly_digest_v1 import (
@@ -234,6 +236,8 @@ class WeeklyDigestAgent:
         return latest if isinstance(latest, dict) else None
 
     def _get_llm(self) -> ChatOpenAI:
+        from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
         if self._llm is None:
             self._llm = ChatOpenAI(
                 model=_LLM_MODEL,

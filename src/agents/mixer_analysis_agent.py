@@ -26,9 +26,10 @@ import os
 import re
 import time
 import uuid
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 
 from src.agents.implication_agent import ImplicationAgent
 from src.middleware.analysis_ledger import with_ledger_writeback
@@ -143,6 +144,8 @@ def _llm_max_completion_tokens(model: str) -> int:
 
 
 def _get_llm(analysis_mode: object = "quick") -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     model = _model_for_mode(analysis_mode)
     if model not in _llms:
         ensure_llm_env_loaded()

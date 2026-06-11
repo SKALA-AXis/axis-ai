@@ -134,6 +134,14 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--title-llm-pipeline",
+        action="store_true",
+        help=(
+            "대량 수동 재처리용 경량 경로. relevance를 저장한 뒤 BGE dedup 대신 "
+            "title LLM clustering으로 cluster_id/is_representative를 계산한다."
+        ),
+    )
+    parser.add_argument(
         "--title-llm-batch-size",
         type=int,
         default=120,
@@ -256,6 +264,20 @@ def main() -> None:
         log.info("재처리 상태 초기화 완료 | updated=%d", updated)
 
     if args.reset_only:
+        return
+
+    if args.title_llm_pipeline:
+        _run_title_llm_pipeline(
+            source_types=source_types,
+            companies=companies,
+            published_since=published_since,
+            published_until=published_until,
+            limit=max(1, args.limit),
+            max_batches=max(0, args.max_batches),
+            batch_size=max(10, args.title_llm_batch_size),
+            enable_relevance_llm=bool(args.enable_relevance_llm),
+            enable_classifier_llm=bool(args.enable_classifier_llm),
+        )
         return
 
     _run_batches(
@@ -459,6 +481,102 @@ def _run_batches(
     )
 
 
+def _run_title_llm_pipeline(
+    *,
+    source_types: list[str],
+    companies: list[str],
+    published_since: str | None,
+    published_until: str | None,
+    limit: int,
+    max_batches: int,
+    batch_size: int,
+    enable_relevance_llm: bool,
+    enable_classifier_llm: bool,
+) -> None:
+    service = PreprocessingService(
+        relevance_evaluator=RelevanceEvaluator(enable_llm=enable_relevance_llm),
+        classifier=ClusterClassifier(enable_llm=enable_classifier_llm),
+    )
+    total_raw = 0
+    total_relevant = 0
+    batch = 0
+
+    while True:
+        if max_batches and batch >= max_batches:
+            break
+        batch += 1
+        raw_ids = service.load_raw_ids(
+            companies,
+            source_types=source_types,
+            limit=limit,
+            published_since=published_since,
+            published_until=published_until,
+        )
+        if not raw_ids:
+            batch -= 1
+            break
+
+        route_result = service.route_by_source(raw_ids)
+        service.analyze_documents(route_result.get("parsed_document_ids", []))
+        relevant_ids = route_result.get("relevant_ids", [])
+        if relevant_ids:
+            _mark_relevant_articles_processed(relevant_ids)
+
+        total_raw += len(raw_ids)
+        total_relevant += len(relevant_ids)
+        log.info(
+            "title-llm-pipeline relevance 완료 | batch=%d raw=%d relevant=%d skipped=%d",
+            batch,
+            len(raw_ids),
+            len(relevant_ids),
+            len(route_result.get("skipped_preprocess_ids", [])),
+        )
+
+        if len(raw_ids) < limit:
+            break
+
+    cluster_map = _run_title_llm_cluster_only(
+        source_types=source_types,
+        statuses=["PROCESSED", "CLASSIFIED"],
+        companies=companies,
+        published_since=published_since,
+        published_until=published_until,
+        limit=max(limit * max(batch, 1), limit),
+        batch_size=batch_size,
+        reset_cluster_fields=True,
+    )
+    classified = service.classify_clusters(
+        representative_ids=list(cluster_map),
+        cluster_map=cluster_map,
+        requested_companies=companies,
+    )
+    log.info(
+        ("title-llm-pipeline 완료 | batches=%d raw=%d relevant=%d clusters=%d classified=%d"),
+        batch,
+        total_raw,
+        total_relevant,
+        len(cluster_map),
+        len(classified),
+    )
+
+
+def _mark_relevant_articles_processed(article_ids: list[int]) -> int:
+    if not article_ids:
+        return 0
+    with SessionLocal() as db:
+        result = db.execute(
+            text("""
+                UPDATE raw_articles
+                SET processing_status = 'PROCESSED'
+                WHERE id = ANY(:article_ids)
+                  AND relevance_label = 'relevant'
+            """),
+            {"article_ids": article_ids},
+        )
+        db.commit()
+        return int(getattr(result, "rowcount", 0) or 0)
+
+
 def _run_cluster_only(
     *,
     source_types: list[str],
@@ -530,7 +648,7 @@ def _run_title_llm_cluster_only(
     limit: int,
     batch_size: int,
     reset_cluster_fields: bool,
-) -> None:
+) -> dict[int, list[int]]:
     articles = _list_title_llm_cluster_articles(
         source_types=source_types,
         statuses=statuses,
@@ -542,7 +660,7 @@ def _run_title_llm_cluster_only(
     )
     if not articles:
         log.info("title-llm-cluster 대상 없음")
-        return
+        return {}
 
     total_clusters = 0
     total_articles = 0
@@ -585,6 +703,7 @@ def _run_title_llm_cluster_only(
         total_articles,
         total_clusters,
     )
+    return combined_cluster_map
 
 
 def _list_cluster_only_article_ids(
@@ -839,7 +958,8 @@ def _post_merge_title_llm_clusters(
 ) -> dict[int, list[int]]:
     del groups
     article_by_id = {int(article["id"]): article for article in articles}
-    return _merge_title_related_clusters(cluster_map, article_by_id)
+    split_cluster_map = _split_unrelated_title_groups(cluster_map, articles)
+    return _merge_title_related_clusters(split_cluster_map, article_by_id)
 
 
 def _title_llm_event_keys(
@@ -912,6 +1032,12 @@ def _title_articles_related(
 ) -> bool:
     if not left or not right:
         return False
+    left_title = str(left.get("title") or "")
+    right_title = str(right.get("title") or "")
+    left_tokens = _title_merge_tokens(left_title)
+    right_tokens = _title_merge_tokens(right_title)
+    if _multi_topic_bridge_conflict(left_title, right_title, left_tokens, right_tokens):
+        return False
     left_features = _title_cluster_features([int(left["id"])], {int(left["id"]): left})
     right_features = _title_cluster_features([int(right["id"])], {int(right["id"]): right})
     return _title_clusters_related(left_features, right_features)
@@ -962,15 +1088,17 @@ def _title_cluster_features(
     article_ids: list[int],
     article_by_id: dict[int, dict[str, Any]],
 ) -> dict[str, Any]:
-    tokens: set[str] = set()
+    token_counts: dict[str, int] = {}
     companies: set[str] = set()
     dates: set[str] = set()
     list_like_count = 0
+    multi_topic_count = 0
     title_count = 0
     for article_id in article_ids:
         article = article_by_id.get(article_id) or {}
         title = str(article.get("title") or "")
-        tokens |= _title_merge_tokens(title)
+        for token in _title_merge_tokens(title):
+            token_counts[token] = token_counts.get(token, 0) + 1
         companies |= set(article.get("matched_companies") or [])
         published_at = str(article.get("published_at") or "")
         if published_at:
@@ -979,13 +1107,25 @@ def _title_cluster_features(
             title_count += 1
             if _is_list_like_title(title):
                 list_like_count += 1
+            if _is_multi_topic_title(title):
+                multi_topic_count += 1
+    tokens = _cluster_core_title_tokens(token_counts, title_count)
     return {
         "tokens": tokens,
+        "anchors": _concrete_title_merge_anchors(tokens),
         "companies": companies,
         "dates": dates,
         "list_like_ratio": list_like_count / title_count if title_count else 0.0,
+        "multi_topic_ratio": multi_topic_count / title_count if title_count else 0.0,
         "article_count": len(article_ids),
     }
+
+
+def _cluster_core_title_tokens(token_counts: dict[str, int], title_count: int) -> set[str]:
+    if title_count <= 1:
+        return set(token_counts)
+    threshold = max(2, (title_count + 1) // 2)
+    return {token for token, count in token_counts.items() if count >= threshold}
 
 
 def _title_clusters_related(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -1005,12 +1145,24 @@ def _title_clusters_related(left: dict[str, Any], right: dict[str, Any]) -> bool
     if len(shared) < 2:
         return False
 
+    if _cluster_multi_topic_bridge_conflict(left, right):
+        return False
+
+    if _has_concrete_product_overlap(shared):
+        return True
+
     strict_mode = _requires_strict_title_merge(left, right)
     coverage = len(shared) / min(len(left_tokens), len(right_tokens))
     jaccard = len(shared) / len(left_tokens | right_tokens)
     if strict_mode:
         return len(shared) >= 3 and coverage >= 0.62 and jaccard >= 0.32
     return coverage >= 0.58 or (len(shared) >= 3 and jaccard >= 0.30)
+
+
+def _cluster_multi_topic_bridge_conflict(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if left["multi_topic_ratio"] <= 0 and right["multi_topic_ratio"] <= 0:
+        return False
+    return len(left["anchors"] & right["anchors"]) < 2
 
 
 def _companies_compatible(left_companies: set[str], right_companies: set[str]) -> bool:
@@ -1032,15 +1184,23 @@ def _requires_strict_title_merge(left: dict[str, Any], right: dict[str, Any]) ->
 def _is_list_like_title(title: str) -> bool:
     compact = _compact_title(title)
     markers = (
+        "뉴스브리프",
+        "뉴스브리핑",
         "클라우드월드",
         "ai브리프",
+        "it브리프",
+        "it스냅샷",
+        "전자it레이더",
+        "시큐리티포커스",
         "it는지금",
         "biznow",
         "기업경쟁력",
         "테크앤나우",
         "tech&now",
     )
-    return any(marker in compact for marker in markers)
+    if any(marker in compact for marker in markers):
+        return True
+    return bool(re.match(r"^\[?#?[가-힣a-z0-9]*(?:포커스|레이더|브리프|스냅샷)\]?", compact))
 
 
 def _dates_near(left_dates: set[str], right_dates: set[str]) -> bool:
@@ -1069,6 +1229,7 @@ def _title_merge_tokens(title: str) -> set[str]:
 
 def _normalize_title_merge_token(token: str) -> str:
     compact = _compact_title(token)
+    compact = _strip_title_particle(compact)
     aliases = {
         "엘지씨엔에스": "lgcns",
         "lg씨엔에스": "lgcns",
@@ -1085,6 +1246,78 @@ def _normalize_title_merge_token(token: str) -> str:
         "온에이아이": "온ai",
     }
     return aliases.get(compact, compact)
+
+
+def _strip_title_particle(token: str) -> str:
+    if len(token) < 4:
+        return token
+    for suffix in ("으로", "에게", "에서", "과", "와", "은", "는", "이", "가", "을", "를", "의"):
+        if token.endswith(suffix) and len(token) - len(suffix) >= 3:
+            return token[: -len(suffix)]
+    return token
+
+
+def _has_concrete_product_overlap(shared_tokens: set[str]) -> bool:
+    if len(shared_tokens) < 2:
+        return False
+    return any(
+        len(token) >= 4 and any(char.isascii() and char.isalpha() for char in token)
+        for token in shared_tokens
+    )
+
+
+def _multi_topic_bridge_conflict(
+    left_title: str,
+    right_title: str,
+    left_tokens: set[str],
+    right_tokens: set[str],
+) -> bool:
+    left_multi = _is_multi_topic_title(left_title)
+    right_multi = _is_multi_topic_title(right_title)
+    if not left_multi and not right_multi:
+        return False
+
+    shared_anchors = _concrete_title_merge_anchors(left_tokens & right_tokens)
+    if len(shared_anchors) >= 2:
+        return False
+
+    if left_multi and len(_concrete_title_merge_anchors(left_tokens)) >= 2:
+        return True
+    return bool(right_multi and len(_concrete_title_merge_anchors(right_tokens)) >= 2)
+
+
+def _is_multi_topic_title(title: str) -> bool:
+    raw = str(title or "").lower()
+    if any(marker in raw for marker in ("·", "ㆍ", "/", " 및 ", " 이어 ")):
+        return True
+    compact = _compact_title(title)
+    return any(marker in compact for marker in ("및", "이어"))
+
+
+def _concrete_title_merge_anchors(tokens: set[str]) -> set[str]:
+    generic = {
+        "가속",
+        "계약",
+        "계열사",
+        "공개",
+        "그룹",
+        "기업용",
+        "기반",
+        "도입",
+        "사업",
+        "전격",
+        "전사",
+        "체결",
+        "출시",
+        "혁신",
+        "확대",
+    }
+    return {
+        token
+        for token in tokens
+        if token not in generic
+        and (len(token) >= 3 or any(char.isascii() and char.isalpha() for char in token))
+    }
 
 
 def _useful_title_merge_token(token: str) -> bool:

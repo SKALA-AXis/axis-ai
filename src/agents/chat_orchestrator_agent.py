@@ -502,7 +502,10 @@ class ChatOrchestratorAgent:
                                event_type,
                                importance,
                                COALESCE(peer_company_id, company) AS peer_id,
-                               created_at
+                               created_at,
+                               source_raw_article_ids,
+                               sources,
+                               source_articles
                           FROM card_news
                          WHERE id = ANY(CAST(:ids AS text[]))
                          ORDER BY created_at DESC
@@ -576,6 +579,7 @@ class ChatOrchestratorAgent:
                                importance,
                                COALESCE(peer_company_id, company) AS peer_id,
                                created_at,
+                               source_raw_article_ids,
                                sources,
                                source_articles
                           FROM card_news
@@ -742,6 +746,7 @@ class ChatOrchestratorAgent:
                                    importance,
                                    COALESCE(peer_company_id, company) AS peer_id,
                                    created_at,
+                                   source_raw_article_ids,
                                    sources,
                                    source_articles,
                                    ROW_NUMBER() OVER (
@@ -761,6 +766,7 @@ class ChatOrchestratorAgent:
                                importance,
                                peer_id,
                                created_at,
+                               source_raw_article_ids,
                                sources,
                                source_articles
                           FROM ranked_cards
@@ -902,6 +908,7 @@ class ChatOrchestratorAgent:
                                importance,
                                COALESCE(peer_company_id, company) AS peer_id,
                                created_at,
+                               source_raw_article_ids,
                                sources,
                                source_articles
                           FROM card_news
@@ -956,6 +963,7 @@ class ChatOrchestratorAgent:
                                importance,
                                COALESCE(peer_company_id, company) AS peer_id,
                                created_at,
+                               source_raw_article_ids,
                                sources,
                                source_articles
                           FROM card_news
@@ -1489,6 +1497,7 @@ def _card_row_to_candidate(row: Any, *, score: float) -> RetrievalCandidate:
     summary = row.get("summary_lines") or []
     snippet = " ".join(str(item) for item in summary if item) if isinstance(summary, list) else ""
     source_meta = _primary_source_metadata(row.get("sources"), row.get("source_articles"))
+    source_count = _card_source_count(row)
     return RetrievalCandidate(
         source_type="card_news",
         source_id=str(row.get("id") or ""),
@@ -1500,6 +1509,7 @@ def _card_row_to_candidate(row: Any, *, score: float) -> RetrievalCandidate:
             "event_type": row.get("event_type"),
             "importance": row.get("importance"),
             "created_at": str(row.get("created_at") or ""),
+            "source_count": source_count,
             **source_meta,
         },
     )
@@ -1597,6 +1607,13 @@ def _primary_source_metadata(*values: Any) -> dict[str, Any]:
                     "published_at": published_at,
                 }
     return {}
+
+
+def _card_source_count(row: Any) -> int:
+    raw_ids = row.get("source_raw_article_ids") or []
+    counts = [len(raw_ids) if isinstance(raw_ids, list) else 0]
+    counts.extend(len(_jsonish_list(row.get(key))) for key in ("sources", "source_articles"))
+    return max(counts) if counts else 0
 
 
 def _jsonish_list(value: Any) -> list[dict[str, Any]]:

@@ -11,9 +11,10 @@ import json
 import logging
 import os
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 
 from src.config.openai_policy import openai_calls_enabled, openai_disabled_reason
 
@@ -179,6 +180,8 @@ def analyze_ir_with_llm(
 
 
 def _get_llm() -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     global _llm
     if _llm is None:
         _llm = ChatOpenAI(
