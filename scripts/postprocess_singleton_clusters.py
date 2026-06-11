@@ -43,7 +43,8 @@ log = logging.getLogger("postprocess_singleton_clusters")
 
 _TOKEN_RE = re.compile(r"[가-힣A-Za-z0-9]+")
 _STOCK_NOISE_RE = re.compile(
-    r"주가|특징주|목표가|투자의견|테마주|급등|급락|상한가|하한가|증시|지수선물|옵션|시황|강세|약세|반등"
+    r"주가|특징주|목표가|목표\s*주가|투자의견|테마주|급등|급락|상한가|하한가|증시|"
+    r"지수선물|옵션|시황|강세|약세|반등|폭등|장중|시가총액|거래량"
 )
 _LIST_LIKE_RE = re.compile(
     r"클라우드\s*월드|ai\s*브리프|it\s*스냅샷|전자\s*it\s*레이더|테크\s*&?\s*나우|tech\s*&?\s*now",
@@ -1007,8 +1008,6 @@ def _within_time_gap(
 
 
 def _is_stock_noise(title: str) -> bool:
-    if _has_event_action([title]) and len(_event_tokens(title)) >= 2:
-        return False
     return bool(_STOCK_NOISE_RE.search(title or ""))
 
 

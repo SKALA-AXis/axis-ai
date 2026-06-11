@@ -57,10 +57,10 @@ def test_company_name_alone_does_not_create_generic_merge() -> None:
     assert relation is None
 
 
-def test_contract_stock_article_is_not_stock_noise_without_event_hardcoding() -> None:
+def test_contract_stock_article_is_stock_noise_even_with_event_terms() -> None:
     title = "[특징주] 플래티어, 현대오토에버와 24억 규모 추가 공급계약 체결"
 
-    assert _is_stock_noise(title) is False
+    assert _is_stock_noise(title) is True
 
 
 def test_multi_company_roundup_title_is_list_like_noise() -> None:
