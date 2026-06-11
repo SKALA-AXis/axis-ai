@@ -40,6 +40,85 @@ DEFAULT_PEAK_MIN_RATIO = 70.0
 DEFAULT_PEAK_MIN_DELTA = 25.0
 DEFAULT_PEAK_MAX_GAP_DAYS = 3
 
+TECH_KEYWORD_GROUPS: list[dict[str, Any]] = [
+    {
+        "groupName": "인프라",
+        "keywords": ["인프라", "IT 인프라", "클라우드", "데이터센터", "IDC", "서버"],
+    },
+    {
+        "groupName": "IT 인프라",
+        "keywords": ["IT 인프라", "인프라", "클라우드 인프라", "데이터센터", "IDC"],
+    },
+    {
+        "groupName": "AX",
+        "keywords": ["AX", "AI 전환", "디지털 전환", "DX", "업무 자동화"],
+    },
+    {
+        "groupName": "생성형 AI",
+        "keywords": ["생성형 AI", "생성 AI", "GenAI", "ChatGPT", "AI 챗봇"],
+    },
+    {
+        "groupName": "GPU",
+        "keywords": ["GPU", "AI 반도체", "엔비디아 GPU", "GPU 서버", "AI 인프라"],
+    },
+    {
+        "groupName": "cloud",
+        "keywords": ["cloud", "클라우드", "AWS", "Azure", "Google Cloud"],
+    },
+    {
+        "groupName": "프라이빗 클라우드",
+        "keywords": ["프라이빗 클라우드", "private cloud", "전용 클라우드"],
+    },
+    {
+        "groupName": "하이브리드 클라우드",
+        "keywords": ["하이브리드 클라우드", "hybrid cloud", "멀티 클라우드"],
+    },
+    {
+        "groupName": "네트워크",
+        "keywords": ["네트워크", "5G", "망분리", "SDN", "네트워크 보안"],
+    },
+    {
+        "groupName": "스마트팩토리",
+        "keywords": ["스마트팩토리", "스마트 공장", "제조 AI", "공장 자동화"],
+    },
+    {
+        "groupName": "AI 에이전트",
+        "keywords": ["AI 에이전트", "AI agent", "에이전틱 AI", "Agentic AI"],
+    },
+    {
+        "groupName": "LLM",
+        "keywords": ["LLM", "대규모 언어모델", "거대언어모델", "Large Language Model"],
+    },
+    {
+        "groupName": "RAG",
+        "keywords": ["RAG", "검색증강생성", "Retrieval Augmented Generation"],
+    },
+    {
+        "groupName": "SOC",
+        "keywords": ["SOC", "보안관제", "Security Operation Center", "통합보안관제"],
+    },
+    {
+        "groupName": "디지털 트윈",
+        "keywords": ["디지털 트윈", "digital twin", "가상 시뮬레이션"],
+    },
+    {
+        "groupName": "Kubernetes",
+        "keywords": ["Kubernetes", "쿠버네티스", "K8s", "컨테이너 오케스트레이션"],
+    },
+    {
+        "groupName": "랜섬웨어",
+        "keywords": ["랜섬웨어", "ransomware", "랜섬웨어 공격", "랜섬웨어 대응"],
+    },
+    {
+        "groupName": "사이버보안",
+        "keywords": ["사이버보안", "보안", "정보보안", "정보보호", "해킹"],
+    },
+    {
+        "groupName": "제조 AX",
+        "keywords": ["제조 AX", "제조 AI", "제조 디지털 전환", "산업 AI"],
+    },
+]
+
 
 class NaverCredential(NamedTuple):
     client_id: str
@@ -179,8 +258,37 @@ def build_company_keyword_groups(
     return groups
 
 
+def build_tech_keyword_groups(
+    tech_keyword_groups: list[dict[str, Any]] = TECH_KEYWORD_GROUPS,
+) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+
+    for group in tech_keyword_groups:
+        group_name = str(group.get("groupName") or "").strip()
+        keywords = group.get("keywords") or []
+
+        if not group_name or not isinstance(keywords, list):
+            continue
+
+        normalized_keywords = dedupe_texts(keywords)[:NAVER_DATALAB_MAX_KEYWORDS_PER_GROUP]
+        if not normalized_keywords:
+            continue
+
+        groups.append(
+            {
+                "groupName": group_name,
+                "keywords": normalized_keywords,
+                "metadata": {
+                    "mode": "tech_keywords",
+                },
+            }
+        )
+
+    return groups
+
+
 def build_default_keyword_groups() -> list[dict[str, Any]]:
-    return build_company_keyword_groups()
+    return build_tech_keyword_groups() + build_company_keyword_groups()
 
 
 def chunk_keyword_groups(

@@ -62,7 +62,9 @@ _LIST_LIKE_COMPACT_MARKERS = (
     "technow",
     "클라우드월드",
 )
-_TITLE_LLM_JUDGE_ENABLED = os.getenv("POSTPROCESS_TITLE_LLM_JUDGE_ENABLED", "true").lower() == "true"
+_TITLE_LLM_JUDGE_ENABLED = (
+    os.getenv("POSTPROCESS_TITLE_LLM_JUDGE_ENABLED", "true").lower() == "true"
+)
 _TITLE_LLM_MAX_CALLS = int(os.getenv("POSTPROCESS_TITLE_LLM_MAX_CALLS", "80"))
 _TITLE_LLM_MODEL = os.getenv("POSTPROCESS_TITLE_LLM_MODEL", "gpt-4o-mini")
 _title_llm_calls = 0
@@ -816,7 +818,9 @@ def _sync_card_news_with_current_clusters(db: Any) -> dict[str, int]:
 
 
 def _table_exists(db: Any, table_name: str) -> bool:
-    return bool(db.execute(text("SELECT to_regclass(:table_name)"), {"table_name": table_name}).scalar())
+    return bool(
+        db.execute(text("SELECT to_regclass(:table_name)"), {"table_name": table_name}).scalar()
+    )
 
 
 def _reset_representatives(db: Any, cluster_ids: list[int]) -> None:
@@ -887,7 +891,9 @@ def _cluster_relation(
     )
     if title_llm_decision is True:
         score = max(
-            _candidate_score(left_context_tokens, right_context_tokens, shared_context_tokens, target_size),
+            _candidate_score(
+                left_context_tokens, right_context_tokens, shared_context_tokens, target_size
+            ),
             0.65,
         )
         return "title_content_llm", shared_context_tokens, score
@@ -1049,12 +1055,16 @@ def _title_llm_same_event(
 ) -> bool | None:
     global _title_llm_calls
 
-    if not _should_consult_title_llm(left_titles, right_titles, shared_tokens, left_snippets, right_snippets):
+    if not _should_consult_title_llm(
+        left_titles, right_titles, shared_tokens, left_snippets, right_snippets
+    ):
         return None
 
     left_key = " | ".join(sorted(left_titles))
     right_key = " | ".join(sorted(right_titles))
-    cache_key: tuple[str, str] = (left_key, right_key) if left_key <= right_key else (right_key, left_key)
+    cache_key: tuple[str, str] = (
+        (left_key, right_key) if left_key <= right_key else (right_key, left_key)
+    )
     if cache_key in _title_llm_cache:
         return _title_llm_cache[cache_key]
     if _title_llm_calls >= _TITLE_LLM_MAX_CALLS:
@@ -1069,11 +1079,18 @@ def _title_llm_same_event(
             "shared keywords; ignore sector labels."
         ),
         "criteria": [
-            "same_event=true when titles use different wording for the same underlying announcement, deal, launch, deployment, or collaboration.",
-            "same_event=true when title wording differs but lead snippets and keywords indicate the same concrete event.",
-            "same_event=true when both articles are focused analysis/strategy coverage of the same company and the same narrow set of anchors such as product line, market, executive, partner, financial figures, or operational initiative.",
-            "same_event=false when articles share only a broad theme, company, technology category, earnings season, or industry trend.",
-            "same_event=false when the titles have different concrete anchors, even if snippets share broad AI, cloud, platform, or business terms.",
+            "same_event=true when titles use different wording for the same underlying "
+            "announcement, deal, launch, deployment, or collaboration.",
+            "same_event=true when title wording differs but lead snippets and keywords "
+            "indicate the same concrete event.",
+            "same_event=true when both articles are focused analysis/strategy coverage "
+            "of the same company and the same narrow set of anchors such as product "
+            "line, market, executive, partner, financial figures, or operational "
+            "initiative.",
+            "same_event=false when articles share only a broad theme, company, "
+            "technology category, earnings season, or industry trend.",
+            "same_event=false when the titles have different concrete anchors, even "
+            "if snippets share broad AI, cloud, platform, or business terms.",
             "Do not require identical company labels if the titles indicate the same event.",
         ],
         "left_titles": left_titles[:5],
@@ -1097,7 +1114,9 @@ def _title_llm_same_event(
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a strict Korean news title clustering judge. Return JSON only.",
+                    "content": (
+                        "You are a strict Korean news title clustering judge. Return JSON only."
+                    ),
                 },
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
@@ -1176,7 +1195,8 @@ def _has_context_anchor_overlap(
     distinctive = {
         token
         for token in shared
-        if len(token) >= 3 and token not in {"ai", "ax", "dx", "시장", "사업", "기업", "기술", "서비스"}
+        if len(token) >= 3
+        and token not in {"ai", "ax", "dx", "시장", "사업", "기업", "기술", "서비스"}
     }
     return len(distinctive) >= 2
 
