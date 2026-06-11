@@ -44,7 +44,7 @@ _MAX_BRIDGE_TOPIC_TERMS = 1
 _MIN_RELATED_TERM_LENGTH = 6
 _TERM_NGRAM_SIMILARITY = 0.40
 _CLUSTER_LLM_JUDGE_ENABLED = os.getenv("DEDUP_CLUSTER_LLM_JUDGE_ENABLED", "true").lower() == "true"
-_CLUSTER_LLM_MAX_CALLS = int(os.getenv("DEDUP_CLUSTER_LLM_MAX_CALLS", "30"))
+_CLUSTER_LLM_MAX_CALLS = int(os.getenv("DEDUP_CLUSTER_LLM_MAX_CALLS", "80"))
 _CLUSTER_LLM_MODEL = os.getenv("DEDUP_CLUSTER_LLM_MODEL", "gpt-4o-mini")
 _CLUSTER_LLM_CONTENT_CHARS = int(os.getenv("DEDUP_CLUSTER_LLM_CONTENT_CHARS", "280"))
 _ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
@@ -188,6 +188,8 @@ class ArticleDeduplicator:
         if not articles:
             return {}, []
 
+        _reset_cluster_llm_run_state()
+
         cluster_map = _cluster_rule_first(
             articles=articles,
             threshold=DEDUP_THRESHOLD,
@@ -236,6 +238,8 @@ def deduplicate_articles(
 
     if not articles:
         return {}, []
+
+    _reset_cluster_llm_run_state()
 
     normalized = [_normalize_local_article(article, id_key) for article in articles]
 
@@ -501,6 +505,19 @@ def _cluster(
     ]
 
     return {cluster_id: ids for cluster_id, ids in enumerate(cluster_values)}
+
+
+def _reset_cluster_llm_run_state() -> None:
+    """Reset LLM judge accounting for each dedup run.
+
+    The API server is long-lived. If call count/cache survives across scheduled
+    runs, one noisy batch can exhaust the cap and silently disable LLM review
+    for later batches.
+    """
+    global _cluster_llm_calls, _cluster_llm_cache, _cluster_llm_approved_pairs
+    _cluster_llm_calls = 0
+    _cluster_llm_cache = {}
+    _cluster_llm_approved_pairs = set()
 
 
 def _with_representative_cluster_ids(
@@ -1268,6 +1285,7 @@ def _title_has_event_action(article: dict[str, Any]) -> bool:
             "투자",
             "인수",
             "확대",
+            "확보",
         )
     )
 
@@ -1355,7 +1373,7 @@ def _normalize_title_token(token: str) -> str:
 
 
 def _strip_korean_particle(token: str) -> str:
-    if len(token) < 4 or not re.fullmatch(r"[가-힣]+", token):
+    if len(token) < 4:
         return token
     for suffix in ("으로", "에게", "에서", "과", "와", "은", "는", "이", "가", "을", "를", "의"):
         if token.endswith(suffix) and len(token) - len(suffix) >= 3:
