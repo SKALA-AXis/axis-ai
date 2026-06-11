@@ -48,6 +48,10 @@ jobs:
       - name: Lint
         run: uv run ruff check src/
 
+      - name: Import boundaries (import-linter)
+        # 모듈 경계 가드 — agents→api 순환의 신규 유입 차단 (pyproject [tool.importlinter])
+        run: uv run lint-imports
+
       - name: Cache mypy
         # mypy 콜드런이 잡 시간의 큰 몫 — 의존성 lock 단위로 캐시
         uses: actions/cache@v4

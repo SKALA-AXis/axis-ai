@@ -57,6 +57,7 @@ dev = [
     "pre-commit>=3.0",
     "types-requests>=2.33.0.20260503",
     "types-python-dateutil>=2.9.0.20260408",
+    "import-linter>=2.11",
 ]
 
 [tool.ruff]
@@ -94,3 +95,20 @@ torch = { index = "pytorch-cpu" }
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
+
+# ── import-linter — 모듈 경계 가드 (PROJECT_STRUCTURE_PLAN Phase 2-A1) ──
+# agents → api 방향 의존이 순환(api ↔ agents)을 만든다. 기존 위반 2건은
+# allowlist 로 두고 신규 유입만 차단. 스키마가 필요하면 src/api 가 아니라
+# 중립 모듈(향후 src/contracts)로 옮길 것.
+[tool.importlinter]
+root_packages = ["src"]
+
+[[tool.importlinter.contracts]]
+name = "agents must not import api"
+type = "forbidden"
+source_modules = ["src.agents"]
+forbidden_modules = ["src.api"]
+ignore_imports = [
+    "src.agents.chat_orchestrator_agent -> src.api.chat_schemas",
+    "src.agents.today_insight_agent -> src.api.today_insight_schemas",
+]
