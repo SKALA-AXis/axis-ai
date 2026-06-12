@@ -29,3 +29,7 @@ def test_run_skips_when_no_cards(mock_session_local: MagicMock) -> None:
     agent = WeeklyDigestAgent()
     result = agent.run(peer_id="samsung_sds", use_llm=False)
     assert result["skipped"] is True
+    sql = str(mock_db.execute.call_args.args[0])
+    assert "latest_published_at" in sql
+    assert "source_raw_article_ids" in sql
+    assert "cn.created_at" in sql
