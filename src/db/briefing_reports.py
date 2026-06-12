@@ -46,6 +46,37 @@ _INSERT_ARTICLE_SQL = text("""
     ON CONFLICT DO NOTHING
 """)
 
+_SELECT_REPORT_SQL = text("""
+    SELECT payload, completed_at
+    FROM briefing_reports
+    WHERE id = :id
+      AND status IN ('completed', 'delivered')
+      AND payload IS NOT NULL
+""")
+
+
+def load_briefing_report(report_id: str) -> dict[str, Any] | None:
+    """저장된 브리핑을 재사용(read-through 캐시)하기 위해 조회한다.
+
+    Returns:
+        ``{"payload": dict, "completed_at": datetime | None}`` 또는 미존재 시 None.
+        payload 가 dict 로 해석되지 않으면 None (손상 row 는 캐시 미스로 처리).
+    """
+
+    with SessionLocal() as db:
+        row = db.execute(_SELECT_REPORT_SQL, {"id": report_id}).mappings().first()
+    if row is None:
+        return None
+    payload = row["payload"]
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            return None
+    if not isinstance(payload, dict):
+        return None
+    return {"payload": payload, "completed_at": row["completed_at"]}
+
 
 def save_briefing_report(
     report: dict[str, Any],

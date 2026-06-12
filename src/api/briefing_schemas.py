@@ -30,6 +30,9 @@ class BriefingGenerateRequest(BaseModel):
         limit: 기간 내 선택할 최대 카드 수.
         save: true 이면 briefing_reports 와 매핑 테이블에 저장한다.
         refine_display_copy: true 이면 화면 문장 정제 LLM 단계를 수행한다.
+        reuse_saved: true(기본) 이면 필터 없는 기본형 요청에서 저장된 동일 기간
+            브리핑을 재사용한다 (과거 기간 무기한·진행 중 기간 30분 TTL).
+            false 면 강제 재생성.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -46,6 +49,7 @@ class BriefingGenerateRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=50)
     save: bool = Field(default=False)
     refine_display_copy: bool = Field(default=True)
+    reuse_saved: bool = Field(default=True)
 
 
 class BriefingGenerateResponse(BaseModel):
