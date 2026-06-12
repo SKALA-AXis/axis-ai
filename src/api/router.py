@@ -40,6 +40,13 @@ from src.schemas import (
     SearchResponse,
 )
 
+_LOG_LEVEL_NAME = os.getenv("AXIS_AI_LOG_LEVEL", os.getenv("LOG_LEVEL", "INFO")).upper()
+_LOG_LEVEL = logging.getLevelNamesMapping().get(_LOG_LEVEL_NAME, logging.INFO)
+logging.basicConfig(
+    level=_LOG_LEVEL,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logging.getLogger().setLevel(_LOG_LEVEL)
 log = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
 SCHEDULED_PREPROCESS_LIMIT = 5000
