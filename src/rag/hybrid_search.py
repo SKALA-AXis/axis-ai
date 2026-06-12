@@ -24,6 +24,7 @@ def hybrid_search(
     company: Optional[str] = None,
     event_type: Optional[str] = None,
     peer_id: Optional[str] = None,
+    raise_on_failure: bool = False,
 ) -> list[dict]:
     """BGE-M3 Dense+Sparse RRF 하이브리드 검색.
 
@@ -32,6 +33,8 @@ def hybrid_search(
         top_k: 반환할 결과 수.
         company: 회사 필터 (없으면 전체).
         event_type: 이벤트 타입 필터.
+
+        raise_on_failure: True면 embedding/Qdrant 장애를 빈 결과로 숨기지 않고 예외로 전달.
 
     Returns:
         검색 결과 목록 (rdb_id, title, summary 등 포함).
@@ -42,6 +45,8 @@ def hybrid_search(
         vectors = embed_text(query, mode="both")
     except Exception as e:
         log.warning("임베딩 실패. BM25 폴백: %s", e)
+        if raise_on_failure:
+            raise RuntimeError("hybrid_search_embedding_failed") from e
         return []
 
     client = get_qdrant_client()
@@ -104,4 +109,6 @@ def hybrid_search(
         ]
     except Exception as e:
         log.error("Qdrant REST fallback 검색 실패: %s", e)
+        if raise_on_failure:
+            raise RuntimeError("hybrid_search_qdrant_failed") from e
         return []
