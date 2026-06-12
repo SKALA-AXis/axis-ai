@@ -281,8 +281,8 @@ exposure_score = 0.70·cluster_size_score + 0.30·company_mention_score
 high ≥ 0.65   (src/preprocessing/classification.py)
 ```
 
-> ⚠️ 1차 미팅 확정 스펙(0.40~0.50/0.30/0.20 다항)과 다름 — "코드가 맞다(문서 갱신)" vs
-> "스펙 이탈(코드 수정)" **팀 결정 대기** (axis-infra PROJECT_STRUCTURE_PLAN §2.6).
+> ✅ **확정 (2026-06-12 팀 결정): 코드가 정본.** 1차 미팅 스펙(다항식)은 폐기 —
+> 분석·발표 자료 모두 위 구현값 기준 (axis-infra PROJECT_STRUCTURE_PLAN §2.6).
 
 ---
 

@@ -10,6 +10,7 @@ from src.api.mixer_schemas import MixerAnalysisRequest, MixerAnalysisResponse
 from src.services.analysis_units import (
     QUALITY_SUMMARY_ONLY_FALLBACK,
     AnalysisUnit,
+    analysis_unit_from_card,
 )
 
 
@@ -129,6 +130,91 @@ def _unit(card_id: str, issue_id: str, *, flags: list[str] | None = None) -> Ana
         card={"id": card_id, "title": f"{card_id} 제목", "company": "samsung_sds"},
         quality_flags=flags or [],
     )
+
+
+def test_analysis_unit_preserves_source_published_at_for_mixer_prompt():
+    unit = analysis_unit_from_card(
+        {
+            "id": "CN-1",
+            "title": "원문 날짜 보존",
+            "company": "samsung_sds",
+            "source_raw_article_ids": [10],
+            "source_links": [
+                {
+                    "raw_article_id": 10,
+                    "title": "원문 기사",
+                    "source_name": "연합뉴스",
+                    "published_at": "2026-06-10T09:30:00+09:00",
+                    "url": "https://example.com/news",
+                }
+            ],
+            "evidence_payload": {
+                "analysis": {"analysis_summary": "분석"},
+                "implication": {"skax_implication": {"why_important": "시사점"}},
+            },
+        }
+    )
+
+    card = unit.to_card_like()
+    assert card["evidence_payload"]["source_links"][0]["published_at"].startswith("2026-06-10")
+    prompt = mixer_module._format_analysis_units([card])
+    assert "2026-06-10T09:30:00+09:00" in prompt
+
+
+def test_mixer_validation_does_not_persist_ellipsis_when_clipping():
+    long_hidden = (
+        "핵심 신호는 AX와 클라우드 판단 기준이 기술 보유 선언에서 실제 고객군, "
+        "운영 책임 조직, 보안 승인 권한, 수익화 근거를 함께 제시할 수 있는 실행 조건으로 "
+        "이동한다는 점입니다."
+    )
+    long_action = (
+        "SK AX는 금융과 공공 고객군을 분리해 우선 공략군을 정하고, 각 고객군별 "
+        "오퍼링 책임 조직과 보안 리스크 승인 권한을 함께 지정해 상품화 기준을 명확히 한다."
+    )
+    content = json.dumps(
+        {
+            "mix_insight": long_hidden,
+            "common_pattern": {
+                "finding": "실행 조건을 성과 근거로 제시하는 움직임이 반복됩니다.",
+                "rationale": "두 이슈 모두 고객군과 운영 조건을 판단 근거로 제시합니다.",
+                "evidence_card_ids": ["CN-1", "CN-2"],
+            },
+            "comparison_point": {
+                "finding": "한쪽은 고객군을, 다른 쪽은 운영 책임을 더 앞세웁니다.",
+                "rationale": "같은 실행 조건 안에서도 강조점이 다릅니다.",
+                "evidence_card_ids": ["CN-1", "CN-2"],
+            },
+            "hidden_conclusion": {
+                "finding": long_hidden,
+                "rationale": "여러 이슈를 함께 보면 실행 조건이 판단 기준으로 확인됩니다.",
+                "evidence_card_ids": ["CN-1", "CN-2"],
+            },
+            "recommended_actions": [long_action],
+            "action_details": [
+                {
+                    "action": long_action,
+                    "why": "고객군과 운영 책임이 함께 제시될 때 실행 판단으로 이어집니다.",
+                    "use_case": "사업 우선순위",
+                    "evidence_card_ids": ["CN-1", "CN-2"],
+                }
+            ],
+            "sources_used": ["CN-1", "CN-2"],
+            "confidence": 0.8,
+        },
+        ensure_ascii=False,
+    )
+
+    result = mixer_module._parse_and_validate(
+        content,
+        cards=[{"id": "CN-1"}, {"id": "CN-2"}],
+        card_ids=["CN-1", "CN-2"],
+    )
+
+    assert "…" not in result["final_one_liner"]
+    assert "..." not in result["final_one_liner"]
+    assert "…" not in result["sk_ax_implication"]
+    assert "..." not in result["sk_ax_implication"]
+    assert len(result["final_one_liner"]) > 100
 
 
 def test_mixer_accepts_integrated_issue_ids_and_exposes_sources(monkeypatch):
