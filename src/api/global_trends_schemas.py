@@ -182,6 +182,7 @@ class GlobalTrendsResponse(BaseModel):
     forecasts: list[GlobalForecast] = Field(default_factory=list)
 
     final_one_liner: str = ""
+    overall_summary: str = ""
     sk_ax_implication: str = ""
     follow_up_questions: list[str] = Field(default_factory=list)
 
