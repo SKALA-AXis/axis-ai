@@ -1319,7 +1319,10 @@ def update_classification(
     importance_score: float,
     qdrant_vector_id: Optional[str] = None,
 ) -> None:
-    """중요도 분류 결과를 raw_articles에 반영한다."""
+    """중요도 분류 결과를 raw_articles에 반영한다.
+
+    qdrant_vector_id를 넘기지 않으면 기존 값을 보존한다 (재분류 시 인덱싱 결과 유실 방지).
+    """
     with SessionLocal() as db:
         db.execute(
             text("""
@@ -1327,7 +1330,7 @@ def update_classification(
                 SET importance_level = :importance,
                     importance_score = :score,
                     processing_status = 'PROCESSED',
-                    qdrant_vector_id = CAST(:qdrant_id AS uuid)
+                    qdrant_vector_id = COALESCE(CAST(:qdrant_id AS uuid), qdrant_vector_id)
                 WHERE id = :id
             """),
             {
