@@ -190,6 +190,10 @@ class CardNewsComposer:
         summary_lines = _plain_summary_lines(summary, use_llm=True)
         if not summary_lines:
             summary_lines = _article_title_summary_lines(articles)
+        elif len(summary_lines) < _SUMMARY_LINE_MIN:
+            summary_lines = _merge_summary_lines(
+                summary_lines, _article_title_summary_lines(articles)
+            )
         card_text = _card_text(title, summary_lines, summary, articles)
         event_type = _infer_event_type(summary, classification, card_text)
         title = _business_context_title(title, summary=summary, event_type=event_type)
@@ -349,6 +353,11 @@ class CardNewsComposer:
                 "frontend_implication", _frontend_implication(package.get("analysis") or {})
             )
         literal_summary_lines = _literal_summary_lines(integrated_issue)
+        if literal_summary_lines and len(literal_summary_lines) < _SUMMARY_LINE_MIN:
+            literal_summary_lines = _merge_summary_lines(
+                literal_summary_lines,
+                _article_title_summary_lines(input_bundle.get("items") or []),
+            )
         if literal_summary_lines:
             card["summary_lines"] = literal_summary_lines
             if isinstance(card.get("db_record"), dict):
@@ -540,6 +549,8 @@ def _card_from_summary(
     summary_lines = _plain_summary_lines(summary, use_llm=True)
     if not summary_lines:
         return None
+    if len(summary_lines) < _SUMMARY_LINE_MIN:
+        summary_lines = _merge_summary_lines(summary_lines, _article_title_summary_lines(articles))
 
     title = _first_non_empty(
         summary.get("headline"),
@@ -547,6 +558,8 @@ def _card_from_summary(
         classification.get("title"),
         articles[0].get("title"),
     )
+    if _looks_like_sentence_title(title):
+        title = _first_non_empty(classification.get("title"), articles[0].get("title"), title)
     title = _business_context_title(
         title,
         summary=summary,
@@ -554,6 +567,7 @@ def _card_from_summary(
     )
     created_at = _now_iso()
     published_date = _published_date(articles, created_at)
+    media_assets = _media_assets(articles)
 
     card = {
         "id": _card_news_id(cluster_id, published_date),
@@ -573,6 +587,7 @@ def _card_from_summary(
         "importance_score": classification.get("importance_score", 0.0),
         "sources": _default_sources(articles),
         "news_summary": summary,
+        "image_assets": media_assets,
     }
     _attach_card_news_schema_fields(card)
     return card
@@ -617,6 +632,7 @@ def _attach_card_news_schema_fields(card: dict[str, Any]) -> None:
         "sources": card.get("sources", []),
         "validation_pass": validation_pass,
         "validation_sc_score": validation_sc_score,
+        "image_assets": card.get("image_assets", []),
     }
 
 
@@ -671,6 +687,13 @@ def _business_context_title(title: str, *, summary: dict[str, Any], event_type: 
             return f"{peer_name}, {focus} 성장 전망"
         return f"{peer_name}, {focus} 중심 실적 변화"
     return value
+
+
+def _looks_like_sentence_title(title: str) -> bool:
+    value = re.sub(r"\s+", " ", str(title or "")).strip()
+    if len(value) > 60 and value.endswith(("다", "다.", "했다", "했다.", "됐다", "됐다.")):
+        return True
+    return bool(re.search(r"(했다|공개했다|체결했다|진출했다|선보였다|밝혔다)[.]?$", value))
 
 
 def _is_financial_only_title(title: str) -> bool:
@@ -1987,19 +2010,74 @@ def _article_title_summary_lines(articles: list[dict[str, Any]]) -> list[str]:
     """Fallback factual summary when IntegrationAgent marks a cluster invalid."""
     out: list[str] = []
     seen: set[str] = set()
+
+    def add_line(value: Any) -> None:
+        text = _clean_card_editorial_text(str(value or ""))
+        text = re.sub(r"\s+", " ", text).strip(" .")
+        if not text or _looks_like_article_boilerplate(text):
+            return
+        key = re.sub(r"\W+", "", text).casefold()
+        if key in seen:
+            return
+        out.append(text)
+        seen.add(key)
+
     for article in articles:
         title = str(article.get("title") or "").strip()
-        if not title:
-            continue
-        title = re.sub(r"\s+", " ", title)
-        key = title.casefold()
-        if key in seen:
-            continue
-        out.append(title)
-        seen.add(key)
+        add_line(title)
+        content = str(article.get("content") or "")
+        for sentence in _article_content_sentences(content):
+            add_line(sentence)
+            if len(out) >= _SUMMARY_LINE_MIN:
+                break
         if len(out) >= _SUMMARY_LINE_MAX:
             break
     return out[:_SUMMARY_LINE_MAX]
+
+
+def _merge_summary_lines(primary: list[str], fallback: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for line in [*primary, *fallback]:
+        text = _clean_card_editorial_text(str(line or "")).strip(" .")
+        key = re.sub(r"\W+", "", text).casefold()
+        if not text or key in seen:
+            continue
+        merged.append(text)
+        seen.add(key)
+        if len(merged) >= _SUMMARY_LINE_MAX:
+            break
+    return merged
+
+
+def _article_content_sentences(content: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", str(content or "")).strip()
+    if not normalized:
+        return []
+    parts = re.split(r"(?<=[.!?。！？다])\s+", normalized)
+    sentences: list[str] = []
+    for part in parts:
+        text = part.strip(" -·,")
+        if not (24 <= len(text) <= 180):
+            continue
+        if _looks_like_article_boilerplate(text):
+            continue
+        sentences.append(text)
+        if len(sentences) >= _SUMMARY_LINE_MAX:
+            break
+    return sentences
+
+
+def _looks_like_article_boilerplate(text: str) -> bool:
+    return bool(
+        re.search(
+            r"뉴스\s*듣기|글자\s*크기|기사\s*공유|주소복사|다크모드|"
+            r"무단전재|재배포\s*금지|저작권|기자\s*=|기자\s*$|"
+            r"페이스북|카카오톡|이메일|구독|프린트",
+            text,
+            re.I,
+        )
+    )
 
 
 def _first_list_item(value: Any) -> str:
@@ -2774,11 +2852,27 @@ def _ensure_card_sentence(text: str) -> str:
 
 def _clean_card_editorial_text(text: str) -> str:
     out = re.sub(r"\s+", " ", str(text or "")).strip()
+    out = _normalize_company_surface_names(out)
+    out = re.sub(r"[!！]+$", "", out).strip()
     out = re.sub(r"^함께\s+", "", out)
     out = re.sub(r"\s+함께\s+(?=\d+[조억만천]|\d+장|[A-Z0-9]+ 서비스)", " ", out)
     out = re.sub(r"피어\s*프로필에서는\s*", "현재 확인되는 피어 사업 정보상 ", out)
     out = re.sub(r"SK\s*AX\s*프로필에서는\s*", "현재 확인되는 SK AX 사업 정보상 ", out)
     return out.strip()
+
+
+def _normalize_company_surface_names(text: str) -> str:
+    replacements = (
+        (r"엘지\s*씨엔에스|LG\s*CNS", "LG CNS"),
+        (r"삼성\s*SDS|삼성에스디에스|Samsung\s*SDS", "삼성SDS"),
+        (r"현대\s*오토에버|Hyundai\s*AutoEver", "현대오토에버"),
+        (r"포스코\s*DX|포스코디엑스|POSCO\s*DX", "포스코DX"),
+        (r"SK\s*C&C|SK㈜\s*C&C|SK주식회사\s*C&C|에스케이\s*씨앤씨", "SK AX"),
+    )
+    normalized = text
+    for pattern, replacement in replacements:
+        normalized = re.sub(pattern, replacement, normalized, flags=re.I)
+    return normalized
 
 
 def _profile_phrase_from_peer_copy(text: str) -> str:
@@ -3251,18 +3345,20 @@ def _rich_sources(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
         url = str(article.get("url") or "").strip()
         if not title and not url:
             continue
-        sources.append(
-            {
-                "index": index,
-                "article_id": _optional_int(article.get("id")),
-                "title": title,
-                "url": url,
-                "archive_url": article.get("archive_url"),
-                "source_name": str(article.get("source_name") or article.get("publisher") or ""),
-                "published_at": _string_or_none(article.get("published_at")),
-                "link_status": "ok",
-            }
-        )
+        source = {
+            "index": index,
+            "article_id": _optional_int(article.get("id")),
+            "title": title,
+            "url": url,
+            "archive_url": article.get("archive_url"),
+            "source_name": str(article.get("source_name") or article.get("publisher") or ""),
+            "published_at": _string_or_none(article.get("published_at")),
+            "link_status": "ok",
+        }
+        image_urls = _article_image_urls(article)
+        if image_urls:
+            source["image_urls"] = image_urls
+        sources.append(source)
     return sources
 
 

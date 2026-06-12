@@ -48,6 +48,22 @@ _SEARCH_ALIAS_BLOCKLIST = {
     "skinc.",
     "sk주식회사",
 }
+_POSCO_DX_GROUP_SEARCH_ALIASES = [
+    "포스코 AX",
+    "포스코 AI 에이전트",
+    "포스코 피지컬 AI",
+    "포스코 스마트팩토리",
+    "포스코 자동화",
+    "포스코 디지털 전환",
+]
+_POSCO_DX_GROUP_RELEVANCE_RE = re.compile(
+    r"포스코.{0,80}(AX|AI\s*에이전트|피지컬\s*AI|스마트\s*팩토리|"
+    r"자동화|디지털\s*전환|업무\s*혁신|제조\s*AI|수주|영업|품질)"
+    r"|"
+    r"(AX|AI\s*에이전트|피지컬\s*AI|스마트\s*팩토리|자동화|"
+    r"디지털\s*전환|업무\s*혁신|제조\s*AI).{0,80}포스코",
+    re.IGNORECASE,
+)
 _NON_BUSINESS_PATH_SEGMENTS = {
     "sports",
     "esports",
@@ -120,7 +136,7 @@ class NaverNewsCrawler(BaseCrawler):
 
         articles = []
         query_specs = self.search_queries or [
-            {"query": alias, "sector": ""} for alias in self.aliases
+            {"query": alias, "sector": ""} for alias in self._search_aliases()
         ]
 
         for spec in query_specs:
@@ -271,6 +287,12 @@ class NaverNewsCrawler(BaseCrawler):
                 **({"sector": sector} if sector else {}),
             },
         )
+
+    def _search_aliases(self) -> list[str]:
+        aliases = list(self.aliases)
+        if self.peer_id == "posco_dx":
+            aliases.extend(_POSCO_DX_GROUP_SEARCH_ALIASES)
+        return _dedupe_keep_order(aliases)
 
 
 def load_naver_credentials() -> list[NaverCredential]:
@@ -750,6 +772,16 @@ def classify_peer_relevance(
         decision = "pass"
         reason = "tracked_peer_in_title"
 
+    elif target_peer_id == "posco_dx" and _matches_posco_dx_group_ax_signal(
+        f"{title} {subtitle} {content}"
+    ):
+        matched_peers.append("posco_dx")
+        matched_aliases_by_peer.setdefault("posco_dx", []).append("포스코+AX")
+        title_peers.append("posco_dx")
+        target_count = max(target_count, 1)
+        decision = "pass"
+        reason = "posco_group_ax_signal"
+
     # 부제 + 본문 기준:
     # 제목에는 없지만 부제 + 정제된 본문에서 타깃 피어사명이 2회 이상 반복 등장하면 pass.
     elif target_subbody_count >= 2 and _target_has_core_role_context(
@@ -937,6 +969,27 @@ def _target_has_core_role_context(text_norm: str, target_peer_id: str) -> bool:
     return False
 
 
+def _matches_posco_dx_group_ax_signal(text: str) -> bool:
+    if not text:
+        return False
+    if not _POSCO_DX_GROUP_RELEVANCE_RE.search(text):
+        return False
+    if _MARKET_PRICE_RE.search(text) and _MARKET_METRIC_RE.search(text):
+        return False
+    return True
+
+
+def _dedupe_keep_order(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
 def company_peer_ids_for_article(
     decision: str,
     reason: str,
@@ -949,6 +1002,7 @@ def company_peer_ids_for_article(
         "target_peer_in_title",
         "multiple_tracked_peers_in_title",
         "target_peer_core_role_in_body",
+        "posco_group_ax_signal",
     }:
         return sorted(set(title_peers or [target_peer_id]))
 

@@ -40,7 +40,7 @@ log = logging.getLogger("backfill_news_images")
 _TARGET_SQL = text("""
     SELECT id, title, url, metadata
     FROM raw_articles
-    WHERE source_type = 'news'
+    WHERE source_type = ANY(:source_types)
       AND crawl_status = 'success'
       AND url IS NOT NULL
       AND url <> ''
@@ -58,7 +58,7 @@ _TARGET_SQL = text("""
 _COUNT_SQL = text("""
     SELECT count(*)
     FROM raw_articles
-    WHERE source_type = 'news'
+    WHERE source_type = ANY(:source_types)
       AND crawl_status = 'success'
       AND url IS NOT NULL
       AND url <> ''
@@ -93,6 +93,13 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="특정 source_name만 처리. 예: naver_news",
     )
+    parser.add_argument(
+        "--source-type",
+        action="append",
+        dest="source_types",
+        default=None,
+        help="처리할 source_type. 여러 번 지정 가능. 기본: news, official",
+    )
     parser.add_argument("--timeout", type=float, default=10.0, help="기사 HTML fetch timeout.")
     parser.add_argument("--concurrency", type=int, default=8, help="동시 fetch 수.")
     parser.add_argument("--apply", action="store_true", help="실제 DB에 반영.")
@@ -106,11 +113,21 @@ async def main() -> None:
     days = max(0, args.days)
     concurrency = max(1, args.concurrency)
 
-    rows, total = _load_targets(days=days, limit=limit, source_name=args.source_name)
+    source_types = args.source_types or ["news", "official"]
+    rows, total = _load_targets(
+        days=days,
+        limit=limit,
+        source_name=args.source_name,
+        source_types=source_types,
+    )
     log.info(
-        "뉴스 이미지 백필 대상 확인 | profile=%s days=%d source_name=%s total=%d loaded=%d",
+        (
+            "뉴스 이미지 백필 대상 확인 | profile=%s days=%d source_types=%s "
+            "source_name=%s total=%d loaded=%d"
+        ),
         profile,
         days,
+        ",".join(source_types),
         args.source_name or "*",
         total,
         len(rows),
@@ -152,8 +169,14 @@ def _load_targets(
     days: int,
     limit: int,
     source_name: str | None,
+    source_types: list[str],
 ) -> tuple[list[dict[str, Any]], int]:
-    params = {"days": days, "limit": limit, "source_name": source_name}
+    params = {
+        "days": days,
+        "limit": limit,
+        "source_name": source_name,
+        "source_types": source_types,
+    }
     with SessionLocal() as db:
         total = int(db.execute(_COUNT_SQL, params).scalar() or 0)
         rows = [

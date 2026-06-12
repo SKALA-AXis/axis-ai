@@ -35,7 +35,11 @@ log = logging.getLogger("backfill_card_news")
 _FINANCIAL_LIKE_TITLE_RE = re.compile(
     r"영업이익|순이익|수익성|주가|목표가|투자의견|상한가|하한가|"
     r"주가.{0,12}(상승|하락|급등|급락)|전년\s*동기|전분기|"
-    r"분기\s*(매출|영업이익|실적)|배당|주주환원|R&D\s*지출"
+    r"분기\s*(매출|영업이익|실적)|배당|주주환원|R&D\s*지출|"
+    r"공모|공모가|공모주|수요예측|청약|상장|IPO|시가총액|기업가치|"
+    r"경영\s*실적|투자재원|사내이사|이사회|주주총회|사회이사진|법률자문|"
+    r"증권|투자수익률|주식\s*초고수|사들인\s*종목|매수\s*종목|"
+    r"채용|공채|인재\s*모집"
 )
 _FINANCIAL_LIKE_EVENTS = {"financial", "earnings", "stock_market", "analyst_report"}
 
@@ -192,9 +196,29 @@ def main() -> None:
             )
             card = result.get("card_news") or {}
             if card:
-                if not args.include_financial_like and _is_problematic_generated_title(
-                    str(card.get("title") or "")
-                ):
+                validation = (
+                    card.get("validation") if isinstance(card.get("validation"), dict) else {}
+                )
+                validation_pass = bool(card.get("validation_pass", validation.get("pass", False)))
+                title = str(card.get("title") or "")
+                if not validation_pass and _is_problematic_generated_title(title):
+                    transient_card_id = str(card.get("id") or "")
+                    deleted = _mark_card_deleted(transient_card_id) if transient_card_id else 0
+                    skipped += 1
+                    log.info(
+                        (
+                            "card_news backfill deleted invalid generated card | "
+                            "%d/%d cluster_id=%s card_id=%s title=%s deleted=%d"
+                        ),
+                        index,
+                        len(targets),
+                        cluster_id,
+                        transient_card_id,
+                        title,
+                        deleted,
+                    )
+                    continue
+                if not args.include_financial_like and _is_problematic_generated_title(title):
                     transient_card_id = str(card.get("id") or "")
                     deleted = _mark_card_deleted(transient_card_id) if transient_card_id else 0
                     if args.update_existing_in_place and existing_card_id:
@@ -361,6 +385,29 @@ def _load_targets(
                 OR cn.implication::text ILIKE '%PoC%'
                 OR cn.implication::text ILIKE '%검증표%'
                 OR cn.implication::text ILIKE '%데이터 없음%'
+                OR cardinality(COALESCE(cn.summary_lines, ARRAY[]::text[])) < 3
+                OR (
+                    jsonb_array_length(
+                        COALESCE(cn.implication->'frontend'->'key_implications', '[]'::jsonb)
+                    ) = 0
+                    AND jsonb_array_length(
+                        COALESCE(cn.implication->'key_implications', '[]'::jsonb)
+                    ) = 0
+                )
+                OR (
+                    jsonb_array_length(
+                        COALESCE(cn.implication->'frontend'->'suggested_actions', '[]'::jsonb)
+                    ) = 0
+                    AND jsonb_array_length(
+                        COALESCE(cn.implication->'recommended_actions', '[]'::jsonb)
+                    ) = 0
+                    AND jsonb_array_length(
+                        COALESCE(
+                            cn.implication->'skax_implication'->'recommended_actions',
+                            '[]'::jsonb
+                        )
+                    ) = 0
+                )
                 OR cn.title ILIKE '%사진=%'
                 OR cn.title ILIKE '%전자공시시스템%'
                 OR cn.title ILIKE '%따르면%'
@@ -392,6 +439,29 @@ def _load_targets(
                 OR cn.implication::text ILIKE '%PoC%'
                 OR cn.implication::text ILIKE '%검증표%'
                 OR cn.implication::text ILIKE '%데이터 없음%'
+                OR cardinality(COALESCE(cn.summary_lines, ARRAY[]::text[])) < 3
+                OR (
+                    jsonb_array_length(
+                        COALESCE(cn.implication->'frontend'->'key_implications', '[]'::jsonb)
+                    ) = 0
+                    AND jsonb_array_length(
+                        COALESCE(cn.implication->'key_implications', '[]'::jsonb)
+                    ) = 0
+                )
+                OR (
+                    jsonb_array_length(
+                        COALESCE(cn.implication->'frontend'->'suggested_actions', '[]'::jsonb)
+                    ) = 0
+                    AND jsonb_array_length(
+                        COALESCE(cn.implication->'recommended_actions', '[]'::jsonb)
+                    ) = 0
+                    AND jsonb_array_length(
+                        COALESCE(
+                            cn.implication->'skax_implication'->'recommended_actions',
+                            '[]'::jsonb
+                        )
+                    ) = 0
+                )
                 OR cn.title ILIKE '%사진=%'
                 OR cn.title ILIKE '%전자공시시스템%'
                 OR cn.title ILIKE '%따르면%'
@@ -442,12 +512,46 @@ def _load_targets(
                         )[1] AS representative_id,
                         MIN(ra.published_at) AS min_published
                     FROM raw_articles ra
-                    WHERE ra.source_type = 'news'
+                    WHERE ra.source_type IN ('news', 'official')
                       AND ra.published_at >= CAST(:published_since AS timestamptz)
                       AND ra.published_at < CAST(:published_until AS timestamptz)
                       AND ra.processing_status = 'PROCESSED'
                       AND ra.relevance_label = 'relevant'
                       AND ra.cluster_id IS NOT NULL
+                      AND COALESCE(ra.title, '') !~* (
+                          '영업이익|순이익|수익성|주가|목표가|투자의견|상한가|하한가|'
+                          '전년\\s*동기|전분기|분기\\s*(매출|영업이익|실적)|'
+                          '배당|주주환원|R&D\\s*지출|공모|공모가|공모주|수요예측|'
+                          '청약|상장|IPO|시가총액|기업가치|증권신고서|'
+                          '경영\\s*실적|투자재원|사내이사|이사회|주주총회|'
+                          '사회이사진|법률자문|증권|투자수익률|주식\\s*초고수|'
+                          '사들인\\s*종목|매수\\s*종목|채용|공채|인재\\s*모집'
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM raw_articles ra2
+                          WHERE ra2.cluster_id = ra.cluster_id
+                            AND COALESCE(ra2.title, '') !~* '수상|표창'
+                            AND COALESCE(ra2.title, '') ~* (
+                                '영업이익|순이익|수익성|주가|목표가|투자의견|상한가|하한가|'
+                                '전년\\s*동기|전분기|분기\\s*(매출|영업이익|실적)|'
+                                '배당|주주환원|R&D\\s*지출|공모|공모가|공모주|수요예측|'
+                                '청약|상장|IPO|시가총액|기업가치|증권신고서|'
+                                '경영\\s*실적|투자재원|사내이사|이사회|주주총회|'
+                                '사회이사진|법률자문|증권|투자수익률|주식\\s*초고수|'
+                                '사들인\\s*종목|매수\\s*종목|채용|공채|인재\\s*모집'
+                            )
+                      )
+                      AND EXISTS (
+                          SELECT 1
+                          FROM peer_companies pc
+                          WHERE pc.is_active = TRUE
+                            AND pc.id <> 'sk_ax'
+                            AND (
+                                ra.company ? pc.id
+                                OR ra.matched_companies ? pc.id
+                            )
+                      )
                     GROUP BY ra.cluster_id
                 )
                 SELECT cluster_id, article_ids, titles, representative_id
@@ -519,6 +623,10 @@ def _is_problematic_generated_title(title: str) -> bool:
     if len(stripped) > 80:
         return True
     if any(fragment in stripped for fragment in ("사진=", "전자공시시스템", "따르면")):
+        return True
+    if len(stripped) > 42 and stripped.endswith(
+        ("다", "다.", "했다", "했다.", "됐다", "됐다.", "있다", "있다.")
+    ):
         return True
     return _is_financial_like_text(stripped)
 
