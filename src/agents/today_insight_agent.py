@@ -3,7 +3,8 @@
 The agent compares today's integrated issues against accumulated JSON context
 (`today_insight_reports.output_payload`), integrated issue history, company
 profiles, and SK AX official context. The public output is intentionally compact
-and UI-ready: key signal, watch point, next judgment, evidence, response, sources.
+and UI-ready: key point, watch point, implication, response direction, evidence,
+and sources.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Mapping
@@ -29,6 +31,7 @@ from src.contracts.today_insight_schemas import (
 )
 from src.db.postgres import SessionLocal
 from src.observability.langfuse_client import tracing_config
+from src.services.peer_id_aliases import PEER_ID_ALIASES, normalize_to_canonical_id
 from src.services.profile_context_loader import ProfileContextLoader
 from src.services.skax_profile_context_loader import SKAXProfileLoader
 from src.services.today_insight_comparison_engine import (
@@ -73,6 +76,33 @@ _WEAK_OR_MOCK_MARKERS = (
     "디지털 전환",
     "중요한 사례",
 )
+_PUBLIC_TEXT_REPLACEMENTS = (
+    ("low_visibility_definite_event", "노출은 낮지만 내용이 확인된 이벤트"),
+    ("high_salience_visible", "보도 확산이 큰 이벤트"),
+    ("general_update", "일반 업데이트"),
+    ("event_type_mix_shift", "이벤트 유형 변화"),
+    ("peer_activity_delta", "Peer 활동 변화"),
+    ("baseline_pct", "최근 평균 비중"),
+    ("today_pct", "오늘 비중"),
+    ("delta_pp", "변화폭"),
+    ("ratio_delta", "검색 관심도 변화"),
+    ("latest_ratio", "최근 검색 관심도"),
+    ("baseline", "최근 평균"),
+    ("today_insight_reports", "저장 리포트"),
+    ("integrated_issues", "통합 이슈"),
+    ("card_news", "카드뉴스"),
+    ("raw_articles", "원문"),
+    ("analysis_ledger", "분석 기록"),
+    ("source id", "근거"),
+    ("raw id", "원문 근거"),
+    ("source_ids", "근거"),
+    ("source_id", "근거"),
+    ("source_raw_article_ids", "원문 근거"),
+    ("source_integrated_issue_id", "통합 이슈 근거"),
+    ("source_card_id", "카드뉴스 근거"),
+    ("primary_selection", "대표 신호"),
+    ("comparison_facts", "비교 근거"),
+)
 
 _llm: ChatOpenAI | None = None
 
@@ -114,8 +144,18 @@ _TODAY_INSIGHT_PROMPT = """\
 판단 순서:
 - comparison_facts.primary_selection(확실한 이벤트) → structural/keyword_trends 맥락
   → SK AX 고객 대응·운영 KPI → 오늘 확인 항목.
+- "오늘"은 이슈/카드 생성일이 아니라 연결된 원문 published_at 의 KST 날짜가
+  report_date 와 같은 입력만 current 로 봅니다.
+- Peer 모니터링이므로 SK AX 자체 뉴스/공식자료/자사 기사 원문은 current 입력에서
+  제외하고, SK AX 자료는 해석 관점으로만 사용합니다.
+- "주요 포인트"와 "관찰 포인트"를 별도 항목으로 나누지 말고 signal[0]의
+  "주요 신호" 안에 핵심 사건과 관찰 맥락을 함께 담습니다.
 - label=low_visibility_definite_event 이면 signal[0]에 반드시 반영.
 - structural·keyword_trends는 primary를 대체하지 않는 보조 맥락.
+- 뉴스/카드/이슈 건수 또는 노출량만으로 판단하지 않습니다. 건수는 맥락으로만 쓰고,
+  실제 사건·내용·변화 방향·SK AX 고객 대응 관점과 함께 해석합니다.
+- "중요", "긴급", "우선순위"를 임의로 단정하지 않습니다. 입력에 있는 중요도/확실성
+  근거가 없으면 "확인 필요", "점검 대상"처럼 표현합니다.
 
 reasoning step label: "관찰", "비교", "의미", "판단" 만 사용.
 각 reasoning.detail 은 1문장 이내로 짧게 씁니다.
@@ -125,6 +165,8 @@ reasoning step label: "관찰", "비교", "의미", "판단" 만 사용.
 2. "경쟁 환경", "전략 강화", "시장 확대", "제안서 작성" 같은 넓은 결론만 단독으로 쓰지 않습니다.
 3. signal[0]은 primary_selection.items[0]을 우선 반영합니다.
 4. evidence.changes에는 comparison_facts 에 확인 가능한 항목만 씁니다.
+5. 사용자에게 보이는 문장에는 DB 테이블명, 컬럼명, 내부 id, source id, raw id,
+   IC-/CN-/raw- 같은 식별자를 쓰지 않습니다. sources 배열의 id 필드에만 식별자를 둡니다.
 
 입력 JSON:
 {context_json}
@@ -253,11 +295,14 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
         window_days=req.window_days,
         limit=max(req.max_issues * 3, req.max_issues),
     )
+    issues = [row for row in issues if not _is_self_company_issue(row)]
     current_issues = [
-        row for row in issues if row.get("created_date_kst") == anchor_date.isoformat()
+        row
+        for row in issues
+        if row.get("has_anchor_source") is True
+        or row.get("latest_source_date_kst") == anchor_date.isoformat()
+        or row.get("created_date_kst") == anchor_date.isoformat()
     ]
-    if not current_issues:
-        current_issues = issues[: min(req.max_issues, len(issues))]
     history_issues = [
         row for row in issues if row.get("id") not in {item.get("id") for item in current_issues}
     ][: max(req.max_issues * 2, 6)]
@@ -269,16 +314,26 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
         window_days=req.window_days,
         limit=req.max_cards,
     )
+    cards = [card for card in cards if not _is_self_company_card(card)]
     if len(cards) < req.max_cards:
-        supplemental_cards = _fetch_recent_cards(
+        supplemental_cards = _fetch_anchor_date_cards(
             anchor_date=anchor_date,
-            window_days=req.window_days,
             limit=req.max_cards - len(cards),
             exclude_ids=[
                 str(card.get("id")) for card in cards if str(card.get("id") or "").strip()
             ],
         )
+        supplemental_cards = [
+            card for card in supplemental_cards if not _is_self_company_card(card)
+        ]
         cards = [*cards, *supplemental_cards][: req.max_cards]
+    if not cards:
+        cards = _fetch_recent_cards(
+            anchor_date=anchor_date,
+            window_days=req.window_days,
+            limit=req.max_cards,
+        )
+        cards = [card for card in cards if not _is_self_company_card(card)][: req.max_cards]
     peer_ids = _dedupe(
         [
             str(value)
@@ -304,7 +359,12 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
     skax_context = _load_skax_context(sectors=sectors)
     prior_reports = _fetch_prior_today_reports(anchor_date=anchor_date, limit=5)
     ledger_context = _fetch_analysis_ledger(peer_ids=peer_ids, window_days=req.window_days, limit=8)
-    sources = _collect_sources(current_issues=current_issues, cards=cards, limit=12)
+    sources = _collect_sources(
+        current_issues=current_issues,
+        cards=cards,
+        anchor_date=anchor_date,
+        limit=12,
+    )
     stats = _build_change_stats(
         anchor_date=anchor_date,
         current_issues=current_issues,
@@ -348,41 +408,108 @@ def _fetch_integrated_issues(
                 db.execute(
                     text(
                         """
-                    SELECT id::text AS id,
-                           cluster_id,
-                           main_company,
-                           event_type,
-                           source_family,
-                           confidence,
-                           headline,
-                           one_line_summary,
-                           analyzed_source_ids,
-                           source_ids,
-                           sectors,
-                           mentioned_peer_companies,
-                           content_summary,
-                           issue_frame,
-                           sources,
-                           evidence,
-                           quality,
-                           payload,
-                           created_at,
-                           updated_at,
-                           ((created_at AT TIME ZONE 'Asia/Seoul')::date)::text AS created_date_kst
-                      FROM integrated_issues
-                     WHERE is_current = TRUE
-                       AND status = 'active'
-                       AND is_valid = TRUE
-                       AND (created_at AT TIME ZONE 'Asia/Seoul')::date
+                    SELECT ii.id::text AS id,
+                           ii.cluster_id,
+                           ii.main_company,
+                           ii.event_type,
+                           ii.source_family,
+                           ii.confidence,
+                           ii.headline,
+                           ii.one_line_summary,
+                           ii.analyzed_source_ids,
+                           ii.source_ids,
+                           ii.sectors,
+                           ii.mentioned_peer_companies,
+                           ii.content_summary,
+                           ii.issue_frame,
+                           ii.sources,
+                           ii.evidence,
+                           ii.quality,
+                           ii.payload,
+                           ii.created_at,
+                           ii.updated_at,
+                           ((ii.created_at AT TIME ZONE 'Asia/Seoul')::date)::text
+                               AS created_date_kst,
+                           (
+                               SELECT MAX(source_date)::text
+                                 FROM (
+                                       SELECT (
+                                           COALESCE(
+                                               iisa.published_at,
+                                               ra.published_at,
+                                               ra.created_at
+                                           ) AT TIME ZONE 'Asia/Seoul'
+                                       )::date AS source_date
+                                         FROM integrated_issue_source_articles iisa
+                                         LEFT JOIN raw_articles ra ON ra.id = iisa.raw_article_id
+                                        WHERE iisa.integrated_issue_id = ii.id
+                                       UNION ALL
+                                       SELECT (COALESCE(ra.published_at, ra.created_at)
+                                           AT TIME ZONE 'Asia/Seoul')::date AS source_date
+                                         FROM raw_articles ra
+                                        WHERE ra.id = ii.representative_raw_article_id
+                                           OR ra.id = ANY(ii.source_ids)
+                                           OR ra.id = ANY(ii.analyzed_source_ids)
+                                      ) issue_source_dates
+                           ) AS latest_source_date_kst,
+                           EXISTS (
+                               SELECT 1
+                                 FROM (
+                                       SELECT (
+                                           COALESCE(
+                                               iisa.published_at,
+                                               ra.published_at,
+                                               ra.created_at
+                                           ) AT TIME ZONE 'Asia/Seoul'
+                                       )::date AS source_date
+                                         FROM integrated_issue_source_articles iisa
+                                         LEFT JOIN raw_articles ra ON ra.id = iisa.raw_article_id
+                                        WHERE iisa.integrated_issue_id = ii.id
+                                       UNION ALL
+                                       SELECT (COALESCE(ra.published_at, ra.created_at)
+                                           AT TIME ZONE 'Asia/Seoul')::date AS source_date
+                                         FROM raw_articles ra
+                                        WHERE ra.id = ii.representative_raw_article_id
+                                           OR ra.id = ANY(ii.source_ids)
+                                           OR ra.id = ANY(ii.analyzed_source_ids)
+                                      ) issue_source_dates
+                                WHERE source_date = CAST(:anchor_date AS date)
+                           ) AS has_anchor_source
+                      FROM integrated_issues ii
+                     WHERE ii.is_current = TRUE
+                       AND ii.status = 'active'
+                       AND ii.is_valid = TRUE
+                       AND (ii.created_at AT TIME ZONE 'Asia/Seoul')::date
                            >= CAST(:anchor_date AS date) - (:window_days * INTERVAL '1 day')
                      ORDER BY
                        CASE
-                         WHEN (created_at AT TIME ZONE 'Asia/Seoul')::date
-                              = CAST(:anchor_date AS date)
+                         WHEN EXISTS (
+                               SELECT 1
+                                 FROM (
+                                       SELECT (
+                                           COALESCE(
+                                               iisa.published_at,
+                                               ra.published_at,
+                                               ra.created_at
+                                           ) AT TIME ZONE 'Asia/Seoul'
+                                       )::date AS source_date
+                                         FROM integrated_issue_source_articles iisa
+                                         LEFT JOIN raw_articles ra ON ra.id = iisa.raw_article_id
+                                        WHERE iisa.integrated_issue_id = ii.id
+                                       UNION ALL
+                                       SELECT (COALESCE(ra.published_at, ra.created_at)
+                                           AT TIME ZONE 'Asia/Seoul')::date AS source_date
+                                         FROM raw_articles ra
+                                        WHERE ra.id = ii.representative_raw_article_id
+                                           OR ra.id = ANY(ii.source_ids)
+                                           OR ra.id = ANY(ii.analyzed_source_ids)
+                                      ) issue_source_dates
+                                WHERE source_date = CAST(:anchor_date AS date)
+                           )
                          THEN 0 ELSE 1
                        END,
-                       confidence DESC NULLS LAST,
-                       created_at DESC
+                       ii.confidence DESC NULLS LAST,
+                       ii.created_at DESC
                      LIMIT :limit
                     """
                     ),
@@ -405,9 +532,10 @@ def _fetch_cards_for_issues(
     issue_ids: list[str],
     *,
     anchor_date: date,
-    window_days: int,
+    window_days: int | None = None,
     limit: int,
 ) -> list[dict[str, Any]]:
+    del window_days
     if not issue_ids:
         return []
     placeholders = ", ".join(f"CAST(:issue_{idx} AS uuid)" for idx in range(len(issue_ids)))
@@ -432,12 +560,24 @@ def _fetch_cards_for_issues(
                            source_raw_article_ids,
                            sources,
                            integrated_issue_id::text AS integrated_issue_id,
-                           created_at
-                      FROM card_news
+                           created_at,
+                           ((created_at AT TIME ZONE 'Asia/Seoul')::date)::text AS created_date_kst
+                     FROM card_news
                      WHERE integrated_issue_id IN ({placeholders})
-                       AND (created_at AT TIME ZONE 'Asia/Seoul')::date
-                           BETWEEN CAST(:anchor_date AS date) - (:window_days * INTERVAL '1 day')
-                               AND CAST(:anchor_date AS date)
+                       AND (created_at AT TIME ZONE 'Asia/Seoul')::date = CAST(:anchor_date AS date)
+                       AND COALESCE(peer_company_id, company, '') <> 'sk_ax'
+                       AND (
+                           COALESCE(cardinality(source_raw_article_ids), 0) = 0
+                           OR EXISTS (
+                               SELECT 1
+                                 FROM raw_articles ra
+                                WHERE ra.id = ANY(source_raw_article_ids)
+                                  AND (
+                                      COALESCE(ra.published_at, ra.created_at)
+                                      AT TIME ZONE 'Asia/Seoul'
+                                  )::date = CAST(:anchor_date AS date)
+                           )
+                       )
                      ORDER BY importance_score DESC NULLS LAST, created_at DESC
                      LIMIT :limit
                     """
@@ -445,7 +585,6 @@ def _fetch_cards_for_issues(
                     {
                         **params,
                         "anchor_date": anchor_date.isoformat(),
-                        "window_days": int(window_days),
                     },
                 )
                 .mappings()
@@ -457,10 +596,9 @@ def _fetch_cards_for_issues(
     return [_json_ready(dict(row)) for row in rows]
 
 
-def _fetch_recent_cards(
+def _fetch_anchor_date_cards(
     *,
     anchor_date: date,
-    window_days: int,
     limit: int,
     exclude_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
@@ -473,7 +611,6 @@ def _fetch_recent_cards(
     exclude_clause = ""
     params: dict[str, Any] = {
         "anchor_date": anchor_date.isoformat(),
-        "window_days": int(window_days),
         "limit": int(limit),
     }
     if clean_exclude_ids:
@@ -500,17 +637,99 @@ def _fetch_recent_cards(
                            source_raw_article_ids,
                            sources,
                            integrated_issue_id::text AS integrated_issue_id,
-                           created_at
+                           created_at,
+                           ((created_at AT TIME ZONE 'Asia/Seoul')::date)::text AS created_date_kst
                       FROM card_news
-                     WHERE (created_at AT TIME ZONE 'Asia/Seoul')::date
-                           BETWEEN CAST(:anchor_date AS date) - (:window_days * INTERVAL '1 day')
-                               AND CAST(:anchor_date AS date)
+                     WHERE (created_at AT TIME ZONE 'Asia/Seoul')::date = CAST(:anchor_date AS date)
+                       AND COALESCE(peer_company_id, company, '') <> 'sk_ax'
+                       AND (
+                           COALESCE(cardinality(source_raw_article_ids), 0) = 0
+                           OR EXISTS (
+                               SELECT 1
+                                 FROM raw_articles ra
+                                WHERE ra.id = ANY(source_raw_article_ids)
+                                  AND (
+                                      COALESCE(ra.published_at, ra.created_at)
+                                      AT TIME ZONE 'Asia/Seoul'
+                                  )::date = CAST(:anchor_date AS date)
+                           )
+                       )
                        {exclude_clause}
                      ORDER BY importance_score DESC NULLS LAST, created_at DESC
                      LIMIT :limit
                     """
                     ),
                     params,
+                )
+                .mappings()
+                .all()
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("today insight anchor-date card lookup failed | error=%s", exc)
+        return []
+    return [_json_ready(dict(row)) for row in rows]
+
+
+def _fetch_recent_cards(
+    *,
+    anchor_date: date,
+    window_days: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+
+    try:
+        with SessionLocal() as db:
+            rows = (
+                db.execute(
+                    text(
+                        """
+                    SELECT id,
+                           title,
+                           COALESCE(peer_company_id, company) AS peer_id,
+                           summary_lines,
+                           event_type,
+                           importance,
+                           importance_score,
+                           implication,
+                           primary_keyword_category,
+                           evidence_payload,
+                           source_raw_article_ids,
+                           sources,
+                           integrated_issue_id::text AS integrated_issue_id,
+                           created_at,
+                           ((created_at AT TIME ZONE 'Asia/Seoul')::date)::text
+                               AS created_date_kst
+                      FROM card_news
+                     WHERE (created_at AT TIME ZONE 'Asia/Seoul')::date
+                           BETWEEN CAST(:anchor_date AS date)
+                               - (:window_days * INTERVAL '1 day')
+                               AND CAST(:anchor_date AS date)
+                       AND COALESCE(peer_company_id, company, '') <> 'sk_ax'
+                       AND (
+                           COALESCE(cardinality(source_raw_article_ids), 0) = 0
+                           OR EXISTS (
+                               SELECT 1
+                                 FROM raw_articles ra
+                                WHERE ra.id = ANY(source_raw_article_ids)
+                                  AND (
+                                      COALESCE(ra.published_at, ra.created_at)
+                                      AT TIME ZONE 'Asia/Seoul'
+                                  )::date BETWEEN CAST(:anchor_date AS date)
+                                      - (:window_days * INTERVAL '1 day')
+                                      AND CAST(:anchor_date AS date)
+                           )
+                       )
+                     ORDER BY importance_score DESC NULLS LAST, created_at DESC
+                     LIMIT :limit
+                    """
+                    ),
+                    {
+                        "anchor_date": anchor_date.isoformat(),
+                        "window_days": int(window_days),
+                        "limit": int(limit),
+                    },
                 )
                 .mappings()
                 .all()
@@ -663,14 +882,12 @@ def _scheduled_cache_pending_result(anchor_date: date) -> dict[str, Any]:
             "signals": [
                 {
                     "id": "scheduled-cache-status",
-                    "label": "주요 신호",
+                    "label": "관찰 포인트",
                     "value": "저장된 오늘 인사이트가 아직 없습니다",
                     "reasoning": [
                         {
                             "stage": "관찰",
-                            "detail": (
-                                "today_insight_reports 캐시를 조회했지만 오늘 결과가 없습니다."
-                            ),
+                            "detail": "저장된 오늘 분석 결과가 아직 확인되지 않았습니다.",
                         },
                         {
                             "stage": "판단",
@@ -680,38 +897,15 @@ def _scheduled_cache_pending_result(anchor_date: date) -> dict[str, Any]:
                         },
                     ],
                     "evidence": {
-                        "grounds": ["today_insight_reports cache miss"],
+                        "grounds": ["저장된 오늘 분석 결과 없음"],
                         "changes": ["실제 변화 분석 전 상태"],
-                        "related_keywords": ["cache_only", "scheduled update"],
-                        "source_ids": ["scheduled-cache"],
-                    },
-                },
-                {
-                    "id": "scheduled-cache-watch",
-                    "label": "관찰 포인트",
-                    "value": "08:10 스케줄 실행 및 저장 여부 확인 필요",
-                    "reasoning": [
-                        {
-                            "stage": "관찰",
-                            "detail": "로그인 warm-up과 홈 조회는 캐시 읽기만 수행합니다.",
-                        },
-                        {
-                            "stage": "판단",
-                            "detail": (
-                                "스케줄 실패 시 운영 로그와 axis-ai 연결 상태를 확인해야 합니다."
-                            ),
-                        },
-                    ],
-                    "evidence": {
-                        "grounds": ["cache_only request"],
-                        "changes": ["사용자 진입 시점의 일중 재생성 차단"],
-                        "related_keywords": ["warm-up", "08:10"],
+                        "related_keywords": ["스케줄 업데이트", "캐시 대기"],
                         "source_ids": ["scheduled-cache"],
                     },
                 },
                 {
                     "id": "scheduled-cache-next",
-                    "label": "다음 판단",
+                    "label": "시사점",
                     "value": "오전 생성 결과가 저장된 뒤 홈 화면에 노출",
                     "reasoning": [
                         {"stage": "관찰", "detail": "하루 한 번 생성 정책을 우선 적용했습니다."},
@@ -722,17 +916,36 @@ def _scheduled_cache_pending_result(anchor_date: date) -> dict[str, Any]:
                     ],
                     "evidence": {
                         "grounds": ["daily scheduled generation policy"],
-                        "changes": ["초고중요도 카드 기반 일중 refresh 예외 제거"],
+                        "changes": ["카드 상태 기반 일중 재생성 예외 제거"],
                         "related_keywords": ["daily cache", "executive insight"],
+                        "source_ids": ["scheduled-cache"],
+                    },
+                },
+                {
+                    "id": "scheduled-cache-response",
+                    "label": "대응방향",
+                    "value": "스케줄 완료 뒤 출처 포함 결과를 확인",
+                    "reasoning": [
+                        {
+                            "stage": "관찰",
+                            "detail": "현재 응답은 생성 결과가 아닌 상태 안내입니다.",
+                        },
+                        {
+                            "stage": "판단",
+                            "detail": "저장 완료 이후 실제 근거 기반 인사이트를 사용해야 합니다.",
+                        },
+                    ],
+                    "evidence": {
+                        "grounds": ["스케줄 생성 대기 상태"],
+                        "changes": ["출처 포함 결과 노출 전"],
+                        "related_keywords": ["출처 확인", "저장 결과"],
                         "source_ids": ["scheduled-cache"],
                     },
                 },
             ],
             "response_direction": [
                 {
-                    "action": (
-                        "08:10 스케줄러가 today_insight_reports에 결과를 저장했는지 확인합니다."
-                    ),
+                    "action": "08:10 스케줄러가 오늘 분석 결과를 저장했는지 확인합니다.",
                     "decision_owner": "플랫폼 운영",
                     "time_horizon": "오전",
                     "rationale": "로그인과 홈 조회가 신규 생성 경로로 변하지 않게 하기 위함입니다.",
@@ -973,6 +1186,7 @@ def _normalize_result(
             "prior_reports": len(context["prior_today_insight_memory"]),
             "ledger_items": len(context["analysis_ledger_context"]),
         },
+        "current_input_policy": "anchor_date_peer_only",
         "comparison_coverage": (
             (context.get("comparison_facts") or {}).get("coverage")
             if isinstance(context.get("comparison_facts"), dict)
@@ -991,6 +1205,12 @@ def _normalize_result(
     base = polish_executive_output(base, context=context)
     if _is_weak_or_mock_text(str(base.get("executive_implication") or "")):
         base["executive_implication"] = _fallback_implication(context)
+    base["headline"] = _clip(_sanitize_public_text(base.get("headline")), 120)
+    base["executive_summary"] = _clip(_sanitize_public_text(base.get("executive_summary")), 500)
+    base["executive_implication"] = _clip(
+        _sanitize_public_text(base.get("executive_implication")),
+        500,
+    )
     base["insight_sections"] = _normalize_insight_sections(
         base.get("insight_sections"),
         signals=base["signals"],
@@ -1012,8 +1232,8 @@ def _normalize_change_summary(value: Any, fallback: list[dict[str, str]]) -> lis
     rows = [item for item in _list(value) if isinstance(item, dict)]
     normalized = []
     for item in rows[:3]:
-        label = _clip(str(item.get("label") or ""), 24)
-        val = _clip(str(item.get("value") or ""), 36)
+        label = _clip(_sanitize_public_text(item.get("label") or ""), 24)
+        val = _clip(_sanitize_public_text(item.get("value") or ""), 36)
         if label and val:
             normalized.append({"label": label, "value": val})
     while len(normalized) < 3:
@@ -1025,7 +1245,7 @@ def _normalize_signals(value: Any, *, context: dict[str, Any]) -> list[dict[str,
     rows = [item for item in _list(value) if isinstance(item, dict)]
     fallback = _fallback_signals(context)
     normalized: list[dict[str, Any]] = []
-    for idx in range(3):
+    for idx in range(len(_SIGNAL_LABELS)):
         item = rows[idx] if idx < len(rows) else fallback[idx]
         raw_evidence = item.get("evidence")
         evidence: dict[str, Any] = raw_evidence if isinstance(raw_evidence, dict) else {}
@@ -1034,19 +1254,19 @@ def _normalize_signals(value: Any, *, context: dict[str, Any]) -> list[dict[str,
         ][:4]
         if not reasoning:
             reasoning = fallback[idx]["reasoning"]
-        raw_value = str(item.get("value") or "")
+        raw_value = _sanitize_public_text(item.get("value") or "")
         if _is_weak_or_mock_text(raw_value):
             raw_value = ""
         signal = {
             "id": _slug(str(item.get("id") or f"signal-{idx + 1}")),
             "label": _SIGNAL_LABELS[idx],
-            "value": _clip(raw_value or fallback[idx]["value"], 96),
+            "value": _clip(raw_value or _sanitize_public_text(fallback[idx]["value"]), 220),
             "reasoning": [
                 {
                     "stage": _clip(
                         str(step.get("stage") or fallback[idx]["reasoning"][0]["stage"]), 14
                     ),
-                    "detail": _clip(str(step.get("detail") or ""), 150),
+                    "detail": _clip(_sanitize_public_text(step.get("detail") or ""), 150),
                 }
                 for step in reasoning
                 if step.get("detail")
@@ -1108,24 +1328,31 @@ def _normalize_actions(value: Any, *, context: dict[str, Any]) -> list[dict[str,
     normalized = []
     for idx in range(3):
         item = rows[idx] if idx < len(rows) else fallback[idx]
-        action = str(item.get("action") or "")
-        rationale = str(item.get("rationale") or "")
+        action = _sanitize_public_text(item.get("action") or "")
+        rationale = _sanitize_public_text(item.get("rationale") or "")
         if _is_weak_or_mock_text(action):
             action = ""
         if _is_weak_or_mock_text(rationale):
             rationale = ""
         normalized.append(
             {
-                "action": _clip(action or fallback[idx]["action"], 180),
+                "action": _clip(action or _sanitize_public_text(fallback[idx]["action"]), 180),
                 "decision_owner": _clip(
-                    str(item.get("decision_owner") or fallback[idx]["decision_owner"]),
+                    _sanitize_public_text(
+                        item.get("decision_owner") or fallback[idx]["decision_owner"]
+                    ),
                     48,
                 ),
                 "time_horizon": _clip(
-                    str(item.get("time_horizon") or fallback[idx]["time_horizon"]),
+                    _sanitize_public_text(
+                        item.get("time_horizon") or fallback[idx]["time_horizon"]
+                    ),
                     32,
                 ),
-                "rationale": _clip(rationale or fallback[idx]["rationale"], 160),
+                "rationale": _clip(
+                    rationale or _sanitize_public_text(fallback[idx]["rationale"]),
+                    160,
+                ),
                 "evidence_refs": _string_list(
                     item.get("evidence_refs") or item.get("evidenceRefs"),
                     fallback[idx]["evidence_refs"],
@@ -1138,25 +1365,48 @@ def _normalize_actions(value: Any, *, context: dict[str, Any]) -> list[dict[str,
 
 
 def _normalize_sources(value: Any, fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = [item for item in _list(value) if isinstance(item, dict)] or fallback
+    # Prefer deterministic DB-derived sources because they carry raw article URLs.
+    # LLM-returned sources are still kept as supplemental metadata.
+    rows = [
+        item
+        for item in [*fallback, *[row for row in _list(value) if isinstance(row, dict)]]
+        if isinstance(item, dict)
+    ]
     normalized: list[dict[str, Any]] = []
-    for item in rows[:8]:
+    seen: set[str] = set()
+    for item in rows:
         source_id = str(item.get("id") or item.get("source_id") or item.get("url") or "")
-        title = str(item.get("title") or item.get("headline") or "")
+        title = _sanitize_public_text(item.get("title") or item.get("headline") or "")
         if not source_id and not title:
             continue
-        normalized.append(
-            {
-                "id": _clip(source_id or f"source-{len(normalized) + 1}", 120),
-                "title": _clip(title, 180),
-                "source_name": _clip(str(item.get("source_name") or item.get("source") or ""), 80),
-                "publisher": _clip(str(item.get("publisher") or ""), 80),
-                "url": _clip(str(item.get("url") or ""), 500),
-                "published_at": str(item.get("published_at") or item.get("created_at") or "")
-                or None,
-            }
+        normalized_item = {
+            "id": _clip(source_id or f"source-{len(normalized) + 1}", 120),
+            "title": _clip(title, 180),
+            "source_name": _clip(
+                _sanitize_public_text(item.get("source_name") or item.get("source") or ""),
+                80,
+            ),
+            "publisher": _clip(_sanitize_public_text(item.get("publisher") or ""), 80),
+            "related_companies": _string_list(
+                item.get("related_companies") or item.get("relatedCompanies"),
+                [],
+                6,
+                max_len=40,
+            ),
+            "url": _clip(str(item.get("url") or ""), 500),
+            "published_at": str(item.get("published_at") or item.get("created_at") or "") or None,
+        }
+        key = str(
+            normalized_item.get("url")
+            or normalized_item.get("id")
+            or normalized_item.get("title")
+            or ""
         )
-    return normalized
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(normalized_item)
+    return normalized[:8]
 
 
 def _normalize_source_trace(value: Any, *, context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1173,7 +1423,7 @@ def _normalize_source_trace(value: Any, *, context: dict[str, Any]) -> list[dict
             for raw_id in _list(item.get("source_raw_article_ids") or item.get("raw_article_ids"))
             if str(raw_id or "").strip()
         ][:8]
-        title = str(item.get("title") or "")
+        title = _sanitize_public_text(item.get("title") or "")
         url = str(item.get("url") or "")
         if not issue_id and not card_id and not raw_ids and not title:
             continue
@@ -1200,7 +1450,7 @@ def _normalize_insight_sections(
 ) -> list[dict[str, Any]]:
     rows = [item for item in _list(value) if isinstance(item, dict)]
     sections: list[dict[str, Any]] = []
-    for idx in range(3):
+    for idx in range(len(_SIGNAL_LABELS)):
         signal = signals[idx] if idx < len(signals) else _fallback_signals(context)[idx]
         raw = rows[idx] if idx < len(rows) else {}
         signal_evidence_raw = signal.get("evidence")
@@ -1225,15 +1475,18 @@ def _normalize_insight_sections(
             source_ids=source_ids,
             idx=idx,
         )
-        summary = str(raw.get("summary") or signal.get("value") or "")
+        summary = _sanitize_public_text(raw.get("summary") or signal.get("value") or "")
         if _is_weak_or_mock_text(summary):
             summary = str(signal.get("value") or "")
         sections.append(
             {
                 "id": _slug(str(raw.get("id") or signal.get("id") or f"section-{idx + 1}")),
                 "label": _SIGNAL_LABELS[idx],
-                "title": _clip(str(raw.get("title") or signal.get("value") or ""), 120),
-                "summary": _clip(summary, 220),
+                "title": _clip(
+                    _sanitize_public_text(raw.get("title") or signal.get("value") or ""),
+                    220,
+                ),
+                "summary": _clip(summary, 260),
                 "reasoning": signal.get("reasoning") or [],
                 "evidence": {
                     "grounds": _string_list(
@@ -1296,14 +1549,24 @@ def _match_sources_by_ids(
     sources: list[dict[str, Any]],
     source_ids: set[str],
 ) -> list[dict[str, Any]]:
+    url_sources = [
+        source
+        for source in sources
+        if str(source.get("url") or "").startswith(("http://", "https://"))
+    ]
     if not source_ids:
-        return sources[:4]
+        return (url_sources or sources)[:4]
     matched = [
         source
         for source in sources
         if str(source.get("id") or "") in source_ids or str(source.get("url") or "") in source_ids
     ]
-    return matched or sources[:2]
+    matched_url_sources = [
+        source
+        for source in matched
+        if str(source.get("url") or "").startswith(("http://", "https://"))
+    ]
+    return matched_url_sources or matched or url_sources[:2] or sources[:2]
 
 
 def _match_trace_by_ids(
@@ -1586,15 +1849,14 @@ def _fallback_summary(context: dict[str, Any]) -> str:
     axis = _top_axis_from_stats(stats)
     if count:
         return (
-            f"오늘 통합 이슈 {count}건에서 {axis or 'AX 실행'} 관련 변화가 "
-            "우선 포착됐습니다. 과거 누적 결과와 비교해 고객 대응·PoC·운영 "
-            "책임 범위를 다시 확인할 필요가 있습니다."
+            f"오늘 확인된 통합 이슈에 {axis or 'AX 실행'} 관련 변화가 포함됐습니다. "
+            "과거 누적 결과와 실제 사건 내용을 함께 비교해 고객 대응·PoC·운영 "
+            "책임 범위를 확인할 필요가 있습니다."
         )
     if card_count:
         return (
-            f"최근 {stats.get('window_days', 60)}일 카드뉴스 {card_count}건에서 "
-            f"{axis or 'AX 실행'} 관련 신호가 우선 포착됐습니다. 통합 이슈가 비어 있어도 "
-            "카드뉴스 근거를 기준으로 고객 대응·PoC·운영 책임 범위를 점검합니다."
+            f"최근 카드뉴스에 {axis or 'AX 실행'} 관련 신호가 포함됐습니다. "
+            "통합 이슈가 비어 있어도 원문 내용과 고객 대응 가능 항목을 함께 확인합니다."
         )
     return (
         "오늘 기준 신규 통합 이슈가 충분하지 않습니다. 홈 인사이트는 "
@@ -1635,26 +1897,28 @@ def _fallback_signals(context: dict[str, Any]) -> list[dict[str, Any]]:
                 return [
                     {
                         "id": "signal-primary-salience",
-                        "label": "주요 신호",
+                        "label": "관찰 포인트",
                         "value": _clip(
-                            title or "오늘 primary salience 신호",
-                            96,
+                            _sanitize_public_text(title) or "오늘 확인된 대표 신호",
+                            220,
                         ),
                         "reasoning": [
-                            {"stage": "관찰", "detail": hint or title or "primary_selection 기준"},
+                            {
+                                "stage": "관찰",
+                                "detail": _sanitize_public_text(hint or title) or "대표 신호 기준",
+                            },
                             {
                                 "stage": "비교",
                                 "detail": (
-                                    f"salience {lead.get('salience_score')} / "
-                                    f"exposure {lead.get('exposure_score')}"
+                                    ", ".join(structural) or "대표 신호와 보조 맥락을 함께 확인"
                                 ),
                             },
                             {
                                 "stage": "의미",
                                 "detail": (
-                                    "단건 고임팩트 이벤트로 분류"
+                                    "입력 근거상 확인된 개별 이벤트로 분류"
                                     if label == "low_visibility_definite_event"
-                                    else "오늘 우선 판단 축"
+                                    else "오늘 확인할 판단 축"
                                 ),
                             },
                             {"stage": "판단", "detail": "고객 대응·PoC·운영 책임 범위 재점검"},
@@ -1667,17 +1931,13 @@ def _fallback_signals(context: dict[str, Any]) -> list[dict[str, Any]]:
                         },
                     },
                     {
-                        "id": "signal-watch-volume",
-                        "label": "관찰 포인트",
-                        "value": _clip("보도량·sector 비중 맥락 확인", 96),
+                        "id": "signal-implication",
+                        "label": "시사점",
+                        "value": "고객 대응·PoC·운영모델에서 확인할 항목을 구체화",
                         "reasoning": [
                             {
-                                "stage": "관찰",
-                                "detail": "structural 지표는 primary를 대체하지 않습니다.",
-                            },
-                            {
-                                "stage": "비교",
-                                "detail": ", ".join(structural) or "rolling baseline 대비 변화",
+                                "stage": "의미",
+                                "detail": "primary 이벤트 기준으로 고객 대응 항목을 좁혀 봅니다.",
                             },
                         ],
                         "evidence": {
@@ -1688,11 +1948,14 @@ def _fallback_signals(context: dict[str, Any]) -> list[dict[str, Any]]:
                         },
                     },
                     {
-                        "id": "signal-next-judgment",
-                        "label": "다음 판단",
-                        "value": "고객 대응·PoC·운영모델에서 무엇을 바꿀지 오늘 결정",
+                        "id": "signal-response-direction",
+                        "label": "대응방향",
+                        "value": "관련 고객·사업·운영 KPI를 확인해 대응 범위를 정리",
                         "reasoning": [
-                            {"stage": "판단", "detail": "primary 이벤트 기준 의사결정 항목 확정"},
+                            {
+                                "stage": "판단",
+                                "detail": "입력 근거에 기반해 확인할 대응 범위를 정리합니다.",
+                            },
                         ],
                         "evidence": {
                             "grounds": _default_grounds(context)[:2],
@@ -1728,8 +1991,8 @@ def _fallback_signals(context: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         {
             "id": "signal-primary-change",
-            "label": "주요 신호",
-            "value": _clip(f"{company} 신호가 {signal_axis} 판단 축을 끌어올림", 96),
+            "label": "관찰 포인트",
+            "value": _clip(f"{company} 신호가 {signal_axis} 판단 축과 연결됨", 220),
             "reasoning": [
                 {
                     "stage": "관찰",
@@ -1758,22 +2021,18 @@ def _fallback_signals(context: dict[str, Any]) -> list[dict[str, Any]]:
             },
         },
         {
-            "id": "signal-watch-point",
-            "label": "관찰 포인트",
-            "value": _clip(f"{top_axis} 신호가 단건 뉴스인지 반복 패턴인지 확인 필요", 96),
+            "id": "signal-implication",
+            "label": "시사점",
+            "value": "고객 대응·PoC·운영모델에서 확인할 항목을 구체화",
             "reasoning": [
-                {
-                    "stage": "관찰",
-                    "detail": "오늘 신호를 과거 today insight 메모리와 대조했습니다.",
-                },
+                {"stage": "관찰", "detail": "SK AX 공식 관점과 피어 프로필을 함께 검토했습니다."},
                 {
                     "stage": "비교",
-                    "detail": "동일 peer·sector 반복 여부를 별도 관찰 포인트로 분리했습니다.",
+                    "detail": (
+                        "범용 AX 메시지가 아니라 고객 평가 항목 변화 여부를 기준으로 삼았습니다."
+                    ),
                 },
-                {
-                    "stage": "의미",
-                    "detail": "반복성이 확인될 때만 영업·대응 우선순위를 높이는 편이 안전합니다.",
-                },
+                {"stage": "의미", "detail": "고객 대응 산출물의 구조 변경 여부를 확인합니다."},
             ],
             "evidence": {
                 "grounds": grounds[:2],
@@ -1783,18 +2042,18 @@ def _fallback_signals(context: dict[str, Any]) -> list[dict[str, Any]]:
             },
         },
         {
-            "id": "signal-next-judgment",
-            "label": "다음 판단",
-            "value": "고객 대응·PoC·운영모델에서 무엇을 바꿀지 오늘 결정",
+            "id": "signal-response-direction",
+            "label": "대응방향",
+            "value": "관련 고객·사업·운영 KPI를 확인해 대응 범위를 정리",
             "reasoning": [
-                {"stage": "관찰", "detail": "SK AX 공식 관점과 피어 프로필을 함께 검토했습니다."},
+                {"stage": "관찰", "detail": "입력 근거의 고객·사업·운영 항목을 함께 봅니다."},
                 {
-                    "stage": "비교",
+                    "stage": "판단",
                     "detail": (
-                        "범용 AX 메시지가 아니라 고객 평가 항목 변화 여부를 기준으로 삼았습니다."
+                        "뉴스 건수만이 아니라 실제 사건 내용과 대응 가능 항목을 "
+                        "기준으로 점검합니다."
                     ),
                 },
-                {"stage": "판단", "detail": "다음 판단은 고객 대응 산출물의 구조 변경 여부입니다."},
             ],
             "evidence": {
                 "grounds": grounds[:2],
@@ -1902,6 +2161,8 @@ def _issue_for_prompt(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row.get("id"),
         "created_date_kst": row.get("created_date_kst"),
+        "latest_source_date_kst": row.get("latest_source_date_kst"),
+        "has_anchor_source": row.get("has_anchor_source"),
         "main_company": row.get("main_company"),
         "company_label": _company_label(str(row.get("main_company") or "")),
         "event_type": row.get("event_type"),
@@ -1924,6 +2185,7 @@ def _card_for_prompt(card: dict[str, Any]) -> dict[str, Any]:
     sector = card.get("primary_keyword_category") or implication.get("sector") or ""
     return {
         "id": card.get("id"),
+        "created_date_kst": card.get("created_date_kst"),
         "integrated_issue_id": card.get("integrated_issue_id"),
         "peer_id": card.get("peer_id"),
         "title": _clip(str(card.get("title") or ""), 220),
@@ -1950,30 +2212,21 @@ def _collect_sources(
     *,
     current_issues: list[dict[str, Any]],
     cards: list[dict[str, Any]],
+    anchor_date: date,
     limit: int,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    for issue in current_issues:
-        issue_id = str(issue.get("id") or "")
-        if issue_id and issue_id not in seen:
-            seen.add(issue_id)
-            out.append(
-                {
-                    "id": issue_id,
-                    "title": issue.get("headline") or issue.get("one_line_summary") or issue_id,
-                    "source_name": "integrated_issues",
-                    "publisher": _company_label(str(issue.get("main_company") or "")),
-                    "url": "",
-                    "published_at": str(issue.get("created_at") or ""),
-                }
-            )
-        for source in _compact_sources(issue.get("sources"), limit=4):
-            key = str(source.get("url") or source.get("id") or source.get("title") or "")
-            if key and key not in seen:
-                seen.add(key)
-                out.append(source)
+    raw_sources = _fetch_raw_article_sources(
+        _source_raw_ids({"recent_cards": cards}),
+        anchor_date=anchor_date,
+    )
+    for source in raw_sources:
+        key = str(source.get("url") or source.get("id") or source.get("title") or "")
+        if key and key not in seen:
+            seen.add(key)
+            out.append(source)
         if len(out) >= limit:
             return out[:limit]
 
@@ -1991,6 +2244,9 @@ def _collect_sources(
                     "published_at": str(card.get("created_at") or ""),
                 }
             )
+        if len(out) >= limit:
+            return out[:limit]
+
         for source in _compact_sources(card.get("sources"), limit=3):
             key = str(source.get("url") or source.get("id") or source.get("title") or "")
             if key and key not in seen:
@@ -1998,7 +2254,89 @@ def _collect_sources(
                 out.append(source)
         if len(out) >= limit:
             return out[:limit]
+
+    for issue in current_issues:
+        for source in _compact_sources(issue.get("sources"), limit=4):
+            key = str(source.get("url") or source.get("id") or source.get("title") or "")
+            if key and key not in seen:
+                seen.add(key)
+                out.append(source)
+        if len(out) >= limit:
+            return out[:limit]
+
+        issue_id = str(issue.get("id") or "")
+        if issue_id and issue_id not in seen:
+            seen.add(issue_id)
+            out.append(
+                {
+                    "id": issue_id,
+                    "title": issue.get("headline") or issue.get("one_line_summary") or issue_id,
+                    "source_name": "integrated_issues",
+                    "publisher": _company_label(str(issue.get("main_company") or "")),
+                    "url": "",
+                    "published_at": str(issue.get("created_at") or ""),
+                }
+            )
+        if len(out) >= limit:
+            return out[:limit]
     return out[:limit]
+
+
+def _fetch_raw_article_sources(raw_ids: list[int], *, anchor_date: date) -> list[dict[str, Any]]:
+    if not raw_ids:
+        return []
+    clean_ids = _dedupe([str(raw_id) for raw_id in raw_ids if raw_id], limit=100)
+    if not clean_ids:
+        return []
+    placeholders = ", ".join(f":raw_{idx}" for idx in range(len(clean_ids)))
+    params = {f"raw_{idx}": int(raw_id) for idx, raw_id in enumerate(clean_ids)}
+    try:
+        with SessionLocal() as db:
+            rows = (
+                db.execute(
+                    text(
+                        f"""
+                    SELECT id,
+                           title,
+                           source_name,
+                           company,
+                           content,
+                           url,
+                           published_at
+                      FROM raw_articles
+                     WHERE id IN ({placeholders})
+                       AND (COALESCE(published_at, created_at) AT TIME ZONE 'Asia/Seoul')::date
+                           = CAST(:anchor_date AS date)
+                     ORDER BY array_position(ARRAY[{placeholders}]::bigint[], id)
+                    """
+                    ),
+                    {**params, "anchor_date": anchor_date.isoformat()},
+                )
+                .mappings()
+                .all()
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("today insight raw article source lookup skipped | error=%s", exc)
+        return []
+
+    sources: list[dict[str, Any]] = []
+    for row in rows:
+        item = _json_ready(dict(row))
+        if _is_self_company_source(item):
+            continue
+        related_companies = _related_company_labels_from_source(item)
+        sources.append(
+            {
+                "id": f"raw-{item.get('id')}",
+                "title": item.get("title") or "",
+                "source_name": item.get("source_name") or "",
+                "publisher": item.get("source_name") or "",
+                "related_companies": related_companies,
+                "url": item.get("url") or "",
+                "published_at": str(item.get("published_at") or "") or None,
+            }
+        )
+    return sources
 
 
 def _compact_sources(value: Any, *, limit: int) -> list[dict[str, Any]]:
@@ -2032,6 +2370,90 @@ def _compact_sources(value: Any, *, limit: int) -> list[dict[str, Any]]:
         if len(out) >= limit:
             break
     return out
+
+
+def _related_company_labels_from_source(source: dict[str, Any]) -> list[str]:
+    text_blob = " ".join(
+        [
+            str(source.get("title") or ""),
+            str(source.get("content") or ""),
+        ]
+    )
+    related_ids: list[str] = []
+
+    normalized_text = text_blob.lower().replace(" ", "")
+    for company_id, aliases in PEER_ID_ALIASES.items():
+        if company_id in related_ids:
+            continue
+        if any(alias.lower().replace(" ", "") in normalized_text for alias in aliases):
+            related_ids.append(company_id)
+
+    for raw_company in _list(source.get("company")):
+        canonical_id = normalize_to_canonical_id(str(raw_company)) or str(raw_company)
+        if canonical_id and canonical_id not in related_ids:
+            related_ids.append(canonical_id)
+
+    return [_company_label(company_id) for company_id in related_ids[:6]]
+
+
+def _is_self_company_issue(issue: dict[str, Any]) -> bool:
+    if _is_self_company_id(issue.get("main_company")):
+        return True
+    if any(
+        _is_self_company_id(company) for company in _list(issue.get("mentioned_peer_companies"))
+    ):
+        return True
+    source_texts = [
+        str(source.get("title") or "")
+        for source in _list(issue.get("sources"))
+        if isinstance(source, dict)
+    ]
+    return _contains_self_company_reference(
+        issue.get("headline"),
+        issue.get("one_line_summary"),
+        issue.get("content_summary"),
+        *source_texts,
+    )
+
+
+def _is_self_company_card(card: dict[str, Any]) -> bool:
+    if _is_self_company_id(card.get("peer_id")):
+        return True
+    source_texts = [
+        str(source.get("title") or "")
+        for source in _list(card.get("sources"))
+        if isinstance(source, dict)
+    ]
+    return _contains_self_company_reference(
+        card.get("title"),
+        " ".join(str(line) for line in _list(card.get("summary_lines"))),
+        *source_texts,
+    )
+
+
+def _is_self_company_source(source: dict[str, Any]) -> bool:
+    if any(_is_self_company_id(company) for company in _list(source.get("company"))):
+        return True
+    return _contains_self_company_reference(source.get("title"), source.get("content"))
+
+
+def _is_self_company_id(value: Any) -> bool:
+    canonical_id = normalize_to_canonical_id(str(value or "")) or str(value or "")
+    return canonical_id in SELF_COMPANY_IDS
+
+
+def _contains_self_company_reference(*values: Any) -> bool:
+    normalized_text = " ".join(str(value or "") for value in values)
+    normalized_text = normalized_text.lower().replace(" ", "")
+    if not normalized_text:
+        return False
+    for company_id in SELF_COMPANY_IDS:
+        aliases = PEER_ID_ALIASES.get(company_id, [company_id])
+        for alias in aliases:
+            normalized_alias = alias.lower().replace(" ", "")
+            if normalized_alias and normalized_alias in normalized_text:
+                return True
+    return False
 
 
 def _compact_evidence(value: Any) -> dict[str, Any]:
@@ -2473,7 +2895,7 @@ def _list(value: Any) -> list[Any]:
 
 def _string_list(value: Any, fallback: list[str], limit: int, *, max_len: int = 140) -> list[str]:
     out = [
-        _clip(str(item), max_len)
+        _clip(_sanitize_public_text(item), max_len)
         for item in _list(value)
         if str(item or "").strip() and not _is_weak_or_mock_text(str(item))
     ]
@@ -2488,6 +2910,23 @@ def _is_weak_or_mock_text(value: str) -> bool:
     if not cleaned:
         return False
     return any(marker in cleaned for marker in _WEAK_OR_MOCK_MARKERS)
+
+
+def _sanitize_public_text(value: Any) -> str:
+    text_value = str(value or "").strip()
+    if not text_value:
+        return ""
+    for source, replacement in _PUBLIC_TEXT_REPLACEMENTS:
+        text_value = text_value.replace(source, replacement)
+    text_value = re.sub(r"\b(?:IC|CN|raw)-[A-Za-z0-9_.:-]+\b", "근거", text_value)
+    text_value = re.sub(
+        r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+        "근거",
+        text_value,
+    )
+    text_value = re.sub(r"\b[a-z]+_[a-z0-9_]+\b", "", text_value)
+    text_value = re.sub(r"\s{2,}", " ", text_value).strip()
+    return text_value
 
 
 def _int_list(value: Any) -> list[int]:

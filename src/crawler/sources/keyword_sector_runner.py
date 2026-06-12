@@ -69,6 +69,7 @@ DEFAULT_HOME_LIMIT = 4
 DEFAULT_SECTOR_IDS = ("ax", "security", "infra", "deal")
 DEFAULT_FIXED_HOME_KEYWORDS = ("AX", "사이버보안", "인프라", "수주")
 DEFAULT_MAX_DRIVER_KEYWORDS = 6
+DEFAULT_SPIKE_DELTA_THRESHOLD = 50.0
 DB_STATEMENT_TIMEOUT_MS = 5000
 SECTOR_GROUP_DISPLAY_NAMES = {
     "ax": "AX",
@@ -207,12 +208,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--home-limit",
         type=int,
         default=DEFAULT_HOME_LIMIT,
-        help="홈 화면에 노출할 키워드 개수. 기본 5.",
+        help="홈 화면에 노출할 급등 키워드 개수. 기본 4.",
     )
     parser.add_argument(
         "--fixed-home-keywords",
         default=",".join(DEFAULT_FIXED_HOME_KEYWORDS),
-        help="홈 화면에 우선 고정할 groupName 목록. 쉼표로 구분합니다.",
+        help="홈 화면에서 감시할 고정 groupName 목록. 쉼표로 구분합니다.",
+    )
+    parser.add_argument(
+        "--spike-delta-threshold",
+        type=float,
+        default=DEFAULT_SPIKE_DELTA_THRESHOLD,
+        help="급등 후보로 볼 최소 전일 대비 검색지수 상승폭(pt). 기본 50.",
     )
     parser.add_argument(
         "--cause-window-days",
@@ -629,7 +636,8 @@ def select_home_rows(
         return []
 
     latest_rows = latest_row_per_group(rows)
-    latest_by_group = {str(row.get("group_name") or ""): row for row in latest_rows}
+    rising_rows = [row for row in latest_rows if is_rising_spike(row)]
+    latest_by_group = {str(row.get("group_name") or ""): row for row in rising_rows}
 
     selected: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -642,35 +650,15 @@ def select_home_rows(
         if len(selected) >= limit:
             return selected
 
-    dynamic_candidates = [
-        row for row in latest_rows if str(row.get("group_name") or "") not in seen
-    ]
-    dynamic_candidates.sort(key=home_candidate_score, reverse=True)
-
-    for row in dynamic_candidates:
-        group_name = str(row.get("group_name") or "")
-        if not group_name or group_name in seen:
-            continue
-        selected.append(
-            {
-                **row,
-                "home_reason": "spike" if row.get("is_peak_candidate") else "top_ratio",
-                "home_rank": len(selected) + 1,
-            }
-        )
-        seen.add(group_name)
-        if len(selected) >= limit:
-            break
-
     return selected
 
 
-def home_candidate_score(row: dict[str, Any]) -> tuple[float, float, str]:
-    ratio = parse_float(row.get("ratio")) or 0.0
+def is_rising_spike(row: dict[str, Any]) -> bool:
+    if not row.get("is_peak_candidate"):
+        return False
     peak = row.get("peak") if isinstance(row.get("peak"), dict) else {}
-    delta = parse_float(peak.get("delta")) or 0.0
-    spike_bonus = 1000.0 if row.get("is_peak_candidate") else 0.0
-    return (spike_bonus + delta, ratio, str(row.get("period") or ""))
+    delta = parse_float(peak.get("delta"))
+    return delta is not None and delta > 0
 
 
 def annotate_home_display(
@@ -728,7 +716,7 @@ def analyze_spike_causes(
     analyzed: list[dict[str, Any]] = []
 
     for row in rows:
-        if not row.get("is_peak_candidate"):
+        if not is_rising_spike(row):
             analyzed.append(row)
             continue
 
@@ -1321,10 +1309,10 @@ def to_json_safe(value: Any) -> Any:
 def print_cause_analysis(rows: list[dict[str, Any]]) -> None:
     cause_rows = [row for row in rows if row.get("cause_analysis")]
     if not cause_rows:
-        print("\nSpike cause analysis: no spike rows")
+        print("\nRising spike cause analysis: no +threshold rows")
         return
 
-    print("\nSpike cause analysis")
+    print("\nRising spike cause analysis")
     print("=" * 80)
     for row in cause_rows:
         analysis = row.get("cause_analysis") or {}
@@ -1342,10 +1330,10 @@ def print_cause_analysis(rows: list[dict[str, Any]]) -> None:
 
 def print_home_rows(rows: list[dict[str, Any]]) -> None:
     if not rows:
-        print("\nHome keyword selection: no rows")
+        print("\nHome keyword selection: no +threshold rows")
         return
 
-    print("\nHome keyword selection")
+    print("\nHome keyword selection (+threshold rising spikes only)")
     print("=" * 80)
     print(f"{'rank':>4s} {'group':24s} {'period':12s} {'ratio':>8s} {'reason':12s} peak")
     print("-" * 80)
@@ -1488,7 +1476,11 @@ def run(
         lookback_days=args.lookback_days,
     )
     raw_rows = annotate_group_metadata(raw_rows, groups)
-    marked_rows = mark_relative_peak_candidates(raw_rows)
+    marked_rows = mark_relative_peak_candidates(
+        raw_rows,
+        min_ratio=0.0,
+        min_delta=max(0.0, args.spike_delta_threshold),
+    )
     if not args.skip_cause_analysis:
         marked_rows = analyze_spike_causes(
             marked_rows,
@@ -1537,6 +1529,11 @@ def run_scheduled(*, crawl_run_id: str | None = None) -> int:
             os.getenv("AXIS_DATALAB_SECTOR_DAYS", "14"),
             "--home-limit",
             os.getenv("AXIS_DATALAB_HOME_LIMIT", str(DEFAULT_HOME_LIMIT)),
+            "--spike-delta-threshold",
+            os.getenv(
+                "AXIS_DATALAB_SPIKE_DELTA_THRESHOLD",
+                str(DEFAULT_SPIKE_DELTA_THRESHOLD),
+            ),
             "--fixed-home-keywords",
             os.getenv(
                 "AXIS_DATALAB_FIXED_HOME_KEYWORDS",
