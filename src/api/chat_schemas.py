@@ -48,6 +48,15 @@ class ChatTurnRequest(BaseModel):
         return self
 
 
+class ChatPdfRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    request: ChatTurnRequest
+    file_name: str
+    content_type: str | None = None
+    pdf_base64: str
+
+
 class ChatSource(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -85,5 +94,6 @@ class ChatTurnResponse(BaseModel):
     confidence: float = 0.0
     blocked: bool = False
     blocked_reason: str | None = None
+    error_code: str | None = None
     handoff: ChatHandoff | None = None
     provenance: dict[str, Any] = Field(default_factory=dict)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from src.agents import briefing_generation_agent as briefing_module
+from src.agents.briefing import data_layer as briefing_data_layer
 from src.agents.briefing_generation_agent import (
     BriefingGenerationAgent,
     _display_copy_context,
@@ -157,6 +157,12 @@ def test_briefing_input_output_contract_for_integrated_issue_basis():
     assert response.weeklySnapshot["sections"][0]["title"] == "이번 주 핵심 변화"
     assert response.history[0]["primaryCount"] >= 1
     assert response.interpretation_flow["title"] == "해석 흐름 — 관찰부터 시사까지"
+    assert response.briefingReport["label"] == "일간"
+    assert response.briefingReport["briefingLead"] == response.briefing_lead
+    assert response.briefingReport["selectedCards"][0]["id"] == "CN-1"
+    assert response.briefingReport["signalCards"][0]["relatedCardIds"] == ["CN-1"]
+    assert response.briefingReport["flowSteps"][0]["id"].startswith("generated-")
+    assert response.flowSteps == response.briefingReport["flowSteps"]
     assert (
         response.interpretation_flow["reasoning_summary"]["disclosure_level"]
         == "summarized_intermediate_artifacts"
@@ -324,7 +330,8 @@ def test_briefing_uses_integrated_issues_as_primary_lookup(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(briefing_module, "_fetch_period_integrated_issue_rows", fake_rows)
+    # 분리 후 실호출자는 src.agents.briefing.data_layer 내부 — 그 모듈 바인딩을 패치해야 효과 있음
+    monkeypatch.setattr(briefing_data_layer, "_fetch_period_integrated_issue_rows", fake_rows)
 
     result = asyncio.run(
         BriefingGenerationAgent().generate(

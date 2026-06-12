@@ -44,7 +44,7 @@ _MAX_BRIDGE_TOPIC_TERMS = 1
 _MIN_RELATED_TERM_LENGTH = 6
 _TERM_NGRAM_SIMILARITY = 0.40
 _CLUSTER_LLM_JUDGE_ENABLED = os.getenv("DEDUP_CLUSTER_LLM_JUDGE_ENABLED", "true").lower() == "true"
-_CLUSTER_LLM_MAX_CALLS = int(os.getenv("DEDUP_CLUSTER_LLM_MAX_CALLS", "30"))
+_CLUSTER_LLM_MAX_CALLS = int(os.getenv("DEDUP_CLUSTER_LLM_MAX_CALLS", "80"))
 _CLUSTER_LLM_MODEL = os.getenv("DEDUP_CLUSTER_LLM_MODEL", "gpt-4o-mini")
 _CLUSTER_LLM_CONTENT_CHARS = int(os.getenv("DEDUP_CLUSTER_LLM_CONTENT_CHARS", "280"))
 _ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
@@ -152,7 +152,6 @@ _EVENT_BUCKET_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("security", ("보안", "침해", "해킹", "취약점")),
     ("industry_theme", ("si주", "si株", "it서비스업종", "테마", "업종전반", "관련업종")),
 )
-
 # 단독(singleton) 클러스터 처리 정책.
 #   - bridge risk(제목에 주제어 없음 + 본문 주제어 다수) 가 의심되어도 cluster 를 유지한다.
 #   - 이전: ambiguous singleton 은 drop → cycle 마다 clusters=0 으로 떨어져
@@ -160,163 +159,11 @@ _EVENT_BUCKET_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 #   - 이 토글은 production 의 cycle 단위 cluster 형성률을 회복하기 위한 것.
 #   - default true (singleton 유지). 과거 동작 복원이 필요하면 env 로 false.
 _KEEP_AMBIGUOUS_SINGLETONS = os.getenv("DEDUP_KEEP_AMBIGUOUS_SINGLETONS", "true").lower() == "true"
+_SINGLETON_FAST_PATH = os.getenv("DEDUP_SINGLETON_FAST_PATH", "true").lower() == "true"
 
 _CANONICAL_ISSUE_TERMS: Mapping[str, tuple[str, ...]] = {}
-_TITLE_CONCEPT_TERMS: Mapping[str, tuple[str, ...]] = {
-    "autonomous_welding_robot": (
-        "자율용접",
-        "자율 용접",
-        "용접로봇",
-        "용접 로봇",
-        "ai두뇌",
-        "ai 두뇌",
-    ),
-    "robot_foundation_model": (
-        "로봇파운데이션",
-        "로봇 파운데이션",
-        "산업현장용",
-        "산업현장로봇",
-        "산업 현장 로봇",
-        "로봇뇌",
-        "로봇 뇌",
-        "로봇두뇌",
-        "로봇 두뇌",
-        "로봇의두뇌",
-        "로봇의 두뇌",
-        "범용로봇두뇌",
-        "범용 로봇 두뇌",
-        "범용로봇ai",
-        "범용 로봇 ai",
-        "로봇ai",
-        "로봇 ai",
-        "ai로봇",
-        "ai 로봇",
-        "로봇ai브레인",
-        "로봇 ai브레인",
-        "로봇 ai 브레인",
-        "ai로봇개발",
-        "ai 로봇 개발",
-        "로봇ai개발",
-        "로봇 ai 개발",
-        "산업용로봇제어모델",
-        "산업용 로봇 제어 모델",
-        "로봇지능개발",
-        "로봇 지능 개발",
-        "피지컬ai맞손",
-        "피지컬 ai 맞손",
-        "피지컬ai지능화",
-        "피지컬 ai 지능화",
-        "로봇지능화",
-        "로봇 지능화",
-    ),
-    "logistics_robotics": (
-        "물류센터",
-        "물류 센터",
-        "물류자동화",
-        "물류 자동화",
-        "스마트물류",
-        "스마트 물류",
-        "휴머노이드",
-        "피지컬웍스",
-        "로봇직원",
-        "로봇 직원",
-        "로봇피킹",
-        "로봇 피킹",
-        "로봇도입",
-        "로봇 도입",
-    ),
-    "physicalworks_rx_platform": (
-        "피지컬웍스",
-        "피지컬 웍스",
-        "rx플랫폼",
-        "rx 플랫폼",
-        "로봇학습",
-        "로봇 학습",
-        "로봇운영",
-        "로봇 운영",
-        "로봇플랫폼",
-        "로봇 플랫폼",
-        "로봇통합",
-        "로봇 통합",
-        "자율협업",
-        "자율 협업",
-        "이기종협업",
-        "이기종 협업",
-    ),
-    "manufacturing_ax_market": (
-        "제조ax",
-        "제조 ax",
-        "제조rx",
-        "제조 rx",
-        "제조기업",
-        "제조 기업",
-        "제조시장",
-        "제조 시장",
-        "제조업",
-        "제조특화",
-        "제조 특화",
-        "제조플랫폼",
-        "제조 플랫폼",
-        "스마트팩토리",
-        "스마트 팩토리",
-        "공장지능화",
-        "공장 지능화",
-        "공장전환",
-        "공장 전환",
-        "ai스마트팩토리",
-        "ai 스마트팩토리",
-    ),
-    "smart_infra_lidar": (
-        "스마트인프라",
-        "스마트 인프라",
-        "스마트시티",
-        "스마트 시티",
-        "라이다",
-        "lidar",
-        "에스오에스랩",
-        "soslab",
-        "북미스마트인프라",
-        "북미 스마트 인프라",
-    ),
-    "openai_enterprise_ai": (
-        "오픈ai",
-        "오픈 ai",
-        "openai",
-        "챗gpt",
-        "chatgpt",
-        "엔터프라이즈ai",
-        "엔터프라이즈 ai",
-        "기업용ai",
-        "기업용 ai",
-        "생성형ai",
-        "생성형 ai",
-    ),
-    "national_ai_computing_center": (
-        "국가ai컴퓨팅센터",
-        "국가 ai 컴퓨팅센터",
-        "국가ai컴퓨팅 센터",
-        "ai컴퓨팅센터",
-        "ai 컴퓨팅센터",
-        "ai고속도로",
-        "ai 고속도로",
-        "gpu1.5만장",
-        "gpu 1.5만장",
-    ),
-    "security_token_platform": (
-        "토큰증권",
-        "sto",
-        "예탁결제원",
-        "예탁원",
-        "플랫폼구축",
-        "플랫폼 구축",
-    ),
-    "jensen_huang_visit": (
-        "젠슨황",
-        "젠슨 황",
-        "방한",
-        "유퀴즈",
-    ),
-}
+
+
 _cluster_llm_calls = 0
 _cluster_llm_cache: dict[tuple[str, str, str], bool | None] = {}
 _cluster_llm_approved_pairs: set[frozenset[int]] = set()
@@ -341,6 +188,19 @@ class ArticleDeduplicator:
         articles = get_articles_by_ids(article_ids)
         if not articles:
             return {}, []
+
+        _reset_cluster_llm_run_state()
+
+        if _SINGLETON_FAST_PATH and len(articles) == 1:
+            article_id = int(articles[0]["id"])
+            cluster_map = {article_id: [article_id]}
+            representative_ids = [article_id]
+            _persist(cluster_map, representative_ids)
+            log.info(
+                "Gate 3 singleton fast-path 완료 | article_id=%s clusters=1 reps=1",
+                article_id,
+            )
+            return cluster_map, representative_ids
 
         cluster_map = _cluster_rule_first(
             articles=articles,
@@ -391,6 +251,8 @@ def deduplicate_articles(
     if not articles:
         return {}, []
 
+    _reset_cluster_llm_run_state()
+
     normalized = [_normalize_local_article(article, id_key) for article in articles]
 
     try:
@@ -433,12 +295,26 @@ def _deduplicate_by_title(articles: list[dict[str, Any]]) -> tuple[dict[int, lis
     return cluster_map, representative_ids
 
 
+# 제목 키 비교용 문장부호 정규화 — 매체마다 곱슬따옴표(''""), 가운뎃점, 대시가
+# 섞여 들어와 동일 제목이 다른 키로 갈라졌음 (DB 검증: sim=1.00 분리 11쌍, 2026-06-11).
+_TITLE_KEY_QUOTES_RE = re.compile(r"[\"'‘’‚`“”„「」『』]")
+_TITLE_KEY_SPACERS_RE = re.compile(r"[·‧ㆍ…]")
+_TITLE_KEY_DASHES_RE = re.compile(r"[–—―]")
+
+
+def _normalize_title_key(title: str) -> str:
+    folded = _TITLE_KEY_QUOTES_RE.sub("", title)  # 따옴표류는 의미 없음 — 제거 후 비교
+    folded = _TITLE_KEY_SPACERS_RE.sub(" ", folded)
+    folded = _TITLE_KEY_DASHES_RE.sub("-", folded)
+    return " ".join(folded.lower().split())
+
+
 def _fallback_dedup_key(article: dict[str, Any]) -> str:
     issue_key = _issue_dedup_key(article)
     if issue_key:
         return issue_key
 
-    title = " ".join(str(article.get("title") or "").lower().split())
+    title = _normalize_title_key(str(article.get("title") or ""))
     if title:
         return title
     return str(article.get("url_hash") or article.get("url") or article.get("id"))
@@ -486,7 +362,6 @@ def _build_embedding_text(article: dict[str, Any]) -> str:
 
     entity_lines = [
         _entity_line("companies", entities["companies"]),
-        _entity_line("sectors", entities["sectors"]),
         _entity_line("issues", entities["canonical_issues"]),
         _entity_line("products", entities["quoted_terms"]),
         _entity_line("proper_terms", entities["proper_terms"]),
@@ -602,6 +477,10 @@ def _rule_prefilter_groups(articles: list[dict[str, Any]]) -> list[list[dict[str
 
 
 def _rule_prefilter_key(article: dict[str, Any]) -> str:
+    security_action_key = _security_action_prefilter_key(article)
+    if security_action_key:
+        return f"{_published_day(article)}::{security_action_key}"
+
     event_key = _event_prefilter_key(article)
     if _uses_cross_day_prefilter(article):
         return event_key
@@ -651,6 +530,19 @@ def _cluster(
     ]
 
     return {cluster_id: ids for cluster_id, ids in enumerate(cluster_values)}
+
+
+def _reset_cluster_llm_run_state() -> None:
+    """Reset LLM judge accounting for each dedup run.
+
+    The API server is long-lived. If call count/cache survives across scheduled
+    runs, one noisy batch can exhaust the cap and silently disable LLM review
+    for later batches.
+    """
+    global _cluster_llm_calls, _cluster_llm_cache, _cluster_llm_approved_pairs
+    _cluster_llm_calls = 0
+    _cluster_llm_cache = {}
+    _cluster_llm_approved_pairs = set()
 
 
 def _with_representative_cluster_ids(
@@ -811,10 +703,14 @@ def _should_merge_articles(
     threshold: float,
 ) -> bool:
     same_cross_company_title_issue = _same_cross_company_title_issue(left, right)
-    if not _same_company_context(left, right) and not same_cross_company_title_issue:
+    if not _within_cluster_time_window(left, right):
         return False
 
-    if not _within_cluster_time_window(left, right):
+    title_llm_decision = _cluster_llm_same_event(left, right, similarity, "title_similarity")
+    if title_llm_decision is True:
+        return True
+
+    if not _same_company_context(left, right) and not same_cross_company_title_issue:
         return False
 
     if not _event_buckets_compatible(left, right):
@@ -907,6 +803,17 @@ def _event_buckets_compatible(left: dict[str, Any], right: dict[str, Any]) -> bo
     right_bucket = _event_bucket(right)
     if left_bucket == "general" or right_bucket == "general":
         return True
+    if _same_company_action_candidate(left, right):
+        return True
+    left_signature = _event_signature(left)
+    right_signature = _event_signature(right)
+    if (
+        left_signature == right_signature
+        and not left_signature.endswith(":general")
+        and ":title:" not in left_signature
+        and ":proper:" not in left_signature
+    ):
+        return True
     return left_bucket == right_bucket
 
 
@@ -920,6 +827,8 @@ def _event_signatures_compatible(left: dict[str, Any], right: dict[str, Any]) ->
     if left_bucket == right_bucket == "ax_strategy":
         return left_signature == right_signature
     if left_bucket == right_bucket == "contract_deal":
+        return left_signature == right_signature
+    if left_bucket == right_bucket == "security":
         return left_signature == right_signature
     if left_bucket == right_bucket and left_bucket not in {
         "market_reaction",
@@ -969,6 +878,10 @@ def _event_signature(article: dict[str, Any]) -> str:
     text = _issue_text(article)
 
     if bucket == "market_reaction":
+        if _has_contract_markers(text):
+            contract_key = _contract_issue_key(article)
+            if contract_key:
+                return f"contract_deal:{contract_key}"
         return f"market_reaction:{_published_day(article)}"
     if "두나무" in text:
         return "investment_deal:dunamu"
@@ -976,33 +889,10 @@ def _event_signature(article: dict[str, Any]) -> str:
         contract_key = _contract_issue_key(article)
         if contract_key:
             return f"contract_deal:{contract_key}"
-    if "ax서밋" in text or "axsummit" in text:
-        return "ax_strategy:ax_summit"
-    if "자율공장" in text:
-        return "ax_strategy:ai_factory"
-    if "인더스트리데이" in text:
-        return "ax_strategy:industry_day"
-    title_concepts = set(_title_concepts(article))
-    if "jensen_huang_visit" in title_concepts:
-        return "ax_strategy:jensen_huang_nc_meeting"
-    if "autonomous_welding_robot" in title_concepts:
-        return "ax_strategy:autonomous_welding_robot"
-    if "robot_foundation_model" in title_concepts:
-        return "ax_strategy:robot_foundation_model"
-    if "physicalworks_rx_platform" in title_concepts:
-        return "ax_strategy:physicalworks_rx_platform"
-    if "manufacturing_ax_market" in title_concepts:
-        return "ax_strategy:manufacturing_ax_market"
-    if "smart_infra_lidar" in title_concepts:
-        return f"{bucket}:smart_infra_lidar"
-    if "openai_enterprise_ai" in title_concepts:
-        return "ax_strategy:openai_enterprise_ai"
-    if "national_ai_computing_center" in title_concepts:
-        return "cloud_infra:national_ai_computing_center"
-    if "데이터센터" in text or "ai인프라" in text:
-        return "cloud_infra:ai_datacenter"
-    if "si주" in text or "it서비스업종" in text or "테마주" in text:
-        return "industry_theme:si_theme"
+
+    title_event_key = _title_event_issue_key(article)
+    if title_event_key:
+        return f"{bucket}:title_event:{title_event_key}"
 
     title_terms = sorted(_title_topic_terms(article))
     if title_terms:
@@ -1032,6 +922,13 @@ def _event_bucket(article: dict[str, Any]) -> str:
     if title_bucket != "general":
         return title_bucket
     return _event_bucket_from_text(_issue_text(article))
+
+
+def _security_action_prefilter_key(article: dict[str, Any]) -> str:
+    title = _compact_text(str(article.get("title") or ""))
+    if not _company_key(article) or "보안" not in title or not _title_has_event_action(article):
+        return ""
+    return f"security_action:{','.join(_company_key(article))}"
 
 
 def _event_bucket_from_text(text: str) -> str:
@@ -1070,7 +967,7 @@ def _cluster_llm_same_event(
 
     decision = _invoke_cluster_llm_judge(left, right, similarity, reason)
     if decision is True:
-        _remember_cluster_llm_approval(left, right)
+        _remember_cluster_pair_approval(left, right)
     return decision
 
 
@@ -1080,11 +977,22 @@ def _should_consult_cluster_llm(
     similarity: float,
     reason: str,
 ) -> bool:
+    if reason == "title_similarity":
+        return (
+            _CLUSTER_LLM_JUDGE_ENABLED
+            and openai_calls_enabled()
+            and _CLUSTER_LLM_MAX_CALLS > 0
+            and similarity >= 0.55
+            and _within_cluster_time_window(left, right)
+            and _title_llm_candidate(left, right)
+        )
+    if reason == "event_signature_conflict" and _security_signature_conflict_without_action(
+        left, right
+    ):
+        return False
     if not _CLUSTER_LLM_JUDGE_ENABLED or not openai_calls_enabled():
         return False
     if _CLUSTER_LLM_MAX_CALLS <= 0:
-        return False
-    if reason == "event_signature_conflict":
         return False
     if similarity < 0.72:
         return False
@@ -1117,6 +1025,7 @@ def _invoke_cluster_llm_judge(
         ),
         "criteria": [
             "same_event=true when one article is a market reaction to the same contract/deal/news.",
+            "For reason=title_similarity, judge from titles first; do not require same sector.",
             (
                 "same_event=false when they are only broad themes, background mentions, "
                 "or different deals."
@@ -1173,7 +1082,6 @@ def _cluster_llm_article_payload(article: dict[str, Any]) -> dict[str, Any]:
         "title": str(article.get("title") or "")[:240],
         "published_at": str(article.get("published_at") or article.get("collected_at") or ""),
         "companies": _company_key(article),
-        "sectors": _sector_key(article),
         "event_bucket": _event_bucket(article),
         "event_signature": _event_signature(article),
     }
@@ -1190,7 +1098,7 @@ def _cluster_llm_cache_key(
     return first, second, reason
 
 
-def _remember_cluster_llm_approval(left: dict[str, Any], right: dict[str, Any]) -> None:
+def _remember_cluster_pair_approval(left: dict[str, Any], right: dict[str, Any]) -> None:
     left_raw_id = left.get("id")
     right_raw_id = right.get("id")
     if left_raw_id is None or right_raw_id is None:
@@ -1242,15 +1150,17 @@ def _same_cross_company_title_issue(left: dict[str, Any], right: dict[str, Any])
     if left_bucket != right_bucket or left_bucket in {"market_reaction", "industry_theme"}:
         return False
 
+    left_title_key = _title_event_issue_key(left)
+    right_title_key = _title_event_issue_key(right)
+    if left_title_key and left_title_key == right_title_key:
+        return True
+
     left_terms = _title_topic_terms(left)
     right_terms = _title_topic_terms(right)
     if left_terms and right_terms and _topic_sets_related(left_terms, right_terms):
         return True
 
-    if set(_title_concepts(left)) & set(_title_concepts(right)):
-        return True
-
-    return False
+    return _shared_title_token_count(left, right) >= 3
 
 
 def _same_company_title_fallback(
@@ -1289,9 +1199,6 @@ def _same_company_title_fallback(
     if left_terms and right_terms and _topic_sets_related(left_terms, right_terms):
         return True
 
-    if set(_title_concepts(left)) & set(_title_concepts(right)):
-        return True
-
     return _title_tokens_related(left, right)
 
 
@@ -1301,6 +1208,9 @@ def _same_company_signature_or_concept(left: dict[str, Any], right: dict[str, An
 
     if _has_specific_ax_signature_conflict(left, right):
         return False
+
+    if _same_company_action_topic(left, right):
+        return True
 
     left_signature = _event_signature(left)
     right_signature = _event_signature(right)
@@ -1312,18 +1222,7 @@ def _same_company_signature_or_concept(left: dict[str, Any], right: dict[str, An
     ):
         return True
 
-    strong_concepts = {
-        "security_token_platform",
-        "national_ai_computing_center",
-        "openai_enterprise_ai",
-        "physicalworks_rx_platform",
-        "robot_foundation_model",
-        "logistics_robotics",
-        "manufacturing_ax_market",
-        "smart_infra_lidar",
-    }
-    shared_concepts = set(_title_concepts(left)) & set(_title_concepts(right))
-    return bool(shared_concepts & strong_concepts)
+    return False
 
 
 def _has_weak_bridge_risk(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -1344,24 +1243,165 @@ def _title_tokens_related(left: dict[str, Any], right: dict[str, Any]) -> bool:
         return False
 
     shared = left_tokens & right_tokens
-    high_signal_tokens = {
-        "skala",
-        "토큰증권",
-        "예탁결제원",
-        "두나무",
-        "openai",
-        "chatgpt",
-        "피지컬웍스",
-    }
-    if shared & high_signal_tokens:
-        return True
-
     if len(shared) < 2:
         return False
 
     jaccard = len(shared) / len(left_tokens | right_tokens)
     coverage = len(shared) / min(len(left_tokens), len(right_tokens))
     return jaccard >= 0.35 or coverage >= 0.55
+
+
+def _title_llm_candidate(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_bucket = _event_bucket(left)
+    right_bucket = _event_bucket(right)
+    if left_bucket != right_bucket or left_bucket in {"market_reaction", "industry_theme"}:
+        return False
+    if not (_title_has_event_action(left) or _title_has_event_action(right)):
+        return False
+
+    left_tokens = _title_event_tokens(left) - _company_title_tokens(left)
+    right_tokens = _title_event_tokens(right) - _company_title_tokens(right)
+    if len(left_tokens) < 2 or len(right_tokens) < 2:
+        return False
+
+    shared = left_tokens & right_tokens
+    if len(shared) >= 2:
+        return True
+
+    jaccard = len(shared) / max(1, len(left_tokens | right_tokens))
+    coverage = len(shared) / max(1, min(len(left_tokens), len(right_tokens)))
+    return jaccard >= 0.25 or coverage >= 0.40
+
+
+def _same_company_action_topic(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if not _same_company_action_candidate(left, right):
+        return False
+
+    if _same_company_security_action_topic(left, right):
+        return True
+
+    shared_anchors = _concrete_title_anchors(left) & _concrete_title_anchors(right)
+    return bool(shared_anchors)
+
+
+def _same_company_action_candidate(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if not _same_company_context(left, right):
+        return False
+    if not (_title_has_event_action(left) and _title_has_event_action(right)):
+        return False
+    shared = _title_event_tokens(left) & _title_event_tokens(right)
+    company_tokens = _company_title_tokens(left) | _company_title_tokens(right)
+    non_company_shared = shared - company_tokens
+    return bool(non_company_shared)
+
+
+def _same_company_security_action_topic(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if _published_day(left) != _published_day(right):
+        return False
+    if _security_action_prefilter_key(left) != _security_action_prefilter_key(right):
+        return False
+
+    company_tokens = _company_title_tokens(left) | _company_title_tokens(right)
+    shared = (_title_event_tokens(left) & _title_event_tokens(right)) - company_tokens
+    if len(shared) < 2:
+        return False
+
+    domain_tokens = {"보안", "클라우드", "취약점", "침해", "해킹"}
+    return bool(shared & domain_tokens)
+
+
+def _security_signature_conflict_without_action(
+    left: dict[str, Any],
+    right: dict[str, Any],
+) -> bool:
+    return _event_bucket(left) == _event_bucket(
+        right
+    ) == "security" and not _same_company_action_candidate(left, right)
+
+
+def _concrete_title_anchors(article: dict[str, Any]) -> set[str]:
+    entities = _title_issue_entities(article)
+    anchors = {
+        *entities["quoted_terms"],
+        *entities["proper_terms"],
+        *entities["numbers"],
+    }
+    company_tokens = _company_title_tokens(article)
+    for token in _title_event_tokens(article) - company_tokens:
+        if _is_concrete_title_anchor(token):
+            anchors.add(token)
+    return anchors
+
+
+def _title_has_event_action(article: dict[str, Any]) -> bool:
+    title = _compact_text(str(article.get("title") or ""))
+    return any(
+        marker in title
+        for marker in (
+            "계약",
+            "도입",
+            "체결",
+            "협력",
+            "협업",
+            "맞손",
+            "손잡",
+            "수주",
+            "선정",
+            "출시",
+            "공개",
+            "공급",
+            "구축",
+            "투자",
+            "인수",
+            "확대",
+            "확보",
+        )
+    )
+
+
+def _company_title_tokens(article: dict[str, Any]) -> set[str]:
+    tokens: set[str] = set()
+    for company_id in _company_key(article):
+        for alias in [company_id, *_ALL_COMPANY_ALIASES.get(company_id, [])]:
+            for raw_token in re.findall(r"[가-힣A-Za-z0-9]+", str(alias).lower()):
+                token = _normalize_title_token(raw_token)
+                if token:
+                    tokens.add(token)
+    return tokens
+
+
+def _is_concrete_title_anchor(token: str) -> bool:
+    if len(token) < 3:
+        return False
+    generic = {
+        "ai",
+        "ax",
+        "dx",
+        "보안",
+        "보안기업",
+        "전문기업",
+        "스타트업",
+        "클라우드",
+        "국내외",
+        "글로벌",
+        "경쟁력",
+        "역량",
+        "강화",
+        "구축",
+        "사업",
+        "시장",
+        "기업",
+        "기업용",
+    }
+    if token in generic:
+        return False
+    if any(char.isascii() and char.isalpha() for char in token):
+        return True
+    return len(token) >= 4
+
+
+def _shared_title_token_count(left: dict[str, Any], right: dict[str, Any]) -> int:
+    return len(_title_event_tokens(left) & _title_event_tokens(right))
 
 
 def _title_event_tokens(article: dict[str, Any]) -> set[str]:
@@ -1371,37 +1411,12 @@ def _title_event_tokens(article: dict[str, Any]) -> set[str]:
         for token in re.findall(r"[가-힣A-Za-z0-9]+", title)
         if token.strip()
     }
-    tokens = {token for token in tokens if _useful_title_token(token)}
-
-    compact_title = _compact_text(title)
-    for marker in (
-        "두나무",
-        "오픈ai",
-        "openai",
-        "챗gpt",
-        "피지컬웍스",
-        "토큰증권",
-        "토큰증권플랫폼",
-        "스마트팩토리",
-        "스마트인프라",
-        "예탁결제원",
-        "예탁원",
-        "로봇파운데이션",
-        "로봇브레인",
-        "로봇두뇌",
-        "로봇지능",
-        "지분투자",
-        "지분인수",
-    ):
-        compact_marker = _compact_text(marker)
-        if compact_marker in compact_title:
-            tokens.add(compact_marker)
-
-    return tokens
+    return {token for token in tokens if _useful_title_token(token)}
 
 
 def _normalize_title_token(token: str) -> str:
     compact = _compact_text(token.lower())
+    compact = _strip_korean_particle(compact)
     aliases = {
         "엔씨": "nc",
         "엔씨ai": "ncai",
@@ -1424,6 +1439,15 @@ def _normalize_title_token(token: str) -> str:
         "sto": "토큰증권",
     }
     return aliases.get(compact, compact)
+
+
+def _strip_korean_particle(token: str) -> str:
+    if len(token) < 4:
+        return token
+    for suffix in ("으로", "에게", "에서", "과", "와", "은", "는", "이", "가", "을", "를", "의"):
+        if token.endswith(suffix) and len(token) - len(suffix) >= 3:
+            return token[: -len(suffix)]
+    return token
 
 
 def _useful_title_token(token: str) -> bool:
@@ -1457,8 +1481,13 @@ def _useful_title_token(token: str) -> bool:
         "한다",
         "위해",
         "기술",
+        "기업",
+        "기업용",
+        "기반",
         "시장",
         "사업",
+        "공략",
+        "확대",
     }
     return token not in stopwords
 
@@ -1521,7 +1550,6 @@ def _issue_entities(article: dict[str, Any]) -> dict[str, list[str]]:
     title_text = _title_text(article)
     return {
         "companies": _company_key(article),
-        "sectors": _sector_key(article),
         "canonical_issues": _matched_alias_keys(_CANONICAL_ISSUE_TERMS, title_text),
         "quoted_terms": _normalize_quoted_product_terms(
             _quoted_terms_from_text(str(article.get("title") or ""))
@@ -1542,7 +1570,6 @@ def _title_issue_entities(article: dict[str, Any]) -> dict[str, list[str]]:
     title_text = _compact_text(title)
     return {
         "companies": _company_key(article),
-        "sectors": _sector_key(article),
         "canonical_issues": _matched_alias_keys(_CANONICAL_ISSUE_TERMS, title_text),
         "quoted_terms": _normalize_quoted_product_terms(_quoted_terms_from_text(title)),
         "proper_terms": _proper_terms_from_text(title),
@@ -1667,11 +1694,7 @@ def _title_concepts(article: dict[str, Any]) -> list[str]:
 
 
 def _concepts_from_text(compact_text: str) -> list[str]:
-    concepts: list[str] = []
-    for concept, markers in _TITLE_CONCEPT_TERMS.items():
-        if any(_compact_text(marker) in compact_text for marker in markers):
-            concepts.append(concept)
-    return concepts
+    return []
 
 
 def _proper_terms_from_text(text: str) -> list[str]:
@@ -1797,29 +1820,14 @@ def _normalize_number_term(value: str) -> str:
 
 def _contract_issue_key(article: dict[str, Any]) -> str | None:
     title_text = _title_text(article)
-    fallback_text = _title_with_short_lead_text(article)
     amount_match = re.search(r"\d+(?:\.\d+)?(?:억|억원|원|만|천)", title_text)
     amount = _normalize_number_term(amount_match.group(0)) if amount_match else ""
-    concepts = _event_terms(article, include_lead=False)
-    for concept in sorted(concepts):
-        return concept
-    domain_key = _contract_domain_key(title_text) or _contract_domain_key(fallback_text)
-    if domain_key:
-        return domain_key
     terms = sorted(_title_topic_terms(article))
     term = _topic_value(terms[0]) if terms else ""
     if term:
         return term
     if amount:
         return amount
-    return None
-
-
-def _contract_domain_key(compact_text: str) -> str | None:
-    if "인증중고차" in compact_text or "cpo" in compact_text:
-        return "certified_used_car_platform"
-    if "코어뱅킹" in compact_text or "웹단말" in compact_text:
-        return "core_banking_web_terminal"
     return None
 
 
@@ -1856,9 +1864,9 @@ def _same_company_business_issue(left: dict[str, Any], right: dict[str, Any]) ->
         right_entities["proper_terms"],
     )
     shared_numbers = set(left_entities["numbers"]) & set(right_entities["numbers"])
-    if shared_proper_terms and (
-        shared_numbers or _shared(left_entities["sectors"], right_entities["sectors"])
-    ):
+    if not shared_numbers and shared_proper_terms:
+        shared_numbers = set(_number_terms(left)) & set(_number_terms(right))
+    if shared_proper_terms and shared_numbers:
         return True
 
     return False
@@ -1904,45 +1912,33 @@ def _same_operational_event(left: dict[str, Any], right: dict[str, Any]) -> bool
     if len(shared_terms) >= 2:
         return True
 
-    strong_terms = {
-        "logistics_robotics",
-        "physicalworks_rx_platform",
-        "manufacturing_ax_market",
-        "smart_infra_lidar",
-        "openai_enterprise_ai",
-        "robot_foundation_model",
-        "national_ai_computing_center",
-        "security_token_platform",
-    }
-    return bool(shared_terms & strong_terms)
+    return False
 
 
 def _event_terms(article: dict[str, Any], *, include_lead: bool = False) -> set[str]:
     text = _title_with_short_lead_text(article) if include_lead else _title_text(article)
-    terms = set(_concepts_from_text(text))
-    if "물류" in text and ("로봇" in text or "휴머노이드" in text or "피지컬웍스" in text):
-        terms.add("logistics_robotics")
-    if "피지컬웍스" in text or (
-        ("rx" in text or "로봇" in text) and ("학습" in text or "운영" in text or "플랫폼" in text)
-    ):
-        terms.add("physicalworks_rx_platform")
-    if ("제조" in text or "공장" in text or "스마트팩토리" in text) and (
-        "ax" in text or "rx" in text or "ai" in text or "지능화" in text or "플랫폼" in text
-    ):
-        terms.add("manufacturing_ax_market")
-    if ("스마트인프라" in text or "스마트시티" in text or "라이다" in text) and (
-        "북미" in text or "에스오에스랩" in text or "lgcns" in text
-    ):
-        terms.add("smart_infra_lidar")
-    if ("오픈ai" in text or "openai" in text or "챗gpt" in text) and (
-        "skax" in text or "엔터프라이즈" in text or "기업용" in text or "생성형" in text
-    ):
-        terms.add("openai_enterprise_ai")
-    if ("국가" in text and "ai컴퓨팅" in text) or "ai고속도로" in text:
-        terms.add("national_ai_computing_center")
-    if ("토큰증권" in text or "sto" in text) and ("예탁결제원" in text or "예탁원" in text):
-        terms.add("security_token_platform")
-    return terms
+    return _topic_terms_from_text(text)
+
+
+def _title_event_issue_key(article: dict[str, Any]) -> str:
+    """Title-only concrete event key.
+
+    This deliberately ignores matched sector/company metadata. Crawlers often
+    label the same article under adjacent sectors or companies, while the title
+    carries the actual event shape users expect to cluster by.
+    """
+    tokens = _title_event_tokens(article) - _company_title_tokens(article)
+    anchors = sorted(token for token in tokens if _is_title_event_key_token(token))
+    if len(anchors) >= 3 and _title_has_event_action(article):
+        return "_".join(anchors[:5])
+
+    return ""
+
+
+def _is_title_event_key_token(token: str) -> bool:
+    if len(token) < 3:
+        return False
+    return token not in {"기업용", "서비스", "플랫폼", "솔루션", "사업자"}
 
 
 def _has_operational_action(compact_text: str) -> bool:

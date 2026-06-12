@@ -12,11 +12,14 @@ from src.db.postgres import SessionLocal
 _UPSERT_REPORT_SQL = text("""
     INSERT INTO briefing_reports (
         id, title, briefing_type, date_from, date_to, requested_by_user_id,
-        status, progress, payload, error_message, confidence, provenance,
+        report_date, period_label, status, progress, key_summary, sk_implication,
+        related_card_ids, related_raw_article_ids, payload, error_message, confidence, provenance,
         completed_at
     ) VALUES (
         :id, :title, :briefing_type, :date_from, :date_to, :requested_by_user_id,
-        :status, :progress, CAST(:payload AS jsonb), :error_message, :confidence,
+        :report_date, :period_label, :status, :progress, :key_summary, :sk_implication,
+        CAST(:related_card_ids AS text[]), CAST(:related_raw_article_ids AS bigint[]),
+        CAST(:payload AS jsonb), :error_message, :confidence,
         CAST(:provenance AS jsonb), NOW()
     )
     ON CONFLICT (id) DO UPDATE SET
@@ -25,8 +28,14 @@ _UPSERT_REPORT_SQL = text("""
         date_from = EXCLUDED.date_from,
         date_to = EXCLUDED.date_to,
         requested_by_user_id = EXCLUDED.requested_by_user_id,
+        report_date = EXCLUDED.report_date,
+        period_label = EXCLUDED.period_label,
         status = EXCLUDED.status,
         progress = EXCLUDED.progress,
+        key_summary = EXCLUDED.key_summary,
+        sk_implication = EXCLUDED.sk_implication,
+        related_card_ids = EXCLUDED.related_card_ids,
+        related_raw_article_ids = EXCLUDED.related_raw_article_ids,
         payload = EXCLUDED.payload,
         error_message = EXCLUDED.error_message,
         confidence = EXCLUDED.confidence,
@@ -34,17 +43,36 @@ _UPSERT_REPORT_SQL = text("""
         completed_at = NOW()
 """)
 
-_INSERT_CARD_SQL = text("""
-    INSERT INTO briefing_report_cards (briefing_report_id, card_news_id)
-    VALUES (:briefing_report_id, :card_news_id)
-    ON CONFLICT DO NOTHING
+_SELECT_REPORT_SQL = text("""
+    SELECT payload, completed_at
+    FROM briefing_reports
+    WHERE id = :id
+      AND status IN ('completed', 'delivered')
+      AND payload IS NOT NULL
 """)
 
-_INSERT_ARTICLE_SQL = text("""
-    INSERT INTO briefing_report_articles (briefing_report_id, raw_article_id)
-    VALUES (:briefing_report_id, :raw_article_id)
-    ON CONFLICT DO NOTHING
-""")
+
+def load_briefing_report(report_id: str) -> dict[str, Any] | None:
+    """저장된 브리핑을 재사용(read-through 캐시)하기 위해 조회한다.
+
+    Returns:
+        ``{"payload": dict, "completed_at": datetime | None}`` 또는 미존재 시 None.
+        payload 가 dict 로 해석되지 않으면 None (손상 row 는 캐시 미스로 처리).
+    """
+
+    with SessionLocal() as db:
+        row = db.execute(_SELECT_REPORT_SQL, {"id": report_id}).mappings().first()
+    if row is None:
+        return None
+    payload = row["payload"]
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            return None
+    if not isinstance(payload, dict):
+        return None
+    return {"payload": payload, "completed_at": row["completed_at"]}
 
 
 def save_briefing_report(
@@ -56,8 +84,7 @@ def save_briefing_report(
 
     Expected schema:
     - ``briefing_reports`` stores the full frontend payload in ``payload`` JSONB.
-    - ``briefing_report_cards`` stores report-card links.
-    - ``briefing_report_articles`` stores report-raw article links.
+    - Related card/article ids are stored in array columns on ``briefing_reports``.
     """
 
     with SessionLocal() as db:
@@ -70,31 +97,54 @@ def save_briefing_report(
                 "date_from": report.get("date_from"),
                 "date_to": report.get("date_to"),
                 "requested_by_user_id": report.get("requested_by_user_id"),
+                "report_date": report.get("report_date") or report.get("date_to"),
+                "period_label": report.get("period_label"),
                 "status": report.get("status"),
                 "progress": report.get("progress"),
+                "key_summary": report.get("key_summary") or report.get("executive_summary"),
+                "sk_implication": _sk_implication(report),
+                "related_card_ids": _pg_text_array(_card_ids(report, selected_cards)),
+                "related_raw_article_ids": _pg_bigint_array(_raw_article_ids(selected_cards)),
                 "payload": json.dumps(report, ensure_ascii=False, default=str),
                 "error_message": report.get("error_message"),
                 "confidence": report.get("confidence"),
                 "provenance": json.dumps(report.get("provenance") or {}, ensure_ascii=False),
             },
         )
-        for card in selected_cards:
-            card_id = str(card.get("id") or "").strip()
-            if not card_id:
-                continue
-            db.execute(
-                _INSERT_CARD_SQL,
-                {"briefing_report_id": report.get("id"), "card_news_id": card_id},
-            )
-            for article_id in _source_article_ids(card):
-                db.execute(
-                    _INSERT_ARTICLE_SQL,
-                    {
-                        "briefing_report_id": report.get("id"),
-                        "raw_article_id": article_id,
-                    },
-                )
         db.commit()
+
+
+def _card_ids(report: dict[str, Any], selected_cards: list[dict[str, Any]]) -> list[str]:
+    raw_values = report.get("related_card_ids") or report.get("source_card_ids") or []
+    values = list(raw_values) if isinstance(raw_values, list) else [raw_values]
+    values.extend(card.get("id") for card in selected_cards)
+    result: list[str] = []
+    for value in values:
+        item = str(value or "").strip()
+        if item and item not in result:
+            result.append(item)
+    return result
+
+
+def _raw_article_ids(selected_cards: list[dict[str, Any]]) -> list[int]:
+    result: list[int] = []
+    for card in selected_cards:
+        for article_id in _source_article_ids(card):
+            if article_id not in result:
+                result.append(article_id)
+    return result
+
+
+def _sk_implication(report: dict[str, Any]) -> str | None:
+    basis = report.get("briefing_basis")
+    if isinstance(basis, dict):
+        strategy = basis.get("strategy_implication")
+        if isinstance(strategy, dict):
+            value = strategy.get("finding") or strategy.get("rationale")
+            if value:
+                return str(value)
+    value = report.get("sk_implication") or report.get("executive_implication")
+    return str(value) if value else None
 
 
 def _source_article_ids(card: dict[str, Any]) -> list[int]:
@@ -110,3 +160,16 @@ def _source_article_ids(card: dict[str, Any]) -> list[int]:
         if parsed not in result:
             result.append(parsed)
     return result
+
+
+def _pg_text_array(values: list[Any]) -> str:
+    cleaned = [str(value).replace('"', '\\"') for value in values if value]
+    if not cleaned:
+        return "{}"
+    return "{" + ",".join(f'"{value}"' for value in cleaned) + "}"
+
+
+def _pg_bigint_array(values: list[int]) -> str:
+    if not values:
+        return "{}"
+    return "{" + ",".join(str(int(value)) for value in values) + "}"

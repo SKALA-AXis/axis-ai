@@ -1,7 +1,14 @@
 import asyncio
+import base64
+import binascii
+import hashlib
 import json
 import logging
+import os
+import re
+import time
 import uuid
+from collections.abc import Iterable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -11,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from src.api.briefing_schemas import BriefingGenerateRequest, BriefingGenerateResponse
-from src.api.chat_schemas import ChatTurnRequest, ChatTurnResponse
+from src.api.chat_schemas import ChatPdfRequest, ChatTurnRequest, ChatTurnResponse
 from src.api.global_trends_schemas import GlobalTrendsRequest, GlobalTrendsResponse
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
 from src.api.link_verification_schemas import LinkVerificationRequest, LinkVerificationResponse
@@ -28,15 +35,135 @@ from src.schemas import (
     HealthResponse,
     PipelineRunRequest,
     PipelineRunResponse,
+    SearchHit,
     SearchRequest,
     SearchResponse,
 )
 
+_LOG_LEVEL_NAME = os.getenv("AXIS_AI_LOG_LEVEL", os.getenv("LOG_LEVEL", "INFO")).upper()
+_LOG_LEVEL = logging.getLevelNamesMapping().get(_LOG_LEVEL_NAME, logging.INFO)
+logging.basicConfig(
+    level=_LOG_LEVEL,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logging.getLogger().setLevel(_LOG_LEVEL)
 log = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
 SCHEDULED_PREPROCESS_LIMIT = 5000
 # Mixer SSE keepalive 주기(초) — nginx/ALB idle timeout(기본 60s)보다 충분히 짧게.
 _MIXER_SSE_HEARTBEAT_SEC = 10
+_CHAT_PDF_MAX_BYTES = 15 * 1024 * 1024
+_CHAT_PDF_MAX_TEXT_CHARS = 80_000
+_AGENT_CALL_FAILED_MESSAGE = "호출에 실패했다"
+
+
+def _count_result_items(results: Iterable[Mapping[str, object]], key: str) -> int:
+    total = 0
+    for result in results:
+        value = result.get(key)
+        if isinstance(value, list):
+            total += len(value)
+    return total
+
+
+def _sum_result_ints(results: Iterable[Mapping[str, object]], key: str) -> int:
+    total = 0
+    for result in results:
+        value = result.get(key)
+        if isinstance(value, int):
+            total += value
+    return total
+
+
+def _raise_if_agent_failure(agent: str, result: Mapping[str, object] | None) -> None:
+    reason = _agent_failure_reason(result)
+    if not reason:
+        return
+    raise HTTPException(
+        status_code=502,
+        detail={
+            "code": _agent_failure_code(agent, result),
+            "message": _AGENT_CALL_FAILED_MESSAGE,
+            "detail": reason,
+        },
+    )
+
+
+def _agent_failure_event(agent: str, result: Mapping[str, object] | None) -> dict[str, str]:
+    return {
+        "type": "error",
+        "message": _AGENT_CALL_FAILED_MESSAGE,
+        "error_code": _agent_failure_code(agent, result),
+        "detail": _agent_failure_reason(result) or "agent response failed",
+    }
+
+
+def _agent_failure_reason(result: Mapping[str, object] | None) -> str:
+    if not result:
+        return "empty_response"
+    status = str(result.get("status") or "").strip().lower()
+    if status in {"failed", "error"}:
+        return status
+    top_error = str(result.get("error") or "").strip()
+    if top_error:
+        return top_error
+
+    provenance = result.get("provenance")
+    provenance_error = ""
+    provenance_mode = ""
+    provenance_kind = ""
+    if isinstance(provenance, Mapping):
+        provenance_error = str(provenance.get("error") or "").strip()
+        provenance_mode = str(provenance.get("mode") or "").strip().lower()
+        provenance_kind = str(provenance.get("result_kind") or "").strip().lower()
+    if provenance_error:
+        return provenance_error
+
+    result_kind = str(result.get("result_kind") or provenance_kind).strip().lower()
+    if "unavailable" in result_kind or "empty_axis_ai_response" in result_kind:
+        return result_kind
+    if "fallback" in result_kind or "fallback" in provenance_mode:
+        return result_kind or provenance_mode
+
+    warning = str(result.get("warning") or "").strip()
+    warning_lower = warning.lower()
+    if (
+        "llm generation failed" in warning_lower
+        or "llm 호출 실패" in warning_lower
+        or "generation failed" in warning_lower
+        or "source data unavailable" in warning_lower
+    ):
+        return warning
+    return ""
+
+
+def _agent_failure_code(agent: str, result: Mapping[str, object] | None) -> str:
+    prefix = _normalize_error_code(agent)
+    if result:
+        top_code = str(result.get("error_code") or "").strip()
+        if top_code:
+            return _normalize_error_code(top_code)
+        provenance = result.get("provenance")
+        if isinstance(provenance, Mapping):
+            provenance_code = str(provenance.get("error_code") or "").strip()
+            if provenance_code:
+                return _normalize_error_code(provenance_code)
+            provenance_error = str(provenance.get("error") or "").strip()
+            if provenance_error:
+                return f"{prefix}_{_normalize_error_code(provenance_error)}"
+            provenance_kind = str(provenance.get("result_kind") or "").strip()
+            if provenance_kind:
+                return f"{prefix}_{_normalize_error_code(provenance_kind)}"
+        result_kind = str(result.get("result_kind") or "").strip()
+        if result_kind:
+            return f"{prefix}_{_normalize_error_code(result_kind)}"
+    return f"{prefix}_AI_RESPONSE_FAILED"
+
+
+def _normalize_error_code(value: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", value or "").strip("_").upper()
+    return normalized or "AI_RESPONSE_FAILED"
+
 
 PREPROCESS_SOURCE_TYPES_BY_SOURCE: dict[str, list[str]] = {
     "naver_news": ["news"],
@@ -72,6 +199,13 @@ async def lifespan(app: FastAPI):
         preload_embedder()
     except Exception as e:
         log.warning("startup preload skipped: %s", e)
+    # langchain 경로 선로딩 — 에이전트들은 ChatOpenAI 를 지연 임포트하는데(transformers
+    # 체인 회피), 상주 서버에서는 첫 LLM 요청이 import 비용까지 떠안아 이벤트 루프를
+    # 막고 readiness 플랩을 유발했음 (2026-06-11 배포 순단 실측). startup 에서 1회 선로딩.
+    try:
+        import langchain_openai  # noqa: F401
+    except Exception as e:
+        log.warning("startup langchain preload skipped: %s", e)
     yield
     log.info("AXIS AI 서버 종료")
 
@@ -225,13 +359,22 @@ async def generate_briefing(request: BriefingGenerateRequest) -> BriefingGenerat
             save=request.save,
             use_mock=False,
             refine_display_copy=request.refine_display_copy,
+            reuse_saved=request.reuse_saved,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         log.exception("BriefingGenerationAgent 실행 실패 | error=%s", exc)
-        raise HTTPException(status_code=500, detail="briefing generation failed") from exc
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "BRIEFING_GENERATION_FAILED",
+                "message": _AGENT_CALL_FAILED_MESSAGE,
+                "detail": str(exc),
+            },
+        ) from exc
 
+    _raise_if_agent_failure("BRIEFING", result)
     return BriefingGenerateResponse.model_validate(result)
 
 
@@ -291,9 +434,9 @@ async def _run_collection_track(
         TRACK_D_SOURCES,
         BatchProcessor,
     )
-    from src.pipeline.analysis_delivery import run_analysis_delivery
+    from src.pipeline.analysis_delivery import AnalysisDeliveryResult, run_analysis_delivery
     from src.preprocessing.classification import ClusterClassifier
-    from src.preprocessing.preprocessing import PreprocessingService
+    from src.preprocessing.preprocessing import PreprocessingResult, PreprocessingService
     from src.preprocessing.relevance import RelevanceEvaluator
 
     all_aliases = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
@@ -306,10 +449,10 @@ async def _run_collection_track(
     processor = BatchProcessor()
     started_at = datetime.now(UTC).isoformat()
     crawl_window = _collection_window(track, window_start, window_end)
-    results = []
-    delivery_results = []
+    results: list[PreprocessingResult] = []
+    delivery_results: list[AnalysisDeliveryResult] = []
 
-    async def _preprocess_crawl_record(record: dict[str, str]):
+    async def _preprocess_crawl_record(record: dict[str, str]) -> PreprocessingResult:
         crawl_run_id = record["crawl_run_id"]
         source_name = record["source_name"]
         source_types = _preprocess_source_types(track, source_name)
@@ -354,7 +497,6 @@ async def _run_collection_track(
             for record in new_records:
                 result = await _preprocess_crawl_record(record)
                 results.append(result)
-                delivery_results.append(await asyncio.to_thread(run_analysis_delivery, result))
 
     try:
         if track in {"a", "all"}:
@@ -383,27 +525,68 @@ async def _run_collection_track(
                     limit=SCHEDULED_PREPROCESS_LIMIT,
                 )
             ]
+
+        news_postprocess = None
+        if track in {"a", "all"}:
+            news_postprocess = await asyncio.to_thread(_run_recent_news_cluster_postprocess)
+
         if not delivery_results:
             for result in results:
                 delivery_results.append(await asyncio.to_thread(run_analysis_delivery, result))
+
         log.info(
             (
                 "수집 파이프라인 완료 | task_id=%s track=%s raw=%d "
                 "analysis_metrics=%d analysis_signals=%d classified=%d "
-                "card_news=%d indexed=%d delivery_errors=%d"
+                "postprocess=%s card_news=%d indexed=%d delivery_errors=%d"
             ),
             task_id,
             track,
-            sum(len(result.get("raw_article_ids", [])) for result in results),
-            sum(result.get("analysis_metric_count", 0) for result in results),
-            sum(result.get("analysis_signal_count", 0) for result in results),
-            sum(len(result.get("classified_clusters", [])) for result in results),
-            sum(len(result.get("card_news", [])) for result in delivery_results),
-            sum(len(result.get("indexed_vector_ids", [])) for result in delivery_results),
-            sum(len(result.get("errors", [])) for result in delivery_results),
+            _count_result_items(results, "raw_article_ids"),
+            _sum_result_ints(results, "analysis_metric_count"),
+            _sum_result_ints(results, "analysis_signal_count"),
+            _count_result_items(results, "classified_clusters"),
+            news_postprocess,
+            _count_result_items(delivery_results, "card_news"),
+            _count_result_items(delivery_results, "indexed_vector_ids"),
+            _count_result_items(delivery_results, "errors"),
         )
     except Exception:
         log.exception("수집 파이프라인 실패 | task_id=%s track=%s", task_id, track)
+
+
+def _run_recent_news_cluster_postprocess() -> dict:
+    from scripts.postprocess_singleton_clusters import run_postprocess
+    from src.db.postgres import SessionLocal
+
+    with SessionLocal() as db:
+        result = run_postprocess(
+            db=db,
+            source_type="news",
+            lookback_hours=24,
+            time_field="published_at",
+            max_source_size=0,
+            min_target_size=2,
+            min_new_cluster_size=2,
+            max_time_gap_hours=72,
+            min_score=0.45,
+            apply=True,
+            skip_noise=True,
+        )
+        db.commit()
+        summary = {
+            "clusters": result["cluster_count"],
+            "sources": result["source_count"],
+            "targets": result["target_count"],
+            "merge_candidates": len(result["candidates"]),
+            "group_merge_candidates": len(result["group_candidates"]),
+            "noise_candidates": len(result["noise_ids"]),
+            "updated": result["updated"],
+            "group_updated": result["group_updated"],
+            "noise_updated": result["noise_updated"],
+        }
+    log.info("뉴스 클러스터 후처리 완료 | %s", summary)
+    return summary
 
 
 def _preprocess_source_types(track: str, source_name: str | None) -> list[str]:
@@ -457,21 +640,214 @@ def _ensure_kst(value: datetime) -> datetime:
 async def search(request: SearchRequest):
     """BGE-M3 하이브리드 검색 (Dense + Sparse RRF)"""
     log.info("검색 요청 | query=%s company=%s", request.query, request.company)
-    # TODO: hybrid_search.py 실행
-    return SearchResponse(hits=[], total=0)
+    hits, _timings = await asyncio.to_thread(_run_search_pipeline, request)
+    return SearchResponse(hits=[SearchHit.model_validate(hit) for hit in hits], total=len(hits))
 
 
 @app.post("/gen-search", response_model=GenSearchResult)
 async def gen_search(request: GenSearchRequest):
     """Generative Search — RAG + GPT-4o + SC 검증"""
     log.info("Generative Search | query=%s", request.query)
-    # TODO: RAG + LLM 실행
-    return GenSearchResult(
-        answer="(AI 서버 초기화 중)",
-        sources=[],
-        sc_passed=False,
-        sc_score=0.0,
+    search_request = SearchRequest(
+        query=request.query,
+        company=request.company,
+        event_type=None,
+        top_k=request.top_k,
     )
+    hits, _timings = await asyncio.to_thread(_run_search_pipeline, search_request)
+    if not hits:
+        return GenSearchResult(
+            answer="검색 인덱스에서 관련 근거를 찾지 못했습니다. 검색어를 더 구체화해 주세요.",
+            sources=[],
+            sc_passed=False,
+            sc_score=0.0,
+        )
+
+    llm_answer = await asyncio.to_thread(_try_gen_search_llm_answer, request.query, hits)
+    if llm_answer:
+        return GenSearchResult(
+            answer=llm_answer,
+            sources=hits,
+            sc_passed=True,
+            sc_score=0.72,
+        )
+
+    return GenSearchResult(
+        answer=_deterministic_gen_search_answer(request.query, hits),
+        sources=hits,
+        sc_passed=False,
+        sc_score=0.42,
+    )
+
+
+def _run_search_pipeline(request: SearchRequest) -> tuple[list[dict[str, object]], dict[str, int]]:
+    from src.rag.hybrid_search import hybrid_search
+    from src.rag.reranker import rerank
+
+    top_k = max(1, min(int(request.top_k or 10), 50))
+    timings: dict[str, int] = {}
+    started = time.perf_counter()
+    try:
+        candidates = hybrid_search(
+            query=request.query,
+            top_k=max(top_k * 3, top_k),
+            company=request.company,
+            event_type=request.event_type,
+            raise_on_failure=True,
+        )
+        timings["search_ms"] = int((time.perf_counter() - started) * 1000)
+        rerank_started = time.perf_counter()
+        ranked = rerank(request.query, candidates, top_k=top_k)
+        timings["rerank_ms"] = int((time.perf_counter() - rerank_started) * 1000)
+    except Exception as exc:  # noqa: BLE001 - 내부 API는 장애를 빈 결과로 숨기지 않는다.
+        log.exception("검색 실행 실패 | query=%s error=%s", request.query, exc)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "SEARCH_RAG_UNAVAILABLE",
+                "message": _AGENT_CALL_FAILED_MESSAGE,
+                "detail": str(exc),
+            },
+        ) from exc
+    return [_normalize_search_hit(hit) for hit in ranked], timings
+
+
+def _normalize_search_hit(hit: Mapping[str, object]) -> dict[str, object]:
+    rdb_id = _safe_int(
+        hit.get("rdb_id")
+        or hit.get("raw_article_id")
+        or hit.get("article_id")
+        or hit.get("source_id")
+    )
+    company = _first_text(hit.get("company"), hit.get("peer_id"), hit.get("peer"), "unknown")
+    title = _first_text(hit.get("title"), hit.get("card_title"), f"검색 결과 {rdb_id}")
+    summary = _first_text(hit.get("summary"), hit.get("snippet"), hit.get("text"), "")
+    event_type = _first_text(hit.get("event_type"), hit.get("type"), "unknown")
+    published_at = hit.get("pub_date") or hit.get("published_at") or hit.get("updated_at")
+    score = _safe_float(hit.get("rerank_score"), hit.get("score"), 0.0)
+    return {
+        "rdb_id": rdb_id,
+        "company": company,
+        "title": title,
+        "summary": summary,
+        "importance": _first_text(hit.get("importance"), hit.get("exposure_band"), "unknown"),
+        "event_type": event_type,
+        "pub_date": _search_date_string(published_at),
+        "rerank_score": score,
+        "source_url": _optional_text(hit.get("source_url") or hit.get("url") or hit.get("link")),
+    }
+
+
+def _try_gen_search_llm_answer(query: str, hits: list[dict[str, object]]) -> str:
+    from src.services.llm_env import llm_credentials_ready
+
+    if os.getenv("AXIS_GEN_SEARCH_ENABLE_LLM", "1").lower() in {"0", "false", "no"}:
+        return ""
+    if not llm_credentials_ready():
+        return ""
+    try:
+        from langchain_openai import ChatOpenAI
+
+        payload = {
+            "query": query,
+            "sources": [
+                {
+                    "title": hit.get("title"),
+                    "summary": hit.get("summary"),
+                    "company": hit.get("company"),
+                    "event_type": hit.get("event_type"),
+                    "pub_date": hit.get("pub_date"),
+                    "score": hit.get("rerank_score"),
+                }
+                for hit in hits[:6]
+            ],
+        }
+        prompt = f"""\
+AXIS Generative Search 답변을 작성합니다.
+
+규칙:
+- 아래 JSON의 sources 안에 있는 사실만 사용합니다.
+- 출처에 없는 수치, 고객명, 계약명, 날짜를 만들지 않습니다.
+- 답변은 한국어 4~7문장으로 작성합니다.
+- 마지막 문장에는 추가로 확인해야 할 검색어 1개를 제안합니다.
+- JSON object 하나만 반환합니다.
+
+입력 JSON:
+{json.dumps(payload, ensure_ascii=False)}
+
+출력 JSON:
+{{"answer":"근거 기반 답변"}}
+"""
+        model = os.getenv("GEN_SEARCH_LLM_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o-mini"
+        llm = ChatOpenAI(
+            model=model,
+            temperature=0.1,
+            max_completion_tokens=800,
+            model_kwargs={"response_format": {"type": "json_object"}},
+        )
+        result = llm.invoke(prompt)
+        parsed = json.loads(str(getattr(result, "content", result) or "{}"))
+        answer = str(parsed.get("answer") or "").strip()
+        return answer
+    except Exception as exc:  # noqa: BLE001 - 검색 결과 요약 fallback 을 사용한다.
+        log.warning("GenSearch LLM compose failed; deterministic fallback used | error=%s", exc)
+        return ""
+
+
+def _deterministic_gen_search_answer(query: str, hits: list[dict[str, object]]) -> str:
+    lead = hits[0]
+    bullets = []
+    for index, hit in enumerate(hits[:3], start=1):
+        title = _first_text(hit.get("title"), f"근거 {index}")
+        company = _first_text(hit.get("company"), "unknown")
+        summary = _first_text(hit.get("summary"), "")
+        bullets.append(f"{index}. {company}: {title}" + (f" — {summary}" if summary else ""))
+    return (
+        f"'{query}'에 대해 Qdrant 하이브리드 검색과 rerank 결과를 기준으로 요약했습니다. "
+        f"가장 관련도가 높은 근거는 {lead.get('company')}의 '{lead.get('title')}'입니다. "
+        "현재 응답은 LLM 생성 단계가 비활성화되었거나 실패해 "
+        "deterministic fallback으로 작성되었습니다.\n" + "\n".join(bullets)
+    )
+
+
+def _first_text(*values: object) -> str:
+    for value in values:
+        text = _optional_text(value)
+        if text:
+            return text
+    return ""
+
+
+def _optional_text(value: object) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return text
+
+
+def _safe_int(value: object) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_float(*values: object) -> float:
+    for value in values:
+        try:
+            return float(str(value).strip())
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def _search_date_string(value: object) -> str:
+    if isinstance(value, (int, float)):
+        if value <= 0:
+            return ""
+        return datetime.fromtimestamp(value, tz=UTC).isoformat()
+    text = _optional_text(value)
+    return text
 
 
 @app.post("/chat", response_model=ChatTurnResponse)
@@ -491,6 +867,499 @@ async def chat(request: ChatTurnRequest) -> ChatTurnResponse:
     )
     result = await ChatOrchestratorAgent().answer(request)
     return ChatTurnResponse.model_validate(result)
+
+
+@app.post("/chat/pdf", response_model=ChatTurnResponse)
+async def chat_pdf(request: ChatPdfRequest) -> ChatTurnResponse:
+    """Analyze a user-uploaded PDF inside the floating assistant flow."""
+
+    try:
+        pdf_bytes = base64.b64decode(request.pdf_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="pdf_base64 is not valid base64") from exc
+
+    if len(pdf_bytes) > _CHAT_PDF_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="PDF file is too large")
+    if not _looks_like_pdf(request.file_name, request.content_type, pdf_bytes):
+        raise HTTPException(status_code=400, detail="Only PDF attachments are supported")
+
+    from src.crawler.parsers.pdf_payload import extract_pdf_payload
+
+    pdf_payload = extract_pdf_payload(
+        pdf_bytes,
+        max_text_chars=_CHAT_PDF_MAX_TEXT_CHARS,
+    )
+    file_hash = hashlib.sha256(pdf_bytes).hexdigest()
+    log.info(
+        "Assistant PDF chat 요청 | conversation=%s file=%s bytes=%s text_chars=%s",
+        request.request.conversation_id,
+        request.file_name,
+        len(pdf_bytes),
+        len(str(pdf_payload.get("text") or "")),
+    )
+    result = _build_pdf_chat_response(
+        request.request,
+        file_name=request.file_name,
+        content_type=request.content_type or "application/pdf",
+        file_hash=file_hash,
+        pdf_payload=pdf_payload,
+    )
+    return ChatTurnResponse.model_validate(result)
+
+
+def _looks_like_pdf(file_name: str, content_type: str | None, pdf_bytes: bytes) -> bool:
+    name_ok = (file_name or "").lower().endswith(".pdf")
+    type_ok = (content_type or "").lower() in {"application/pdf", "application/x-pdf"}
+    bytes_ok = pdf_bytes.startswith(b"%PDF")
+    return bytes_ok or (name_ok and type_ok)
+
+
+def _build_pdf_chat_response(
+    request: ChatTurnRequest,
+    *,
+    file_name: str,
+    content_type: str,
+    file_hash: str,
+    pdf_payload: Mapping[str, object],
+) -> dict[str, object]:
+    conversation_id = request.conversation_id or request.session_id or str(uuid.uuid4())
+    message_id = str(uuid.uuid4())
+    text = str(pdf_payload.get("text") or "").strip()
+    page_count = _safe_pdf_int(pdf_payload.get("page_count"))
+    parsed_page_count = _safe_pdf_int(pdf_payload.get("parsed_page_count"))
+    source_id = f"pdf:{file_hash[:16]}"
+
+    if not text:
+        error_code = "ASSISTANT_PDF_TEXT_EXTRACTION_FAILED"
+        return {
+            "conversation_id": conversation_id,
+            "session_id": conversation_id,
+            "message_id": message_id,
+            "reply": (
+                "기능에 문제가 생겼습니다.\n"
+                f"에러코드: {error_code}\n"
+                "PDF에서 분석 가능한 텍스트를 추출하지 못했습니다."
+            ),
+            "intent": "pdf_attachment_analysis",
+            "scope": "uploaded_pdf",
+            "answer_blocks": [
+                {
+                    "type": "warning",
+                    "title": "PDF 분석 실패",
+                    "items": [
+                        f"파일명: {file_name}",
+                        f"파싱 전략: {pdf_payload.get('pdf_parse_strategy') or 'unknown'}",
+                    ],
+                }
+            ],
+            "sources": [],
+            "follow_up_suggestions": ["다른 PDF로 다시 분석해줘"],
+            "confidence": 0.15,
+            "blocked": True,
+            "blocked_reason": error_code,
+            "error_code": error_code,
+            "handoff": None,
+            "provenance": {
+                "retrieval_mode": "uploaded_pdf_text_extraction",
+                "error_code": error_code,
+                "attachment": {
+                    "file_name": file_name,
+                    "content_type": content_type,
+                    "sha256": file_hash,
+                    "page_count": page_count,
+                    "parsed_page_count": parsed_page_count,
+                },
+            },
+        }
+
+    title = _pdf_title(file_name, text)
+    bullets = _pdf_key_points(text, limit=4)
+    evidence = _pdf_evidence_lines(text, limit=4)
+    llm_payload = _try_pdf_llm_payload(
+        request=request,
+        file_name=file_name,
+        text=text,
+        bullets=bullets,
+        evidence=evidence,
+    )
+    if llm_payload:
+        bullets = _string_list_from_payload(
+            llm_payload.get("key_points"), fallback=bullets, limit=4
+        )
+        evidence = _string_list_from_payload(
+            llm_payload.get("evidence"), fallback=evidence, limit=4
+        )
+    question = (request.message or "첨부 PDF를 분석해줘").strip()
+    reply = str(llm_payload.get("reply") or "").strip() if llm_payload else ""
+    if not reply:
+        reply = (
+            f"{file_name}에서 {parsed_page_count or page_count}개 페이지의 텍스트를 확인했습니다. "
+            f"요청 '{question}' 기준으로 핵심은 {bullets[0] if bullets else title} 입니다."
+        )
+    raw_report_draft = llm_payload.get("report_draft") if llm_payload else None
+    report_draft_payload: Mapping[str, object] = (
+        raw_report_draft if isinstance(raw_report_draft, dict) else {}
+    )
+    report_draft = {
+        "title": str(report_draft_payload.get("title") or "").strip() or f"{title} 분석 보고서",
+        "sections": [
+            {
+                "title": "목차 및 구성",
+                "body": "\n".join(
+                    [
+                        "1. Executive Summary",
+                        "2. 문서 주요 내용",
+                        "3. 문서 근거",
+                        "4. 해석 한계",
+                        "5. SK AX 관점 검토 포인트",
+                    ]
+                ),
+            },
+            {
+                "title": "Executive Summary",
+                "body": _section_body(report_draft_payload, "핵심 요약")
+                or _pdf_executive_summary(
+                    title=title, bullets=bullets, page_count=parsed_page_count or page_count
+                ),
+            },
+            {
+                "title": "문서 주요 내용",
+                "body": _section_body(report_draft_payload, "문서 주요 내용")
+                or "\n".join(f"{index}. {item}" for index, item in enumerate(bullets[:6], start=1)),
+            },
+            {
+                "title": "문서 근거",
+                "body": _section_body(report_draft_payload, "문서 근거")
+                or "\n".join(f"- {item}" for item in evidence[:8]),
+            },
+            {
+                "title": "해석 한계",
+                "body": (
+                    "이 초안은 업로드된 PDF에서 추출 가능한 텍스트만 바탕으로 작성되었습니다. "
+                    "표, 이미지, 각주, 스캔본 OCR 품질에 따라 일부 문맥이 누락될 수 있으므로 "
+                    "최종 보고 전 원문 페이지와 수치·고유명사를 대조해야 합니다."
+                ),
+            },
+            {
+                "title": "SK AX 관점 검토 포인트",
+                "body": _section_body(report_draft_payload, "SK AX 관점 검토 포인트")
+                or _pdf_skax_review_point(bullets, evidence),
+            },
+        ],
+    }
+    return {
+        "conversation_id": conversation_id,
+        "session_id": conversation_id,
+        "message_id": message_id,
+        "reply": reply,
+        "intent": "pdf_attachment_analysis",
+        "scope": "uploaded_pdf",
+        "answer_blocks": [
+            {"type": "summary", "title": "PDF 핵심 요약", "items": bullets},
+            {"type": "evidence", "title": "문서 근거", "items": evidence},
+        ],
+        "report_draft": report_draft,
+        "sources": [
+            {
+                "type": "pdf_attachment",
+                "id": source_id,
+                "title": file_name,
+                "snippet": _compact_text(text, limit=420),
+                "score": 1.0,
+                "source_name": "uploaded_pdf",
+            }
+        ],
+        "follow_up_suggestions": [
+            "이 PDF를 임원 보고서 형식으로 다시 정리해줘",
+            "문서에서 SK AX가 확인해야 할 리스크만 뽑아줘",
+        ],
+        "confidence": _safe_pdf_confidence(
+            llm_payload.get("confidence") if llm_payload else None, text
+        ),
+        "blocked": False,
+        "blocked_reason": None,
+        "handoff": None,
+        "provenance": {
+            "retrieval_mode": "uploaded_pdf_text_extraction",
+            "attachment": {
+                "file_name": file_name,
+                "content_type": content_type,
+                "sha256": file_hash,
+                "page_count": page_count,
+                "parsed_page_count": parsed_page_count,
+                "text_chars": len(text),
+                "parse_strategy": pdf_payload.get("pdf_parse_strategy"),
+                "llm_used": bool(llm_payload),
+            },
+        },
+    }
+
+
+def _try_pdf_llm_payload(
+    *,
+    request: ChatTurnRequest,
+    file_name: str,
+    text: str,
+    bullets: list[str],
+    evidence: list[str],
+) -> dict[str, object]:
+    if os.getenv("AXIS_CHAT_PDF_ENABLE_LLM", "1").lower() in {"0", "false", "no"}:
+        return {}
+    try:
+        from src.agents.chat_orchestrator_agent import _get_llm, _parse_json_object
+        from src.observability.langfuse_client import tracing_config, with_session
+
+        prompt = _pdf_llm_prompt(
+            request=request,
+            file_name=file_name,
+            text=text,
+            bullets=bullets,
+            evidence=evidence,
+        )
+        session_id = request.conversation_id or request.session_id or str(uuid.uuid4())
+        with with_session(session_id):
+            result = _get_llm().invoke(
+                prompt,
+                config=tracing_config(
+                    agent="ChatOrchestratorAgent",
+                    phase="pdf_attachment_analysis",
+                    prompt_version="chat-pdf-v1",
+                    session_id=session_id,
+                ),
+            )
+        parsed = _parse_json_object(str(getattr(result, "content", result) or ""))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception as exc:  # noqa: BLE001 - PDF chat must still answer without LLM.
+        log.debug("assistant PDF LLM compose skipped | file=%s error=%s", file_name, exc)
+        return {}
+
+
+def _pdf_llm_prompt(
+    *,
+    request: ChatTurnRequest,
+    file_name: str,
+    text: str,
+    bullets: list[str],
+    evidence: list[str],
+) -> str:
+    payload = {
+        "question": request.message,
+        "file_name": file_name,
+        "extracted_key_points": bullets,
+        "extracted_evidence": evidence,
+        "pdf_text": text[:18_000],
+    }
+    return f"""\
+당신은 SK AX AXIS 챗봇의 PDF 분석 모듈입니다.
+
+규칙:
+- 아래 입력 JSON의 pdf_text와 extracted_evidence에 있는 사실만 사용합니다.
+- 문서에 없는 고객명, 금액, 일정, 계약명은 만들지 않습니다.
+- 사용자의 질문에 먼저 답하고, 임원이 바로 출력할 수 있는 보고서 초안을 함께 작성합니다.
+- report_draft는 내부적으로 "목차 및 구성 설계 → 초안 작성 → 문서 근거로 내용 채우기" 순서로
+  작성하되 내부 단계명은 출력하지 않고 완성본만 반환합니다.
+- report_draft는 5~7개 섹션으로 구성하고 각 body는 3~6문장 또는 3~5개 bullet을 포함합니다.
+- SK AX 관점은 "무엇을 확인/판단/조치해야 하는지"로 씁니다.
+- SK AX가 이미 알고 있을 내부 행동 묘사는 쓰지 않습니다.
+- 출력은 JSON object 하나만 반환합니다.
+
+입력 JSON:
+{json.dumps(payload, ensure_ascii=False)}
+
+출력 JSON:
+{{
+  "reply": "PDF 기반 답변 3~6문장",
+  "key_points": ["핵심 포인트 1", "핵심 포인트 2"],
+  "evidence": ["문서 안 근거 문장 또는 수치"],
+  "report_draft": {{
+    "title": "보고서 제목",
+    "sections": [
+      {{"title": "Executive Summary", "body": "출력 가능한 본문"}},
+      {{"title": "문서 주요 내용", "body": "출력 가능한 본문"}},
+      {{"title": "문서 근거", "body": "출력 가능한 본문"}},
+      {{"title": "해석 한계", "body": "출력 가능한 본문"}},
+      {{"title": "SK AX 관점 검토 포인트", "body": "출력 가능한 본문"}}
+    ]
+  }},
+  "confidence": 0.0
+}}
+"""
+
+
+def _pdf_title(file_name: str, text: str) -> str:
+    for line in _pdf_lines(text):
+        cleaned = re.sub(r"^\[PAGE\s+\d+\]\s*", "", line, flags=re.IGNORECASE).strip()
+        if 8 <= len(cleaned) <= 80 and not cleaned.lower().startswith("page "):
+            return cleaned
+    return re.sub(r"\.pdf$", "", file_name, flags=re.IGNORECASE).strip() or "첨부 PDF"
+
+
+def _pdf_key_points(text: str, *, limit: int) -> list[str]:
+    lines = _rank_pdf_lines(text)
+    if not lines:
+        lines = _pdf_sentences(text)
+    return [_compact_text(line, limit=180) for line in lines[:limit]] or [
+        "문서에서 식별 가능한 핵심 문장이 부족합니다."
+    ]
+
+
+def _pdf_evidence_lines(text: str, *, limit: int) -> list[str]:
+    candidates = [
+        line
+        for line in _pdf_lines(text)
+        if re.search(
+            r"\d|%|억원|매출|영업|계약|투자|AI|AX|cloud|클라우드", line, flags=re.IGNORECASE
+        )
+    ]
+    if len(candidates) < limit:
+        candidates.extend(_pdf_sentences(text))
+    deduped = _dedupe_preserve_order(candidates)
+    return [_compact_text(line, limit=200) for line in deduped[:limit]] or [
+        "본문에서 직접 인용 가능한 근거 문장을 충분히 찾지 못했습니다."
+    ]
+
+
+def _pdf_executive_summary(*, title: str, bullets: list[str], page_count: int) -> str:
+    lead = bullets[0] if bullets else title
+    supporting = bullets[1:4]
+    lines = [
+        f"이 보고서는 '{title}' 문서에서 추출한 텍스트를 기준으로 작성한 초안입니다.",
+        f"문서 범위는 약 {page_count or 1}개 페이지이며, 핵심 논점은 {lead}입니다.",
+        (
+            "주요 내용을 의사결정 관점에서 빠르게 검토할 수 있도록 문서 주요 내용, "
+            "근거, 해석 한계, SK AX 관점 검토 포인트로 재구성했습니다."
+        ),
+    ]
+    lines.extend(f"- {item}" for item in supporting)
+    return "\n".join(lines)
+
+
+def _pdf_skax_review_point(bullets: list[str], evidence: list[str]) -> str:
+    lead = bullets[0] if bullets else "문서의 핵심 변화"
+    basis = evidence[0] if evidence else "문서 근거"
+    return (
+        f"{lead}를 기준으로 고객·산업·기술 실행 영향이 SK AX의 제안, 운영, "
+        f"보안 검토 항목에 연결되는지 확인해야 합니다. 판단 근거는 '{basis}'이며, "
+        "후속 검토에서는 문서 안 수치와 일정이 실제 고객 대응 우선순위를 바꾸는지 분리해 보세요."
+    )
+
+
+def _string_list_from_payload(value: object, *, fallback: list[str], limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return fallback
+    normalized = [str(item).strip() for item in value if str(item).strip()]
+    return normalized[:limit] or fallback
+
+
+def _section_body(report_draft: object, title: str) -> str:
+    if not isinstance(report_draft, dict):
+        return ""
+    sections = report_draft.get("sections")
+    if not isinstance(sections, list):
+        return ""
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        if str(section.get("title") or "").strip() != title:
+            continue
+        return str(section.get("body") or "").strip()
+    return ""
+
+
+def _safe_pdf_confidence(value: object, text: str) -> float:
+    parsed = _safe_pdf_float(value)
+    if parsed is not None and 0.0 <= parsed <= 1.0:
+        return parsed
+    return 0.74 if len(text) >= 800 else 0.58
+
+
+def _safe_pdf_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, (str, bytes, bytearray)):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
+
+
+def _safe_pdf_float(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, (str, bytes, bytearray)):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _rank_pdf_lines(text: str) -> list[str]:
+    keywords = (
+        "AI",
+        "AX",
+        "cloud",
+        "클라우드",
+        "계약",
+        "투자",
+        "매출",
+        "전략",
+        "보안",
+        "운영",
+        "고객",
+    )
+    scored: list[tuple[int, str]] = []
+    for line in _pdf_lines(text):
+        keyword_score = sum(1 for keyword in keywords if keyword.lower() in line.lower())
+        digit_score = 1 if re.search(r"\d", line) else 0
+        length_score = 1 if 30 <= len(line) <= 180 else 0
+        score = keyword_score * 3 + digit_score + length_score
+        if score > 0:
+            scored.append((score, line))
+    scored.sort(key=lambda item: (-item[0], _pdf_lines(text).index(item[1])))
+    return _dedupe_preserve_order([line for _, line in scored])
+
+
+def _pdf_lines(text: str) -> list[str]:
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    return [
+        line
+        for line in lines
+        if len(line) >= 12 and not re.fullmatch(r"\[PAGE\s+\d+\]", line, flags=re.IGNORECASE)
+    ]
+
+
+def _pdf_sentences(text: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", text)
+    parts = re.split(r"(?<=[.!?。？！다])\s+", normalized)
+    return [part.strip() for part in parts if len(part.strip()) >= 20]
+
+
+def _compact_text(text: str, *, limit: int) -> str:
+    cleaned = re.sub(r"\s+", " ", text or "").strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 1)].rstrip() + "..."
+
+
+def _dedupe_preserve_order(items: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        normalized = re.sub(r"\s+", " ", item).strip()
+        key = normalized.lower()
+        if not normalized or key in seen:
+            continue
+        seen.add(key)
+        out.append(normalized)
+    return out
 
 
 @app.post("/today-insight/generate", response_model=TodayInsightGenerateResponse)
@@ -513,6 +1382,7 @@ async def generate_today_insight(
         request.save,
     )
     result = await TodayInsightAgent().generate(request)
+    _raise_if_agent_failure("TODAY_INSIGHT", result)
     return TodayInsightGenerateResponse.model_validate(result)
 
 
@@ -533,6 +1403,7 @@ async def generate_insight(request: InsightGenerateRequest) -> InsightGenerateRe
         card_ids=request.card_ids,
         context=request.context,
     )
+    _raise_if_agent_failure("INSIGHT", result)
     return InsightGenerateResponse.model_validate(result)
 
 
@@ -549,7 +1420,8 @@ async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
     from src.agents.mixer_analysis_agent import MixerAnalysisAgent
 
     log.info(
-        "Mixer 요청 | card_ids=%s integrated_issue_ids=%s",
+        "Mixer 요청 | mode=%s card_ids=%s integrated_issue_ids=%s",
+        request.analysis_mode,
         request.card_ids,
         request.integrated_issue_ids,
     )
@@ -558,7 +1430,9 @@ async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
         integrated_issue_ids=request.integrated_issue_ids,
         ratios=request.ratios,
         user_context=request.user_context,
+        analysis_mode=request.analysis_mode,
     )
+    _raise_if_agent_failure("MIXER", result)
     return MixerAnalysisResponse.model_validate(result)
 
 
@@ -596,6 +1470,7 @@ async def analyze_mixer_stream(request: MixerAnalysisRequest) -> StreamingRespon
                 integrated_issue_ids=request.integrated_issue_ids,
                 ratios=request.ratios,
                 user_context=request.user_context,
+                analysis_mode=request.analysis_mode,
                 progress=progress,
             )
         )
@@ -603,11 +1478,26 @@ async def analyze_mixer_stream(request: MixerAnalysisRequest) -> StreamingRespon
     async def worker() -> None:
         try:
             result = await asyncio.to_thread(run_blocking)
+            failure_reason = _agent_failure_reason(result)
+            if failure_reason:
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    _agent_failure_event("MIXER", result),
+                )
+                return
             payload = MixerAnalysisResponse.model_validate(result).model_dump(mode="json")
             loop.call_soon_threadsafe(queue.put_nowait, {"type": "result", "data": payload})
         except Exception as e:  # noqa: BLE001 — 모든 실패를 SSE error 로 전달
             log.warning("Mixer stream 실패: %s", e)
-            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(e)})
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {
+                    "type": "error",
+                    "message": _AGENT_CALL_FAILED_MESSAGE,
+                    "error_code": "MIXER_STREAM_FAILED",
+                    "detail": str(e),
+                },
+            )
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
 
@@ -650,6 +1540,9 @@ async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsRespons
     Phase 1 (Snapshot) + Phase 2 (Trend Detection) 결정적 산식,
     Phase 3 (Peer Alignment) + Phase 4 (Impact Mapping) + Phase 5 (Synthesis) LLM 3 호출.
 
+    ``previous_trend_context`` 는 ITTrendAgent.generate() 가 ``global_industry_trends`` 직전
+    batch 를 self-read 해 delta 를 계산한다 (design §16).
+
     결과는 ``global_industry_trends`` 에 keyword 별 row 로 직접 upsert. (V30 이후
     ``analysis_ledger`` DROP 되어 ``@with_ledger_writeback`` 미사용 — 설계서 §7.)
     """
@@ -681,6 +1574,7 @@ async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsRespons
     # ITTrendAgent.generate 는 sync (5-phase 합산 ~70s, LLM 3 calls + DB 호출) —
     # event loop 를 막으면 liveness probe /healthz 도 응답 못해 SIGKILL.
     result = await asyncio.to_thread(ITTrendAgent().generate, trend_input)
+    _raise_if_agent_failure("GLOBAL_TRENDS", result)
     return GlobalTrendsResponse.model_validate(
         {
             "analysis_id": result.get("analysis_id", ""),
@@ -723,10 +1617,19 @@ async def verify_link(request: LinkVerificationRequest) -> LinkVerificationRespo
 
 @app.post("/weak-signal/run")
 async def run_weak_signal():
-    """약한 신호 감지기 실행 (주 1회)"""
+    """약한 신호 감지기 실행 (주 1회).
+
+    W7 weak-signal read model 이 V30 이후 제거된 상태라 accepted 로 위장하지 않는다.
+    """
     log.info("약한 신호 감지기 실행")
-    # TODO: weak_signal_agent.py 실행
-    return {"status": "accepted"}
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "code": "WEAK_SIGNAL_NOT_IMPLEMENTED",
+            "message": "WeakSignalAgent는 현재 운영 경로에 연결되어 있지 않습니다.",
+            "result_kind": "not_implemented",
+        },
+    )
 
 
 def _check_db() -> bool:

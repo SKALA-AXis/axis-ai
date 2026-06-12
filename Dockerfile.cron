@@ -17,8 +17,10 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /usr/local/bin/
 COPY pyproject.toml uv.lock ./
 
 ENV UV_LINK_MODE=copy
-# --frozen 생략: cron group 은 pyproject.toml 에서 직접 resolve (lock 미동기화 허용).
-RUN uv export --no-emit-project --no-hashes --group cron \
+# --only-group: 기존 --group 은 "프로젝트 deps + cron group" 이라 torch/playwright 등
+# full deps 가 유입돼 cron 이미지가 ~3.3GB 였음 (Harbor artifact 실측, 2026-06-11).
+# cron group 단독 export 로 의도했던 경량 이미지로 복원.
+RUN uv export --no-emit-project --no-hashes --only-group cron \
         --format requirements-txt -o /tmp/requirements.txt \
     && uv pip install --system --no-cache -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
@@ -36,10 +38,13 @@ RUN apt-get update \
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# card-evaluator 가 import 하는 최소 src 트리만 복사
+# CronJob 별 최소 src/scripts 만 복사 (Playwright/torch 제외).
+COPY src/config ./src/config
 COPY src/db ./src/db
 COPY src/evaluators ./src/evaluators
+COPY scripts/__init__.py ./scripts/__init__.py
 COPY scripts/evaluate_recent_cards.py ./scripts/evaluate_recent_cards.py
+COPY scripts/postprocess_singleton_clusters.py ./scripts/postprocess_singleton_clusters.py
 
 ENV PYTHONPATH=/app
 

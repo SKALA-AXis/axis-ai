@@ -21,7 +21,9 @@ from src.agents.it_trend_agent import (
     _is_global_newsroom_row,
     _is_research_row,
     _make_source_analysis_id,
+    _phase2_trends,
     _reference_issue_ids,
+    _resolve_previous_trend_context,
     _slugify,
     _trend_confidence_for_keyword,
 )
@@ -275,6 +277,67 @@ def test_trend_confidence_clips_llm_batch_confidence() -> None:
         llm_batch_confidence=9.9,
     )
     assert 0.0 <= score <= 1.0
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# _phase2_trends — frequency_delta_pct (previous batch mention_count 기준)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _gpu_newsroom_rows(count: int) -> list[dict[str, str]]:
+    return [{"title": "NVIDIA GPU cloud platform update", "content": "GPU"} for _ in range(count)]
+
+
+def test_phase2_trends_cold_start_delta_is_zero() -> None:
+    """previous_trend_context 없으면 design §13: frequency_delta_pct = 0."""
+    rows = _gpu_newsroom_rows(6)
+    detections = _phase2_trends(
+        snapshots=[{"company_id": "nvidia", "card_count": 6, "top_themes": ["gpu"]}],
+        global_rows=rows,
+        research_rows=[],
+        previous_trend_context=None,
+        min_mention_count=3,
+        max_trend_count=8,
+        focus_themes=[],
+    )
+    gpu = next(d for d in detections if d["theme"] == "gpu")
+    assert gpu["frequency_delta_pct"] == 0.0
+
+
+def test_phase2_trends_uses_previous_mention_count_for_delta() -> None:
+    rows = _gpu_newsroom_rows(10)
+    detections = _phase2_trends(
+        snapshots=[{"company_id": "nvidia", "card_count": 10, "top_themes": ["gpu"]}],
+        global_rows=rows,
+        research_rows=[],
+        previous_trend_context={"keyword_counts": {"gpu": 5}},
+        min_mention_count=3,
+        max_trend_count=8,
+        focus_themes=[],
+    )
+    gpu = next(d for d in detections if d["theme"] == "gpu")
+    assert gpu["frequency_delta_pct"] == 100.0
+
+
+def test_phase2_trends_new_keyword_with_prior_batch_still_zero_delta() -> None:
+    """직전 batch 에 없던 keyword 는 delta 0 (더 이상 +100% hardcode 아님)."""
+    rows = _gpu_newsroom_rows(6)
+    detections = _phase2_trends(
+        snapshots=[{"company_id": "nvidia", "card_count": 6, "top_themes": ["gpu"]}],
+        global_rows=rows,
+        research_rows=[],
+        previous_trend_context={"keyword_counts": {"cloud": 8}},
+        min_mention_count=3,
+        max_trend_count=8,
+        focus_themes=[],
+    )
+    gpu = next(d for d in detections if d["theme"] == "gpu")
+    assert gpu["frequency_delta_pct"] == 0.0
+
+
+def test_resolve_previous_trend_context_keeps_explicit_payload() -> None:
+    explicit = {"keyword_counts": {"gpu": 4}}
+    assert _resolve_previous_trend_context(explicit) == explicit
 
 
 # ──────────────────────────────────────────────────────────────────────────

@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from difflib import SequenceMatcher
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.runnables import RunnableConfig
-from langchain_openai import ChatOpenAI
+
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 
 from src.config.companies import COMPANY_ALIASES
 from src.config.company_tiers import company_tier
@@ -52,6 +55,10 @@ _SUMMARY_LINE_MAX = 5
 _ARTICLE_CONTENT_CHARS = _env_int("NEWS_SUMMARY_ARTICLE_CONTENT_CHARS", 2400)
 _COMPACT_ARTICLE_CONTENT_CHARS = _env_int("NEWS_SUMMARY_COMPACT_ARTICLE_CONTENT_CHARS", 1200)
 _FULL_TEXT_ARTICLE_LIMIT = _env_int("NEWS_SUMMARY_FULL_TEXT_ARTICLE_LIMIT", 3)
+_MIN_ANALYZED_ARTICLES = _env_int("NEWS_SUMMARY_MIN_ANALYZED_ARTICLES", 8)
+_MAX_ANALYZED_ARTICLES = _env_int("NEWS_SUMMARY_MAX_ANALYZED_ARTICLES", 20)
+_MAJORITY_THRESHOLD = _env_float("NEWS_SUMMARY_MAJORITY_THRESHOLD", 0.70)
+_MIXED_THRESHOLD = _env_float("NEWS_SUMMARY_MIXED_THRESHOLD", 0.50)
 _SUPPORTING_ARTICLE_CONTENT_CHARS = _env_int("NEWS_SUMMARY_SUPPORTING_ARTICLE_CONTENT_CHARS", 0)
 _NEAR_DUPLICATE_SIMILARITY = _env_float("NEWS_SUMMARY_NEAR_DUPLICATE_SIMILARITY", 0.86)
 _SNIPPETS_PER_ARTICLE = _env_int("NEWS_SUMMARY_SNIPPETS_PER_ARTICLE", 4)
@@ -107,6 +114,21 @@ _SUMMARY_ROLES = {
 _NUMBER_TOKEN_PATTERN = re.compile(
     r"\d[\d,]*(?:\.\d+)?\s*(?:억원|조원|만원|원|달러|%|퍼센트|건|명|개|대|년|월|일|분기|개월|주|일|시간|배|곳|개사)?"
 )
+_ARTICLE_UI_BOILERPLATE_MARKERS = (
+    "뉴스 듣기",
+    "글자 크기",
+    "기사 공유",
+    "주소복사",
+    "다크모드",
+    "프린트",
+    "채널구독",
+    "네이버 채널구독",
+    "다음 채널구독",
+    "페이스북",
+    "카카오톡",
+    "이메일 주소복사",
+    "북마크",
+)
 _PEER_ALIASES = {
     company_id: aliases
     for company_id, aliases in {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}.items()
@@ -117,6 +139,8 @@ _llm: ChatOpenAI | None = None
 
 
 def _get_llm() -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     global _llm
 
     if _llm is None:
@@ -159,6 +183,9 @@ _ARTICLE_FACT_EXTRACTION_PROMPT = """\
    main_event|product_definition|service_function|application_case|numeric_effect|market_reaction|risk_detail|uncertainty_detail
 9. 날짜가 포함되어 있어도 수치 자체가 핵심이 아니면 numeric_fact로 분류하지 마세요.
 10. 출시/공개/선보임, 제품 정의, 적용 사례, 수치 효과, 시장 반응, 리스크, 불확실성을 서로 구분하세요.
+11. 제3자 회사·서비스·고객 사례는 피어사와 직접 계약/협약/도입/수주/공급/공동개발 관계로
+    연결된 경우에만 핵심 사실로 추출하세요. 기사 배경이나 시장 예시로만 언급된 제3자 사례는
+    application_fact/main_event 후보에서 제외하세요.
 
 기사 클러스터:
 {articles_text}
@@ -223,12 +250,19 @@ _FACT_ID_SUMMARY_PROMPT = """\
 7. uncertain_fact를 사용하는 문장은 확정 표현을 피하고 "소개됐다", "언급됐다", "제시됐다", "설명됐다"처럼 원문 수위를 유지하세요.
 8. 요약 문장은 같은 내용을 반복하지 말고 서로 다른 역할을 가져야 합니다.
 9. 특정 기사 키워드를 규칙처럼 추가하지 말고, 제품명/서비스명/플랫폼명/프로젝트명/이벤트명/기술명 같은 정보 유형을 기준으로 작성하세요.
-10. 같은 회사명으로 시작하는 문장은 최대 1개만 두세요. 이후 문장은 의미가 분명하면 제품명/플랫폼명/서비스명/해당 기술/기사에서는 등으로 이어가세요.
+10. 같은 회사명으로 시작하는 문장은 최대 1개만 두세요. 이후 문장은 의미가 분명하면 제품명/플랫폼명/서비스명/해당 기술 등으로 이어가세요.
+    "기사에서는", "사실이 확인됐다" 같은 보고서체 표현은 쓰지 마세요.
 11. fact에 구체 수치·개수·기간·범위·장소·현장이 있으면 3~5문장에 우선 반영하되, 연결된 fact evidence_text에서 검증되는 경우에만 쓰세요.
 12. 주어와 서술어의 의미 관계를 맞추세요. 회사/기관 주어는 행동·발표·공개를, 제품/서비스/플랫폼/기술 주어는 기능·역할·적용 범위를, 기사/보도/자료 주어는 소개·설명·언급처럼 전달 행위를 서술하세요.
 13. 계약/수주 요약에서는 정확한 사업명·프로젝트명과 계약 금액을 가능하면 1문장에 보존하세요.
     2문장은 단순 공급 여부보다 고객 업무/시스템 전환 범위를 보존하세요.
     계약 기간, 최근 매출 대비 비율, 후속 단계가 별도 fact로 있으면 3~5문장에 우선 반영하세요.
+14. 계약/협력 기사가 기술·플랫폼·AI 서비스 도입을 다루면, "계약했다"와 "적용 가능하다"만 반복하지 마세요.
+    내부 업무에서 무엇을 하게 되는지, 파트너 기술이 어떤 기능을 제공하는지,
+    향후 외부 고객/사업 확장과 어떻게 연결되는지를 서로 다른 문장으로 나누어 쓰세요.
+15. 제3자 회사·서비스·고객 사례는 피어사와 직접 계약/협약/도입/수주/공급/공동개발 관계로 연결된
+    fact_id가 있을 때만 summary_lines에 넣으세요. 본문 배경이나 시장 사례로만 나온 제3자 서비스는
+    핵심 변화 3줄 요약에 넣지 말고, 피어사의 발표·제품·계약·고객 업무 범위로 문장을 구성하세요.
 
 문장별 역할:
 - 1문장: 핵심 사건·상태·평가
@@ -341,45 +375,71 @@ class SourceSummarizer:
                 reason="요약할 기사가 없습니다.",
             )
 
-        source_article_ids = _article_ids(articles)
+        all_source_article_ids = _article_ids(articles)
         requested_cluster_ids = list(cluster_article_ids or [])
         coverage_warning = ""
         if not requested_cluster_ids:
             coverage_warning = "cluster_article_ids 없음"
-        cluster_article_count = len(requested_cluster_ids or source_article_ids)
+        cluster_ids_for_summary = requested_cluster_ids or all_source_article_ids
+        selection = _select_analysis_articles(
+            articles=articles,
+            representative_id=representative_id,
+        )
+        if selection["status"] == "mixed_cluster_no_majority":
+            return _empty_summary(
+                cluster_id=cluster_id,
+                representative_id=representative_id,
+                reason="mixed_cluster_no_majority",
+                source_article_ids=[],
+                cluster_article_ids=cluster_ids_for_summary,
+                coverage=_coverage_info(
+                    cluster_article_count=len(cluster_ids_for_summary),
+                    analyzed_article_count=0,
+                    warning=selection["warning"],
+                    selection=selection,
+                ),
+            )
+
+        articles_for_analysis = selection["articles"]
+        source_article_ids = _article_ids(articles_for_analysis)
+        cluster_article_count = len(cluster_ids_for_summary)
         analyzed_article_count = len(source_article_ids)
         coverage = _coverage_info(
             cluster_article_count=cluster_article_count,
             analyzed_article_count=analyzed_article_count,
-            warning=coverage_warning,
+            warning=_join_warnings(coverage_warning, selection["warning"]),
+            selection=selection,
         )
 
-        target_companies = _candidate_peer_companies(articles)
+        target_companies = _candidate_peer_companies(articles_for_analysis)
         if not target_companies:
             return _empty_summary(
                 cluster_id=cluster_id,
                 representative_id=representative_id,
                 reason="self 회사를 제외한 피어사 후보를 찾지 못했습니다.",
                 source_article_ids=source_article_ids,
-                cluster_article_ids=requested_cluster_ids or source_article_ids,
+                cluster_article_ids=cluster_ids_for_summary,
                 coverage=coverage,
             )
 
         article_fact_notes, fact_extraction_warnings, fact_extraction_failed = (
             _extract_article_fact_notes_batch(
                 cluster_id=cluster_id,
-                articles=articles,
+                articles=articles_for_analysis,
                 target_companies=target_companies,
                 representative_id=representative_id,
             )
         )
         merged_facts = _merge_article_facts(article_fact_notes)
         cluster_fact_intelligence = _build_cluster_fact_intelligence(merged_facts)
-        cluster_event_type = _classify_cluster_event_type(cluster_fact_intelligence, articles)
+        cluster_event_type = _classify_cluster_event_type(
+            cluster_fact_intelligence,
+            articles_for_analysis,
+        )
         extracted_facts = _build_extracted_facts(
             cluster_id=cluster_id,
             article_fact_notes=article_fact_notes,
-            articles=articles,
+            articles=articles_for_analysis,
             cluster_event_type=cluster_event_type,
         )
         selected_fact_ids = _select_fact_ids_for_summary_lines(
@@ -408,7 +468,7 @@ class SourceSummarizer:
                 representative_id=representative_id,
                 reason=f"LLM 요약 실패: {type(exc).__name__}",
                 source_article_ids=source_article_ids,
-                cluster_article_ids=requested_cluster_ids or source_article_ids,
+                cluster_article_ids=cluster_ids_for_summary,
                 coverage=coverage,
             )
 
@@ -416,7 +476,7 @@ class SourceSummarizer:
             "cluster_id": cluster_id,
             "representative_id": representative_id,
             "source_article_ids": source_article_ids,
-            "cluster_article_ids": requested_cluster_ids or source_article_ids,
+            "cluster_article_ids": cluster_ids_for_summary,
             "analyzed_article_ids": source_article_ids,
             "summary_scope": "peer_company_fact_only",
             "excluded_company_tiers": ["self"],
@@ -445,6 +505,253 @@ class SourceSummarizer:
             len(summary["source_article_ids"]),
         )
         return summary
+
+
+def _select_analysis_articles(
+    *,
+    articles: list[dict[str, Any]],
+    representative_id: int,
+) -> dict[str, Any]:
+    total = len(articles)
+    limit = _analysis_article_limit(total)
+    if total <= limit:
+        return {
+            "status": "full_cluster",
+            "articles": articles,
+            "selected_article_ids": _article_ids(articles),
+            "excluded_article_ids": [],
+            "majority_article_ids": _article_ids(articles),
+            "outlier_article_ids": [],
+            "majority_ratio": 1.0 if total else 0.0,
+            "analysis_article_limit": limit,
+            "warning": "",
+        }
+
+    groups = _same_event_title_groups(articles)
+    majority = max(groups, key=len) if groups else articles
+    majority_ids = set(_article_ids(majority))
+    majority_ratio = len(majority) / total if total else 0.0
+    outlier_ids = [
+        article_id for article_id in _article_ids(articles) if article_id not in majority_ids
+    ]
+    if majority_ratio < _MIXED_THRESHOLD:
+        return {
+            "status": "mixed_cluster_no_majority",
+            "articles": [],
+            "selected_article_ids": [],
+            "excluded_article_ids": _article_ids(articles),
+            "majority_article_ids": _article_ids(majority),
+            "outlier_article_ids": outlier_ids,
+            "majority_ratio": round(majority_ratio, 4),
+            "analysis_article_limit": limit,
+            "warning": (
+                "mixed_cluster_no_majority: "
+                f"majority_ratio={majority_ratio:.2f} threshold={_MIXED_THRESHOLD:.2f}"
+            ),
+        }
+
+    selected = _diverse_articles_from_same_event_group(
+        articles=majority,
+        representative_id=representative_id,
+        limit=limit,
+    )
+    selected_ids = set(_article_ids(selected))
+    excluded_ids = [
+        article_id for article_id in _article_ids(articles) if article_id not in selected_ids
+    ]
+    status = "sampled_majority_group"
+    warning = (
+        f"large_cluster_sampled: analyzed={len(selected)} total={total} "
+        f"majority_ratio={majority_ratio:.2f}"
+    )
+    if majority_ratio < _MAJORITY_THRESHOLD:
+        status = "sampled_mixed_majority_group"
+        warning = (
+            f"mixed_cluster_warning: majority_ratio={majority_ratio:.2f} "
+            f"threshold={_MAJORITY_THRESHOLD:.2f}; {warning}"
+        )
+    return {
+        "status": status,
+        "articles": selected,
+        "selected_article_ids": _article_ids(selected),
+        "excluded_article_ids": excluded_ids,
+        "majority_article_ids": _article_ids(majority),
+        "outlier_article_ids": outlier_ids,
+        "majority_ratio": round(majority_ratio, 4),
+        "analysis_article_limit": limit,
+        "warning": warning,
+    }
+
+
+def _analysis_article_limit(total: int) -> int:
+    if total <= 0:
+        return 0
+    max_limit = max(1, _MAX_ANALYZED_ARTICLES)
+    min_limit = min(max_limit, max(1, _MIN_ANALYZED_ARTICLES))
+    dynamic = int(math.ceil(math.sqrt(total) * 2.5))
+    return min(total, max_limit, max(min_limit, dynamic))
+
+
+def _same_event_title_groups(articles: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    parent = list(range(len(articles)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    features = [_title_group_features(article) for article in articles]
+    for left_index in range(len(articles)):
+        for right_index in range(left_index + 1, len(articles)):
+            if _same_title_event(features[left_index], features[right_index]):
+                union(left_index, right_index)
+
+    groups: dict[int, list[dict[str, Any]]] = {}
+    for index, article in enumerate(articles):
+        groups.setdefault(find(index), []).append(article)
+    return sorted(groups.values(), key=len, reverse=True)
+
+
+def _title_group_features(article: dict[str, Any]) -> dict[str, Any]:
+    title = normalize_korean_spacing(article.get("title") or "")
+    companies = set(_company_list(article)) | set(_matched_companies(article))
+    tokens = _title_event_tokens(title, companies=companies)
+    return {
+        "tokens": tokens,
+        "companies": companies,
+        "event_type": _rule_based_event_type([title]),
+    }
+
+
+def _same_title_event(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if left["event_type"] != right["event_type"]:
+        return False
+    left_companies = left["companies"]
+    right_companies = right["companies"]
+    if left_companies and right_companies and not left_companies & right_companies:
+        return False
+    left_tokens = left["tokens"]
+    right_tokens = right["tokens"]
+    if len(left_tokens) < 2 or len(right_tokens) < 2:
+        return False
+    shared = left_tokens & right_tokens
+    if len(shared) < 2:
+        return False
+    coverage = len(shared) / min(len(left_tokens), len(right_tokens))
+    jaccard = len(shared) / len(left_tokens | right_tokens)
+    return coverage >= 0.45 or (len(shared) >= 3 and jaccard >= 0.22)
+
+
+def _title_event_tokens(title: str, *, companies: set[str]) -> set[str]:
+    raw_tokens = re.findall(r"[가-힣A-Za-z0-9]+", str(title or "").lower())
+    company_tokens = _company_alias_title_tokens(companies)
+    return {
+        token
+        for token in (_normalize_title_event_token(token) for token in raw_tokens)
+        if _useful_title_event_token(token) and token not in company_tokens
+    }
+
+
+def _normalize_title_event_token(token: str) -> str:
+    value = re.sub(r"[^가-힣a-z0-9]", "", str(token or "").lower())
+    if re.search(r"[가-힣]", value):
+        value = re.sub(r"(으로|로|과|와|은|는|이|가|을|를|에|의)$", "", value)
+    return value
+
+
+def _company_alias_title_tokens(companies: set[str]) -> set[str]:
+    tokens: set[str] = set()
+    for company_id in companies:
+        for alias in _PEER_ALIASES.get(company_id, [company_id]):
+            tokens.update(
+                _normalize_title_event_token(token)
+                for token in re.findall(r"[가-힣A-Za-z0-9]+", str(alias or "").lower())
+            )
+    return {token for token in tokens if token}
+
+
+def _useful_title_event_token(token: str) -> bool:
+    if len(token) < 2:
+        return False
+    if token in {
+        "및",
+        "로",
+        "으로",
+        "에서",
+        "기반",
+        "사업",
+        "기업",
+        "그룹",
+        "전사",
+        "확대",
+        "가속",
+        "추진",
+    }:
+        return False
+    return True
+
+
+def _diverse_articles_from_same_event_group(
+    *,
+    articles: list[dict[str, Any]],
+    representative_id: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    ranked = sorted(
+        articles,
+        key=lambda article: _analysis_article_score(article, representative_id=representative_id),
+        reverse=True,
+    )
+    selected: list[dict[str, Any]] = []
+    selected_titles: list[str] = []
+    for article in ranked:
+        title = str(article.get("title") or "")
+        is_representative = _article_numeric_id(article) == representative_id or bool(
+            article.get("is_representative")
+        )
+        if (
+            not is_representative
+            and title
+            and any(_text_similarity(title, existing) >= 0.82 for existing in selected_titles)
+        ):
+            continue
+        selected.append(article)
+        if title:
+            selected_titles.append(title)
+        if len(selected) >= limit:
+            break
+    if len(selected) < min(limit, len(ranked)):
+        selected_ids = set(_article_ids(selected))
+        for article in ranked:
+            if _article_numeric_id(article) in selected_ids:
+                continue
+            selected.append(article)
+            if len(selected) >= limit:
+                break
+    selected_ids_order = set(_article_ids(selected))
+    return [article for article in articles if _article_numeric_id(article) in selected_ids_order]
+
+
+def _analysis_article_score(article: dict[str, Any], *, representative_id: int) -> float:
+    title = str(article.get("title") or "")
+    score = _article_evidence_score(article, representative_id=representative_id)
+    score += min(2.0, 0.5 * len(_number_tokens(title)))
+    score += min(1.0, 0.5 * len(_date_tokens(title)))
+    score += min(1.5, 0.5 * len(_rule_based_entities([title])))
+    if _rule_based_event_type([title]) != "general_update":
+        score += 1.0
+    return score
+
+
+def _join_warnings(*values: str) -> str:
+    return "; ".join(value for value in values if value)
 
 
 def _build_fetch_ids(
@@ -525,6 +832,7 @@ def _article_prompt_snippets(
             ),
         ]
     )
+    sentences = [sentence for sentence in sentences if not _is_article_ui_boilerplate(sentence)]
     scored = sorted(
         (
             (_snippet_score(sentence, article=article, target_companies=target_companies), sentence)
@@ -970,7 +1278,7 @@ def _rule_based_article_fact_notes(
                     *_split_evidence_sentences(article.get("content") or "", limit=8),
                 ]
             )
-            if sentence
+            if sentence and not _is_article_ui_boilerplate(sentence)
         ]
         if not article_id or not sentences:
             continue
@@ -1268,6 +1576,11 @@ def _build_extracted_facts(
     """기사 fact note에 안정적인 fact_id를 붙여 요약 가능한 fact 목록으로 변환한다."""
     facts: list[dict[str, Any]] = []
     counters: dict[int, int] = {}
+    article_by_id = {
+        _article_numeric_id(article): article
+        for article in articles
+        if _article_numeric_id(article) > 0
+    }
 
     def add_fact(
         *,
@@ -1285,15 +1598,32 @@ def _build_extracted_facts(
         evidence = normalize_korean_spacing(evidence_text or raw_fact)
         if not text or not evidence:
             return
+        if _fact_is_off_topic_for_article(
+            f"{text} {evidence}",
+            article=article_by_id.get(article_id) or {},
+        ):
+            return
+        activity = activity_type or cluster_event_type
+        if _is_market_data_fact(f"{text} {evidence}") and _normalize_event_type(activity) not in {
+            "stock_market",
+            "analyst_report",
+        }:
+            return
         if _is_duplicate_extracted_fact(facts, article_id, text, evidence):
             return
         counters[article_id] = counters.get(article_id, 0) + 1
         inferred_type = _normalize_fact_type(
             fact_type=fact_type,
             text=f"{text} {evidence}",
-            activity_type=activity_type or cluster_event_type,
+            activity_type=activity,
         )
         normalized_role = _normalize_summary_role(summary_role, fact_type=inferred_type)
+        normalized_role = _coerce_summary_role(
+            role=normalized_role,
+            fact_type=inferred_type,
+            text=f"{text} {evidence}",
+            activity_type=activity,
+        )
         facts.append(
             {
                 "fact_id": f"c{cluster_id}_a{article_id}_f{counters[article_id]}",
@@ -1620,8 +1950,17 @@ def _add_article_fallback_facts(
 
 
 def _normalize_fact_type(*, fact_type: str, text: str, activity_type: str) -> str:
-    del text, activity_type
-    return _normalize_fact_type_value(fact_type)
+    normalized = _normalize_fact_type_value(fact_type)
+    if normalized == "numeric_fact" and _has_business_scope_terms(text):
+        if _normalize_event_type(activity_type) in {"contract", "partnership"}:
+            return "application_fact"
+        if _normalize_event_type(activity_type) in {
+            "launch",
+            "technology_update",
+            "general_update",
+        }:
+            return "application_fact"
+    return normalized
 
 
 def _normalize_fact_type_value(value: Any) -> str:
@@ -1634,6 +1973,70 @@ def _normalize_summary_role(value: Any, *, fact_type: str) -> str:
     if role in _SUMMARY_ROLES:
         return role
     return _default_summary_role(fact_type)
+
+
+def _coerce_summary_role(*, role: str, fact_type: str, text: str, activity_type: str) -> str:
+    event_type = _normalize_event_type(activity_type)
+    if role == "numeric_effect" and _has_business_scope_terms(text):
+        if event_type in {"contract", "partnership"} and re.search(
+            r"계약|수주|공급\s*계약|공급계약|협약|MOU", text
+        ):
+            return "main_event"
+        if re.search(r"업무|시스템|전환|구축|플랫폼|솔루션|서비스|AI|에이전트", text, re.I):
+            return "service_function"
+        return "application_case"
+    if fact_type == "numeric_fact":
+        return role
+    if role == "main_event" and re.search(r"기능|역할|지원|자동화|분석|검증|운영|적용|연계", text):
+        return "service_function"
+    return role
+
+
+def _has_business_scope_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"계약|수주|공급|협약|사업|프로젝트|업무|시스템|전환|구축|"
+            r"플랫폼|솔루션|서비스|AI|에이전트|자동화|검증|운영|고객|"
+            r"ERP|MES|단말|클라우드|데이터센터|모빌리티|소프트웨어|SW",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _is_financial_only_fact(text: str) -> bool:
+    value = str(text or "")
+    if _has_business_scope_terms(value):
+        return False
+    return bool(
+        re.search(r"매출|영업이익|순이익|주가|시가총액|증가|감소|흑자|적자|억원|조원|%", value)
+    )
+
+
+def _is_market_data_fact(text: str) -> bool:
+    value = str(text or "")
+    if not value:
+        return False
+    strong_terms = (
+        "주가",
+        "현재가",
+        "전일대비",
+        "등락률",
+        "거래량",
+        "시가총액",
+        "목표주가",
+        "투자의견",
+    )
+    if any(term in value for term in strong_terms):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:KOSPI|KOSDAQ)\b|전\s*거래일|장\s*(초반|마감)|"
+            r"(?:상승|하락|급등|급락)\s*(?:마감|출발|전환)",
+            value,
+            re.I,
+        )
+    )
 
 
 def _default_summary_role(fact_type: str) -> str:
@@ -1678,6 +2081,7 @@ def _select_fact_ids_for_summary_lines(
 ) -> dict[str, list[str]]:
     available = [fact for fact in extracted_facts if fact.get("fact_id")]
     used: set[str] = set()
+    selected_facts: list[dict[str, Any]] = []
 
     def choose(index: int, preferred_roles: tuple[str, ...]) -> list[str]:
         candidates = [
@@ -1691,9 +2095,16 @@ def _select_fact_ids_for_summary_lines(
             candidates = available
         if not candidates:
             return []
-        selected = sorted(candidates, key=_fact_selection_score, reverse=True)[0]
+        selected = sorted(
+            candidates,
+            key=lambda fact: (
+                _fact_selection_score(fact) - _similar_selected_fact_penalty(fact, selected_facts)
+            ),
+            reverse=True,
+        )[0]
         fact_id = str(selected.get("fact_id"))
         used.add(fact_id)
+        selected_facts.append(selected)
         return [fact_id]
 
     preferences = _line_summary_role_preferences(cluster_event_type)
@@ -1728,9 +2139,9 @@ def _line_summary_role_preferences(
         return (
             ("main_event",),
             ("service_function", "product_definition", "application_case"),
-            ("numeric_effect", "uncertainty_detail"),
-            ("application_case", "service_function", "numeric_effect"),
-            ("uncertainty_detail", "risk_detail", "market_reaction"),
+            ("application_case", "service_function", "product_definition"),
+            ("service_function", "application_case", "numeric_effect"),
+            ("service_function", "application_case", "uncertainty_detail", "numeric_effect"),
         )
     if event_type == "earnings":
         return (
@@ -1767,6 +2178,17 @@ def _line_summary_role_preferences(
 
 def _fact_selection_score(fact: dict[str, Any]) -> int:
     score = 0
+    role = str(fact.get("summary_role") or "")
+    score += {
+        "main_event": 8,
+        "product_definition": 7,
+        "service_function": 7,
+        "application_case": 6,
+        "uncertainty_detail": 2,
+        "risk_detail": 2,
+        "numeric_effect": 1,
+        "market_reaction": 0,
+    }.get(role, 0)
     score += (
         3 if fact.get("confidence") == "high" else 2 if fact.get("confidence") == "medium" else 1
     )
@@ -1776,8 +2198,104 @@ def _fact_selection_score(fact: dict[str, Any]) -> int:
         score += 2
     if fact.get("event_verbs"):
         score += 1
+    text = f"{fact.get('normalized_fact') or ''} {fact.get('evidence_text') or ''}"
+    if re.search(r"업무|시스템|고객|서비스|솔루션|플랫폼|에이전트|코딩|협업|문서", text):
+        score += 3
+    if re.search(r"외부|확대|고도화|제공|지원|활용|적용|연계", text):
+        score += 2
+    if re.search(r"외부\s*기업|기업\s*고객|사업\s*영역|사업\s*확장|고객으로|고객에게", text):
+        score += 5
+    if role == "numeric_effect" and _is_financial_only_fact(text):
+        score -= 8
     score += min(len(str(fact.get("normalized_fact") or "")) // 30, 3)
     return score
+
+
+def _similar_selected_fact_penalty(
+    fact: dict[str, Any],
+    selected_facts: list[dict[str, Any]],
+) -> int:
+    text = _fact_similarity_text(fact)
+    if not text or not selected_facts:
+        return 0
+    max_similarity = max(
+        _text_similarity(text, _fact_similarity_text(selected)) for selected in selected_facts
+    )
+    if max_similarity >= 0.82:
+        return 8
+    if max_similarity >= 0.68:
+        return 4
+    return 0
+
+
+def _fact_similarity_text(fact: dict[str, Any]) -> str:
+    return str(fact.get("normalized_fact") or fact.get("evidence_text") or "").strip()
+
+
+def _fact_is_off_topic_for_article(text: str, *, article: dict[str, Any]) -> bool:
+    title = str(article.get("title") or "").strip()
+    if not title:
+        return False
+    title_tokens = _article_topic_tokens(title)
+    if len(title_tokens) < 2:
+        return False
+    value = str(text or "")
+    fact_tokens = _article_topic_tokens(value)
+    if title_tokens & fact_tokens:
+        return False
+    if _article_company_alias_mentioned(value, article):
+        return False
+    return True
+
+
+def _article_topic_tokens(text: str) -> set[str]:
+    stopwords = {
+        "속보",
+        "단독",
+        "특징주",
+        "정부",
+        "사업",
+        "참여",
+        "선정",
+        "체결",
+        "규모",
+        "지원",
+        "구축",
+        "확보",
+        "운용",
+        "관련",
+        "오늘",
+        "이번",
+    }
+    return {
+        token
+        for token in _article_similarity_tokens(text)
+        if len(token) >= 2 and token not in stopwords and not token.isdigit()
+    }
+
+
+def _article_similarity_tokens(text: str) -> set[str]:
+    return {
+        token.lower()
+        for token in re.findall(r"[가-힣A-Za-z0-9]{2,}", str(text or ""))
+        if len(token) >= 2
+    }
+
+
+def _article_company_alias_mentioned(text: str, article: dict[str, Any]) -> bool:
+    companies = [
+        *_normalize_string_list(article.get("company")),
+        *_normalize_string_list(article.get("matched_companies")),
+        *_normalize_string_list(article.get("matched_company")),
+    ]
+    value = str(text or "")
+    for company_id in companies:
+        aliases = _PEER_ALIASES.get(company_id) or COMPANY_ALIASES.get(company_id) or []
+        if any(
+            alias and re.search(re.escape(str(alias)), value, re.IGNORECASE) for alias in aliases
+        ):
+            return True
+    return False
 
 
 def _summarize_from_fact_ids(
@@ -2134,7 +2652,7 @@ def _validate_fact_id_summary(
 ) -> dict[str, Any]:
     fact_by_id = {str(fact.get("fact_id")): fact for fact in extracted_facts}
     lines = [
-        normalize_korean_spacing(line)
+        _clean_summary_line(normalize_korean_spacing(line))
         for line in _normalize_string_list(result.get("fact_summary"))[:_SUMMARY_LINE_MAX]
     ]
     result["fact_summary"] = lines
@@ -2228,6 +2746,20 @@ def _validate_fact_id_summary(
     if lines and company_start_count == len(lines):
         warnings.append("summary_lines 모든 문장이 company_name으로 시작함")
 
+    role_counts = _summary_line_role_counts(line_items, fact_by_id)
+    cluster_event_type = _normalize_event_type(result.get("cluster_event_type"))
+    if cluster_event_type not in {"earnings", "stock_market", "analyst_report"}:
+        business_role_count = sum(
+            role_counts.get(role, 0)
+            for role in ("main_event", "product_definition", "service_function", "application_case")
+        )
+        numeric_role_count = role_counts.get("numeric_effect", 0) + role_counts.get(
+            "market_reaction", 0
+        )
+        if numeric_role_count >= 2 and business_role_count < 2:
+            warnings.append("비실적 이슈 요약이 수치/시장반응 중심으로 치우침")
+            actions.append("numeric_heavy_summary_detected")
+
     bad_korean = [line for line in result["fact_summary"] if _has_bad_korean_join(line)]
     if bad_korean:
         warnings.append("한국어 조사/띄어쓰기 오류가 남아 있음")
@@ -2258,6 +2790,19 @@ def _validate_fact_id_summary(
             [*_normalize_string_list(result.get("repair_actions")), *actions]
         )
     return result
+
+
+def _summary_line_role_counts(
+    line_items: list[dict[str, Any]],
+    fact_by_id: dict[str, dict[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in line_items:
+        for fact_id in _normalize_string_list(item.get("fact_ids")):
+            role = str((fact_by_id.get(fact_id) or {}).get("summary_role") or "")
+            if role:
+                counts[role] = counts.get(role, 0) + 1
+    return counts
 
 
 def _sync_summary_line_item_texts(
@@ -2452,10 +2997,16 @@ def _topic_subject(entity: str) -> str:
 
 
 def _reported_context_sentence(rest: str) -> str:
-    nominal = _nominalize_korean_predicate(rest)
-    if not nominal:
-        return "기사에서는 관련 사실이 확인됐다."
-    return normalize_korean_spacing(f"기사에서는 {nominal} 사실이 확인됐다.")
+    value = _clean_summary_line(rest)
+    return value if value else "관련 사실이 확인됐다."
+
+
+def _clean_summary_line(line: str) -> str:
+    value = normalize_korean_spacing(line).strip()
+    value = re.sub(r"^기사에서는\s+", "", value)
+    value = re.sub(r"\s*사실이\s+확인됐다\.?$", ".", value)
+    value = re.sub(r"\s*사실이\s+확인됐습니다\.?$", ".", value)
+    return normalize_korean_spacing(value)
 
 
 def _nominalize_korean_predicate(text: str) -> str:
@@ -2607,16 +3158,45 @@ def _text_similarity(left: str, right: str) -> float:
 
 
 def _split_evidence_sentences(text: str, limit: int = 80) -> list[str]:
-    chunks = re.split(r"(?<=[.!?。！？])\s+|(?<=[다요죠임음])\.\s*|\n+", str(text or ""))
+    chunks = re.split(
+        r"(?<=[.!?。！？])\s+|(?<=[다요죠임음])\.\s*|\n+",
+        _strip_article_ui_boilerplate(str(text or "")),
+    )
     sentences: list[str] = []
     for chunk in chunks:
         sentence = re.sub(r"\s+", " ", chunk).strip()
         if len(sentence) < 8:
             continue
+        if _is_article_ui_boilerplate(sentence):
+            continue
         sentences.append(sentence[:500])
         if len(sentences) >= limit:
             break
     return sentences
+
+
+def _strip_article_ui_boilerplate(text: str) -> str:
+    value = str(text or "")
+    for marker in _ARTICLE_UI_BOILERPLATE_MARKERS:
+        value = value.replace(marker, " ")
+    value = re.sub(r"\b[가]?\s*(?:작게|보통|크게|아주\s*크게)\s*[가]?\b", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
+def _is_article_ui_boilerplate(sentence: str) -> bool:
+    compact = re.sub(r"\s+", "", str(sentence or ""))
+    if not compact:
+        return True
+    marker_hits = sum(
+        1 for marker in _ARTICLE_UI_BOILERPLATE_MARKERS if marker.replace(" ", "") in compact
+    )
+    if marker_hits >= 2:
+        return True
+    if marker_hits and len(compact) < 120:
+        return True
+    share_markers = ("기사공유", "주소복사", "다크모드", "프린트", "채널구독")
+    return sum(1 for marker in share_markers if marker in compact) >= 2
 
 
 def _number_tokens(text: str) -> list[str]:
@@ -2835,19 +3415,32 @@ def _coverage_info(
     cluster_article_count: int,
     analyzed_article_count: int,
     warning: str,
+    selection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ratio = analyzed_article_count / cluster_article_count if cluster_article_count else 0.0
     coverage_warning = warning
     if cluster_article_count and analyzed_article_count < cluster_article_count:
         coverage_warning = (
             f"{coverage_warning}; " if coverage_warning else ""
-        ) + "일부 cluster_article_ids 기사 조회 실패"
-    return {
+        ) + "일부 cluster_article_ids는 metadata로만 보존하고 fact extraction에서 제외"
+    info = {
         "cluster_article_count": cluster_article_count,
         "analyzed_article_count": analyzed_article_count,
         "coverage_ratio": round(ratio, 4),
         "coverage_warning": coverage_warning,
     }
+    if selection:
+        info.update(
+            {
+                "selection_status": selection.get("status"),
+                "analysis_article_limit": selection.get("analysis_article_limit"),
+                "majority_ratio": selection.get("majority_ratio"),
+                "majority_article_count": len(selection.get("majority_article_ids") or []),
+                "outlier_article_count": len(selection.get("outlier_article_ids") or []),
+                "excluded_article_count": len(selection.get("excluded_article_ids") or []),
+            }
+        )
+    return info
 
 
 def _as_int_list(value: Any) -> list[int]:

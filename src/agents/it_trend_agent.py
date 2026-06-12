@@ -35,9 +35,10 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 
 from src.analysis.models import TrendContext
 from src.config.global_companies import GLOBAL_COMPANY_IDS
@@ -45,6 +46,7 @@ from src.db.article_store import (
     DEFAULT_PEER_COMPANY_IDS,
     fetch_global_trend_inputs,
     fetch_peer_cards_for_alignment,
+    fetch_previous_trend_context_for_delta,
     invalidate_trend_context_cache,
     upsert_global_industry_trends,
 )
@@ -114,6 +116,8 @@ _llm: ChatOpenAI | None = None
 
 
 def _get_llm() -> ChatOpenAI:
+    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
     global _llm
     if _llm is None:
         _llm = ChatOpenAI(
@@ -278,11 +282,12 @@ class ITTrendAgent:
             )
 
         # 3) Phase 2 — Trend Detection (deterministic).
+        previous_ctx = _resolve_previous_trend_context(trend_input.previous_trend_context)
         detections = _phase2_trends(
             snapshots=snapshots,
             global_rows=global_rows,
             research_rows=research_rows,
-            previous_trend_context=trend_input.previous_trend_context,
+            previous_trend_context=previous_ctx,
             min_mention_count=min_mention_count,
             max_trend_count=max_trend_count,
             focus_themes=focus_themes,
@@ -445,7 +450,7 @@ class ITTrendAgent:
             },
             "metadata": {
                 **meta,
-                "previous_trend_context_provided": bool(trend_input.previous_trend_context),
+                "previous_trend_context_provided": bool(previous_ctx),
                 "global_newsroom_row_count": len(global_rows),
                 "research_row_count": len(research_rows),
                 "peer_company_ids": peer_company_ids,
@@ -512,6 +517,19 @@ def _phase1_snapshot(global_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # ──────────────────────────────────────────────────────────────────────────
 
 
+def _resolve_previous_trend_context(provided: dict[str, Any] | None) -> dict[str, Any]:
+    """Phase 2 delta 용 직전 batch context. caller 가 비워두면 DB self-read."""
+    ctx = dict(provided or {})
+    if ctx.get("keyword_counts") or ctx.get("signals"):
+        return ctx
+    try:
+        loaded = fetch_previous_trend_context_for_delta()
+    except Exception:
+        log.exception("ITTrendAgent | fetch_previous_trend_context_for_delta 실패")
+        return {}
+    return loaded if loaded else {}
+
+
 def _phase2_trends(
     *,
     snapshots: list[dict[str, Any]],
@@ -529,10 +547,23 @@ def _phase2_trends(
 
     prev_counts: Counter[str] = Counter()
     if previous_trend_context:
-        for signal in previous_trend_context.get("signals", []) or []:
-            kw = (signal.get("signal") or "").lower()
-            intensity = (signal.get("intensity") or "").lower()
-            prev_counts[kw] = {"weak": 3, "moderate": 8, "strong": 18}.get(intensity, 0)
+        raw_counts = previous_trend_context.get("keyword_counts")
+        if isinstance(raw_counts, dict):
+            for kw, count in raw_counts.items():
+                normalized = str(kw or "").strip().lower()
+                if normalized:
+                    prev_counts[normalized] = int(count or 0)
+        else:
+            for signal in previous_trend_context.get("signals", []) or []:
+                kw = (signal.get("signal") or "").lower()
+                if not kw:
+                    continue
+                mention = signal.get("mention_count")
+                if mention is not None:
+                    prev_counts[kw] = int(mention or 0)
+                    continue
+                intensity = (signal.get("intensity") or "").lower()
+                prev_counts[kw] = {"weak": 3, "moderate": 8, "strong": 18}.get(intensity, 0)
 
     detections: list[dict[str, Any]] = []
     for kw, n in keyword_counts.most_common(30):
@@ -544,7 +575,8 @@ def _phase2_trends(
         if prev_n > 0:
             delta = ((n - prev_n) / prev_n) * 100.0
         else:
-            delta = 100.0 if n >= min_mention_count else 0.0
+            # cold start / 신규 keyword — design §13: delta 무시 (0).
+            delta = 0.0
         intensity = _classify_intensity(n)
         leading = _leading_companies_for_keyword(snapshots, kw)
         category = _keyword_category(kw)

@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
+from src.config.company_tiers import SELF_COMPANY_IDS, resolve_company_id
 from src.crawler.base import CrawlRunContext, RawArticle
 from src.db.postgres import SessionLocal
 
@@ -29,6 +30,20 @@ _INSERT_SQL = text("""
         :published_at, :collected_at, CAST(:company AS jsonb), :language, :content_type,
         :crawl_status, :error_message, 'RAW', CAST(:metadata AS jsonb),
         CAST(:crawl_run_id AS uuid)
+    )
+    ON CONFLICT (url) DO NOTHING
+    RETURNING id
+""")
+
+_INSERT_SQL_WITHOUT_CRAWL_RUN_ID = text("""
+    INSERT INTO raw_articles (
+        source_type, source_name, publisher, title, content, url, url_hash,
+        published_at, collected_at, company, language, content_type,
+        crawl_status, error_message, processing_status, metadata
+    ) VALUES (
+        :source_type, :source_name, :publisher, :title, :content, :url, :url_hash,
+        :published_at, :collected_at, CAST(:company AS jsonb), :language, :content_type,
+        :crawl_status, :error_message, 'RAW', CAST(:metadata AS jsonb)
     )
     ON CONFLICT (url) DO NOTHING
     RETURNING id
@@ -69,9 +84,8 @@ _UPDATE_COMPANY_ANALYSIS_IF_CHANGED_SQL = text("""
         processing_status = 'RAW',
         metadata = metadata || CAST(:metadata AS jsonb),
         error_message = COALESCE(:error_message, error_message)
-    WHERE id = :id
+    WHERE (id = :id OR url = :url)
       AND source_type = 'company_analysis'
-      AND COALESCE(metadata ->> 'content_hash', '') <> :content_hash
 """)
 
 _INSERT_CRAWL_RUN_ARTICLE = text("""
@@ -276,27 +290,35 @@ def save_articles(
                 sanitized_title = _sanitize_text(article.title)[:500]
                 sanitized_content = _sanitize_text(article.content if article.content else "")
                 source_metadata = _source_metadata_json(article, storage_company)
-                result = db.execute(
-                    _INSERT_SQL,
-                    {
-                        "source_type": article.source_type,
-                        "source_name": article.source_name,
-                        "publisher": article.publisher,
-                        "title": sanitized_title,
-                        "content": sanitized_content,
-                        "url": article.url,
-                        "url_hash": article.url_hash,
-                        "published_at": article.published_at or article.collected_at,
-                        "collected_at": article.collected_at,
-                        "company": json.dumps(storage_company, ensure_ascii=False),
-                        "language": article.language,
-                        "content_type": article.content_type,
-                        "crawl_status": article.crawl_status,
-                        "error_message": article.error_message,
-                        "metadata": source_metadata,
-                        "crawl_run_id": run_context.crawl_run_id if run_context else None,
-                    },
-                )
+                insert_params = {
+                    "source_type": article.source_type,
+                    "source_name": article.source_name,
+                    "publisher": article.publisher,
+                    "title": sanitized_title,
+                    "content": sanitized_content,
+                    "url": article.url,
+                    "url_hash": article.url_hash,
+                    "published_at": article.published_at or article.collected_at,
+                    "collected_at": article.collected_at,
+                    "company": json.dumps(storage_company, ensure_ascii=False),
+                    "language": article.language,
+                    "content_type": article.content_type,
+                    "crawl_status": article.crawl_status,
+                    "error_message": article.error_message,
+                    "metadata": source_metadata,
+                    "crawl_run_id": run_context.crawl_run_id if run_context else None,
+                }
+                try:
+                    result = db.execute(_INSERT_SQL, insert_params)
+                except Exception as exc:  # noqa: BLE001
+                    if not _is_missing_column(exc, "crawl_run_id"):
+                        raise
+                    db.rollback()
+                    log.info(
+                        "raw_articles.crawl_run_id 미적용 DB 감지 → legacy INSERT 사용 | url=%s",
+                        article.url,
+                    )
+                    result = db.execute(_INSERT_SQL_WITHOUT_CRAWL_RUN_ID, insert_params)
                 row = result.fetchone()
                 if row:
                     article_id = row[0]
@@ -413,14 +435,11 @@ def _update_company_analysis_if_changed(
 ) -> None:
     if article.source_type != "company_analysis":
         return
-    metadata = _metadata_dict(source_metadata)
-    content_hash = str(metadata.get("content_hash") or "")
-    if not content_hash:
-        return
-    db.execute(
+    result = db.execute(
         _UPDATE_COMPANY_ANALYSIS_IF_CHANGED_SQL,
         {
             "id": article_id,
+            "url": article.url,
             "title": sanitized_title,
             "content": sanitized_content,
             "content_type": article.content_type,
@@ -428,8 +447,12 @@ def _update_company_analysis_if_changed(
             "collected_at": article.collected_at,
             "metadata": source_metadata,
             "error_message": article.error_message,
-            "content_hash": content_hash,
         },
+    )
+    log.info(
+        "company_analysis 최신 본문 갱신 | url=%s rows=%d",
+        article.url,
+        result.rowcount,
     )
 
 
@@ -1346,7 +1369,14 @@ _INSERT_CARD_NEWS_V2 = text("""
         CAST(:evaluation_payload AS jsonb)
     )
     ON CONFLICT (id) DO UPDATE SET
+        status = 'ACTIVE',
+        title = EXCLUDED.title,
+        summary_lines = EXCLUDED.summary_lines,
+        event_type = EXCLUDED.event_type,
+        importance = EXCLUDED.importance,
+        importance_score = EXCLUDED.importance_score,
         implication = CAST(:implication AS jsonb),
+        sources = CAST(:sources AS jsonb),
         validation_pass = :validation_pass,
         validation_sc_score = :validation_sc_score,
         peer_company_id = COALESCE(EXCLUDED.peer_company_id, card_news.peer_company_id),
@@ -1389,7 +1419,14 @@ _INSERT_CARD_NEWS_V2_WITHOUT_INTEGRATED_ISSUE = text("""
         CAST(:evaluation_payload AS jsonb)
     )
     ON CONFLICT (id) DO UPDATE SET
+        status = 'ACTIVE',
+        title = EXCLUDED.title,
+        summary_lines = EXCLUDED.summary_lines,
+        event_type = EXCLUDED.event_type,
+        importance = EXCLUDED.importance,
+        importance_score = EXCLUDED.importance_score,
         implication = CAST(:implication AS jsonb),
+        sources = CAST(:sources AS jsonb),
         validation_pass = :validation_pass,
         validation_sc_score = :validation_sc_score,
         peer_company_id = COALESCE(EXCLUDED.peer_company_id, card_news.peer_company_id),
@@ -1457,6 +1494,13 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
     `UndefinedColumn` 발생 → 기존 v1 컬럼만 사용하는 fallback INSERT 로 자동 재시도.
     """
     try:
+        if _is_self_company_card(card):
+            log.info(
+                "카드 뉴스 저장 제외 | id=%s company=%s reason=self company",
+                card.get("id"),
+                card.get("company") or card.get("peer_id") or card.get("peer_company_id"),
+            )
+            return None
         params = _card_news_insert_params(card)
         try:
             card_id = _execute_v2_insert(card_id=card["id"], params=params)
@@ -1486,10 +1530,19 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
                 source_raw_article_ids=params["source_raw_article_ids"],
                 relation_source="source_raw_article_ids",
             )
+            sync_card_sources_for_cluster(card.get("cluster_id"))
         return card_id
     except Exception as e:
         log.error("카드 뉴스 저장 실패 | id=%s error=%s", card.get("id"), e)
     return None
+
+
+def _is_self_company_card(card: dict[str, Any]) -> bool:
+    for key in ("peer_company_id", "company", "peer_id"):
+        company_id = resolve_company_id(str(card.get(key) or ""))
+        if company_id in SELF_COMPANY_IDS:
+            return True
+    return False
 
 
 def _execute_v2_insert(*, card_id: str, params: dict[str, Any]) -> Optional[str]:
@@ -1565,7 +1618,7 @@ def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
     source_articles = _source_articles_payload(card, source_ids)
     return {
         "id": card["id"],
-        "company": card.get("company") or card.get("peer_id"),
+        "company": card.get("company") or card.get("peer_id") or _resolve_peer_company_id(card),
         "cluster_id": card.get("cluster_id"),
         "title": card["title"][:500],
         "summary_lines": card.get("summary_lines", []),
@@ -1641,12 +1694,126 @@ def _sync_card_news_articles(
             )
             db.commit()
     except Exception as e:  # noqa: BLE001
+        if _is_missing_card_news_articles_table(e):
+            log.info(
+                "card_news_articles table unavailable; skip normalized card/article sync | "
+                "card_id=%s article_ids=%s",
+                card_id,
+                ids,
+            )
+            return
         log.warning(
             "card_news_articles 동기화 실패 | card_id=%s article_ids=%s error=%s",
             card_id,
             ids,
             e,
         )
+
+
+def _is_missing_card_news_articles_table(exc: Exception) -> bool:
+    text_repr = str(exc).lower()
+    return "card_news_articles" in text_repr and (
+        "undefinedtable" in text_repr or "does not exist" in text_repr
+    )
+
+
+def sync_card_sources_for_cluster(cluster_id: Any) -> int:
+    """Sync ACTIVE card provenance from all relevant processed raw articles in a cluster."""
+    try:
+        normalized_cluster_id = int(cluster_id)
+    except (TypeError, ValueError):
+        return 0
+    try:
+        with SessionLocal() as db:
+            result = db.execute(
+                text(
+                    """
+                    WITH ranked_articles AS (
+                        SELECT
+                            ra.cluster_id,
+                            ra.id,
+                            ra.title,
+                            ra.url,
+                            ra.source_name,
+                            ra.publisher,
+                            ra.published_at,
+                            ra.collected_at,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY ra.cluster_id
+                                ORDER BY
+                                    ra.published_at DESC NULLS LAST,
+                                    ra.collected_at DESC NULLS LAST,
+                                    ra.id DESC
+                            ) AS rn
+                        FROM raw_articles ra
+                        WHERE ra.cluster_id = :cluster_id
+                          AND ra.source_type = 'news'
+                          AND ra.processing_status = 'PROCESSED'
+                          AND ra.relevance_label = 'relevant'
+                    ),
+                    cluster_sources AS (
+                        SELECT
+                            cluster_id,
+                            ARRAY_AGG(
+                                id
+                                ORDER BY
+                                    published_at DESC NULLS LAST,
+                                    collected_at DESC NULLS LAST,
+                                    id DESC
+                            ) AS raw_ids,
+                            JSONB_AGG(
+                                JSONB_BUILD_OBJECT(
+                                    'index', rn,
+                                    'raw_article_id', id,
+                                    'title', COALESCE(title, ''),
+                                    'source_name', COALESCE(source_name, publisher, ''),
+                                    'url', COALESCE(url, ''),
+                                    'published_at', published_at,
+                                    'collected_at', collected_at
+                                )
+                                ORDER BY
+                                    published_at DESC NULLS LAST,
+                                    collected_at DESC NULLS LAST,
+                                    id DESC
+                            ) AS sources,
+                            JSONB_AGG(
+                                JSONB_BUILD_OBJECT(
+                                    'id', id,
+                                    'title', COALESCE(title, ''),
+                                    'url', COALESCE(url, ''),
+                                    'source_name', COALESCE(source_name, ''),
+                                    'publisher', COALESCE(publisher, ''),
+                                    'published_at', published_at,
+                                    'collected_at', collected_at
+                                )
+                                ORDER BY
+                                    published_at DESC NULLS LAST,
+                                    collected_at DESC NULLS LAST,
+                                    id DESC
+                            ) AS source_articles
+                        FROM ranked_articles
+                        GROUP BY cluster_id
+                    )
+                    UPDATE card_news cn
+                    SET source_raw_article_ids = cs.raw_ids,
+                        sources = cs.sources,
+                        source_articles = cs.source_articles
+                    FROM cluster_sources cs
+                    WHERE cn.status = 'ACTIVE'
+                      AND cn.cluster_id = cs.cluster_id
+                    """
+                ),
+                {"cluster_id": normalized_cluster_id},
+            )
+            db.commit()
+            return int(getattr(result, "rowcount", 0) or 0)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "card_news cluster source sync 실패 | cluster_id=%s error=%s",
+            cluster_id,
+            exc,
+        )
+        return 0
 
 
 def _source_ids_from_sources(value: Any) -> list[int]:
@@ -1746,6 +1913,9 @@ def _build_evidence_payload(card: dict[str, Any]) -> dict[str, Any]:
     raw_evidence = card.get("evidence_payload")
     if isinstance(raw_evidence, dict):
         payload.update(raw_evidence)
+    analysis_package = card.get("analysis_package")
+    if isinstance(analysis_package, dict) and analysis_package:
+        payload.setdefault("analysis_package", analysis_package)
     evidence_chain = card.get("evidence_chain") or {}
     if isinstance(evidence_chain, dict):
         payload.setdefault("source_links", evidence_chain.get("source_links") or [])
@@ -2562,6 +2732,67 @@ def upsert_global_industry_trends(rows: list[dict[str, Any]]) -> int:
         db.execute(_GLOBAL_TREND_UPSERT_SQL, serialized)
         db.commit()
     return len(serialized)
+
+
+def fetch_previous_trend_context_for_delta() -> dict[str, Any]:
+    """오늘 이전 가장 최근 ``global_industry_trends`` batch → Phase 2 delta 입력.
+
+    design: ``global-trends.md`` §16 — ledger 대신 self-read.
+    prior batch 가 없으면 빈 dict (cold start → ``frequency_delta_pct = 0``).
+    """
+    query = text(
+        """
+                WITH latest_prior AS (
+                    SELECT MAX(trend_date) AS d
+                    FROM global_industry_trends
+                    WHERE trend_date < CURRENT_DATE
+                )
+                SELECT g.keyword, g.mention_count, g.payload, g.trend_date
+                FROM global_industry_trends g
+                INNER JOIN latest_prior lp ON g.trend_date = lp.d
+                ORDER BY g.impact_score DESC NULLS LAST, g.keyword ASC
+                """
+    )
+    try:
+        with SessionLocal() as db:
+            rows = db.execute(query).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        if not _is_missing_relation(exc, "global_industry_trends"):
+            raise
+        rows = []
+
+    if not rows:
+        return {}
+
+    keyword_counts: dict[str, int] = {}
+    signals: list[dict[str, Any]] = []
+    for row in rows:
+        kw = str(row["keyword"] or "").strip().lower()
+        if not kw:
+            continue
+        payload = row["payload"] if isinstance(row["payload"], dict) else {}
+        mention_count = int(row["mention_count"] or payload.get("mention_count") or 0)
+        keyword_counts[kw] = mention_count
+        signals.append(
+            {
+                "signal": kw,
+                "mention_count": mention_count,
+                "intensity": payload.get("intensity"),
+                "leading_companies": payload.get("leading_companies", []),
+            }
+        )
+
+    latest_date = rows[0]["trend_date"]
+    return {
+        "period": "prior_batch",
+        "keyword_counts": keyword_counts,
+        "signals": signals,
+        "source_groups": ["global_industry_trends"],
+        "updated_at": latest_date.isoformat()
+        if hasattr(latest_date, "isoformat")
+        else str(latest_date),
+        "metadata": {"row_count": len(rows), "prior_trend_date": str(latest_date)},
+    }
 
 
 # trend 는 cronjob 으로 일 1 회만 갱신되므로 60 초 캐시는 정합성 손실 거의 없음.

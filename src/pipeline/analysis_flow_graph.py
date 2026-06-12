@@ -10,8 +10,7 @@ design/01-analysis-pipeline-implementation-plan.md §3.1 + 외부 리뷰 (2026-0
 
     issue_integrate  →  profile_context  →  build_analysis_context
         →  strategic_insight  →  validate
-        → pass → assemble → card_writer → END
-        → fail → human_review → END
+        → assemble → card_writer → END
 
 순서 변경 근거 (외부 리뷰 R-1):
 * IntegratedIssue 가 만들어진 후 main_company / mentioned_peer_companies 가 확정되어야
@@ -86,6 +85,11 @@ class SupervisorState(TypedDict, total=False):
     analysis: dict[str, Any] | None
     implication: dict[str, Any] | None
     sentence_grounding: dict[str, Any] | None
+    issue_understanding: dict[str, Any] | None
+    profile_linkage: dict[str, Any] | None
+    skax_response_linkage: dict[str, Any] | None
+    grounding_summary: dict[str, Any] | None
+    claim_strength: str | None
     validation: ValidationReport | None
     analysis_package: AnalysisPackage | None
     card_news_id: str | None
@@ -304,6 +308,11 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
                 "analysis": insight.get("analysis") or {},
                 "implication": insight.get("implication") or {},
                 "sentence_grounding": insight.get("sentence_grounding") or {},
+                "issue_understanding": insight.get("issue_understanding") or {},
+                "profile_linkage": insight.get("profile_linkage") or {},
+                "skax_response_linkage": insight.get("skax_response_linkage") or {},
+                "grounding_summary": insight.get("grounding_summary") or {},
+                "claim_strength": insight.get("claim_strength"),
             },
         )
 
@@ -379,6 +388,11 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
             validation=validation.to_dict() if validation is not None else {},
             evidence_payload=evidence_payload,
             classification=state.get("classification") or {},
+            issue_understanding=state.get("issue_understanding") or {},
+            profile_linkage=state.get("profile_linkage") or {},
+            skax_response_linkage=state.get("skax_response_linkage") or {},
+            grounding_summary=state.get("grounding_summary") or {},
+            claim_strength=state.get("claim_strength"),
         )
         return cast(
             SupervisorState,
@@ -413,9 +427,18 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
             card["primary_keyword_category"] = (
                 classification.get("sector") or card.get("sector") or None
             )
-        # source_raw_article_ids — bundle.items 의 id 들.
+        # source_raw_article_ids — IntegratedIssue가 실제 분석한 기사 ids를 우선 사용.
         if not card.get("source_raw_article_ids"):
             ids: list[int] = []
+            for raw_id in integrated.get("source_article_ids") or []:
+                try:
+                    ids.append(int(raw_id))
+                except (TypeError, ValueError):
+                    continue
+            card["source_raw_article_ids"] = ids
+        # fallback: 구버전 IntegratedIssue에는 source_article_ids가 없을 수 있다.
+        if not card.get("source_raw_article_ids"):
+            ids = []
             for item in bundle.items or []:
                 raw_id = item.get("id") if isinstance(item, dict) else None
                 if raw_id is None:
@@ -473,13 +496,6 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         "card_writer": card_writer_node,
         "human_review": human_review_node,
     }
-
-
-def _route_after_validate(state: SupervisorState) -> str:
-    validation = state.get("validation")
-    if validation is None:
-        return "fail"
-    return "pass" if validation.passed else "fail"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -731,6 +747,11 @@ def _evidence_payload_from_state(state: SupervisorState) -> dict[str, Any]:
     analysis = state.get("analysis") or {}
     implication = state.get("implication") or {}
     sentence_grounding = state.get("sentence_grounding") or {}
+    issue_understanding = state.get("issue_understanding") or {}
+    profile_linkage = state.get("profile_linkage") or {}
+    skax_response_linkage = state.get("skax_response_linkage") or {}
+    grounding_summary = state.get("grounding_summary") or {}
+    claim_strength = state.get("claim_strength")
     evidence_payload: dict[str, Any] = {
         "source_links": [
             {
@@ -749,6 +770,11 @@ def _evidence_payload_from_state(state: SupervisorState) -> dict[str, Any]:
             "analysis": analysis,
             "implication": implication,
             "sentence_grounding": sentence_grounding,
+            "issue_understanding": issue_understanding,
+            "profile_linkage": profile_linkage,
+            "skax_response_linkage": skax_response_linkage,
+            "grounding_summary": grounding_summary,
+            "claim_strength": claim_strength,
             "classification": classification,
         },
     }
@@ -865,14 +891,12 @@ def build_supervisor_graph(deps: SupervisorDeps | None = None) -> Any:
     g.add_edge("profile_context", "build_analysis_context")
     g.add_edge("build_analysis_context", "strategic_insight")
     g.add_edge("strategic_insight", "validate")
-    g.add_conditional_edges(
-        "validate",
-        _route_after_validate,
-        {"pass": "assemble", "fail": "human_review"},
-    )
+    # Validation remains attached to the card payload, but it should not block
+    # historical/realtime card creation. Downstream quality filters can decide
+    # whether to hide or regenerate a card without losing the clustered event.
+    g.add_edge("validate", "assemble")
     g.add_edge("assemble", "card_writer")
     g.add_edge("card_writer", END)
-    g.add_edge("human_review", END)
     return g.compile()
 
 

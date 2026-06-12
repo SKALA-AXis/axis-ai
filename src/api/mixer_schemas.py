@@ -21,6 +21,7 @@ class MixerAnalysisRequest(BaseModel):
         integrated_issue_ids: canonical 분석 단위 id 목록 (2 ≤ N ≤ 20 권장).
         ratios: peer / industry / keyword 비율 (frontend Mixer UI 슬라이더 결과).
         user_context: 사용자 자유 입력 컨텍스트.
+        analysis_mode: 빠른 실행(quick) 또는 정확 분석(deep).
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -32,6 +33,7 @@ class MixerAnalysisRequest(BaseModel):
     )
     ratios: Optional[dict[str, Any]] = Field(default=None)
     user_context: Optional[str] = Field(default=None)
+    analysis_mode: Literal["quick", "deep"] = Field(default="quick")
 
     @model_validator(mode="after")
     def require_analysis_ids(self) -> "MixerAnalysisRequest":
@@ -53,6 +55,13 @@ class RadarAxis(BaseModel):
     ] = "peer_strategic_shift"
     score: float = 0.0
     explanation: str = ""
+    calculation: str = ""
+    meaning: str = ""
+    prompted_interpretation: str = ""
+    analysis_prompt: str = ""
+    support_count: int = 0
+    total_count: int = 0
+    matched_card_ids: list[str] = Field(default_factory=list)
 
 
 class Connection(BaseModel):
@@ -122,6 +131,41 @@ class ReasoningTrailItem(BaseModel):
     langfuse_observation_id: Optional[str] = None
 
 
+class FollowUpCheck(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    question: str = ""
+    answer: str = ""
+    purpose: str = ""
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class MixerAnalysisDepth(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    mode: Literal["quick", "deep"] = "quick"
+    label: str = ""
+    summary: str = ""
+    included_steps: list[str] = Field(default_factory=list)
+    omitted_steps: list[str] = Field(default_factory=list)
+
+
+class MixerDeepDiveDetail(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    label: str = ""
+    text: str = ""
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class MixerDeepDiveSection(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    title: str = ""
+    summary: str = ""
+    details: list[MixerDeepDiveDetail] = Field(default_factory=list)
+
+
 class CoTStep(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -162,6 +206,9 @@ class MixerAnalysisResponse(BaseModel):
     langfuse_trace_id: Optional[str] = None
 
     follow_up_questions: list[str] = Field(default_factory=list)
+    follow_up_checks: list[FollowUpCheck] = Field(default_factory=list)
+    analysis_depth: MixerAnalysisDepth = Field(default_factory=MixerAnalysisDepth)
+    deep_dive_sections: list[MixerDeepDiveSection] = Field(default_factory=list)
     confidence: float = 0.0
 
     sources_used: list[str] = Field(default_factory=list)

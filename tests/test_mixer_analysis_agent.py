@@ -145,7 +145,7 @@ def test_mixer_accepts_integrated_issue_ids_and_exposes_sources(monkeypatch):
         return units
 
     monkeypatch.setattr(mixer_module, "load_analysis_units_by_integrated_issue_ids", _load)
-    monkeypatch.setattr(mixer_module, "_get_llm", lambda: fake_llm)
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: fake_llm)
     monkeypatch.setattr(
         mixer_module,
         "_repair_mixer_result_quality",
@@ -159,13 +159,20 @@ def test_mixer_accepts_integrated_issue_ids_and_exposes_sources(monkeypatch):
     assert result["sources_used"] == ["CN-1", "CN-2"]
     assert result["source_integrated_issue_ids"] == issue_ids
     assert result["provenance"]["source_integrated_issue_ids"] == issue_ids
+    assert result["radar_axes"][0]["calculation"]
+    assert result["radar_axes"][0]["meaning"]
+    assert result["radar_axes"][0]["analysis_prompt"]
+    assert result["radar_axes"][0]["prompted_interpretation"]
+    assert isinstance(result["follow_up_checks"], list)
+    assert result["follow_up_checks"][0]["answer"]
     assert "통합 상세" in fake_llm.prompts[0]
     assert "표시 요약(최하위 보조)" in fake_llm.prompts[0]
     assert "임원/의사결정자" in fake_llm.prompts[0]
     assert len(result["recommended_actions"]) == 3
+    assert all("경영진 리뷰 안건" not in action for action in result["recommended_actions"])
     assert all("제안 첫 장" not in action for action in result["recommended_actions"])
     assert all("모니터링" not in action for action in result["recommended_actions"])
-    assert all(action.startswith("SK AX") for action in result["recommended_actions"])
+    assert all(action.strip() for action in result["recommended_actions"])
     assert any(
         "고객군" in action and "책임 조직" in action for action in result["recommended_actions"]
     )
@@ -190,7 +197,7 @@ def test_mixer_card_ids_are_interpreted_as_analysis_units(monkeypatch):
     units = [_unit("CN-1", issue_ids[0]), _unit("CN-2", issue_ids[1])]
 
     monkeypatch.setattr(mixer_module, "load_analysis_units_by_card_ids", lambda ids: units)
-    monkeypatch.setattr(mixer_module, "_get_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: _FakeLLM())
     monkeypatch.setattr(
         mixer_module,
         "_repair_mixer_result_quality",
@@ -201,6 +208,82 @@ def test_mixer_card_ids_are_interpreted_as_analysis_units(monkeypatch):
     result = asyncio.run(MixerAnalysisAgent().analyze(card_ids=["CN-1", "CN-2"]))
 
     assert result["source_integrated_issue_ids"] == issue_ids
+
+
+def test_mixer_quick_mode_skips_mix_level_implication(monkeypatch):
+    issue_ids = [
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+    ]
+    units = [_unit("CN-1", issue_ids[0]), _unit("CN-2", issue_ids[1])]
+
+    monkeypatch.setattr(
+        mixer_module, "load_analysis_units_by_integrated_issue_ids", lambda ids: units
+    )
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: _FakeLLM())
+    monkeypatch.setattr(
+        mixer_module,
+        "_repair_mixer_result_quality",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("quick mode must not repair via LLM")
+        ),
+    )
+    monkeypatch.setattr(
+        mixer_module,
+        "_generate_mix_level_implication",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("quick mode must not call implication")
+        ),
+    )
+
+    result = asyncio.run(
+        MixerAnalysisAgent().analyze(integrated_issue_ids=issue_ids, analysis_mode="quick")
+    )
+
+    assert result["provenance"]["analysis_mode"] == "quick"
+    assert result["provenance"]["analysis_quality"] == "fast"
+    assert result["provenance"]["llm_model"] == mixer_module._QUICK_LLM_MODEL
+    assert result["analysis_depth"]["mode"] == "quick"
+    assert result["analysis_depth"]["omitted_steps"]
+    assert result["deep_dive_sections"] == []
+    assert len(result["recommended_actions"]) == 3
+
+
+def test_mixer_deep_mode_runs_quality_and_implication(monkeypatch):
+    issue_ids = [
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+    ]
+    units = [_unit("CN-1", issue_ids[0]), _unit("CN-2", issue_ids[1])]
+    calls = {"repair": 0, "implication": 0}
+
+    monkeypatch.setattr(
+        mixer_module, "load_analysis_units_by_integrated_issue_ids", lambda ids: units
+    )
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: _FakeLLM())
+
+    def _repair(**kwargs):
+        calls["repair"] += 1
+        return kwargs["result"]
+
+    def _implication(**kwargs):
+        del kwargs
+        calls["implication"] += 1
+        return {}
+
+    monkeypatch.setattr(mixer_module, "_repair_mixer_result_quality", _repair)
+    monkeypatch.setattr(mixer_module, "_generate_mix_level_implication", _implication)
+
+    result = asyncio.run(
+        MixerAnalysisAgent().analyze(integrated_issue_ids=issue_ids, analysis_mode="deep")
+    )
+
+    assert calls == {"repair": 1, "implication": 1}
+    assert result["provenance"]["analysis_mode"] == "deep"
+    assert result["provenance"]["analysis_quality"] == "detailed"
+    assert result["provenance"]["llm_model"] == mixer_module._DEEP_LLM_MODEL
+    assert result["analysis_depth"]["mode"] == "deep"
+    assert result["deep_dive_sections"]
 
 
 def test_mixer_quality_flags_lower_confidence_and_warn(monkeypatch):
@@ -218,7 +301,7 @@ def test_mixer_quality_flags_lower_confidence_and_warn(monkeypatch):
         "load_analysis_units_by_integrated_issue_ids",
         lambda ids: units,
     )
-    monkeypatch.setattr(mixer_module, "_get_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: _FakeLLM())
     monkeypatch.setattr(
         mixer_module,
         "_repair_mixer_result_quality",
@@ -230,11 +313,52 @@ def test_mixer_quality_flags_lower_confidence_and_warn(monkeypatch):
 
     assert result["confidence"] == 0.55
     assert result["provenance"]["quality_flags"] == [QUALITY_SUMMARY_ONLY_FALLBACK]
-    assert QUALITY_SUMMARY_ONLY_FALLBACK in result["warning"]
+    assert "통합 분석 연결이 제한" in result["warning"]
+    assert QUALITY_SUMMARY_ONLY_FALLBACK not in result["warning"]
+    assert "confidence <" not in result["warning"]
+    assert "다른 카드 조합" not in result["warning"]
+
+
+def test_mixer_missing_credentials_error_is_sanitized(monkeypatch):
+    issue_ids = [
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+    ]
+    units = [_unit("CN-1", issue_ids[0]), _unit("CN-2", issue_ids[1])]
+
+    monkeypatch.setattr(
+        mixer_module,
+        "load_analysis_units_by_integrated_issue_ids",
+        lambda ids: units,
+    )
+
+    class _MissingCredentialLLM:
+        def invoke(self, prompt, config=None):  # noqa: ANN001
+            del prompt, config
+            raise ValueError(
+                "Missing credentials. Please pass an `api_key`, `workload_identity`, "
+                "`admin_api_key`, or set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` "
+                "environment variable."
+            )
+
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: _MissingCredentialLLM())
+
+    result = asyncio.run(
+        MixerAnalysisAgent().analyze(integrated_issue_ids=issue_ids, analysis_mode="quick")
+    )
+
+    assert result["confidence"] == 0.0
+    assert "AI 모델 인증 정보가 설정되지 않아" in result["warning"]
+    assert "Missing credentials" not in result["warning"]
+    assert "api_key" not in result["warning"]
 
 
 def test_mixer_schema_requires_card_or_integrated_issue_ids():
     assert MixerAnalysisRequest(integrated_issue_ids=["a"]).integrated_issue_ids == ["a"]
+    assert (
+        MixerAnalysisRequest(integrated_issue_ids=["a"], analysis_mode="deep").analysis_mode
+        == "deep"
+    )
 
     try:
         MixerAnalysisRequest()

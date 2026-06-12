@@ -11,13 +11,117 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
 from src.agents.implication_agent import ImplicationAgent
 from src.agents.strategic_analyzer import StrategicAnalyzer
+from src.agents.strategic_insight.profile_linkage import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
+    _SUPPLY_CONTRACT_PATTERN,
+    GENERIC_BUSINESS_CATEGORIES,
+    UNCERTAIN_ACTIVITY_MARKERS,
+    _activity_candidates_have,
+    _activity_types_from_issue,
+    _appears_in_structured_issue_fields,
+    _appears_repeatedly_in_evidence,
+    _build_profile_linkage_evaluation,
+    _business_novelty_status,
+    _cluster_fact_intelligence_for_prompt,
+    _compact_capability_evolution_for_prompt,
+    _compact_evidence_value,
+    _compact_financial_profile_context,
+    _compact_profile_item,
+    _compact_value,
+    _companies_from_integrated_issue,
+    _company_token_variants,
+    _content_tokens,
+    _evaluate_single_profile_linkage,
+    _evidence_repeat_score,
+    _expand_profile_relevance_tokens,
+    _extract_issue_structured_signals,
+    _extract_ranked_terms,
+    _fact_like_text,
+    _fact_texts,
+    _financial_profile_context_for_prompt,
+    _grounding_text,
+    _has_uncertain_role,
+    _implication_mode_from_linkage,
+    _integrated_grounding_text,
+    _is_generic_business_term,
+    _is_low_signal_profile_relevance_token,
+    _issue_relevance_tokens,
+    _issue_structured_terms,
+    _iter_dicts,
+    _json_dumps,
+    _linkage_level_from_profile_score,
+    _looks_like_korean_function_word_or_ending,
+    _looks_like_source_noise,
+    _main_company_is_customer_or_buyer,
+    _main_company_near_role_pattern,
+    _matched_profile_item_from_entry,
+    _normalize_activity_candidates,
+    _normalize_content_token,
+    _normalize_entity_token,
+    _peer_role_mode_for_linkage,
+    _profile_entries_for_linkage,
+    _profile_entry_relevance_text,
+    _profile_entry_specificity_level,
+    _profile_for_prompt,
+    _profile_linkage_for_company,
+    _profile_linkage_guidance,
+    _profile_linkage_issue_context,
+    _profile_linkage_reason,
+    _profile_relevance_hint_text,
+    _profile_relevance_score,
+    _rank_relevant_profile_items,
+    _raw_normalized_terms,
+    _relevant_business_areas_for_prompt,
+    _role_mode_from_evidence_fallback,
+    _role_mode_from_structured_activity,
+    _score_profile_entry_against_issue,
+    _shrink_profile,
+    _source_noise_terms_from_issue,
+    _string_values_from_any,
+    _structured_activity_matches_active_role,
+    _structured_activity_matches_contract_role,
+    _structured_activity_matches_partnership_role,
+    _structured_activity_matches_selected_role,
+    _structured_field_overlap_score,
+    _supplier_names_for_target_counterparty,
+    _target_name_patterns,
+    _term_signal_weight,
+    _tokens_semantically_close,
+    _weighted_term_overlap_score,
+)
+
+# 분리 모듈 re-export — 기존 참조 호환 유지 (agent-split-design.md 1단계)
+from src.agents.strategic_insight.prompts import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
+    ACTION_REPAIR_SYSTEM_PROMPT,
+    ACTION_REPAIR_USER_PROMPT_TEMPLATE,
+    COUNTERPARTY_REPAIR_SYSTEM_PROMPT,
+    COUNTERPARTY_REPAIR_USER_PROMPT_TEMPLATE,
+    REPAIR_SYSTEM_PROMPT,
+    REPAIR_USER_PROMPT_TEMPLATE,
+    REPORT_COPY_REPAIR_SYSTEM_PROMPT,
+    REPORT_COPY_REPAIR_USER_PROMPT_TEMPLATE,
+    REVIEW_SYSTEM_PROMPT,
+    REVIEW_USER_PROMPT_TEMPLATE,
+    SYSTEM_PROMPT,
+    USER_PROMPT_TEMPLATE,
+)
+from src.agents.strategic_insight.utils import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
+    _choice,
+    _has_final_consonant,
+    _int_list,
+    _json_dict,
+    _jsonish_list,
+    _parse_json_loose,
+    _string_list,
+    _with_particle,
+)
 from src.analysis.models import AnalysisContext, AnalysisInputBundle, ProfileContext
 from src.db.postgres import SessionLocal
 from src.services.analysis_context_builder import AnalysisContextBuilder
@@ -27,7 +131,7 @@ from src.services.profile_context_loader import ProfileContextLoader
 log = logging.getLogger(__name__)
 
 _LLM_MODEL = "gpt-4o"
-_PROMPT_VERSION = "strategic-insight-v1.62-evidence-flow"
+_PROMPT_VERSION = "strategic-insight-v1.61-llm-structured-reasoning"
 _LLM_TEMPERATURE = 0.0
 _LLM_MAX_COMPLETION_TOKENS = 2600
 
@@ -43,586 +147,71 @@ _UNSUPPORTED_CLAIM_PATTERNS = (
     r"시장\s*선점",
     r"선점",
     r"기술적\s*우위",
-    r"격차",
+    r"격차[가를은\s]*(확대|벌어|커|발생|나타)",
     r"리더십\s*확보",
     r"매출\s*기여",
-    r"큰\s*영향",
-    r"수요.{0,20}지속적.{0,20}(증가|확대)",
-    r"수요[가를은\s]*(증가|확대)",
-    r"수요[가를은\s]*(반영|있)",
-    r"수요.{0,20}촉진",
-    r"지속적.{0,20}중요",
-    r"고객.{0,12}기대[가를을\s]*(높|상승)",
     r"시장\s*점유율\s*감소",
     r"점유율[이을가\s]*(감소|하락|축소)",
-    r"경쟁\s*심화",
-    r"앞서\s*나갈",
-    r"경쟁력[을를이가\s]*(강화|높|제고)",
-    r"기술적\s*역량[을를이가\s]*(강화|검증|입증)",
-    r"역량[을를이가\s]*(강화)",
-    r"역량[을를이가\s]*(검증|입증)",
-    r"공공\s*및\s*민간.{0,20}(확대|활용)",
-    r"활용\s*확대",
-    r"기술적\s*신뢰성",
-    r"차별화",
-    r"효율성[을를\s]*평가",
-    r"효율성[을를\s]*입증",
-    r"고객.{0,10}신뢰[를을\s]*(확보|구축)",
-    r"속도[가를\s]*(증가|상승|가속)",
-    r"가속화",
-    r"초기\s*단계",
 )
-_RELATIONSHIP_PATTERN = re.compile(r"협업|협력|파트너십|제휴|공동")
+_RELATIONSHIP_PATTERN = re.compile(
+    r"협업|협력|파트너십|제휴|MOU|얼라이언스|컨소시엄|"
+    r"공동\s*(추진|개발|연구|사업|운영|구축|참여|투자|검증)",
+    re.IGNORECASE,
+)
 _RELATIONSHIP_ACTIVITY_TYPES = {"partnership", "collaboration", "alliance", "joint", "mou"}
-_UNCERTAINTY_PATTERN = re.compile(r"검토|가능성|구상|계획|예정|추진|모색|방향")
+_UNCERTAINTY_PATTERN = re.compile(r"검토|가능성|구상|계획|예정|모색|논의|추진\s*(중|예정|계획)")
 _SUPPLIER_CAPABILITY_PATTERN = re.compile(
     r"(공급|납품)\s*역량|공급\s*계약.{0,30}(제공|수행)\s*역량"
 )
-_SUPPLY_CONTRACT_PATTERN = re.compile(r"공급\s*계약|공급계약|납품|구매|조달|계약\s*체결|계약")
 _NUMERIC_TOKEN_PATTERN = re.compile(
     r"\d+(?:[.,]\d+)*\s*(?:%|원|조|억|만|천만|백만|달러|usd|krw)?",
     re.IGNORECASE,
 )
-_GENERIC_INSIGHT_PATTERN = re.compile(
-    r"디지털\s*전환을\s*지원|"
-    r"업무\s*효율성\s*향상|"
-    r"업무\s*효율성[을를]?\s*(높|향상|개선)|"
-    r"기술\s*발전\s*동향|"
-    r"사업\s*전략에\s*반영|"
-    r"적용할\s*수\s*있는\s*부분을\s*탐색|"
-    r"도입\s*가능성[을를]?\s*탐색|"
-    r"적용\s*가능한\s*요소|"
-    r"기술\s*개발\s*및\s*적용\s*가능성|"
-    r"지속적으로\s*추적|"
-    r"영향[을를]?\s*추적|"
-    r"역량[을를이가\s]*강화|"
-    r"중요성[이을가\s]*부각|"
-    r"혁신적인\s*솔루션|"
-    r"혁신\s*서비스",
-    re.IGNORECASE,
-)
 
-
-ACTION_REPAIR_SYSTEM_PROMPT = """\
-당신은 SK AX 관점의 비교 인사이트만 다시 쓰는 repair agent입니다.
-새 사실을 만들지 말고 recommended_actions 만 JSON 으로 출력합니다.
-각 action 은 실행계획이 아니라 SK AX가 유사 동향을 해석할 때 사용할 비교 인사이트입니다.
-현재 사건의 대상 사업/서비스/시스템, 피어 신호, 비교해야 할 축,
-후속 확인 데이터가 함께 보여야 합니다. SK AX 프로필 접점이 없으면 특정 역량과
-연결하지 말고 사건 기반 비교 인사이트로 낮춥니다.
-"""
-
-
-ACTION_REPAIR_USER_PROMPT_TEMPLATE = """\
-## IntegratedIssue
-{integrated_issue_json}
-
-## IssueFrame
-{issue_frame_json}
-
-## ComparableContext
-{comparable_context_json}
-
-## ProfileContext
-{profile_json}
-
-## 현재 skax_implication
-{skax_json}
-
-## recommended_actions 작성 규칙
-recommended_actions 는 실행방안이 아니라 SK AX 관점의 비교 인사이트입니다.
-
-1. recommended_actions 는 가능하면 2~3개입니다. 근거가 부족할 때만 1개로 줄입니다.
-2. 각 action 은 2~3문장입니다:
-   현재 사건에서 확인된 사업 장면 → 해당 기업이 이 장면에서 보여준 방식 →
-   SK AX와 비교해야 할 사업 범위 또는 운영 역할 → 그 비교가 필요한 이유 →
-   후속으로 확인할 데이터.
-3. 고객에게 제안하는 문장이 아니라 SK AX 내부 직원/임원이 보는 비교 인사이트 문장입니다.
-4. SK AX 프로필과 연결되지 않으면 특정 역량/사업영역 대응으로 쓰지 말고,
-   현재 사건 근거 기반의 비교 인사이트로 낮춥니다.
-5. 특정 기술명·사업영역·솔루션명은 현재 입력 컨텍스트에 근거가 있을 때만 씁니다.
-   근거 출처는 IntegratedIssue, classification, 관련 peer/skax ProfileContext,
-   현재 이슈와 매칭된 AnalysisContext 입니다.
-   근거가 약하면 현재 사건의 대상 사업·서비스·시스템·수치·일정 같은
-   더 상위의 안전한 표현으로 낮춥니다.
-6. business_line_mapping 이름을 솔루션명처럼 그대로 쓰지 않습니다.
-   예: business line 이 "클라우드&AI"여도 현재 사건과 직접 연결되지 않으면
-   "클라우드 및 AI 솔루션"이라고 쓰지 않습니다.
-7. "성공 사례"는 ProfileContext 에 실제 사례 근거가 있을 때만 씁니다.
-8. 근거 없는 강화, 경쟁력, 차별화, 고객 신뢰 같은 결과 표현으로 끝내지 않습니다.
-9. "모니터링", "추적", "전략 반영", "부분 탐색"만으로 끝내지 말고,
-   무엇을 왜 봐야 하는지 현재 사건의 적용 업무·서비스·수치·관계로 설명합니다.
-10. "대응 가능한지 내부적으로 구분"처럼 추상적으로 끝내지 말고,
-   어떤 역량이 어떤 사업 장면과 비교되는지 설명합니다.
-11. 각 action 은 "왜 이 비교가 필요한지"를 문장 안에 포함해야 합니다.
-   예: 이 기준이 사업화 가능성, 운영 책임, 성과 검증, 역할 분담 중
-   무엇을 판단하게 해주는지 설명합니다.
-12. "같은 기준으로 축적", "비교해야 합니다", "모니터링해야 합니다"로 끝내지 않습니다.
-   현재 사건의 어떤 사실이 그 기준을 만들었는지, 그 기준이 SK AX의 어떤 판단을
-   바꾸게 하는지까지 씁니다.
-
-## 출력
-{{
-  "recommended_actions": ["string"]
-}}
-"""
-
-
-REPORT_COPY_REPAIR_SYSTEM_PROMPT = """\
-당신은 임원 보고용 문장을 다듬는 repair agent입니다.
-새 사실을 만들지 말고 추상 문장을 근거와 해석이 보이는 문장으로 바꿉니다.
-JSON 외 텍스트를 출력하지 마세요.
-"""
-
-
-REPORT_COPY_REPAIR_USER_PROMPT_TEMPLATE = """\
-## IntegratedIssue
-{integrated_issue_json}
-
-## IssueFrame
-{issue_frame_json}
-
-## ComparableContext
-{comparable_context_json}
-
-## ProfileContext
-{profile_json}
-
-## business_line_mapping 후보
-{business_lines_json}
-
-## 수정 대상 결과
-{result_json}
-
-## 수정 대상 위반
-{violations_json}
-
-## 규칙
-1. schema 는 유지하고 문장만 고칩니다.
-2. analysis 는 현재 사실 → IssueFrame 의 business_object/numbers/target_scope →
-   ComparableContext 의 유사 사업·흐름 → 이번 사건에서 확인된 의미를 보여야 합니다.
-3. peer_implication 은 현재 사실 → 유사 사업/흐름 → 피어 프로필 접점 또는 접점 부족 한계를
-   보여야 합니다.
-4. skax_implication 은 피어 신호 → 유사 사업/흐름 → 이번 사건에서 새로 확인된 차이 →
-   후속으로 볼 지표를 보여야 합니다.
-5. 타깃 피어가 계약 상대방/고객 슬롯이면 공급자처럼 쓰지 않습니다.
-6. 프로필 또는 recent context 접점이 없으면 프로필 기반 결론처럼 쓰지 말고
-   confidence/evidence_label 을 낮춥니다.
-7. 입력에 없는 수치, 고객명, 제품명, 회사명은 추가하지 않습니다.
-8. "디지털 전환 지원", "업무 효율성 향상", "역량 강화" 같은 넓은 표현은
-   현재 사건의 적용 업무·시스템·서비스·수치·관계와 함께 설명할 때만 사용합니다.
-9. "기회", "역량 강화", "표준 제시", "긍정적 영향"처럼 강한 해석은
-   현재 사건 사실과 프로필/비교 맥락의 연결이 문장 안에 보일 때만 유지합니다.
-   연결이 약하면 어떤 근거가 부족한지와 후속 확인 항목을 밝혀 낮춥니다.
-
-## 출력
-StrategicInsightAgent 최종 schema 그대로 출력합니다.
-"""
-
-
-COUNTERPARTY_REPAIR_SYSTEM_PROMPT = """\
-당신은 계약 상대방/고객 슬롯의 피어사를 보수적으로 해석하는 repair agent입니다.
-IntegratedIssue 는 현재 사건 사실, ProfileContext 는 기존 사업영역/역량 배경으로만 씁니다.
-JSON 외 텍스트를 출력하지 마세요.
-"""
-
-
-COUNTERPARTY_REPAIR_USER_PROMPT_TEMPLATE = """\
-## IntegratedIssue
-{integrated_issue_json}
-
-## IssueFrame
-{issue_frame_json}
-
-## ComparableContext
-{comparable_context_json}
-
-## ProfileContext
-{profile_json}
-
-## business_line_mapping 후보
-{business_lines_json}
-
-## 기존 결과
-{result_json}
-
-## 규칙
-1. 타깃 피어를 공급자/수행사로 단정하지 않습니다.
-   계약 상대방, 사업 범위, 기간, 대상 시스템으로 설명합니다.
-2. 공급사 매출 비율은 타깃 피어의 성과나 역량 변화가 아니라 계약 규모 참고 근거입니다.
-3. peer_meaning 은 2문장입니다: 현재 계약 사실, 피어 프로필 접점이 드러내는 유사 사업 비교 기준.
-4. capability_change 는 공급 역량 강화가 아니라 확인된 사업 범위/대상 시스템/프로필 접점으로 씁니다.
-   ProfileContext 에 관련 사업영역/역량이 없으면 모델 일반 지식으로 채우지 말고
-   사건 기반 해석으로 낮춥니다.
-5. recommended_actions 는 SK AX 관점 체크포인트입니다. 유사 동향에서 비교할 축과
-   후속으로 확인할 데이터를 함께 씁니다.
-6. 중요성, 연결성, 평가 기준 변화 같은 추상 표현으로 끝내지 않습니다.
-7. 이 모드에서는 문장 주어를 가능한 "이번 계약", "해당 사업", "확인된 계약 범위"처럼
-   사건/사업명으로 둡니다. 타깃 피어 이름을 주어로 두고 참여·추진·제공·수행·확장한다고
-   쓰면 실패입니다.
-8. 안전한 구조:
-   - analysis: 계약 사실 → 사업명에 드러난 대상 시스템/전환 성격 → 시장 신호
-   - peer_meaning: 계약 사실. 타깃 피어는 계약 상대방으로 확인되며, 관련 프로필 사업영역이
-     어떤 유사 사업 비교 기준과 접점을 갖는지 설명
-   - capability_change: 역량 강화가 아니라 확인된 사업 범위/대상 시스템/기간이 피어 프로필과
-     어떤 접점을 갖는지 설명
-   - recommended_actions: 유사 동향에서 비교할 축 → 후속 확인 데이터 → SK AX 내부 점검 항목
-9. 공개 문장 다듬기는 기존 논리와 구체 명사를 유지한 채 내부 용어만 바꿉니다.
-   "통합 결과"는 "기사에서는", "피어 프로필"은 "해당 기업의 기존 사업 흐름",
-   "자사 프로필"은 "SK AX의 관련 사업/역량", "linkage/접점"은
-   "연결 지점/이어지는 흐름/비교할 지점"으로 바꿉니다.
-
-## 출력
-StrategicInsightAgent 최종 schema 그대로 출력합니다.
-"""
-
-
-SYSTEM_PROMPT = """\
-당신은 임원 보고용 전략 인사이트를 작성하는 Agent입니다.
-
-데이터 역할:
-- IntegratedIssue: 현재 사건의 유일한 사실 근거입니다.
-- ProfileContext.peer_profiles: 피어사의 기존 사업영역/역량 배경입니다.
-- ProfileContext.skax_profile: SK AX의 기존 사업영역/역량 배경입니다.
-- financial_profile_context: 현재 이슈가 재무/IR/투자/공급계약/실적과 직접 관련될 때만 쓰는
-  별도 배경입니다. 현재 사건 숫자는 IntegratedIssue.key_numbers 를 우선합니다.
-- AnalysisContext: 최근 피어 이벤트와 섹터 흐름 보조 근거입니다.
-
-원칙:
-1. 수치, 날짜, 회사명, 고객명, 사업명, 제품명은 IntegratedIssue 근거에 있는 것만 씁니다.
-2. ProfileContext 와 AnalysisContext 는 현재 사건의 새 사실이 아니라 해석 배경입니다.
-   모델의 일반 지식이나 회사 이미지로 비어 있는 프로필을 채우지 않습니다.
-3. 계약/수주/선정/투자/검토 같은 관계 수준을 보존합니다. 역할이 불명확하면
-   고객, 원청, 운영 책임자, 도입 주체로 단정하지 않습니다.
-4. analysis 는 피어/시장 의미, peer_implication 은 피어 프로필 기반 시사점,
-   skax_implication 은 SK AX 관점의 관찰·비교·추적 체크포인트입니다.
-5. 좋은 결과는 짧은 결론이 아니라
-   "근거 사실 → 왜 그렇게 해석되는지 → 어떤 대응이 필요한지"가 보입니다.
-6. JSON 외 텍스트를 출력하지 마세요.
-"""
-
-
-USER_PROMPT_TEMPLATE = """\
-## IntegratedIssue
-{integrated_issue_json}
-
-## IssueFrame
-{issue_frame_json}
-
-## classification
-{classification_json}
-
-## input_bundle metadata
-{bundle_json}
-
-## ProfileContext
-{profile_json}
-
-## AnalysisContext
-{context_json}
-
-## ComparableContext
-{comparable_context_json}
-
-## Context availability
-{context_availability_json}
-
-## SK AX business_line_mapping 후보
-{business_lines_json}
-
-## 역할 해석 모드
-{role_mode_instructions}
-
-## 생성 순서
-1. Fact grounding: 확정 사실, 관계 수준, 수치/날짜, evidence_ids 를 먼저 확인합니다.
-2. 사실 기반 해석: 계약 규모, 기간, 고객명, 사업명은 1차 해석 재료로만 쓰고
-   이 단계의 결론을 최종 시사점으로 끝내지 않습니다. 아래 peer_signal 까지 연결합니다.
-3. peer_role_in_issue: 피어가 공급자/수행사/운영자/고객/계약 상대방 중 무엇으로만
-   확인되는지 정합니다. 불명확하면 더 약한 표현을 씁니다.
-4. related_peer_profile_context: 현재 사건의 사업명, 대상 시스템, 고객군, 섹터와 맞는
-   피어 프로필 사업영역만 고릅니다. 맞지 않는 프로필 조각은 쓰지 않습니다.
-5. 사업 맥락 기반 시사점 생성(peer_signal):
-   현재 사건의 IssueFrame 을 먼저 봅니다. ComparableContext.matched_cases 가 있으면
-   현재 사건과 matched_case 의 공통점과 차이점을 1개 이상 연결합니다.
-   ProfileContext 는 matched_cases 보다 우선하지 않습니다.
-   관련 피어 ProfileContext 가 현재 사건과 직접 맞으면 기존 사업영역/역량과 현재 사건의
-   접점을 설명합니다. 맞지 않으면 프로필 기반 결론처럼 쓰지 않습니다.
-   matched_cases 도 없으면 현재 사건 안의 수치/역할/범위만으로 보수적으로 해석합니다.
-   피어 프로필에 identity 필드만 있으면 사업영역/역량명을 추측하지 말고 프로필 접점 부족으로 둡니다.
-6. SK AX 관점 체크포인트 생성(skax_checkpoint):
-   현재 사건의 사업 구조 + 해당 기업의 기존 사업 흐름과의 연결 +
-   SK AX와 비교되는 지점 + 왜 중요한지 + 후속으로 확인할 데이터를 정합니다.
-   SK AX profile_context 의 관련 사업영역/역량이 있으면 그 접점을 쓰되,
-   없으면 특정 역량 대응으로 쓰지 않고 현재 사건 기반 관찰 체크포인트로 낮춥니다.
-   고객에게 제안하는 실행계획이 아니라 SK AX 내부 직원/임원이 보는 비교 인사이트로 씁니다.
-   "대응 가능한지 내부적으로 구분"처럼 추상적으로 쓰지 말고,
-   어떤 역량이 어떤 사업 장면과 비교되는지 설명합니다.
-7. final output: 위 중간 판단은 출력하지 말고, schema 필드에 자연어로 반영합니다.
-
-## 시사점 작성 규칙
-시사점은 단순 체크리스트가 아니라 사업 비교 인사이트로 작성합니다.
-1. 현재 사건의 사업 구조: 기사에서 확인된 사업명, 적용 업무, 시스템, 인프라, 수치,
-   참여 주체를 사용합니다.
-2. 해당 기업의 기존 사업 흐름과 연결: ProfileContext 또는 ComparableContext에 근거가
-   있을 때만 연결합니다. 단순히 "기존 사업 흐름과 연결된다"고 쓰지 말고,
-   어떤 역량/사업이 이번 사건의 어떤 적용 장면으로 이어지는지 설명합니다.
-3. SK AX와 비교되는 지점: SK AX가 바로 실행해야 할 일을 쓰지 말고,
-   어떤 사업 범위, 운영 역할, 데이터 확보 방식, 성과 지표, 책임 구조를
-   비교해야 하는지 씁니다.
-4. 왜 중요한지: 그 기준이 사업화 가능성, 운영 책임, 성과 검증, 역할 분담 중
-   무엇을 판단하게 해주는지 설명합니다.
-5. "기존 사업 맥락이 적용 장면과 만난다", "관찰 지점이다"처럼 끝내지 않습니다.
-   기존 사업 맥락이 무엇이고, 현재 사건의 어떤 사실 때문에 연결된다고 보는지,
-   왜 강한 결론이 아니라 관찰 신호로 낮추는지까지 씁니다.
-6. 시사점 한 문장 안에는 가능하면 세 요소가 함께 보여야 합니다:
-   현재 사건의 구체 사실, 해당 기업의 기존 사업/역량 근거, 그 둘을 연결해
-   해석할 수 있는 범위 또는 한계.
-금지: "단순 발표 여부보다 A, B, C를 봐야 한다" 같은 체크리스트형 문장,
-"자사 관련 사업이 대응 가능한지 내부적으로 구분" 같은 추상 문장.
-
-## 최종 공개 문장 다듬기 규칙
-- 기존 문장의 논리와 구체 명사는 최대한 유지합니다.
-- 내부 시스템 용어만 사용자에게 보이는 표현으로 바꿉니다.
-- 문장을 짧게 요약하거나 체크리스트로 압축하지 않습니다.
-- "통합 결과"는 "기사에서는" 또는 문장 삭제로 처리합니다.
-- "피어 프로필"은 "해당 기업의 기존 사업 흐름"으로 바꿉니다.
-- "자사 프로필"은 "SK AX의 관련 사업/역량"으로 바꿉니다.
-- "피어 쪽"은 해당 기업명 또는 기사에 나온 주체명으로 바꿉니다.
-- "linkage", "접점"은 "연결 지점", "이어지는 흐름", "비교할 지점"으로 바꿉니다.
-- 단, 원문에 없던 새 사업명이나 역량명은 추가하지 않습니다.
-
-## 필드 기준
-- analysis_summary: 현재 사건과 피어/시장 의미를 1~2문장으로 씁니다.
-- strategic_meaning: 2~3개. 사실 반복이 아니라 "사실이 의미하는 피어/시장 변화"를 씁니다.
-  "영역 확장", "긍정적인 영향"처럼 방향만 말하지 말고, 현재 사건에서 확인된
-  대상 시스템/인프라 구성/운영 구조/추진 방식/비교 기준 중 무엇이 바뀌는지 씁니다.
-- market_signal: 한 사건으로 수요 증가를 단정하지 말고 현재 사건에서 확인된 수요 신호,
-  적용 범위, 비교 기준 변화를 씁니다.
-- 시장 범위/표현 강도: 원문이 국내 정부 사업이면 국가 단위/공공 대형 인프라 수준으로 씁니다.
-  글로벌, 공공+민간, 전 산업, 사업 확장, 긍정적 영향은 현재 사건 또는 관련 프로필 근거가
-  그 범위를 뒷받침할 때만 씁니다. 근거가 약하면 관찰 신호/연결 사례/후속 활용 가능성으로 낮춥니다.
-- peer_meaning: 2문장 이상 가능. 현재 사실 → 피어 역할 → 관련 프로필/최근 흐름 접점을 설명합니다.
-  관련 피어 프로필이 있으면 프로필의 business_area/core_capability/recent_direction 중
-  현재 사건과 맞는 표현을 최소 1개 이상 자연어로 연결합니다.
-  단순히 "입지 강화", "영역 확장"으로 끝내지 말고, 관련 프로필의 구체 사업영역/역량명과
-  현재 사건의 대상 사업·인프라·고객군이 어떻게 만나는지 씁니다.
-  "관찰 지점"이라고 낮출 때는 왜 단정하지 않는지도 함께 씁니다.
-  "기존 사업 흐름"이라고 쓰면 그 흐름의 이름/근거와 현재 사건의 적용 업무·시스템·서비스 중
-  무엇이 이어지는지까지 씁니다.
-- capability_change: 직접 확인되는 사업 범위, 고객군, 대상 시스템, 적용 영역만 씁니다.
-  "역량 강화/영역 확장 예상"으로 끝내지 말고, 어떤 고객군·대상 시스템·운영 범위·추진 구조와
-  연결되는지 적습니다.
-  프로필 근거가 있으면 "기존 역량이 이번 사건에서 어떤 적용 장면/운영 범위/고객군과
-  만나는지"를 설명하고, 프로필 근거가 없으면 역량 변화로 단정하지 않습니다.
-- why_important: 피어/시장 신호가 SK AX의 어떤 사업영역/역량과 비교되는지 씁니다.
-- potential_impact: 피어 신호가 SK AX 내부에서 어떤 비교/관찰 항목을 만들게 하는지,
-  어떤 후속 데이터가 있어야 판단 가능한지 2~3문장으로 씁니다.
-- recommended_actions: 1~3개. 각 항목은 길어도 됩니다.
-  현재 피어 신호 → 비교해야 할 축 → 왜 그 축이 필요한지 → 후속 확인 데이터 →
-  SK AX 내부 점검 관점을 연결합니다.
-  모호한 "대응 가능 범위 구분"으로 끝내지 말고, 그 범위가 사업화 가능성, 운영 책임,
-  성과 검증, 역할 분담 중 무엇을 판단하게 하는지 설명합니다.
-- business_line_mapping: 입력 후보 name 중 실제 관련 있는 항목만 0~3개 선택합니다.
-- sourced_evidence_ids / used_fact_ids: 입력에 존재하는 fact_id 만 사용합니다.
-
-## 금지
-- 근거 없는 기술적 우위, 선점, 격차, 경쟁 심화, 점유율 확대, 성과 예측
-- 계약 상대방을 공급자/수행사로 바꾸는 표현
-- ProfileContext 에 없는 사업영역/역량명을 모델 일반 지식으로 생성
-- SK AX 프로필이 없는데 SK AX의 특정 역량/사업영역과 연결하는 표현
-- 현재 사건 신호, 비교 축, 후속 확인 데이터가 없는 체크포인트
-- 출력 schema 예시 문구 복사
-
-## 출력
-아래 JSON schema 를 그대로 지켜 출력합니다. 설명 텍스트나 markdown 은 출력하지 마세요.
-{{
-  "is_valid_strategic_insight": true,
-  "analysis": {{
-    "is_valid_analysis": true,
-    "analysis_scope": "peer_and_industry",
-    "analysis_summary": "string",
-    "strategic_meaning": ["string"],
-    "market_signal": "string",
-    "impact_level": "high|medium|low",
-    "impact_reason": "string",
-    "risk_or_opportunity": "risk|opportunity|neutral",
-    "confidence": 0.0,
-    "reason": "string"
-  }},
-  "implication": {{
-    "is_valid_implication": true,
-    "implication_scope": "peer_and_skax",
-    "peer_implication": {{
-      "company_id": "string",
-      "company_name_ko": "string",
-      "peer_meaning": "string",
-      "capability_change": "string",
-      "sourced_evidence_ids": ["입력에 존재하는 fact_id"]
-    }},
-    "skax_implication": {{
-      "why_important": "string",
-      "potential_impact": "string",
-      "opportunities": ["string"],
-      "threats": ["string"],
-      "recommended_actions": ["string"],
-      "business_line_mapping": ["후보 중 실제 관련 있는 name"]
-    }},
-    "follow_up_questions": ["string"],
-    "watch_points": ["string"],
-    "confidence": 0.0,
-    "evidence_label": "sufficient|moderate|insufficient",
-    "provenance": {{
-      "generator": "StrategicInsightAgent",
-      "prompt_version": "{prompt_version}",
-      "model": "{model}",
-      "used_fact_ids": ["입력에 존재하는 fact_id"],
-      "used_context_layers": ["실제로 사용한 context layer명"],
-      "run_at": "ISO-8601 timestamp"
-    }}
-  }}
-}}
-"""
-
-
-REVIEW_SYSTEM_PROMPT = """\
-당신은 StrategicInsightAgent 결과를 점검하는 전략 QA reviewer입니다.
-새 사실을 만들지 말고, 입력 근거와 프로필만 사용해 논리 공백을 고칩니다.
-복구할 수 없으면 invalid 로 낮춥니다. JSON 외 텍스트를 출력하지 마세요.
-"""
-
-
-REVIEW_USER_PROMPT_TEMPLATE = """\
-## IntegratedIssue
-{integrated_issue_json}
-
-## IssueFrame
-{issue_frame_json}
-
-## classification
-{classification_json}
-
-## ProfileContext
-{profile_json}
-
-## ComparableContext
-{comparable_context_json}
-
-## AnalysisContext
-{context_json}
-
-## Context availability
-{context_availability_json}
-
-## business_line_mapping 후보
-{business_lines_json}
-
-## 1차 결과
-{result_json}
-
-## 리뷰 기준
-1. 수치/날짜/회사명/고객명/사업명은 IntegratedIssue 근거 안에 있어야 합니다.
-2. 시사점이 요약 반복이면 고칩니다. 현재 사실, ComparableContext 의 유사 사업/흐름,
-   피어 프로필 접점 또는 접점 부족 한계가 보여야 합니다.
-   profile_context 나 recent context 가 없거나 현재 사건과 맞는 접점이 없으면
-   프로필 기반 결론처럼 쓰지 말고 confidence/evidence_label 을 낮춥니다.
-   피어 프로필이 identity 필드뿐이면 모델 일반 지식으로 사업영역/역량명을 만들지 않습니다.
-   관련 피어 프로필이 있으면 기존 사업영역/역량 → 현재 사건 접점 → 사업적 의미가
-   보여야 합니다. 이 연결이 없으면 요약 반복으로 보고 고칩니다.
-   "영역 확장", "긍정적 영향"처럼 방향만 말하는 문장은 현재 사건에서 확인된
-   대상 시스템, 인프라 구성, 운영 구조, 추진 방식, 비교 기준으로 구체화합니다.
-3. 피어가 계약 상대방/고객 슬롯이면 피어가 제공·수행·지원·운영했다고 쓰지 않습니다.
-   계약 상대방으로 확인된 사업 범위, 계약 기간, 대상 시스템, 프로필 사업영역 접점으로 낮춥니다.
-4. peer_meaning 은 2문장입니다. 현재 사실과 피어 프로필 접점이 어떤 유사 사업 비교 기준을
-   보여주는지까지 설명해야 합니다.
-5. recommended_actions 는 현재 피어/시장 신호, 비슷한 사업/흐름, 이번 사건에서 새로 확인된 차이,
-   후속 확인 데이터가 연결되어야 합니다. SK AX 프로필이 없으면 특정 역량 대응은 금지하지만,
-   동향 관찰 체크포인트는 유지합니다.
-6. recommended_actions 는 실행계획이 아니라 SK AX 관점 체크포인트입니다.
-   현재 사건 신호, 비교 축, 후속 확인 데이터, 내부 점검 관점이 보여야 합니다.
-7. 기술명+솔루션 표현은 IntegratedIssue에 해당 기술명이 직접 있을 때만 씁니다.
-   business_line 후보만 보고 "클라우드 및 AI 솔루션"처럼 솔루션명을 만들지 않습니다.
-8. 성공 사례, 구축 경험, 운영 역량은 ProfileContext에 실제 근거가 있을 때만 씁니다.
-   근거가 없으면 현재 사건에서 확인된 역할, 수치, 일정, 적용 업무 수준으로 낮춥니다.
-9. 시장 범위와 표현 강도는 근거 범위를 넘지 않습니다.
-   글로벌/해외, 공공+민간 양쪽, 전 산업, 사업영역 확장, 입지 강화,
-   긍정적 영향 같은 표현은 IntegratedIssue 또는 관련 프로필에 그 범위를
-   뒷받침하는 근거가 있을 때만 씁니다. 근거가 약하면 관찰 신호,
-   연결 사례, 검증 계기, 후속 활용 가능성으로 낮춥니다.
-10. 근거 없는 우위/선점/점유율/경쟁 심화/성과 예측은 제거합니다.
-11. 공개 문장 다듬기는 기존 논리와 구체 명사를 유지한 채 내부 용어만 바꿉니다.
-   "통합 결과"는 "기사에서는", "피어 프로필"은 "해당 기업의 기존 사업 흐름",
-   "자사 프로필"은 "SK AX의 관련 사업/역량", "linkage/접점"은
-   "연결 지점/이어지는 흐름/비교할 지점"으로 바꿉니다.
-12. "관찰 지점", "이어지는 흐름", "비교해야 합니다", "모니터링해야 합니다"처럼
-   결론만 있는 문장은 고칩니다. 현재 사건의 구체 사실, 연결되는 기존 사업/역량 근거,
-   왜 이 기준이 필요한지가 함께 보이게 씁니다.
-
-## 출력
-{{
-  "needs_revision": true,
-  "violations": ["수정 이유"],
-  "revised_result": {{
-    "is_valid_strategic_insight": true,
-    "analysis": {{}},
-    "implication": {{}}
-  }}
-}}
-"""
-
-
-REPAIR_SYSTEM_PROMPT = """\
-당신은 StrategicInsightAgent 결과에서 검증 실패가 난 필드만 고치는 repair agent입니다.
-새 사실을 만들지 말고, 위반 사유를 해결하는 최소 수정만 합니다. JSON 외 텍스트를 출력하지 마세요.
-"""
-
-
-REPAIR_USER_PROMPT_TEMPLATE = """\
-## IntegratedIssue
-{integrated_issue_json}
-
-## IssueFrame
-{issue_frame_json}
-
-## ComparableContext
-{comparable_context_json}
-
-## ProfileContext
-{profile_json}
-
-## business_line_mapping 후보
-{business_lines_json}
-
-## 검증 실패 사유
-{violations_json}
-
-## 수정 대상 결과
-{result_json}
-
-## repair 기준
-1. 없는 수치, 없는 관계, 근거 없는 역할 단정을 제거합니다.
-2. 피어가 계약 상대방/고객 슬롯이면 제공·수행·지원·운영 같은 공급자 행동을 제거하고,
-   계약 상대방으로 확인된 사업 범위, 기간, 대상 시스템, 프로필 사업영역 접점으로 고칩니다.
-3. 공급사 매출 비율은 계약 규모 참고 근거로만 쓰고 피어사의 성과로 쓰지 않습니다.
-4. 시사점은 현재 사건과 ComparableContext, 피어 프로필 접점으로 고칩니다.
-   접점이 없으면 사건 기반 해석으로 낮춥니다.
-   ProfileContext 에 없는 피어 사업영역/역량명은 제거합니다.
-5. SK AX 체크포인트는 skax_profile/business_line 후보와 연결합니다.
-6. recommended_actions 는 현재 사건 신호, 비슷한 사업/흐름, 이번 사건에서 새로 확인된 차이,
-   후속 확인 데이터가 보이게 고칩니다.
-7. 기술명+솔루션 표현은 IntegratedIssue에 해당 기술명이 직접 있을 때만 씁니다.
-   business_line 후보만으로 "클라우드 및 AI 솔루션" 같은 표현을 만들지 않습니다.
-8. 성공 사례, 구축 경험, 운영 역량은 ProfileContext에 실제 사례 근거가 있을 때만 씁니다.
-9. 공개 문장 다듬기는 기존 논리와 구체 명사를 유지한 채 내부 용어만 바꿉니다.
-   "통합 결과"는 "기사에서는", "피어 프로필"은 "해당 기업의 기존 사업 흐름",
-   "자사 프로필"은 "SK AX의 관련 사업/역량", "linkage/접점"은
-   "연결 지점/이어지는 흐름/비교할 지점"으로 바꿉니다.
-10. 검증 실패가 "근거 흐름 부족"이면 문장을 짧게 만들지 말고,
-   현재 사건의 구체 사실 → 프로필/비교 근거 → 해석 범위 또는 한계 → 후속 확인 데이터
-   순서가 보이도록 보강합니다.
-
-## 출력
-StrategicInsightAgent 최종 schema 그대로 JSON 으로 출력합니다.
-"""
+_INTERNAL_CHECKPOINT_GROUPS: dict[str, str] = {
+    "scope": r"범위|대상\s*업무|대상\s*시스템|적용\s*범위|고객군|유사\s*사업",
+    "ownership": r"책임|역할\s*분담|운영\s*구조|수행\s*주체|관리\s*주체",
+    "validation": r"검증|성능|용량|평가\s*기준|확인\s*기준|전환\s*조건|안착\s*조건",
+    "risk": r"리스크|위험|장애\s*대응|보안|권한|운영\s*조건|처리\s*기준",
+    "strategy": r"사업\s*기회|역량\s*공백|영업\s*전략|보완|모니터링|후속\s*확인",
+}
+_SKAX_ACTION_VERB_GROUPS: dict[str, str] = {
+    "diagnose": r"점검|확인|비교|분석|검토",
+    "define": r"정의|기준화|명시|구체화|항목화",
+    "design": r"구조화|구성|설계|재구성|분리|구분",
+    "operate": r"관리|추적|측정|반영|모니터링",
+}
+_DOMAIN_ALIASES: dict[str, set[str]] = {
+    "금융": {"금융", "금융권", "은행", "보험", "증권", "카드", "코어뱅킹"},
+    "제조": {"제조", "공장", "생산", "스마트팩토리", "팩토리"},
+    "공공": {"공공", "정부", "지자체", "공공기관", "국가"},
+    "물류": {"물류", "배송", "창고", "풀필먼트"},
+    "유통": {"유통", "리테일", "커머스", "이커머스"},
+    "통신": {"통신", "텔코", "네트워크", "5G"},
+    "의료": {"의료", "병원", "헬스케어", "바이오"},
+    "헬스케어": {"헬스케어", "의료", "병원", "건강관리"},
+    "인프라": {"인프라", "데이터센터", "컴퓨팅센터", "GPU", "서버", "클러스터", "스토리지"},
+}
+OVERCLAIM_PATTERNS: dict[str, tuple[str, ...]] = {
+    "counterparty": (
+        r"신규\s*사업",
+        r"사업\s*(영역|범위)?\s*(확장|확대)",
+        r"영역\s*(확장|확대)",
+        r"입지\s*강화",
+        r"역량\s*강화",
+        r"경쟁력\s*강화",
+        r"레퍼런스\s*확보",
+    ),
+    "new_signal": (
+        r"확정\s*(성과|사업|진출|확장)",
+        r"입증",
+        r"역량\s*강화",
+        r"성과[가를은\s]*(입증|확대|개선|창출)",
+        r"경쟁력\s*강화",
+        r"입지\s*강화",
+        r"사업\s*(영역|범위)?\s*(확장|확대)",
+    ),
+}
 
 
 class StrategicInsightAgent:
@@ -682,24 +271,32 @@ class StrategicInsightAgent:
             classification=classification,
             bundle=bundle_dict,
         )
+        profile_linkage_evaluation = _build_profile_linkage_evaluation(
+            integrated_issue=integrated_issue,
+            classification=classification,
+            profile_context=profile_dict,
+            relevance_hint_text=profile_relevance_text,
+        )
+        action_artifact_plan = _action_artifact_plan_for_prompt(
+            integrated_issue=integrated_issue,
+            classification=classification,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
         context_for_model = _analysis_context_for_model(
             context_dict,
             integrated_issue=integrated_issue,
             relevance_hint_text=profile_relevance_text,
             include_financial_context=include_financial_profile_context,
         )
-        issue_frame = _issue_frame_for_prompt(integrated_issue)
-        comparable_context = _comparable_context_for_prompt(
-            integrated_issue=integrated_issue,
-            issue_frame=issue_frame,
-            analysis_context=context_for_model,
-            profile_context=profile_dict,
-        )
 
         prompt = USER_PROMPT_TEMPLATE.format(
             integrated_issue_json=_json_dumps(_integrated_issue_for_prompt(integrated_issue)),
-            issue_frame_json=_json_dumps(issue_frame),
-            comparable_context_json=_json_dumps(comparable_context),
+            strategic_evidence_json=_json_dumps(
+                _strategic_evidence_pack_for_prompt(
+                    integrated_issue=integrated_issue,
+                    bundle=bundle_dict,
+                )
+            ),
             classification_json=_json_dumps(_classification_for_prompt(classification)),
             bundle_json=_json_dumps(_bundle_for_prompt(bundle_dict, cluster_metadata)),
             profile_json=_json_dumps(
@@ -708,9 +305,12 @@ class StrategicInsightAgent:
                     integrated_issue=integrated_issue,
                     relevance_hint_text=profile_relevance_text,
                     include_financial_context=include_financial_profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
                 )
             ),
             context_json=_json_dumps(_analysis_context_for_prompt(context_for_model)),
+            profile_linkage_json=_json_dumps(profile_linkage_evaluation),
+            action_artifact_plan_json=_json_dumps(action_artifact_plan),
             context_availability_json=_json_dumps(
                 _context_availability_for_prompt(
                     integrated_issue=integrated_issue,
@@ -756,6 +356,8 @@ class StrategicInsightAgent:
                     result,
                     integrated_issue=integrated_issue,
                     profile_context=profile_dict,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
                 )
             reviewed = self._review_and_revise(
                 result,
@@ -771,36 +373,37 @@ class StrategicInsightAgent:
                 ),
                 profile_relevance_text=profile_relevance_text,
                 include_financial_profile_context=include_financial_profile_context,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                action_artifact_plan=action_artifact_plan,
+            )
+            reviewed = _with_fallback_linkage_payloads(
+                reviewed,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                integrated_issue=integrated_issue,
+                action_artifact_plan=action_artifact_plan,
             )
             if "quality_gate_failed" in _json_dumps(reviewed):
-                reviewed_violations = _quality_gate_violations(
+                fallback = _two_section_fact_based_fallback(
                     reviewed,
                     integrated_issue=integrated_issue,
                     profile_context=profile_dict,
+                    model=self.model,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
                 )
-                if _quality_failure_is_mechanical_repair_candidate(
-                    reviewed_violations
-                ) or _quality_failure_can_fallback_to_issue_frame(
-                    reviewed_violations,
+                fallback_violations = _quality_gate_violations(
+                    fallback,
                     integrated_issue=integrated_issue,
                     profile_context=profile_dict,
-                ):
-                    guarded = _minimal_quality_guard(
-                        reviewed,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
+                )
+                if not fallback_violations:
+                    return _attach_sentence_grounding(
+                        fallback,
                         integrated_issue=integrated_issue,
                         profile_context=profile_dict,
                     )
-                    remaining = _quality_gate_violations(
-                        guarded,
-                        integrated_issue=integrated_issue,
-                        profile_context=profile_dict,
-                    )
-                    if not remaining:
-                        return _attach_sentence_grounding(
-                            _restore_valid_flags_if_structurally_safe(guarded),
-                            integrated_issue=integrated_issue,
-                            profile_context=profile_dict,
-                        )
                 return _attach_sentence_grounding(
                     reviewed,
                     integrated_issue=integrated_issue,
@@ -810,6 +413,8 @@ class StrategicInsightAgent:
                 reviewed,
                 integrated_issue=integrated_issue,
                 profile_context=profile_dict,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                action_artifact_plan=action_artifact_plan,
             )
         except Exception as exc:  # noqa: BLE001 - fallback preserves pipeline availability.
             log.warning(
@@ -921,6 +526,8 @@ class StrategicInsightAgent:
         return result
 
     def _get_llm(self) -> ChatOpenAI:
+        from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
+
         if self._llm is None:
             self._llm = ChatOpenAI(
                 model=_LLM_MODEL,
@@ -965,31 +572,59 @@ class StrategicInsightAgent:
         *,
         integrated_issue: dict[str, Any],
         profile_context: dict[str, Any],
+        profile_linkage_evaluation: dict[str, Any] | None = None,
+        action_artifact_plan: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        profile_linkage_evaluation = (
+            profile_linkage_evaluation
+            or _build_profile_linkage_evaluation(
+                integrated_issue=integrated_issue,
+                classification={},
+                profile_context=profile_context,
+            )
+        )
+        action_artifact_plan = action_artifact_plan or _action_artifact_plan_for_prompt(
+            integrated_issue=integrated_issue,
+            classification={},
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
+        result = _with_fallback_linkage_payloads(
+            result,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+            integrated_issue=integrated_issue,
+            action_artifact_plan=action_artifact_plan,
+        )
         violations = _quality_gate_violations(
             result,
             integrated_issue=integrated_issue,
             profile_context=profile_context,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+            action_artifact_plan=action_artifact_plan,
         )
         if not violations:
-            guarded = _minimal_quality_guard(
-                result,
-                integrated_issue=integrated_issue,
-                profile_context=profile_context,
-            )
-            remaining = _quality_gate_violations(
-                guarded,
-                integrated_issue=integrated_issue,
-                profile_context=profile_context,
-            )
-            if remaining:
-                return _attach_sentence_grounding(
-                    _mark_quality_gate_failed(guarded, remaining),
-                    integrated_issue=integrated_issue,
-                    profile_context=profile_context,
-                )
             return _attach_sentence_grounding(
-                _restore_valid_flags_if_structurally_safe(guarded),
+                _restore_valid_flags_if_structurally_safe(result),
+                integrated_issue=integrated_issue,
+                profile_context=profile_context,
+            )
+        fallback = _two_section_fact_based_fallback(
+            result,
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+            model=self.model,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+            action_artifact_plan=action_artifact_plan,
+        )
+        fallback_violations = _quality_gate_violations(
+            fallback,
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+            action_artifact_plan=action_artifact_plan,
+        )
+        if not fallback_violations:
+            return _attach_sentence_grounding(
+                fallback,
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
             )
@@ -1002,6 +637,8 @@ class StrategicInsightAgent:
             guarded,
             integrated_issue=integrated_issue,
             profile_context=profile_context,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+            action_artifact_plan=action_artifact_plan,
         )
         if remaining:
             return _attach_sentence_grounding(
@@ -1026,18 +663,25 @@ class StrategicInsightAgent:
         bundle_id: str,
         profile_relevance_text: str = "",
         include_financial_profile_context: bool = False,
+        profile_linkage_evaluation: dict[str, Any] | None = None,
+        action_artifact_plan: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        profile_linkage_evaluation = (
+            profile_linkage_evaluation
+            or _build_profile_linkage_evaluation(
+                integrated_issue=integrated_issue,
+                classification=classification,
+                profile_context=profile_context,
+                relevance_hint_text=profile_relevance_text,
+            )
+        )
+        action_artifact_plan = action_artifact_plan or _action_artifact_plan_for_prompt(
+            integrated_issue=integrated_issue,
+            classification=classification,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
         prompt = REVIEW_USER_PROMPT_TEMPLATE.format(
             integrated_issue_json=_json_dumps(_integrated_issue_for_prompt(integrated_issue)),
-            issue_frame_json=_json_dumps(_issue_frame_for_prompt(integrated_issue)),
-            comparable_context_json=_json_dumps(
-                _comparable_context_for_prompt(
-                    integrated_issue=integrated_issue,
-                    issue_frame=_issue_frame_for_prompt(integrated_issue),
-                    analysis_context=analysis_context,
-                    profile_context=profile_context,
-                )
-            ),
             classification_json=_json_dumps(_classification_for_prompt(classification)),
             profile_json=_json_dumps(
                 _profile_for_prompt(
@@ -1045,9 +689,12 @@ class StrategicInsightAgent:
                     integrated_issue=integrated_issue,
                     relevance_hint_text=profile_relevance_text,
                     include_financial_context=include_financial_profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
                 )
             ),
             context_json=_json_dumps(_analysis_context_for_prompt(analysis_context)),
+            profile_linkage_json=_json_dumps(profile_linkage_evaluation),
+            action_artifact_plan_json=_json_dumps(action_artifact_plan),
             context_availability_json=_json_dumps(
                 _context_availability_for_prompt(
                     integrated_issue=integrated_issue,
@@ -1084,6 +731,8 @@ class StrategicInsightAgent:
                 revised,
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                action_artifact_plan=action_artifact_plan,
             )
             if not violations:
                 return revised
@@ -1097,6 +746,8 @@ class StrategicInsightAgent:
                 bundle_id=bundle_id,
                 profile_relevance_text=profile_relevance_text,
                 include_financial_profile_context=include_financial_profile_context,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                action_artifact_plan=action_artifact_plan,
             )
         except Exception as exc:  # noqa: BLE001 - review is quality layer, not availability gate.
             log.warning(
@@ -1108,6 +759,8 @@ class StrategicInsightAgent:
                 result,
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                action_artifact_plan=action_artifact_plan,
             )
             if violations:
                 return _mark_quality_gate_failed(result, violations)
@@ -1125,23 +778,30 @@ class StrategicInsightAgent:
         bundle_id: str,
         profile_relevance_text: str = "",
         include_financial_profile_context: bool = False,
+        profile_linkage_evaluation: dict[str, Any] | None = None,
+        action_artifact_plan: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         current = result
         current_violations = violations
+        profile_linkage_evaluation = (
+            profile_linkage_evaluation
+            or _build_profile_linkage_evaluation(
+                integrated_issue=integrated_issue,
+                classification=classification,
+                profile_context=profile_context,
+                relevance_hint_text=profile_relevance_text,
+            )
+        )
+        action_artifact_plan = action_artifact_plan or _action_artifact_plan_for_prompt(
+            integrated_issue=integrated_issue,
+            classification=classification,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
         try:
             for attempt in range(3):
                 prompt = REPAIR_USER_PROMPT_TEMPLATE.format(
                     integrated_issue_json=_json_dumps(
                         _integrated_issue_for_prompt(integrated_issue)
-                    ),
-                    issue_frame_json=_json_dumps(_issue_frame_for_prompt(integrated_issue)),
-                    comparable_context_json=_json_dumps(
-                        _comparable_context_for_prompt(
-                            integrated_issue=integrated_issue,
-                            issue_frame=_issue_frame_for_prompt(integrated_issue),
-                            analysis_context=analysis_context,
-                            profile_context=profile_context,
-                        )
                     ),
                     profile_json=_json_dumps(
                         _profile_for_prompt(
@@ -1149,8 +809,11 @@ class StrategicInsightAgent:
                             integrated_issue=integrated_issue,
                             relevance_hint_text=profile_relevance_text,
                             include_financial_context=include_financial_profile_context,
+                            profile_linkage_evaluation=profile_linkage_evaluation,
                         )
                     ),
+                    profile_linkage_json=_json_dumps(profile_linkage_evaluation),
+                    action_artifact_plan_json=_json_dumps(action_artifact_plan),
                     business_lines_json=_json_dumps(
                         _business_line_candidate_details(
                             profile_context,
@@ -1180,6 +843,8 @@ class StrategicInsightAgent:
                     current,
                     integrated_issue=integrated_issue,
                     profile_context=profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
                 )
                 if not current_violations:
                     return current
@@ -1193,11 +858,15 @@ class StrategicInsightAgent:
                     bundle_id=bundle_id,
                     profile_relevance_text=profile_relevance_text,
                     include_financial_profile_context=include_financial_profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
                 )
                 current_violations = _quality_gate_violations(
                     current,
                     integrated_issue=integrated_issue,
                     profile_context=profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
                 )
                 if not current_violations:
                     return current
@@ -1212,14 +881,35 @@ class StrategicInsightAgent:
                     bundle_id=bundle_id,
                     profile_relevance_text=profile_relevance_text,
                     include_financial_profile_context=include_financial_profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
                 )
                 current_violations = _quality_gate_violations(
                     current,
                     integrated_issue=integrated_issue,
                     profile_context=profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
                 )
                 if not current_violations:
                     return current
+            fallback = _two_section_fact_based_fallback(
+                current,
+                integrated_issue=integrated_issue,
+                profile_context=profile_context,
+                model=self.model,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                action_artifact_plan=action_artifact_plan,
+            )
+            fallback_violations = _quality_gate_violations(
+                fallback,
+                integrated_issue=integrated_issue,
+                profile_context=profile_context,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                action_artifact_plan=action_artifact_plan,
+            )
+            if not fallback_violations:
+                return fallback
             guarded = _minimal_quality_guard(
                 current,
                 integrated_issue=integrated_issue,
@@ -1242,6 +932,7 @@ class StrategicInsightAgent:
                     profile_context=profile_context,
                     bundle_id=bundle_id,
                     profile_relevance_text=profile_relevance_text,
+                    action_artifact_plan=action_artifact_plan,
                 )
                 guarded = _minimal_quality_guard(
                     guarded,
@@ -1252,11 +943,28 @@ class StrategicInsightAgent:
                 guarded,
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
+                action_artifact_plan=action_artifact_plan,
             )
+            if not _string_list(
+                ((guarded.get("implication") or {}).get("skax_implication") or {}).get(
+                    "recommended_actions"
+                ),
+                max_items=3,
+            ):
+                guarded = _two_section_fact_based_fallback(
+                    guarded,
+                    integrated_issue=integrated_issue,
+                    profile_context=profile_context,
+                    model=self.model,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
+                )
             final_remaining = _quality_gate_violations(
                 guarded,
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                action_artifact_plan=action_artifact_plan,
             )
             if final_remaining:
                 return _mark_quality_gate_failed(guarded, final_remaining)
@@ -1267,19 +975,21 @@ class StrategicInsightAgent:
                 bundle_id,
                 exc,
             )
-            final_remaining = _quality_gate_violations(
+            guarded = _minimal_quality_guard(
                 result,
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
             )
-            return _mark_quality_gate_failed(
-                result,
-                final_remaining
-                or [
-                    "StrategicInsightAgent quality repair failed; "
-                    "근거 기반 repair를 완료하지 못해 fail-closed 처리합니다."
-                ],
+            final_remaining = _quality_gate_violations(
+                guarded,
+                integrated_issue=integrated_issue,
+                profile_context=profile_context,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                action_artifact_plan=action_artifact_plan,
             )
+            if final_remaining:
+                return _mark_quality_gate_failed(guarded, final_remaining)
+            return guarded
 
     def _repair_counterparty_role_result(
         self,
@@ -1292,26 +1002,36 @@ class StrategicInsightAgent:
         bundle_id: str,
         profile_relevance_text: str = "",
         include_financial_profile_context: bool = False,
+        profile_linkage_evaluation: dict[str, Any] | None = None,
+        action_artifact_plan: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        profile_linkage_evaluation = (
+            profile_linkage_evaluation
+            or _build_profile_linkage_evaluation(
+                integrated_issue=integrated_issue,
+                classification=classification,
+                profile_context=profile_context,
+                relevance_hint_text=profile_relevance_text,
+            )
+        )
+        action_artifact_plan = action_artifact_plan or _action_artifact_plan_for_prompt(
+            integrated_issue=integrated_issue,
+            classification=classification,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
         prompt = COUNTERPARTY_REPAIR_USER_PROMPT_TEMPLATE.format(
             integrated_issue_json=_json_dumps(_integrated_issue_for_prompt(integrated_issue)),
-            issue_frame_json=_json_dumps(_issue_frame_for_prompt(integrated_issue)),
-            comparable_context_json=_json_dumps(
-                _comparable_context_for_prompt(
-                    integrated_issue=integrated_issue,
-                    issue_frame=_issue_frame_for_prompt(integrated_issue),
-                    analysis_context=analysis_context,
-                    profile_context=profile_context,
-                )
-            ),
             profile_json=_json_dumps(
                 _profile_for_prompt(
                     profile_context,
                     integrated_issue=integrated_issue,
                     relevance_hint_text=profile_relevance_text,
                     include_financial_context=include_financial_profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
                 )
             ),
+            profile_linkage_json=_json_dumps(profile_linkage_evaluation),
+            action_artifact_plan_json=_json_dumps(action_artifact_plan),
             business_lines_json=_json_dumps(
                 _business_line_candidate_details(
                     profile_context,
@@ -1349,26 +1069,36 @@ class StrategicInsightAgent:
         bundle_id: str,
         profile_relevance_text: str = "",
         include_financial_profile_context: bool = False,
+        profile_linkage_evaluation: dict[str, Any] | None = None,
+        action_artifact_plan: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        profile_linkage_evaluation = (
+            profile_linkage_evaluation
+            or _build_profile_linkage_evaluation(
+                integrated_issue=integrated_issue,
+                classification=classification,
+                profile_context=profile_context,
+                relevance_hint_text=profile_relevance_text,
+            )
+        )
+        action_artifact_plan = action_artifact_plan or _action_artifact_plan_for_prompt(
+            integrated_issue=integrated_issue,
+            classification=classification,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
         prompt = REPORT_COPY_REPAIR_USER_PROMPT_TEMPLATE.format(
             integrated_issue_json=_json_dumps(_integrated_issue_for_prompt(integrated_issue)),
-            issue_frame_json=_json_dumps(_issue_frame_for_prompt(integrated_issue)),
-            comparable_context_json=_json_dumps(
-                _comparable_context_for_prompt(
-                    integrated_issue=integrated_issue,
-                    issue_frame=_issue_frame_for_prompt(integrated_issue),
-                    analysis_context=analysis_context,
-                    profile_context=profile_context,
-                )
-            ),
             profile_json=_json_dumps(
                 _profile_for_prompt(
                     profile_context,
                     integrated_issue=integrated_issue,
                     relevance_hint_text=profile_relevance_text,
                     include_financial_context=include_financial_profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
                 )
             ),
+            profile_linkage_json=_json_dumps(profile_linkage_evaluation),
+            action_artifact_plan_json=_json_dumps(action_artifact_plan),
             business_lines_json=_json_dumps(
                 _business_line_candidate_details(
                     profile_context,
@@ -1403,23 +1133,36 @@ class StrategicInsightAgent:
         profile_context: dict[str, Any],
         bundle_id: str,
         profile_relevance_text: str = "",
+        action_artifact_plan: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
         implication = out.get("implication") or {}
         skax = implication.get("skax_implication") or {}
+        profile_linkage_evaluation = _build_profile_linkage_evaluation(
+            integrated_issue=integrated_issue,
+            classification={},
+            profile_context=profile_context,
+            relevance_hint_text=profile_relevance_text,
+        )
+        action_artifact_plan = action_artifact_plan or _action_artifact_plan_for_prompt(
+            integrated_issue=integrated_issue,
+            classification={},
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
         prompt = ACTION_REPAIR_USER_PROMPT_TEMPLATE.format(
             integrated_issue_json=_json_dumps(_integrated_issue_for_prompt(integrated_issue)),
-            issue_frame_json=_json_dumps(_issue_frame_for_prompt(integrated_issue)),
-            comparable_context_json=_json_dumps(
-                _comparable_context_for_prompt(
-                    integrated_issue=integrated_issue,
-                    issue_frame=_issue_frame_for_prompt(integrated_issue),
-                    analysis_context={},
-                    profile_context=profile_context,
-                )
-            ),
             profile_json=_json_dumps(
                 _profile_for_prompt(
+                    profile_context,
+                    integrated_issue=integrated_issue,
+                    relevance_hint_text=profile_relevance_text,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                )
+            ),
+            profile_linkage_json=_json_dumps(profile_linkage_evaluation),
+            action_artifact_plan_json=_json_dumps(action_artifact_plan),
+            business_lines_json=_json_dumps(
+                _business_line_candidate_details(
                     profile_context,
                     integrated_issue=integrated_issue,
                     relevance_hint_text=profile_relevance_text,
@@ -1439,11 +1182,12 @@ class StrategicInsightAgent:
             for index, action in enumerate(
                 _string_list(data.get("recommended_actions"), max_items=3), start=1
             )
-            if not _recommended_action_quality_violation(
+            if not _repair_action_violation(
                 action,
                 label=f"skax_implication.recommended_actions[{index}]",
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
+                action_artifact_plan=action_artifact_plan,
             )
         ]
         if actions:
@@ -1462,6 +1206,23 @@ class StrategicInsightAgent:
         analysis_context: AnalysisContext | None,
         cluster_metadata: dict[str, Any],
     ) -> dict[str, Any]:
+        profile_dict = _profile_to_dict(profile_context)
+        profile_relevance_text = _profile_relevance_hint_text(
+            integrated_issue=integrated_issue,
+            classification=classification,
+            bundle=_bundle_to_dict(input_bundle),
+        )
+        profile_linkage_evaluation = _build_profile_linkage_evaluation(
+            integrated_issue=integrated_issue,
+            classification=classification,
+            profile_context=profile_dict,
+            relevance_hint_text=profile_relevance_text,
+        )
+        action_artifact_plan = _action_artifact_plan_for_prompt(
+            integrated_issue=integrated_issue,
+            classification=classification,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
         analysis = self._fallback_analyzer.analyze(
             integrated_issue=integrated_issue,
             classification=classification,
@@ -1483,15 +1244,21 @@ class StrategicInsightAgent:
             "implication": _normalize_implication_block(
                 implication,
                 integrated_issue=integrated_issue,
-                profile_context=_profile_to_dict(profile_context),
+                profile_context=profile_dict,
                 analysis_context={},
                 model=self.model,
             ),
         }
+        result = _with_fallback_linkage_payloads(
+            result,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+            integrated_issue=integrated_issue,
+            action_artifact_plan=action_artifact_plan,
+        )
         return _attach_sentence_grounding(
             result,
             integrated_issue=integrated_issue,
-            profile_context=_profile_to_dict(profile_context),
+            profile_context=profile_dict,
         )
 
 
@@ -1526,9 +1293,274 @@ def _parse_and_normalize(
     )
     return {
         "is_valid_strategic_insight": is_valid,
+        "issue_understanding": _normalize_issue_understanding(
+            data.get("issue_understanding"),
+            integrated_issue=integrated_issue,
+        ),
+        "profile_linkage": _normalize_llm_profile_linkage(data.get("profile_linkage")),
+        "skax_response_linkage": _normalize_skax_response_linkage(
+            data.get("skax_response_linkage")
+        ),
+        "claim_strength": _choice(
+            data.get("claim_strength"),
+            {"strong", "moderate", "cautious"},
+            "cautious",
+        ),
+        "grounding_summary": _normalize_grounding_summary(
+            data.get("grounding_summary"),
+            integrated_issue=integrated_issue,
+        ),
         "analysis": analysis,
         "implication": implication,
     }
+
+
+def _normalize_issue_understanding(
+    value: Any,
+    *,
+    integrated_issue: dict[str, Any],
+) -> dict[str, Any]:
+    data = _json_dict(value)
+    known_fact_ids = _known_fact_ids(integrated_issue)
+    return {
+        "confirmed_facts": _string_list(data.get("confirmed_facts"), max_items=8),
+        "main_actor": str(data.get("main_actor") or integrated_issue.get("main_company") or ""),
+        "peer_role_in_issue": _choice(
+            data.get("peer_role_in_issue"),
+            {
+                "provider",
+                "builder",
+                "operator",
+                "selected_party",
+                "contract_counterparty",
+                "customer_or_buyer",
+                "partner",
+                "investor",
+                "unclear",
+            },
+            "unclear",
+        ),
+        "role_confidence": _clamp_float(data.get("role_confidence"), 0.0),
+        "activity_nature": _choice(
+            data.get("activity_nature"),
+            {
+                "selection",
+                "contract",
+                "launch",
+                "investment",
+                "partnership",
+                "operation",
+                "system_transition",
+                "infrastructure_build",
+                "business_update",
+                "unclear",
+            },
+            "unclear",
+        ),
+        "target_business_or_system": _string_list(
+            data.get("target_business_or_system"),
+            max_items=8,
+        ),
+        "customer_or_market_scope": _string_list(
+            data.get("customer_or_market_scope"),
+            max_items=8,
+        ),
+        "confirmed_numbers_or_dates": _string_list(
+            data.get("confirmed_numbers_or_dates"),
+            max_items=8,
+        ),
+        "uncertain_points": _string_list(data.get("uncertain_points"), max_items=8),
+        "evidence_ids": [
+            fact_id
+            for fact_id in _string_list(data.get("evidence_ids"), max_items=12)
+            if fact_id in known_fact_ids
+        ],
+    }
+
+
+def _normalize_llm_profile_linkage(value: Any) -> dict[str, Any]:
+    data = _json_dict(value)
+    return {
+        "peer_company": str(data.get("peer_company") or ""),
+        "profile_evidence_available": bool(data.get("profile_evidence_available")),
+        "matched_profile_areas": [
+            {
+                "business_line": str(item.get("business_line") or "").strip(),
+                "business_area": str(item.get("business_area") or "").strip(),
+                "profile_area_name": str(item.get("profile_area_name") or "").strip(),
+                "profile_capability": str(item.get("profile_capability") or "").strip(),
+                "matched_capabilities": _string_list(
+                    item.get("matched_capabilities")
+                    or item.get("core_capabilities")
+                    or item.get("capabilities"),
+                    max_items=8,
+                ),
+                "matched_products_or_services": _string_list(
+                    item.get("matched_products_or_services")
+                    or item.get("products_or_services")
+                    or item.get("key_products_services"),
+                    max_items=8,
+                ),
+                "matched_issue_terms": _string_list(
+                    item.get("matched_issue_terms") or item.get("matched_terms"),
+                    max_items=12,
+                ),
+                "evidence_text": str(item.get("evidence_text") or "").strip(),
+                "why_relevant_to_issue": str(item.get("why_relevant_to_issue") or "").strip(),
+                "profile_source_ref": str(
+                    item.get("profile_source_ref") or item.get("source_ref") or ""
+                ).strip(),
+                "specificity_level": _choice(
+                    item.get("specificity_level"),
+                    {
+                        "product_or_service",
+                        "core_capability",
+                        "business_area",
+                        "business_line",
+                        "profile_context",
+                    },
+                    "profile_context",
+                ),
+            }
+            for item in _jsonish_list(data.get("matched_profile_areas"))[:5]
+            if isinstance(item, dict)
+        ],
+        "linkage_level": _choice(
+            data.get("linkage_level"),
+            {"high", "medium", "low", "none"},
+            "none",
+        ),
+        "business_novelty_status": _choice(
+            data.get("business_novelty_status"),
+            {
+                "existing_profile_business_linked",
+                "weak_profile_linkage",
+                "new_or_untracked_business_signal",
+                "role_sensitive_untracked_signal",
+                "profile_insufficient_cannot_judge_novelty",
+                "uncertain_not_enough_to_call_new_business",
+                "not_new_business_counterparty_role",
+            },
+            "profile_insufficient_cannot_judge_novelty",
+        ),
+        "allowed_interpretation_strength": _choice(
+            data.get("allowed_interpretation_strength"),
+            {
+                "profile_based",
+                "cautious_profile_based",
+                "event_based",
+                "observation_only",
+            },
+            "observation_only",
+        ),
+        "reason": str(data.get("reason") or "").strip(),
+    }
+
+
+def _normalize_skax_response_linkage(value: Any) -> dict[str, Any]:
+    data = _json_dict(value)
+    return {
+        "skax_profile_evidence_available": bool(data.get("skax_profile_evidence_available")),
+        "matched_skax_areas": [
+            {
+                "business_line": str(item.get("business_line") or "").strip(),
+                "business_area": str(item.get("business_area") or "").strip(),
+                "profile_area_name": str(item.get("profile_area_name") or "").strip(),
+                "matched_capabilities": _string_list(
+                    item.get("matched_capabilities")
+                    or item.get("core_capabilities")
+                    or item.get("capabilities"),
+                    max_items=8,
+                ),
+                "matched_products_or_services": _string_list(
+                    item.get("matched_products_or_services")
+                    or item.get("products_or_services")
+                    or item.get("key_products_services"),
+                    max_items=8,
+                ),
+                "matched_issue_terms": _string_list(
+                    item.get("matched_issue_terms") or item.get("matched_terms"),
+                    max_items=12,
+                ),
+                "evidence_text": str(item.get("evidence_text") or "").strip(),
+                "why_relevant_to_issue": str(item.get("why_relevant_to_issue") or "").strip(),
+                "profile_source_ref": str(
+                    item.get("profile_source_ref") or item.get("source_ref") or ""
+                ).strip(),
+                "specificity_level": _choice(
+                    item.get("specificity_level"),
+                    {
+                        "product_or_service",
+                        "core_capability",
+                        "business_area",
+                        "business_line",
+                        "profile_context",
+                    },
+                    "profile_context",
+                ),
+            }
+            for item in _jsonish_list(data.get("matched_skax_areas"))[:5]
+            if isinstance(item, dict)
+        ],
+        "response_mode": _choice(
+            data.get("response_mode"),
+            {"profile_based_action", "cautious_action", "generic_monitoring_action"},
+            "generic_monitoring_action",
+        ),
+        "response_focus": _string_list(data.get("response_focus"), max_items=8),
+        "internal_checkpoints": _string_list(data.get("internal_checkpoints"), max_items=8),
+        "recommended_focus": _string_list(data.get("recommended_focus"), max_items=8),
+        "monitoring_points": _string_list(data.get("monitoring_points"), max_items=8),
+        "reason": str(data.get("reason") or "").strip(),
+    }
+
+
+def _normalize_grounding_summary(
+    value: Any,
+    *,
+    integrated_issue: dict[str, Any],
+) -> dict[str, Any]:
+    data = _json_dict(value)
+    known_fact_ids = _known_fact_ids(integrated_issue)
+    return {
+        "used_fact_ids": [
+            fact_id
+            for fact_id in _string_list(data.get("used_fact_ids"), max_items=12)
+            if fact_id in known_fact_ids
+        ],
+        "used_profile_refs": _string_list(data.get("used_profile_refs"), max_items=12),
+        "ungrounded_claims_removed": _string_list(
+            data.get("ungrounded_claims_removed"),
+            max_items=12,
+        ),
+    }
+
+
+def _ensure_reasoning_debug_fields(
+    result: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep reasoning/debug fields stable on LLM, repair, invalid, and fallback paths."""
+    out = dict(result or {})
+    out["issue_understanding"] = _normalize_issue_understanding(
+        out.get("issue_understanding"),
+        integrated_issue=integrated_issue,
+    )
+    out["profile_linkage"] = _normalize_llm_profile_linkage(out.get("profile_linkage"))
+    out["skax_response_linkage"] = _normalize_skax_response_linkage(
+        out.get("skax_response_linkage")
+    )
+    out["claim_strength"] = _choice(
+        out.get("claim_strength"),
+        {"strong", "moderate", "cautious"},
+        "cautious",
+    )
+    out["grounding_summary"] = _normalize_grounding_summary(
+        out.get("grounding_summary"),
+        integrated_issue=integrated_issue,
+    )
+    return out
 
 
 def _parse_review_and_normalize(
@@ -1925,18 +1957,6 @@ def _build_analysis_context_for_issue(
         return {}
 
 
-def _companies_from_integrated_issue(integrated_issue: dict[str, Any]) -> list[str]:
-    companies: list[str] = []
-    for company_id in [
-        integrated_issue.get("main_company"),
-        *(_jsonish_list(integrated_issue.get("mentioned_peer_companies")) or []),
-    ]:
-        text = str(company_id or "").strip()
-        if text and text not in companies:
-            companies.append(text)
-    return companies
-
-
 def _evidence_snippets_from_issue(integrated_issue: dict[str, Any]) -> list[dict[str, Any]]:
     snippets: list[dict[str, Any]] = []
     for item in _jsonish_list(integrated_issue.get("fact_basis")):
@@ -1998,46 +2018,6 @@ def _consolidated_facts_from_evidence_refs(rows: Sequence[Any]) -> list[dict[str
             }
         )
     return facts
-
-
-def _json_dict(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
-
-
-def _jsonish_list(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    if isinstance(value, tuple | set):
-        return list(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return [value]
-        return parsed if isinstance(parsed, list) else [parsed]
-    return []
-
-
-def _int_list(value: Any) -> list[int]:
-    result: list[int] = []
-    for item in _jsonish_list(value):
-        try:
-            parsed = int(item)
-        except (TypeError, ValueError):
-            continue
-        if parsed > 0 and parsed not in result:
-            result.append(parsed)
-    return result
 
 
 def _normalize_analysis_block(
@@ -2202,7 +2182,7 @@ def _empty_strategic_insight(
             "run_at": datetime.now(UTC).isoformat(),
         },
     }
-    return {
+    result = {
         "is_valid_strategic_insight": False,
         "analysis": analysis,
         "implication": implication,
@@ -2218,6 +2198,7 @@ def _empty_strategic_insight(
             },
         },
     }
+    return _ensure_reasoning_debug_fields(result, integrated_issue=integrated_issue)
 
 
 def _is_valid_integrated_issue(integrated_issue: dict[str, Any]) -> bool:
@@ -2262,812 +2243,105 @@ def _integrated_issue_for_prompt(integrated_issue: dict[str, Any]) -> dict[str, 
     }
 
 
-def _issue_frame_for_prompt(integrated_issue: dict[str, Any]) -> dict[str, Any]:
-    """Structured reading frame extracted only from IntegratedIssue evidence.
-
-    This is intentionally conservative: it does not decide strategy. It gives the
-    LLM a small, evidence-scoped map of who/what/action/scope/numbers so the
-    generated implication does not drift into generic proposal copy.
-    """
-    intelligence = integrated_issue.get("cluster_fact_intelligence") or {}
-    intelligence = intelligence if isinstance(intelligence, dict) else {}
-    activity_types = _string_list(intelligence.get("activity_types"), max_items=8)
-    products_or_services = _unique_texts(
-        [
-            *_string_list(intelligence.get("products_or_services"), max_items=12),
-            *_products_from_facts(integrated_issue),
-        ],
-        max_items=12,
-    )
-    customers_or_industries = _unique_texts(
-        [
-            *_string_list(intelligence.get("customers_or_industries"), max_items=12),
-            *_customers_from_facts(integrated_issue),
-        ],
-        max_items=12,
-    )
-    main_fact = _primary_issue_fact(integrated_issue)
-    focus_text = _issue_focus_text(integrated_issue)
-    frame_kind = _issue_frame_kind(integrated_issue)
-    evidence_ids = sorted(_known_fact_ids(integrated_issue))
-    action = _issue_frame_action(
-        integrated_issue,
-        activity_types=activity_types,
-        evidence_ids=evidence_ids,
-        frame_kind=frame_kind,
-    )
-    business_object = _issue_frame_business_object(
-        integrated_issue,
-        products_or_services=products_or_services,
-        evidence_ids=evidence_ids,
-        frame_kind=frame_kind,
-    )
-    target_scope = _issue_frame_target_scope(
-        integrated_issue,
-        products_or_services=products_or_services,
-        customers_or_industries=customers_or_industries,
-        frame_kind=frame_kind,
-        focus_text=focus_text,
-    )
-    return {
-        "schema_version": "issue-frame-v1",
-        "main_fact": main_fact,
-        "frame_kind": frame_kind,
-        "entities": _issue_frame_entities(
-            integrated_issue,
-            customers_or_industries=customers_or_industries,
-            evidence_ids=evidence_ids,
-        ),
-        "action_or_event": action,
-        "business_object": business_object,
-        "target_scope": target_scope,
-        "numbers": _issue_frame_numbers(integrated_issue, evidence_ids=evidence_ids),
-        "profile_matching_terms": _issue_terms_for_profile_matching(
-            integrated_issue,
-            products_or_services=products_or_services,
-            customers_or_industries=customers_or_industries,
-        ),
-        "unsupported_inferences": [
-            "IssueFrame에 없는 회사 역할은 현재 사건 역할로 단정하지 않습니다.",
-            "ProfileContext의 사업영역은 현재 사건과 연결될 때만 배경으로 사용합니다.",
-            "수치·기간·성과·인과는 evidence_id가 있는 근거 범위에서만 사용합니다.",
-        ],
-    }
-
-
-def _comparable_context_for_prompt(
+def _strategic_evidence_pack_for_prompt(
     *,
     integrated_issue: dict[str, Any],
-    issue_frame: dict[str, Any],
-    analysis_context: dict[str, Any],
-    profile_context: dict[str, Any],
+    bundle: dict[str, Any],
 ) -> dict[str, Any]:
-    """Find nearby business/flow context from already available context.
+    """Compact article-derived evidence for strategic implication generation.
 
-    This does not invent a similar business. It only exposes compact candidates
-    whose text overlaps with the current issue terms, so the LLM can connect
-    current facts to comparable flows when the surrounding context actually has
-    a match.
+    IntegratedIssue remains the only fact source. This pack simply separates the
+    article evidence that the integration step already selected from display
+    summaries, so the strategic agent does not infer from card copy alone.
     """
-    query_terms = _build_comparable_query_terms(issue_frame)
-    candidates: list[dict[str, Any]] = []
-    for layer_name, layer_value in (analysis_context or {}).items():
-        candidates.extend(
-            _comparable_candidates_from_value(
-                layer_value,
-                query_terms=query_terms,
-                layer_name=str(layer_name),
-                case_type=_comparable_case_type_for_layer(str(layer_name)),
-            )
-        )
-    candidates.extend(
-        _comparable_candidates_from_value(
-            _profile_for_prompt(profile_context, integrated_issue=integrated_issue),
-            query_terms=query_terms,
-            layer_name="profile_context",
-            case_type="profile_case",
-        )
-    )
-    ranked = _rank_comparable_candidates(
-        candidates,
-        query_terms=query_terms,
-        issue_frame=issue_frame,
-    )
-    return {
-        "schema_version": "comparable-context-v1",
-        "query_terms": query_terms,
-        "matched_cases": ranked[:5],
-        "has_comparable_context": bool(ranked),
-        "guidance": [
-            "matched_cases가 있을 때만 유사 사업/비슷한 흐름으로 연결합니다.",
-            "matched_cases가 없으면 유사 사업을 상상하지 않습니다.",
-            "연결은 현재 사건과 matched_case의 공통 business_object/target_scope/"
-            "metric_type 기준으로만 합니다.",
-        ],
-    }
 
-
-def _build_comparable_query_terms(issue_frame: dict[str, Any]) -> list[str]:
-    terms: list[str] = []
-    business_object = issue_frame.get("business_object") or {}
-    terms.extend(_string_list(business_object.get("raw_terms"), max_items=12))
-    if business_object.get("raw_name"):
-        terms.append(str(business_object.get("raw_name")))
-    elif business_object.get("name"):
-        terms.append(str(business_object.get("name")))
-
-    target_scope = issue_frame.get("target_scope") or {}
-    for key in (
-        "target_work",
-        "target_system",
-        "target_customer_or_industry",
-        "geography_or_market",
-    ):
-        terms.extend(_string_list(target_scope.get(key), max_items=8))
-
-    action = issue_frame.get("action_or_event") or {}
-    terms.extend(_string_list(action.get("activity_types"), max_items=8))
-    for key in ("verb", "status"):
-        if action.get(key):
-            terms.append(str(action.get(key)))
-
-    for item in _jsonish_list(issue_frame.get("numbers")):
+    fact_basis = []
+    for item in _jsonish_list(integrated_issue.get("fact_basis"))[:12]:
         if not isinstance(item, dict):
             continue
-        for key in ("metric", "meaning"):
-            if item.get(key):
-                terms.append(str(item.get(key)))
-    return _unique_texts(terms, max_items=24)
-
-
-def _comparable_candidates_from_value(
-    value: Any,
-    *,
-    query_terms: list[str],
-    layer_name: str,
-    case_type: str,
-) -> list[dict[str, Any]]:
-    query_tokens = _terms_to_content_tokens(query_terms)
-    if not query_tokens:
-        return []
-    candidates: list[dict[str, Any]] = []
-    for path, item in _iter_context_dicts(value, root=layer_name, limit=120):
-        text = _comparable_item_text(item)
-        if not text:
-            continue
-        item_tokens = _content_tokens(text)
-        matched_tokens = sorted(query_tokens & item_tokens)
-        if not matched_tokens:
-            continue
-        score = len(matched_tokens)
-        phrase_hits = [
-            term
-            for term in query_terms
-            if len(term) >= 3 and re.search(re.escape(term), text, flags=re.IGNORECASE)
+        evidence_texts = [
+            str(text or "").strip()
+            for text in _jsonish_list(item.get("evidence_texts"))[:3]
+            if str(text or "").strip()
         ]
-        score += min(4, len(phrase_hits))
-        if score <= 0:
-            continue
-        title = _comparable_item_title(item, fallback=path)
-        candidates.append(
+        evidence_text = str(item.get("evidence_text") or "").strip()
+        if evidence_text and evidence_text not in evidence_texts:
+            evidence_texts.append(evidence_text)
+        fact_text = str(item.get("fact") or "").strip()
+        fact_basis.append(
             {
-                "case_title": title[:120],
-                "case_type": case_type,
-                "layer": layer_name,
-                "path": path,
-                "matched_terms": _unique_texts([*phrase_hits, *matched_tokens], max_items=8),
-                "shared_context": _shared_context_phrase(matched_tokens, phrase_hits),
-                "source_ref": _comparable_item_source_ref(item),
-                "_score": score,
-                "_text": text[:500],
+                "fact": fact_text,
+                "fact_ids": _string_list(item.get("fact_ids"), max_items=5),
+                "source_article_ids": _int_list(item.get("source_article_ids"))[:5],
+                "evidence_type": str(item.get("evidence_type") or "").strip(),
+                "evidence_texts": evidence_texts[:3],
             }
         )
-    return candidates
 
-
-def _iter_context_dicts(value: Any, *, root: str, limit: int) -> list[tuple[str, dict[str, Any]]]:
-    out: list[tuple[str, dict[str, Any]]] = []
-
-    def walk(node: Any, path: str) -> None:
-        if len(out) >= limit:
-            return
-        if isinstance(node, dict):
-            out.append((path, node))
-            for key, child in node.items():
-                if key in {"evidence_payload", "raw_payload", "embedding", "vector"}:
-                    continue
-                walk(child, f"{path}.{key}")
-        elif isinstance(node, list):
-            for index, child in enumerate(node[:30]):
-                walk(child, f"{path}[{index}]")
-
-    walk(value, root)
-    return out
-
-
-def _comparable_item_text(item: dict[str, Any]) -> str:
-    keys = (
-        "title",
-        "headline",
-        "summary",
-        "analysis_summary",
-        "market_signal",
-        "peer_meaning",
-        "capability_change",
-        "reason",
-        "one_liner",
-        "company_summary",
-        "name",
-        "summary_text",
-        "event_summary",
-        "recent_direction",
-        "overall_change",
-        "text",
-        "content",
-    )
-    parts: list[str] = []
-    for key in keys:
-        value = item.get(key)
-        if value in ({}, [], "", None):
+    consolidated_facts = []
+    for item in _jsonish_list(integrated_issue.get("consolidated_facts"))[:12]:
+        fact_text = _fact_like_text(item)
+        if not fact_text:
             continue
-        if isinstance(value, (dict, list)):
-            parts.append(_json_dumps(_compact_value(value)))
-        else:
-            parts.append(str(value))
-    for key in ("business_areas", "core_capabilities", "strategic_focus", "source_refs"):
-        value = item.get(key)
-        if value not in ({}, [], "", None):
-            parts.append(_json_dumps(_compact_value(value)))
-    return re.sub(r"\s+", " ", " ".join(parts)).strip()
-
-
-def _comparable_item_title(item: dict[str, Any], *, fallback: str) -> str:
-    for key in ("title", "headline", "name", "one_liner", "summary"):
-        value = str(item.get(key) or "").strip()
-        if value:
-            return re.sub(r"\s+", " ", value)
-    return fallback
-
-
-def _comparable_item_source_ref(item: dict[str, Any]) -> str:
-    for key in ("card_id", "id", "source_ref", "source_id", "event_id", "article_id"):
-        value = item.get(key)
-        if value not in ("", None):
-            return str(value)
-    refs = item.get("source_refs")
-    if isinstance(refs, list) and refs:
-        return str(refs[0])
-    return ""
-
-
-def _terms_to_content_tokens(terms: list[str]) -> set[str]:
-    tokens: set[str] = set()
-    for term in terms:
-        tokens.update(_content_tokens(term))
-    return {token for token in tokens if len(token) >= 2}
-
-
-def _shared_context_phrase(matched_tokens: list[str], phrase_hits: list[str]) -> str:
-    terms = _unique_texts([*phrase_hits, *matched_tokens], max_items=5)
-    if not terms:
-        return "현재 사건과 일부 용어가 겹칩니다."
-    return "현재 사건과 공통으로 확인되는 용어: " + ", ".join(terms)
-
-
-def _rank_comparable_candidates(
-    candidates: list[dict[str, Any]],
-    *,
-    query_terms: list[str],
-    issue_frame: dict[str, Any],
-) -> list[dict[str, Any]]:
-    if not candidates:
-        return []
-    sorted_candidates = sorted(
-        candidates,
-        key=lambda item: (int(item.get("_score") or 0), len(str(item.get("_text") or ""))),
-        reverse=True,
-    )
-    deduped: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in sorted_candidates:
-        key = re.sub(r"\s+", " ", str(item.get("case_title") or "")).casefold()
-        if not key or key in seen:
-            continue
-        clean = {
-            "case_title": item.get("case_title"),
-            "case_type": item.get("case_type"),
-            "matched_terms": item.get("matched_terms") or [],
-            "shared_context": item.get("shared_context") or "",
-            "difference_from_current_issue": _current_issue_difference_hint(
-                issue_frame,
-                query_terms=query_terms,
-            ),
-            "source_ref": item.get("source_ref") or item.get("path") or "",
-        }
-        deduped.append(clean)
-        seen.add(key)
-        if len(deduped) >= 8:
-            break
-    return deduped
-
-
-def _current_issue_difference_hint(issue_frame: dict[str, Any], *, query_terms: list[str]) -> str:
-    numbers = [
-        " ".join(
-            part
-            for part in (
-                str(item.get("metric") or "").strip(),
-                str(item.get("value") or "").strip(),
-                str(item.get("unit") or "").strip(),
-            )
-            if part
-        )
-        for item in _jsonish_list(issue_frame.get("numbers"))
-        if isinstance(item, dict)
-    ]
-    action = issue_frame.get("action_or_event") or {}
-    status = str(action.get("status") or "").strip()
-    business_object = issue_frame.get("business_object") or {}
-    raw_name = str(business_object.get("raw_name") or business_object.get("name") or "").strip()
-    parts = []
-    if raw_name:
-        parts.append(raw_name)
-    if status and status != "unclear":
-        parts.append(f"status={status}")
-    if numbers:
-        parts.append("numbers=" + ", ".join(numbers[:3]))
-    if not parts and query_terms:
-        parts.append("issue_terms=" + ", ".join(query_terms[:3]))
-    return "이번 사건에서 별도로 확인된 조건: " + "; ".join(parts[:3])
-
-
-def _comparable_case_type_for_layer(layer_name: str) -> str:
-    name = str(layer_name or "").casefold()
-    if "similar" in name or "card" in name:
-        return "past_card"
-    if "peer" in name or "timeline" in name:
-        return "peer_event"
-    if "sector" in name or "pulse" in name:
-        return "sector_pulse"
-    if "profile" in name:
-        return "profile_case"
-    return "context_case"
-
-
-def _issue_focus_text(integrated_issue: dict[str, Any]) -> str:
-    chunks = [
-        str(integrated_issue.get(key) or "").strip()
-        for key in ("headline", "one_line_summary", "main_event", "main_issue")
-        if str(integrated_issue.get(key) or "").strip()
-    ]
-    primary = _primary_issue_fact(integrated_issue)
-    if primary:
-        chunks.append(primary)
-    return " ".join(dict.fromkeys(chunks))
-
-
-def _issue_frame_kind(integrated_issue: dict[str, Any]) -> str:
-    event_type = str(integrated_issue.get("cluster_event_type") or "").casefold()
-    focus_text = _issue_focus_text(integrated_issue)
-    intelligence = integrated_issue.get("cluster_fact_intelligence") or {}
-    activity_text = " ".join(
-        _string_list(
-            intelligence.get("activity_types") if isinstance(intelligence, dict) else None,
-            max_items=12,
-        )
-    ).casefold()
-    event_activity_text = f"{event_type} {activity_text}"
-    if event_type in {"earnings", "performance", "financial_result", "financial"} or re.search(
-        r"매출|영업이익|순이익|영업이익률|실적|수익성|전년\s*동기|분기",
-        focus_text,
-    ):
-        return "performance"
-    if re.search(
-        r"selection|selected|build|construction|operation|선정|확정|구축",
-        event_activity_text,
-    ):
-        return "selection_or_build"
-    if event_type in {"partnership", "mou", "collaboration"} or re.search(
-        r"협약|MOU|협력|공동",
-        focus_text,
-        flags=re.IGNORECASE,
-    ):
-        return "partnership"
-    if event_type in {"launch", "release"} or re.search(
-        r"출시|공개|선보|서비스\s*개시|플랫폼",
-        focus_text,
-    ):
-        return "launch_or_service"
-    if re.search(r"계약|수주|전환|현대화|시스템", focus_text):
-        return "contract_or_transition"
-    return "general"
-
-
-def _issue_frame_entities(
-    integrated_issue: dict[str, Any],
-    *,
-    customers_or_industries: list[str],
-    evidence_ids: list[str],
-) -> list[dict[str, Any]]:
-    entities: list[dict[str, Any]] = []
-    main_company = str(integrated_issue.get("main_company") or "").strip()
-    if main_company:
-        role = (
-            "counterparty_or_customer"
-            if _main_company_is_customer_or_buyer(integrated_issue)
-            else "main_company_in_issue"
-        )
-        entities.append(
-            {
-                "name": main_company,
-                "role_in_article": role,
-                "evidence_id": evidence_ids[0] if evidence_ids else "",
-            }
-        )
-    for company_id in _jsonish_list(integrated_issue.get("mentioned_peer_companies"))[:5]:
-        name = str(company_id or "").strip()
-        if name and name != main_company:
-            entities.append(
-                {
-                    "name": name,
-                    "role_in_article": "mentioned_peer",
-                    "evidence_id": evidence_ids[0] if evidence_ids else "",
-                }
-            )
-    for item in customers_or_industries[:5]:
-        if item and item not in {entity["name"] for entity in entities}:
-            entities.append(
-                {
-                    "name": item,
-                    "role_in_article": "customer_or_industry_from_evidence",
-                    "evidence_id": evidence_ids[0] if evidence_ids else "",
-                }
-            )
-    return entities[:10]
-
-
-def _issue_frame_action(
-    integrated_issue: dict[str, Any],
-    *,
-    activity_types: list[str],
-    evidence_ids: list[str],
-    frame_kind: str = "",
-) -> dict[str, Any]:
-    evidence_text = _integrated_grounding_text(integrated_issue)
-    focus_text = _issue_focus_text(integrated_issue)
-    if frame_kind == "performance":
-        verb = "performance"
-        status = "reported"
-        return {
-            "verb": verb,
-            "status": status,
-            "activity_types": activity_types,
-            "evidence_id": evidence_ids[0] if evidence_ids else "",
-        }
-    verb = activity_types[0] if activity_types else _fallback_action_label(evidence_text)
-    status = "unclear"
-    if re.search(r"선정|확정|체결|수주|완료|공개|출시|개시", focus_text or evidence_text):
-        status = "confirmed"
-    elif re.search(r"계획|예정|검토|추진|모색", focus_text or evidence_text):
-        status = "planned_or_under_review"
-    return {
-        "verb": verb or "unclear",
-        "status": status,
-        "activity_types": activity_types,
-        "evidence_id": evidence_ids[0] if evidence_ids else "",
-    }
-
-
-def _issue_frame_business_object(
-    integrated_issue: dict[str, Any],
-    *,
-    products_or_services: list[str],
-    evidence_ids: list[str],
-    frame_kind: str = "",
-) -> dict[str, Any]:
-    focus_text = _issue_focus_text(integrated_issue)
-    evidence_text = focus_text or _integrated_grounding_text(integrated_issue)
-    if frame_kind == "performance":
-        return {
-            "name": "전사 실적·수익성 지표",
-            "type_from_evidence": "performance",
-            "raw_name": "전사 실적·수익성 지표",
-            "raw_terms": _issue_object_raw_terms("전사 실적·수익성 지표", evidence_text),
-            "object_nature_hints": ["performance_like"],
-            "evidence_id": evidence_ids[0] if evidence_ids else "",
-        }
-    name = (
-        _issue_subject_phrase(integrated_issue)
-        or str(integrated_issue.get("headline") or "").strip()
-    )
-    if not name and products_or_services:
-        name = products_or_services[0]
-    type_from_evidence = "business_or_service"
-    if re.search(r"GPU|컴퓨팅|센터|인프라|데이터\s*센터|서버", evidence_text, re.IGNORECASE):
-        type_from_evidence = "infrastructure"
-    elif re.search(r"플랫폼|서비스|솔루션", evidence_text):
-        type_from_evidence = "platform_or_service"
-    elif re.search(r"시스템|웹단말|코어뱅킹|전환|현대화", evidence_text):
-        type_from_evidence = "target_system_transition"
-    elif re.search(r"협약|계약|MOU|수주", evidence_text, re.IGNORECASE):
-        type_from_evidence = "contract_or_agreement"
-    elif re.search(r"매출|영업이익|수익|실적", evidence_text):
-        type_from_evidence = "performance"
-    return {
-        "name": name,
-        "type_from_evidence": type_from_evidence,
-        "raw_name": name,
-        "raw_terms": _issue_object_raw_terms(name, evidence_text),
-        "object_nature_hints": _issue_object_nature_hints(
-            name,
-            evidence_text,
-            type_from_evidence=type_from_evidence,
-        ),
-        "evidence_id": evidence_ids[0] if evidence_ids else "",
-    }
-
-
-def _issue_object_raw_terms(name: str, evidence_text: str) -> list[str]:
-    """Keep observed object terms as evidence hints, not as hard classifications."""
-    terms: list[str] = []
-    terms.extend(re.findall(r"[가-힣A-Za-z0-9&·+_-]{2,}", str(name or "")))
-    quoted_terms = _quoted_entity_terms(evidence_text)
-    terms.extend(quoted_terms)
-    for match in re.finditer(
-        r"[가-힣A-Za-z0-9&·+_-]{2,30}(?:\s+[가-힣A-Za-z0-9&·+_-]{2,30}){0,4}"
-        r"(?:사업|시스템|서비스|플랫폼|센터|인프라|계약|협약|전환|현대화|실적)",
-        str(evidence_text or ""),
-        flags=re.IGNORECASE,
-    ):
-        terms.append(match.group(0))
-    return _unique_texts(terms, max_items=12)
-
-
-def _issue_object_nature_hints(
-    name: str,
-    evidence_text: str,
-    *,
-    type_from_evidence: str,
-) -> list[str]:
-    """Return broad hints so the prompt sees analysis lenses, not fixed templates."""
-    value = f"{name} {evidence_text}"
-    hints: list[str] = []
-    broad_patterns = (
-        ("performance_like", r"매출|영업이익|순이익|수익성|실적"),
-        ("relationship_like", r"협약|MOU|협력|공동|파트너"),
-        ("contract_like", r"계약|수주|공급|체결"),
-        ("build_or_operation_like", r"선정|구축|운영|확보|개시|완료"),
-        ("system_or_process_change_like", r"전환|현대화|개편|고도화|자동화"),
-        ("service_or_platform_like", r"서비스|플랫폼|솔루션|공개|출시"),
-    )
-    for hint, pattern in broad_patterns:
-        if re.search(pattern, value, flags=re.IGNORECASE):
-            hints.append(hint)
-    if type_from_evidence and type_from_evidence not in hints:
-        hints.append(f"{type_from_evidence}_hint")
-    return hints[:5]
-
-
-def _issue_frame_target_scope(
-    integrated_issue: dict[str, Any],
-    *,
-    products_or_services: list[str],
-    customers_or_industries: list[str],
-    frame_kind: str = "",
-    focus_text: str = "",
-) -> dict[str, Any]:
-    evidence_text = focus_text or _integrated_grounding_text(integrated_issue)
-    if frame_kind == "performance":
-        return {
-            "target_work": ["매출", "이익", "수익성 지표"],
-            "target_system": [],
-            "target_customer_or_industry": [],
-            "geography_or_market": _market_scope_terms(evidence_text),
-        }
-    return {
-        "target_work": _target_work_terms(evidence_text),
-        "target_system": _unique_texts(
-            [
-                term
-                for term in products_or_services
-                if re.search(r"시스템|센터|인프라|플랫폼|서비스|단말|로봇|GPU", term, re.IGNORECASE)
-            ],
-            max_items=8,
-        ),
-        "target_customer_or_industry": customers_or_industries[:8],
-        "geography_or_market": _market_scope_terms(evidence_text),
-    }
-
-
-def _issue_frame_numbers(
-    integrated_issue: dict[str, Any],
-    *,
-    evidence_ids: list[str],
-) -> list[dict[str, Any]]:
-    numbers: list[dict[str, Any]] = []
-    for index, item in enumerate(_jsonish_list(integrated_issue.get("key_numbers"))[:10]):
+        row: dict[str, Any] = {"fact": fact_text}
         if isinstance(item, dict):
-            value = str(item.get("value") or item.get("number") or item.get("raw") or "").strip()
-            if not value:
+            row["fact_id"] = str(item.get("fact_id") or "").strip()
+            row["source_article_ids"] = _int_list(item.get("source_article_ids"))[:5]
+        consolidated_facts.append(row)
+
+    representative_sources = []
+    for item in _jsonish_list(integrated_issue.get("representative_sources"))[:10]:
+        if not isinstance(item, dict):
+            continue
+        representative_sources.append(
+            {
+                "article_id": item.get("article_id") or item.get("id"),
+                "title": str(item.get("title") or "").strip(),
+                "publisher": str(item.get("publisher") or "").strip(),
+                "source_name": str(item.get("source_name") or "").strip(),
+                "published_at": str(item.get("published_at") or "").strip(),
+            }
+        )
+
+    bundle_evidence_snippets = []
+    for item in _jsonish_list(bundle.get("evidence_snippets"))[:12]:
+        if isinstance(item, dict):
+            text = str(item.get("text") or item.get("evidence_text") or "").strip()
+            if not text:
                 continue
-            numbers.append(
+            bundle_evidence_snippets.append(
                 {
-                    "metric": str(item.get("metric") or item.get("label") or "").strip(),
-                    "value": value,
-                    "unit": str(item.get("unit") or "").strip(),
-                    "meaning": str(item.get("meaning") or item.get("context") or "").strip(),
-                    "evidence_id": str(item.get("fact_id") or item.get("evidence_id") or "").strip()
-                    or (evidence_ids[index] if index < len(evidence_ids) else ""),
+                    "text": text,
+                    "source_article_ids": _int_list(item.get("source_article_ids"))[:5],
+                    "fact_ids": _string_list(item.get("fact_ids"), max_items=5),
                 }
             )
         else:
             text = str(item or "").strip()
             if text:
-                numbers.append(
-                    {
-                        "metric": "",
-                        "value": text,
-                        "unit": "",
-                        "meaning": "",
-                        "evidence_id": evidence_ids[index] if index < len(evidence_ids) else "",
-                    }
-                )
-    if numbers:
-        return numbers[:10]
-    evidence_text = _integrated_grounding_text(integrated_issue)
-    for index, token in enumerate(_NUMERIC_TOKEN_PATTERN.findall(evidence_text)[:8]):
-        numbers.append(
-            {
-                "metric": "",
-                "value": str(token).strip(),
-                "unit": "",
-                "meaning": "raw_numeric_token_from_evidence",
-                "evidence_id": evidence_ids[index] if index < len(evidence_ids) else "",
-            }
-        )
-    return numbers
+                bundle_evidence_snippets.append({"text": text})
 
-
-def _issue_terms_for_profile_matching(
-    integrated_issue: dict[str, Any],
-    *,
-    products_or_services: list[str],
-    customers_or_industries: list[str],
-) -> list[dict[str, Any]]:
-    issue_terms = _unique_texts(
-        [
-            *products_or_services,
-            *customers_or_industries,
-            *_target_work_terms(_integrated_grounding_text(integrated_issue)),
-        ],
-        max_items=12,
-    )
-    return [
-        {
-            "term": term,
-            "source": "current_issue",
-            "matching_note": (
-                "프로필과 이미 연결됐다는 뜻이 아니라, 프로필 매칭에 사용할 현재 사건 용어입니다."
-            ),
-        }
-        for term in issue_terms[:8]
-    ]
-
-
-def _fallback_action_label(evidence_text: str) -> str:
-    value = str(evidence_text or "")
-    for label, pattern in (
-        ("selection", r"사업자\s*선정|최종\s*선정|참여\s*기업.{0,12}선정"),
-        ("contract", r"계약\s*체결|수주|공급\s*계약"),
-        ("partnership", r"협약|MOU|공동\s*추진|협력"),
-        ("launch", r"정식\s*출시|서비스\s*오픈|개시|공개"),
-        ("build_or_operation", r"구축\s*완료|운영\s*시작|구축한다|운영한다"),
-        ("performance", r"매출|영업이익|실적"),
-    ):
-        if re.search(pattern, value, re.IGNORECASE):
-            return label
-    return "unclear"
-
-
-def _products_from_facts(integrated_issue: dict[str, Any]) -> list[str]:
-    out: list[str] = []
-    intelligence = integrated_issue.get("cluster_fact_intelligence") or {}
-    if not isinstance(intelligence, dict):
-        return out
-    for group_name in ("common_facts", "unique_facts"):
-        for item in _jsonish_list(intelligence.get(group_name)):
-            if isinstance(item, dict):
-                out.extend(_string_list(item.get("products_or_services"), max_items=8))
-    return _unique_texts(out, max_items=12)
-
-
-def _customers_from_facts(integrated_issue: dict[str, Any]) -> list[str]:
-    out: list[str] = []
-    intelligence = integrated_issue.get("cluster_fact_intelligence") or {}
-    if not isinstance(intelligence, dict):
-        return out
-    for group_name in ("common_facts", "unique_facts"):
-        for item in _jsonish_list(intelligence.get(group_name)):
-            if isinstance(item, dict):
-                out.extend(_string_list(item.get("customers_or_industries"), max_items=8))
-    return _unique_texts(out, max_items=12)
-
-
-def _target_work_terms(text: str) -> list[str]:
-    value = str(text or "")
-    candidates = re.findall(
-        r"[가-힣A-Za-z0-9&·+_-]{2,30}(?:\s+[가-힣A-Za-z0-9&·+_-]{2,30}){0,3}"
-        r"(?:전환|현대화|구축|운영|자동화|확보|개시|협약|계약|선정|출시|공개)",
-        value,
-        flags=re.IGNORECASE,
-    )
-    return _unique_texts([_clean_phrase(item) for item in candidates], max_items=8)
-
-
-def _market_scope_terms(text: str) -> list[str]:
-    value = str(text or "")
-    scopes: list[str] = []
-    for term in ("국가", "국내", "공공", "민간", "금융권", "물류", "제조", "글로벌", "해외"):
-        if re.search(re.escape(term), value, re.IGNORECASE):
-            scopes.append(term)
-    return scopes
-
-
-def _unique_texts(values: list[Any], *, max_items: int) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        text = _clean_phrase(str(value or ""))
-        if not text:
-            continue
-        key = re.sub(r"\s+", " ", text).casefold()
-        if key in seen:
-            continue
-        out.append(text)
-        seen.add(key)
-        if len(out) >= max_items:
-            break
-    return out
-
-
-def _clean_phrase(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "").strip(" .。,:;，"))
-
-
-def _cluster_fact_intelligence_for_prompt(value: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
     return {
-        "activity_types": _string_list(value.get("activity_types"), max_items=10),
-        "customers_or_industries": _string_list(value.get("customers_or_industries"), max_items=10),
-        "products_or_services": _string_list(value.get("products_or_services"), max_items=10),
-        "numbers_and_dates": _string_list(value.get("numbers_and_dates"), max_items=10),
-        "unique_facts": [
-            {
-                "fact": str(item.get("fact") or "").strip(),
-                "activity_types": _string_list(item.get("activity_types"), max_items=5),
-                "customers_or_industries": _string_list(
-                    item.get("customers_or_industries"), max_items=5
-                ),
-                "products_or_services": _string_list(item.get("products_or_services"), max_items=5),
-                "summary_role": str(item.get("summary_role") or "").strip(),
-                "fact_type": str(item.get("fact_type") or "").strip(),
-            }
-            for item in (value.get("unique_facts") or [])[:8]
-            if isinstance(item, dict)
-        ],
-        "uncertain_facts": [
-            fact_text
-            for item in (value.get("uncertain_facts") or [])[:5]
-            if (fact_text := _fact_like_text(item))
-        ],
+        "purpose": (
+            "Use this article-derived pack before display/card summaries when deriving "
+            "strategic implications."
+        ),
+        "current_event": {
+            "headline": integrated_issue.get("headline", ""),
+            "main_event": integrated_issue.get("main_event", ""),
+            "main_issue": integrated_issue.get("main_issue", ""),
+            "one_line_summary": integrated_issue.get("one_line_summary", ""),
+            "integrated_text": integrated_issue.get("integrated_text", ""),
+        },
+        "fact_basis": fact_basis,
+        "consolidated_facts": consolidated_facts,
+        "representative_sources": representative_sources,
+        "bundle_evidence_snippets": bundle_evidence_snippets,
+        "cluster_fact_intelligence": _cluster_fact_intelligence_for_prompt(
+            integrated_issue.get("cluster_fact_intelligence") or {}
+        ),
+        "missing_or_uncertain_points": integrated_issue.get("missing_or_uncertain_points", []),
     }
-
-
-def _fact_like_text(value: Any) -> str:
-    if isinstance(value, dict):
-        return str(value.get("fact") or value.get("summary") or "").strip()
-    return str(value or "").strip()
 
 
 def _role_interpretation_hints(integrated_issue: dict[str, Any]) -> dict[str, Any]:
@@ -3143,10 +2417,14 @@ def _role_mode_instructions(integrated_issue: dict[str, Any]) -> str:
             "표현으로 끝내지 말고, 어떤 범위·기간·전환 성격이 확인됐는지 씁니다.",
             "- 공급사 매출 비율은 요약의 계약 규모 근거일 뿐, "
             "타깃 피어의 역량/성과/전략 근거가 아닙니다.",
-            "- SK AX recommended_actions 는 타깃 피어 프로젝트에 직접 제안하는 문장이 아니라 "
-            "유사 동향을 내부에서 관찰·비교·추적하는 체크포인트로 쓰세요.",
-            "- SK AX recommended_actions 는 '피어 신호 → 비교해야 할 축 → 후속 확인 데이터 → "
-            "SK AX 내부 점검 관점' 순서로 2~3문장 작성하세요.",
+            "- SK AX 대응방향은 유사 고객군/유사 사업 관점을 유지하되, "
+            "외부 고객 제안 문장이 아니라 SK AX 내부 전략 점검으로 쓰세요.",
+            "- SK AX 대응방향은 '피어 신호 → 유사 고객군/유사 사업 → 피어사 사업군/역량과 "
+            "SK AX 사업군/역량의 겹침/차이 → 대응 가능 범위와 역량 공백 → "
+            "보완할 사업/역량/운영/영업 전략 → 후속 모니터링' 순서로 2~3문장 작성하세요.",
+            "- 대응방향은 넓은 실행 장면명이 아니라 적용 범위, 역할 분담, 운영 책임, "
+            "일정 조건, 장애 대응 기준, 보안·권한 기준, 전환 리스크, 성능/용량 검증 기준, "
+            "후속 모니터링 항목처럼 내부적으로 확인할 기준을 중심으로 쓰세요.",
         ]
     )
 
@@ -3184,83 +2462,6 @@ def _bundle_for_prompt(
             "trend_context": metadata.get("trend_context", {}),
         },
     }
-
-
-def _profile_for_prompt(
-    profile: dict[str, Any],
-    *,
-    integrated_issue: dict[str, Any] | None = None,
-    relevance_hint_text: str = "",
-    include_financial_context: bool = False,
-) -> dict[str, Any]:
-    skax = profile.get("skax_profile") or {}
-    peer_profiles = profile.get("peer_profiles") or {}
-    relevance_tokens = _issue_relevance_tokens(
-        integrated_issue or {},
-        extra_text=relevance_hint_text,
-    )
-    out = {
-        "skax_profile": _shrink_profile(skax, relevance_tokens=relevance_tokens),
-        "peer_profiles": {
-            str(peer_id): _shrink_profile(payload, relevance_tokens=relevance_tokens)
-            for peer_id, payload in (
-                peer_profiles.items() if isinstance(peer_profiles, dict) else []
-            )
-        },
-        "sector_context": profile.get("sector_context") or {},
-    }
-    if include_financial_context:
-        financial_context = _financial_profile_context_for_prompt(
-            skax=skax,
-            peer_profiles=peer_profiles,
-        )
-        if financial_context:
-            out["financial_profile_context"] = financial_context
-    return out
-
-
-def _financial_profile_context_for_prompt(
-    *,
-    skax: Any,
-    peer_profiles: Any,
-) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    skax_financial = _compact_financial_profile_context(skax)
-    if skax_financial:
-        out["skax_profile"] = skax_financial
-    if isinstance(peer_profiles, dict):
-        peer_out = {
-            str(peer_id): compacted
-            for peer_id, payload in peer_profiles.items()
-            if (compacted := _compact_financial_profile_context(payload))
-        }
-        if peer_out:
-            out["peer_profiles"] = peer_out
-    return out
-
-
-def _compact_financial_profile_context(profile: Any) -> dict[str, Any]:
-    if not isinstance(profile, dict):
-        return {}
-    keys = (
-        "company_id",
-        "company_name",
-        "company_name_ko",
-        "financial_summary",
-        "operational_highlights",
-        "investment_roadmap",
-        "market_view",
-        "validation",
-    )
-    out: dict[str, Any] = {}
-    for key in keys:
-        value = profile.get(key)
-        if value in ({}, [], "", None):
-            continue
-        compacted = _compact_value(value)
-        if compacted not in ({}, [], "", None):
-            out[key] = compacted
-    return out
 
 
 def _analysis_context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
@@ -3371,12 +2572,127 @@ def _context_availability_for_prompt(
                 "_instead_of_fabricating_profile_based_claims"
             ),
             (
-                "skax_checkpoints_require_current_signal_plus_comparison_axis"
-                "_plus_follow_up_data; skax_profile_linkage_is_optional"
-                "_and_only_limits_specific_capability_claims"
+                "skax_actions_require_current_signal_plus_skax_profile_plus_internal"
+                "_strategy_checkpoint_and_follow_up_monitoring"
             ),
         ],
     }
+
+
+def _semantic_fingerprint_for_text(
+    text: str,
+    issue_context: dict[str, Any] | None = None,
+) -> set[str]:
+    return {
+        str(term.get("normalized") or "")
+        for term in _extract_ranked_terms(text, "output_text", issue_context)
+        if float(term.get("weight") or 0.0) >= 0.45
+        and not _is_generic_business_term(str(term.get("normalized") or ""))
+    }
+
+
+def _action_artifact_plan_for_prompt(
+    *,
+    integrated_issue: dict[str, Any],
+    classification: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any],
+) -> dict[str, Any]:
+    signals = _extract_issue_structured_signals(
+        integrated_issue=integrated_issue,
+        classification=classification,
+    )
+    return {
+        "artifact_generation_mode": "llm_dynamic",
+        "current_issue_signals": {
+            "event_type": signals.get("event_type"),
+            "activity_types": _string_list(signals.get("activity_types"), max_items=20),
+            "products_or_services": _string_list(
+                signals.get("products_or_services"),
+                max_items=12,
+            ),
+            "customers_or_industries": _string_list(
+                signals.get("customers_or_industries"),
+                max_items=12,
+            ),
+            "target_systems": _string_list(signals.get("target_systems"), max_items=12),
+            "structured_terms": _string_list(signals.get("structured_terms"), max_items=30),
+            "evidence_terms": _issue_evidence_terms_for_action_plan(integrated_issue),
+        },
+        "skax_implication_mode": (
+            (profile_linkage_evaluation.get("skax_linkage") or {}).get("implication_mode")
+            if isinstance(profile_linkage_evaluation, dict)
+            else ""
+        ),
+        "artifact_policy": [
+            (
+                "현재 사건에서 확인된 대상 사업/시스템/서비스/인프라를 기준으로 "
+                "내부 점검 항목을 만든다."
+            ),
+            (
+                "유사 고객군/유사 사업에서 피어사 사업군·역량과 SK AX 사업군·역량이 "
+                "겹치는 지점과 달라지는 지점을 비교한다."
+            ),
+            (
+                "겹침/차이는 ProfileContext 또는 business_line_mapping 후보에 있는 항목으로만 "
+                "작성하고, 없는 사업군/역량명을 새로 만들지 않는다."
+            ),
+            (
+                "SK AX의 대응 가능 범위, 역량 공백, 운영 구조, 영업 전략, "
+                "후속 경쟁사 모니터링 항목을 중심으로 구조화한다."
+            ),
+            (
+                "범위, 책임, 일정 조건, 검증 기준, 리스크, 운영 조건, 후속 모니터링 중 "
+                "현재 사건에 맞는 항목을 쓴다."
+            ),
+            (
+                "외부 고객 제안 문장이 아니라 SK AX 내부에서 비교하고 보완할 기준을 "
+                "문장 안에 포함한다."
+            ),
+            "현재 사건이나 SK AX 프로필 근거가 없는 기술명/솔루션명/성공 사례는 쓰지 않는다.",
+        ],
+        "guidance": (
+            "이 객체는 고정 taxonomy가 아니라 LLM이 내부 전략 점검 기준을 만들기 위한 정책입니다."
+        ),
+    }
+
+
+def _issue_evidence_terms_for_action_plan(integrated_issue: dict[str, Any]) -> list[str]:
+    if not isinstance(integrated_issue, dict):
+        return []
+    parts = [
+        str(integrated_issue.get("headline") or ""),
+        str(integrated_issue.get("main_event") or ""),
+        str(integrated_issue.get("main_issue") or ""),
+        str(integrated_issue.get("one_line_summary") or ""),
+    ]
+    parts.extend(str(item or "") for item in integrated_issue.get("fact_summary") or [])
+    for _, fact_text in _fact_texts(integrated_issue):
+        parts.append(fact_text)
+    ranked = _extract_ranked_terms(
+        "\n".join(part for part in parts if part),
+        "issue_evidence",
+        {
+            "structured_terms": _issue_structured_terms(
+                integrated_issue=integrated_issue,
+                classification={},
+            )
+        },
+    )
+    terms: list[str] = []
+    seen: set[str] = set()
+    for item in ranked:
+        if str(item.get("term_type") or "") in {"source_noise", "function_word_or_ending"}:
+            continue
+        normalized = str(item.get("normalized") or item.get("term") or "").strip()
+        if not normalized or _is_low_signal_content_token(normalized):
+            continue
+        if normalized in seen:
+            continue
+        terms.append(normalized)
+        seen.add(normalized)
+        if len(terms) >= 40:
+            break
+    return terms
 
 
 def _has_profile_context(profile: dict[str, Any]) -> bool:
@@ -3502,22 +2818,6 @@ def _should_include_financial_profile_context(
         event_text,
     ):
         return True
-    evidence_text = _json_dumps(
-        {
-            "fact_summary": integrated_issue.get("fact_summary") or [],
-            "summary_lines": integrated_issue.get("summary_lines") or [],
-            "consolidated_facts": integrated_issue.get("consolidated_facts") or [],
-            "key_numbers": integrated_issue.get("key_numbers") or [],
-            "cluster_fact_intelligence": integrated_issue.get("cluster_fact_intelligence") or {},
-        }
-    ).lower()
-    if re.search(
-        r"(매출|영업\s*이익|순이익|영업\s*이익률|수익성|실적|재무|"
-        r"계약\s*금액|공급\s*계약|수주\s*금액|최근\s*매출액|"
-        r"revenue|operating\s*profit|net\s*income|margin|earnings|financial)",
-        evidence_text,
-    ):
-        return True
     return False
 
 
@@ -3624,7 +2924,19 @@ def _quality_gate_violations(
     *,
     integrated_issue: dict[str, Any],
     profile_context: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any] | None = None,
+    action_artifact_plan: dict[str, Any] | None = None,
 ) -> list[str]:
+    profile_linkage_evaluation = profile_linkage_evaluation or _build_profile_linkage_evaluation(
+        integrated_issue=integrated_issue,
+        classification={},
+        profile_context=profile_context,
+    )
+    action_artifact_plan = action_artifact_plan or _action_artifact_plan_for_prompt(
+        integrated_issue=integrated_issue,
+        classification={},
+        profile_linkage_evaluation=profile_linkage_evaluation,
+    )
     integrated_evidence_text = _integrated_grounding_text(integrated_issue)
     grounded_numeric_keys = _grounded_numeric_keys_for_issue(integrated_issue)
     violations: list[str] = []
@@ -3683,6 +2995,20 @@ def _quality_gate_violations(
         )
         if counterparty_role_violation:
             violations.append(f"{label}: {counterparty_role_violation}")
+        novelty_violation = _business_novelty_overclaim_violation(
+            value_text,
+            label=label,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
+        if novelty_violation:
+            violations.append(f"{label}: {novelty_violation}")
+        artifact_plan_violation = _action_artifact_plan_violation(
+            value_text,
+            label=label,
+            action_artifact_plan=action_artifact_plan,
+        )
+        if artifact_plan_violation:
+            violations.append(f"{label}: {artifact_plan_violation}")
         evidence_scoped_claim_violation = _evidence_scoped_business_claim_violation(
             value_text,
             label=label,
@@ -3696,6 +3022,7 @@ def _quality_gate_violations(
             label=label,
             integrated_issue=integrated_issue,
             profile_context=profile_context,
+            profile_linkage_evaluation=profile_linkage_evaluation,
         )
         if scope_expansion_violation:
             violations.append(f"{label}: {scope_expansion_violation}")
@@ -3707,21 +3034,6 @@ def _quality_gate_violations(
         )
         if action_quality_violation:
             violations.append(f"{label}: {action_quality_violation}")
-        generic_insight_violation = _generic_insight_quality_violation(
-            value_text,
-            label=label,
-            integrated_issue=integrated_issue,
-        )
-        if generic_insight_violation:
-            violations.append(f"{label}: {generic_insight_violation}")
-        reasoning_flow_violation = _reasoning_flow_quality_violation(
-            value_text,
-            label=label,
-            integrated_issue=integrated_issue,
-            profile_context=profile_context,
-        )
-        if reasoning_flow_violation:
-            violations.append(f"{label}: {reasoning_flow_violation}")
         unsupported_profile_violation = _unsupported_peer_profile_claim_violation(
             value_text,
             label=label,
@@ -3730,93 +3042,26 @@ def _quality_gate_violations(
         )
         if unsupported_profile_violation:
             violations.append(f"{label}: {unsupported_profile_violation}")
-        frame_mismatch_violation = _issue_frame_mismatch_violation(
+        unsupported_skax_term_violation = _unsupported_skax_profile_term_violation(
+            value_text,
+            label=label,
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
+        if unsupported_skax_term_violation:
+            violations.append(f"{label}: {unsupported_skax_term_violation}")
+        unsupported_domain_violation = _unsupported_domain_term_violation(
             value_text,
             label=label,
             integrated_issue=integrated_issue,
         )
-        if frame_mismatch_violation:
-            violations.append(f"{label}: {frame_mismatch_violation}")
+        if unsupported_domain_violation:
+            violations.append(f"{label}: {unsupported_domain_violation}")
+    repetition_violation = _two_section_repetition_violation(result)
+    if repetition_violation:
+        violations.append(repetition_violation)
     return list(dict.fromkeys(violations))
-
-
-def _quality_failure_is_mechanical_repair_candidate(violations: list[str]) -> bool:
-    if not violations:
-        return False
-    recoverable_markers = (
-        "현재 사건과 직접 맞는 피어 프로필 접점",
-        "체크포인트에 현재 사건",
-        "실적형 이슈",
-        "SK AX 내부 관점",
-        "비교 축이나 후속 확인 기준",
-        "현재 사건의 고유 근거",
-        "근거 흐름 부족",
-    )
-    return all(
-        any(marker in violation for marker in recoverable_markers) for violation in violations
-    )
-
-
-def _quality_failure_can_fallback_to_issue_frame(
-    violations: list[str],
-    *,
-    integrated_issue: dict[str, Any],
-    profile_context: dict[str, Any],
-) -> bool:
-    if not violations or not _profile_context_is_sparse(profile_context):
-        return False
-    if _issue_frame_kind(integrated_issue) not in {
-        "performance",
-        "launch_or_service",
-        "selection_or_build",
-    }:
-        return False
-    nonrecoverable_markers = (
-        "시장 선점",
-        "점유율",
-        "차별화된 가치",
-        "기회를 창출",
-        "기술적 역량을 입증",
-    )
-    joined = " / ".join(violations)
-    return not any(marker in joined for marker in nonrecoverable_markers)
-
-
-def _profile_context_is_sparse(profile_context: dict[str, Any]) -> bool:
-    if not isinstance(profile_context, dict) or not profile_context:
-        return True
-    candidates: list[Any] = [profile_context.get("skax_profile")]
-    peer_profiles = profile_context.get("peer_profiles")
-    if isinstance(peer_profiles, dict):
-        candidates.extend(peer_profiles.values())
-    elif isinstance(peer_profiles, list):
-        candidates.extend(peer_profiles)
-    signal_fields = (
-        "business_areas",
-        "core_capabilities",
-        "key_products_services",
-        "execution_cases",
-        "strategic_focus",
-        "recent_changes",
-        "capability_evolution",
-        "business_lines",
-    )
-    for profile in candidates:
-        if not isinstance(profile, dict):
-            continue
-        if any(_has_nonempty_profile_signal(profile.get(field)) for field in signal_fields):
-            return False
-    return True
-
-
-def _has_nonempty_profile_signal(value: Any) -> bool:
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, list):
-        return any(_has_nonempty_profile_signal(item) for item in value)
-    if isinstance(value, dict):
-        return any(_has_nonempty_profile_signal(item) for item in value.values())
-    return value is not None
 
 
 def _quality_checked_texts(result: dict[str, Any]) -> list[tuple[str, str]]:
@@ -3845,18 +3090,300 @@ def _quality_checked_texts(result: dict[str, Any]) -> list[tuple[str, str]]:
     return [(label, str(value or "").strip()) for label, value in items if str(value or "").strip()]
 
 
+def _business_novelty_overclaim_violation(
+    text: str,
+    *,
+    label: str,
+    profile_linkage_evaluation: dict[str, Any],
+) -> str:
+    if not text or _is_follow_up_or_watch_field(label):
+        return ""
+    if not label.startswith(("analysis.", "peer_implication.")):
+        return ""
+    peer_linkages = [
+        linkage
+        for linkage in _jsonish_list(profile_linkage_evaluation.get("peer_linkages"))
+        if isinstance(linkage, dict)
+    ]
+    if not peer_linkages:
+        return ""
+    cautious_terms = re.compile(r"관찰|신호|가능성|후속\s*확인|단정하기\s*어렵|미포착")
+    for linkage in peer_linkages:
+        novelty = str(linkage.get("business_novelty_status") or "")
+        if novelty == "not_new_business_counterparty_role" and _matches_any_pattern(
+            text,
+            OVERCLAIM_PATTERNS["counterparty"],
+        ):
+            return (
+                "계약 상대방/고객 슬롯인 피어를 신규 사업·입지 강화·역량 강화처럼 과대해석했습니다."
+            )
+        if novelty in {
+            "new_or_untracked_business_signal",
+            "profile_insufficient_cannot_judge_novelty",
+        } and _matches_any_pattern(text, OVERCLAIM_PATTERNS["new_signal"]):
+            if not cautious_terms.search(text):
+                return (
+                    "프로필에 강하게 포착되지 않은 사업 신호를 확정 성과나 역량 강화처럼 "
+                    "단정했습니다. 관찰 신호/후속 확인 수준으로 낮춰야 합니다."
+                )
+    return ""
+
+
+def _matches_any_pattern(text: str, patterns: Sequence[str]) -> bool:
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
+def _action_artifact_plan_violation(
+    text: str,
+    *,
+    label: str,
+    action_artifact_plan: dict[str, Any],
+) -> str:
+    if not text or not label.startswith("skax_implication.recommended_actions"):
+        return ""
+    external_phrase = _skax_external_customer_facing_violation(text)
+    if external_phrase:
+        return external_phrase
+    issue_terms = _action_plan_issue_terms(action_artifact_plan)
+    if issue_terms and not _action_text_has_issue_signal(text, issue_terms):
+        return "대응방향에 현재 사건의 대상 사업/시스템/서비스/고객군 신호가 연결되지 않았습니다."
+    if not _action_text_has_internal_strategy_checkpoint(text):
+        return "대응방향에 SK AX가 내부적으로 점검할 기준이 부족합니다."
+    if not _action_text_has_skax_change(text):
+        return "대응방향에 SK AX가 보완하거나 점검할 구체 방식이 부족합니다."
+    return ""
+
+
+def _action_plan_issue_terms(action_artifact_plan: dict[str, Any]) -> set[str]:
+    primary_terms = _action_plan_terms_for_keys(
+        action_artifact_plan,
+        keys=(
+            "products_or_services",
+            "target_systems",
+            "customers_or_industries",
+            "evidence_terms",
+        ),
+    )
+    if primary_terms:
+        return primary_terms
+    return _action_plan_terms_for_keys(
+        action_artifact_plan,
+        keys=(
+            "structured_terms",
+            "activity_types",
+            "event_type",
+        ),
+    )
+
+
+def _action_plan_terms_for_keys(
+    action_artifact_plan: dict[str, Any],
+    *,
+    keys: Sequence[str],
+) -> set[str]:
+    signals = _json_dict(action_artifact_plan.get("current_issue_signals"))
+    terms: set[str] = set()
+    for key in keys:
+        values = (
+            _string_list(signals.get(key), max_items=50)
+            if key != "event_type"
+            else [str(signals.get(key) or "")]
+        )
+        for value in values:
+            for token in _raw_normalized_terms(value):
+                normalized = token.casefold() if token.isascii() else token
+                if normalized and not _is_low_signal_content_token(normalized):
+                    if _is_generic_business_term(normalized):
+                        continue
+                    if len(normalized) < 2:
+                        continue
+                    terms.add(normalized)
+    return terms
+
+
+def _action_text_has_issue_signal(text: str, issue_terms: set[str]) -> bool:
+    output_terms = _content_tokens(text)
+    if output_terms & issue_terms:
+        return True
+    return any(
+        _tokens_semantically_close(output_term, issue_term)
+        for output_term in output_terms
+        for issue_term in issue_terms
+    )
+
+
+def _skax_external_customer_facing_violation(text: str) -> str:
+    value = str(text or "")
+    if re.search(
+        r"고객(이|은|에게|한테).{0,24}(확인|비교|평가|판단|볼 수|보여|제시|설명)",
+        value,
+    ) or re.search(r"고객\s*제안|고객\s*확인\s*기준|고객이\s*확인", value):
+        return (
+            "대응방향이 외부 고객 제안/확인 문장처럼 작성되었습니다. "
+            "유사 고객군/유사 사업 관점은 유지하되, 외부 고객 제안 문장이 아니라 "
+            "SK AX 내부에서 경쟁사 사업군과 자사 사업군의 겹침/차이, 대응 가능 범위, "
+            "역량 공백, 운영·영업 전략, 후속 모니터링 항목을 점검하는 문장으로 "
+            "바꿔야 합니다."
+        )
+    return ""
+
+
+def _action_text_has_internal_strategy_checkpoint(text: str) -> bool:
+    value = str(text or "")
+    matched_groups = [
+        group for group, pattern in _INTERNAL_CHECKPOINT_GROUPS.items() if re.search(pattern, value)
+    ]
+    return len(matched_groups) >= 2
+
+
+def _action_text_has_skax_change(text: str) -> bool:
+    value = str(text or "")
+    return any(re.search(pattern, value) for pattern in _SKAX_ACTION_VERB_GROUPS.values())
+
+
+def _unsupported_skax_profile_term_violation(
+    text: str,
+    *,
+    label: str,
+    integrated_issue: dict[str, Any],
+    profile_context: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any] | None = None,
+) -> str:
+    if not label.startswith("skax_implication."):
+        return ""
+    if _is_follow_up_or_watch_field(label):
+        return ""
+    issue_tokens = _issue_relevance_tokens(integrated_issue)
+    output_tokens = _content_tokens(text)
+    skax_terms = _concrete_profile_terms(
+        profile_context,
+        integrated_issue=integrated_issue,
+        scope="skax",
+    )
+    used_skax_terms = sorted(output_tokens & skax_terms)
+    if not used_skax_terms:
+        return ""
+    linkage_level = _relevant_profile_linkage_level_from_evaluation(
+        profile_linkage_evaluation,
+        scope="skax",
+    ) or _relevant_profile_linkage_level(
+        profile_context,
+        integrated_issue=integrated_issue,
+        scope="skax",
+    )
+    if linkage_level in {"high", "medium"}:
+        return ""
+    unsupported = sorted(set(used_skax_terms) - issue_tokens)
+    if not unsupported:
+        return ""
+    return (
+        "SK AX 프로필 연결이 약한 상태에서 구체 SK AX 사업/역량 용어를 사용했습니다: "
+        f"{', '.join(unsupported[:3])}. 대응 방향은 현재 사건의 적용 범위/대상 업무/"
+        "검증 기준으로 낮춰야 합니다."
+    )
+
+
+def _unsupported_domain_term_violation(
+    text: str,
+    *,
+    label: str,
+    integrated_issue: dict[str, Any],
+) -> str:
+    if not label.startswith("skax_implication."):
+        return ""
+    if _is_follow_up_or_watch_field(label):
+        return ""
+    evidence_text = _integrated_grounding_text(integrated_issue)
+    evidence_tokens = _content_tokens(evidence_text)
+    output_tokens = _content_tokens(text)
+    unsupported = sorted(
+        domain
+        for domain in output_tokens & set(_DOMAIN_ALIASES)
+        if not _domain_supported_by_evidence(
+            domain,
+            evidence_tokens=evidence_tokens,
+            evidence_text=evidence_text,
+        )
+    )
+    if not unsupported:
+        return ""
+    return (
+        "현재 사건 근거에 없는 산업/도메인 용어를 SK AX 대응 방향에 사용했습니다: "
+        f"{', '.join(unsupported[:3])}. 현재 사건의 대상 업무/적용 범위/"
+        "검증 기준으로 낮춰야 합니다."
+    )
+
+
+def _domain_supported_by_evidence(
+    domain: str,
+    *,
+    evidence_tokens: set[str],
+    evidence_text: str,
+) -> bool:
+    aliases = _DOMAIN_ALIASES.get(domain, {domain})
+    evidence_lower = str(evidence_text or "").casefold()
+    return any(
+        alias.casefold() in evidence_lower or alias.casefold() in evidence_tokens
+        for alias in aliases
+    )
+
+
+def _two_section_repetition_violation(result: dict[str, Any]) -> str:
+    analysis = result.get("analysis") or {}
+    implication = result.get("implication") or {}
+    peer = implication.get("peer_implication") or {}
+    insight_texts = [
+        str(analysis.get("analysis_summary") or ""),
+        *[str(item or "") for item in _string_list(analysis.get("strategic_meaning"), max_items=3)],
+        str(analysis.get("market_signal") or ""),
+        str(peer.get("peer_meaning") or ""),
+        str(peer.get("capability_change") or ""),
+    ]
+    normalized: list[set[str]] = []
+    labels: list[str] = []
+    for index, insight_text in enumerate(insight_texts):
+        tokens = _high_signal_tokens_for_repetition(insight_text)
+        if len(tokens) < 4:
+            continue
+        normalized.append(tokens)
+        labels.append(f"시사점 필드 {index + 1}")
+    repeated_pairs: list[tuple[str, str]] = []
+    for left_index, left_tokens in enumerate(normalized):
+        for right_index in range(left_index + 1, len(normalized)):
+            right_tokens = normalized[right_index]
+            overlap = len(left_tokens & right_tokens)
+            smaller = max(1, min(len(left_tokens), len(right_tokens)))
+            if overlap / smaller >= 0.75:
+                repeated_pairs.append((labels[left_index], labels[right_index]))
+    if len(repeated_pairs) >= 2:
+        first, second = repeated_pairs[0]
+        return (
+            f"{first}와 {second} 등 여러 시사점 필드가 같은 의미를 반복합니다. "
+            "analysis 와 peer_implication 은 별도 노출 섹션이 아니라 하나의 "
+            "시사점 묶음으로 압축해야 합니다."
+        )
+    direction_terms = ("가속화", "확장", "확대")
+    repeated_direction_count = sum(
+        1 for text in insight_texts if any(term in text for term in direction_terms)
+    )
+    if repeated_direction_count >= 3:
+        return (
+            "시사점 필드 여러 곳에서 가속화/확장/확대 같은 방향성 표현을 반복합니다. "
+            "카드 요약을 반복하지 말고 적용 범위, 대상 업무, 검증 기준으로 나눠 써야 합니다."
+        )
+    return ""
+
+
+def _high_signal_tokens_for_repetition(text: str) -> set[str]:
+    return {token for token in _semantic_fingerprint_for_text(text) if len(token) >= 3}
+
+
 def _has_unsupported_pattern(text: str, pattern: str, *, evidence_text: str) -> bool:
     if not re.search(pattern, text):
         return False
+    if re.search(r"점검|비교|확인|모니터링|여부|기준", text):
+        return False
     return not re.search(pattern, evidence_text)
-
-
-def _unsupported_claim_pattern_violation(text: str, *, integrated_issue: dict[str, Any]) -> bool:
-    evidence_text = _integrated_grounding_text(integrated_issue)
-    return any(
-        _has_unsupported_pattern(text, pattern, evidence_text=evidence_text)
-        for pattern in _UNSUPPORTED_CLAIM_PATTERNS
-    )
 
 
 def _relationship_grounding_violation(
@@ -3881,35 +3408,6 @@ def _relationship_grounding_violation(
 
 def _is_follow_up_or_watch_field(label: str) -> bool:
     return label.startswith(("implication.follow_up_questions", "implication.watch_points"))
-
-
-def _issue_frame_mismatch_violation(
-    text: str,
-    *,
-    label: str,
-    integrated_issue: dict[str, Any],
-) -> str:
-    if not text or _is_follow_up_or_watch_field(label):
-        return ""
-    frame_kind = _issue_frame_kind(integrated_issue)
-    if frame_kind != "performance":
-        return ""
-    value = str(text or "")
-    focus_text = _issue_focus_text(integrated_issue)
-    performance_terms = r"매출|영업이익|순이익|영업이익률|실적|수익성|이익|전사\s*재무"
-    if re.search(performance_terms, value):
-        return ""
-    operational_terms = (
-        r"물류|자동화|계약\s*범위|대상\s*시스템|전환\s*범위|업무\s*영향도|"
-        r"구축\s*범위|운영\s*책임|일정\s*기준|시스템\s*전환|기술적\s*성과|"
-        r"기술\s*도입|기술.{0,8}기여|기술.{0,8}영향"
-    )
-    if re.search(operational_terms, value) and not re.search(operational_terms, focus_text):
-        return (
-            "실적형 이슈를 물류/계약/시스템 전환 과제처럼 해석했습니다. "
-            "매출·이익·이익률과 사업부 기여도 확인 여부 중심으로 낮춰야 합니다."
-        )
-    return ""
 
 
 def _has_relationship_grounding(integrated_issue: dict[str, Any], evidence_text: str) -> bool:
@@ -4028,14 +3526,10 @@ def _counterparty_role_action_violation(
     if not mentions_target:
         return ""
 
+    current_event_terms = r"이번|해당|계약|사업|프로젝트|과제|수주|협약"
     direct_role_patterns = (
-        r"전략(적)?\s*(방향|움직임|일관성|일환|추진|구체화|강화)",
-        r"프로젝트[가-힣\s]*(추진|참여|제공|공급|수행|구축|운영|지원|확장|확대|통해|기여)",
-        r"사업[가-힣\s]*(추진|참여|제공|공급|수행|구축|운영|지원|확장|확대)",
-        r"(시스템|서비스|솔루션)[가-힣\s]*(추진|참여|제공|공급|수행|구축|운영|지원|확장|확대|집중|기여)",
-        r"(솔루션|서비스|기회)[이가를은\s]*.{0,30}(제공|지원|기여|보여)",
-        r"(제공|공급|수행|구축|운영|지원)\s*역량",
-        r"디지털\s*전환[을를\s]*지원",
+        rf"(?:{current_event_terms}).{{0,28}}(?:제공|공급|수행|구축|운영|지원|추진|참여|기여)",
+        rf"(?:제공|공급|수행|구축|운영|지원|추진|참여|기여).{{0,28}}(?:{current_event_terms})",
     )
     target_near_direct_role = any(
         re.search(
@@ -4047,13 +3541,12 @@ def _counterparty_role_action_violation(
         for target_pattern in target_patterns
         for role_pattern in direct_role_patterns
     )
-    profile_background_statement = (
-        label.startswith(("peer_implication.peer_meaning", "peer_implication.capability_change"))
-        and re.search(
-            r"(제공하는|보유한)\s*기업|제공\s*역량|기존\s*(사업영역|역량)|프로필\s*접점",
-            text,
-        )
-        and not re.search(r"(프로젝트|사업|계약)[가-힣\s]*(제공|수행|참여|추진|운영)", text)
+    profile_background_statement = re.search(
+        r"(제공하는|보유한)\s*기업|기존\s*(사업영역|역량)|프로필\s*접점|프로필상",
+        text,
+    ) and not re.search(
+        rf"(?:{current_event_terms}).{{0,28}}(?:제공|공급|수행|구축|운영|지원|추진|참여|기여)",
+        text,
     )
     if target_near_direct_role and not profile_background_statement:
         return (
@@ -4078,12 +3571,22 @@ def _counterparty_role_action_violation(
     if re.search(conservative_role_terms, text):
         return ""
 
-    if label.startswith("skax_implication.recommended_actions") and re.search(
-        r"제안서|PoC|레퍼런스|운영\s*모델", text
+    if label.startswith("skax_implication.recommended_actions") and any(
+        re.search(
+            pattern + r".{0,24}(에게|대상|상대로|제안|제시|영업)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        for pattern in target_patterns
     ):
+        if re.search(r"SK\s*AX|유사\s*고객군|유사\s*사업", text, flags=re.IGNORECASE):
+            return ""
         return (
-            "SK AX 체크포인트가 외부 실행 산출물 표현에 머물렀습니다. "
-            "현재 사건 신호, 비교 축, 후속 확인 데이터, 내부 점검 관점으로 바꿔야 합니다."
+            "SK AX 대응을 타깃 피어의 특정 프로젝트에 직접 제안하는 것처럼 썼습니다. "
+            "유사 고객군/유사 사업 관점은 유지하되, 외부 고객 제안 문장이 아니라 "
+            "SK AX 내부에서 경쟁사 사업군과 자사 사업군의 겹침/차이, 대응 가능 범위, "
+            "역량 공백, 운영·영업 전략, 후속 모니터링 항목을 점검하는 문장으로 "
+            "바꿔야 합니다."
         )
     return ""
 
@@ -4100,37 +3603,49 @@ def _recommended_action_quality_violation(
     evidence_text = _integrated_grounding_text(integrated_issue or {})
     if re.search(r"주가|거래를\s*마쳤|시장\s*반응|투자자\s*반응", text):
         return (
-            "체크포인트가 주가/시장 반응을 핵심 근거로 사용했습니다. 현재 사건의 "
-            "대상 사업, 역할, 수치, 후속 확인 데이터 중심으로 작성해야 합니다."
+            "대응방향이 주가/시장 반응을 실행 근거로 사용했습니다. 전략 대응은 현재 사건의 "
+            "사업 범위, 운영 조건, 검증 기준, 프로필 접점 중심으로 작성해야 합니다."
         )
-    if re.search(r"클라우드|AI|인공지능|에이아이", text, flags=re.IGNORECASE) and not re.search(
-        r"클라우드|AI|인공지능|에이아이",
-        evidence_text,
-        flags=re.IGNORECASE,
-    ):
-        return (
-            "현재 사건 근거에 없는 기술명을 체크포인트에 사용했습니다. 대상 사업·시스템, "
-            "역할 범위, 수치, 일정, 후속 확인 데이터 중심으로 낮춰야 합니다."
+    if re.search(r"클라우드|AI|인공지능|에이아이", text, flags=re.IGNORECASE):
+        evidence_has_tech = re.search(
+            r"클라우드|AI|인공지능|에이아이",
+            evidence_text,
+            flags=re.IGNORECASE,
         )
+        profile_support = _has_concrete_profile_term(
+            text,
+            profile_context=profile_context or {},
+            integrated_issue=integrated_issue or {},
+            scope="skax",
+        )
+        if not evidence_has_tech and not profile_support:
+            return (
+                "현재 사건 근거 또는 SK AX 프로필 접점 없이 기술명을 대응방향에 사용했습니다. "
+                "대상 시스템, 전환 범위, 업무 영향도, 운영 책임, 검증 기준 중심으로 낮춰야 합니다."
+            )
     if re.search(r"성공|수주에\s*영향|신뢰성", text) and not _profile_has_execution_case(
         profile_context,
         integrated_issue=integrated_issue,
     ):
         return (
             "ProfileContext에 실행 사례 근거가 없는데 성공/수주 영향/신뢰성을 사용했습니다. "
-            "현재 사건에서 확인되는 역할·수치·범위와 후속 확인 데이터로 낮춰야 합니다."
+            "SK AX가 내부적으로 점검할 검증 기준과 운영 조건 중심으로 낮춰야 합니다."
         )
-    if re.search(r"솔루션|성능.{0,12}(강조|입증|검증|확인)|검증된\s*성능", text):
+    if "솔루션" in text and not _solution_term_supported_by_evidence(
+        text,
+        integrated_issue=integrated_issue or {},
+        profile_context=profile_context or {},
+    ):
         return (
-            "대응방향이 솔루션/성능 강조 같은 일반 표현에 머물렀습니다. "
-            "현재 사건의 대상 사업·시스템, 비교 축, 후속 확인 데이터, 내부 점검 관점으로 "
-            "낮춰야 합니다."
+            "대응방향이 근거 없는 솔루션 표현에 머물렀습니다. "
+            "현재 사건의 전환 범위, 업무 영향도, 운영 책임, 검증 기준처럼 "
+            "SK AX가 내부적으로 점검할 기준으로 낮춰야 합니다."
         )
-    if re.search(r"경쟁력[을를이가\s]*확보|전략에\s*반영|방안[을를]?\s*모색", text):
+    if re.search(r"성능.{0,12}(강조|입증)|검증된\s*성능", text):
         return (
-            "대응방향이 경쟁력 확보/전략 반영 같은 일반 결론으로 끝났습니다. "
-            "현재 사건의 어떤 사실이 어떤 내부 비교 기준을 만들었는지와 "
-            "후속으로 확인할 데이터를 함께 써야 합니다."
+            "대응방향이 성능 강조 같은 일반 표현에 머물렀습니다. "
+            "현재 사건의 전환 범위, 업무 영향도, 운영 책임, 성능/용량 검증 기준처럼 "
+            "SK AX가 내부적으로 점검할 기준으로 낮춰야 합니다."
         )
     off_topic_product_violation = _off_topic_application_product_violation(
         text,
@@ -4146,464 +3661,29 @@ def _recommended_action_quality_violation(
     )
     if evidence_scoped_violation:
         return evidence_scoped_violation
-    structural_violation = _recommended_action_checkpoint_violation(
-        text,
-        integrated_issue=integrated_issue or {},
-    )
-    if structural_violation:
-        return structural_violation
     return ""
 
 
-def _generic_insight_quality_violation(
+def _solution_term_supported_by_evidence(
     text: str,
     *,
-    label: str,
-    integrated_issue: dict[str, Any],
-) -> str:
-    if not text or _is_follow_up_or_watch_field(label):
-        return ""
-    if not _GENERIC_INSIGHT_PATTERN.search(text):
-        return ""
-    if _text_has_specific_issue_grounding(text, integrated_issue=integrated_issue):
-        return ""
-    return (
-        "문장이 일반 표현에 머물렀고 현재 사건의 적용 업무/시스템/서비스/수치/관계가 "
-        "함께 보이지 않습니다. 현재 사건의 고유 근거와 연결해 다시 작성해야 합니다."
-    )
-
-
-def _reasoning_flow_quality_violation(
-    text: str,
-    *,
-    label: str,
     integrated_issue: dict[str, Any],
     profile_context: dict[str, Any],
-) -> str:
-    """Require evidence flow for interpretive claims without hard-coding domains."""
-    if not text or _is_follow_up_or_watch_field(label):
-        return ""
-    value = str(text or "")
-    peer_field = label.startswith(
-        (
-            "analysis.analysis_summary",
-            "analysis.strategic_meaning",
-            "analysis.market_signal",
-            "analysis.impact_reason",
-            "analysis.reason",
-            "peer_implication.peer_meaning",
-            "peer_implication.capability_change",
-        )
-    )
-    skax_field = label.startswith(
-        (
-            "skax_implication.why_important",
-            "skax_implication.potential_impact",
-            "skax_implication.recommended_actions",
-        )
-    )
-    if not (peer_field or skax_field):
-        return ""
-
-    has_issue_grounding = _text_has_specific_issue_grounding(
-        value,
-        integrated_issue=integrated_issue,
-    )
-    has_reason_marker = _has_reasoning_marker(value)
-    if peer_field:
-        profile_terms = _profile_terms_for_quality(
-            profile_context,
-            integrated_issue=integrated_issue,
-            scope="peer",
-        )
-        has_profile_grounding = _text_overlaps_issue_terms(value, profile_terms)
-        cautious_when_weak = bool(
-            re.search(r"단정하기\s*어렵|후속\s*확인|관찰\s*신호|근거가\s*(약|부족|제한)", value)
-        )
-        has_metric_effect_support = _has_effect_metric_support(
-            value,
-            integrated_issue=integrated_issue,
-        )
-        if _has_unexplained_observation_phrase(value) and not (
-            has_issue_grounding
-            and (has_profile_grounding or cautious_when_weak)
-            and has_reason_marker
-        ):
-            return (
-                "근거 흐름 부족: 기존 사업/관찰 신호 표현을 썼지만 현재 사건의 구체 사실, "
-                "연결되는 프로필 근거, 왜 단정하지 않는지 또는 왜 연결되는지가 "
-                "함께 보이지 않습니다."
-            )
-        if _has_strong_interpretive_claim(value) and not (
-            has_issue_grounding
-            and (has_profile_grounding or has_metric_effect_support)
-            and has_reason_marker
-        ):
-            return (
-                "근거 흐름 부족: 기회·역량 강화·효과 같은 강한 해석을 썼지만 현재 사건 사실과 "
-                "관련 프로필 근거가 문장 안에서 논리적으로 연결되지 않았습니다."
-            )
-    if skax_field:
-        if _has_vague_skax_comparison(value) and not (
-            has_issue_grounding and has_reason_marker and _has_skax_decision_object(value)
-        ):
-            return (
-                "근거 흐름 부족: SK AX 체크포인트가 무엇을 왜 비교해야 하는지 부족합니다. "
-                "현재 사건 신호, 비교 축, 그 축이 바꾸는 내부 판단, "
-                "후속 확인 데이터를 연결해야 합니다."
-            )
-    return ""
-
-
-def _has_unexplained_observation_phrase(text: str) -> bool:
-    return bool(
-        re.search(
-            r"기존\s*사업\s*(흐름|맥락)|관찰\s*(지점|신호)|연결\s*(지점|사례|흐름)|"
-            r"이어지는\s*흐름|비교할\s*지점|배경으로\s*확인",
-            str(text or ""),
-        )
-    )
-
-
-def _has_strong_interpretive_claim(text: str) -> bool:
-    return bool(
-        re.search(
-            r"기회[를가은\s]*(얻|확보|생기)|"
-            r"역량[이가을를\s]*(강화|높|확장)|"
-            r"표준[을를\s]*(제시|만들)|"
-            r"효율성[을를이가\s]*(높|향상|개선)|"
-            r"긍정적\s*영향|"
-            r"성과[를가\s]*(확인|입증|검증)",
-            str(text or ""),
-        )
-    )
-
-
-def _has_effect_metric_support(text: str, *, integrated_issue: dict[str, Any]) -> bool:
-    """Allow effect/efficiency claims only when the issue itself carries metrics."""
-    value = str(text or "")
-    if not re.search(r"효율|단축|감소|절감|개선|성과|처리\s*시간|적응\s*기간", value):
-        return False
-    grounding = _integrated_grounding_text(integrated_issue)
-    if not grounding:
-        return False
-    has_effect_language = bool(
-        re.search(r"효율|단축|감소|절감|개선|성과|처리\s*시간|적응\s*기간", grounding)
-    )
-    has_metric = bool(
-        re.search(r"\d[\d,.]*\s*(?:시간|분|개월|주|일|%|퍼센트|배|건|명|억원|원)", grounding)
-    )
-    return has_effect_language and has_metric
-
-
-def _has_vague_skax_comparison(text: str) -> bool:
-    return bool(
-        re.search(
-            r"같은\s*기준으로\s*축적|비교해야\s*합니다|구분해야\s*합니다|"
-            r"점검해야\s*합니다|모니터링해야\s*합니다|조정할\s*수\s*있습니다|"
-            r"대응\s*가능\s*범위",
-            str(text or ""),
-        )
-    )
-
-
-def _has_reasoning_marker(text: str) -> bool:
-    return bool(
-        re.search(
-            r"때문|근거|보여|의미|따라서|다만|단정|확인되어야|그래야|"
-            r"이\s*(기준|구분|정보|데이터)|판단|비교|역할|책임|성과|리스크|"
-            r"가능성|범위|왜",
-            str(text or ""),
-        )
-    )
-
-
-def _has_skax_decision_object(text: str) -> bool:
-    return bool(
-        re.search(
-            r"사업화\s*가능성|운영\s*책임|성과\s*검증|역할\s*분담|책임\s*구조|"
-            r"수행\s*범위|보완\s*영역|리스크\s*판단|내부\s*판단|적용\s*업무|"
-            r"사용\s*대상|효과\s*수치|대상\s*시스템|후속\s*데이터|관계\s*수준|"
-            r"과제\s*전환|후속\s*공시|고객\s*접점|검증\s*환경|운영\s*조건",
-            str(text or ""),
-        )
-    )
-
-
-def _profile_terms_for_quality(
-    profile_context: dict[str, Any],
-    *,
-    integrated_issue: dict[str, Any],
-    scope: str,
-) -> list[str]:
-    profiles = _profiles_for_quality(
+) -> bool:
+    del text
+    evidence_text = _integrated_grounding_text(integrated_issue)
+    if "솔루션" in evidence_text:
+        return True
+    profile_terms = _concrete_profile_terms(
         profile_context,
         integrated_issue=integrated_issue,
-        scope=scope,
+        scope="skax",
+    ) | _concrete_profile_terms(
+        profile_context,
+        integrated_issue=integrated_issue,
+        scope="peer",
     )
-    terms: list[str] = []
-    for profile in profiles:
-        for key in (
-            "business_areas",
-            "core_capabilities",
-            "key_products_services",
-            "strategic_focus",
-            "execution_cases",
-            "evidence_digest",
-            "profile_linkage_evaluation",
-            "skax_response_linkage",
-        ):
-            terms.extend(_profile_text_terms(profile.get(key), depth=0))
-    return _unique_texts(
-        [term for term in terms if _profile_quality_term_is_signal(term)], max_items=40
-    )
-
-
-def _profiles_for_quality(
-    profile_context: dict[str, Any],
-    *,
-    integrated_issue: dict[str, Any],
-    scope: str,
-) -> list[dict[str, Any]]:
-    if not isinstance(profile_context, dict):
-        return []
-    if scope == "skax":
-        skax = profile_context.get("skax_profile") or {}
-        return [skax] if isinstance(skax, dict) else []
-    peer_profiles = profile_context.get("peer_profiles") or {}
-    if not isinstance(peer_profiles, dict):
-        return []
-    companies = _companies_from_integrated_issue(integrated_issue)
-    profiles: list[dict[str, Any]] = []
-    for company_id in companies:
-        profile = peer_profiles.get(company_id)
-        if isinstance(profile, dict):
-            profiles.append(profile)
-    if profiles:
-        return profiles
-    return [profile for profile in peer_profiles.values() if isinstance(profile, dict)]
-
-
-def _profile_text_terms(value: Any, *, depth: int) -> list[str]:
-    if depth > 4:
-        return []
-    terms: list[str] = []
-    if isinstance(value, str):
-        text = re.sub(r"\s+", " ", value).strip()
-        if text:
-            terms.append(text)
-            terms.extend(_content_tokens(text))
-        return terms
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if str(key).casefold() in {
-                "source",
-                "source_ref",
-                "source_refs",
-                "schema_version",
-                "generated_at",
-                "confidence",
-                "status",
-            }:
-                continue
-            terms.extend(_profile_text_terms(item, depth=depth + 1))
-        return terms
-    if isinstance(value, list):
-        for item in value[:12]:
-            terms.extend(_profile_text_terms(item, depth=depth + 1))
-    return terms
-
-
-def _profile_quality_term_is_signal(term: str) -> bool:
-    value = re.sub(r"\s+", " ", str(term or "").strip())
-    if len(value) < 3:
-        return False
-    if re.fullmatch(r"[A-Za-z]{1,3}", value):
-        return False
-    lowered = value.casefold()
-    if lowered in {"profile", "schema", "version", "summary", "source", "status"}:
-        return False
-    if value in {"사업", "서비스", "시스템", "플랫폼", "솔루션", "기술", "구축", "운영"}:
-        return False
-    return True
-
-
-def _text_has_specific_issue_grounding(
-    text: str,
-    *,
-    integrated_issue: dict[str, Any],
-) -> bool:
-    value = str(text or "")
-    if not value:
-        return False
-    for token in _NUMERIC_TOKEN_PATTERN.findall(value):
-        if _numeric_token_key(token) in _grounded_numeric_keys_for_issue(integrated_issue):
-            return True
-    specific_terms = _high_specific_issue_terms_for_quality(integrated_issue)
-    matched_specific_terms = [
-        term for term in specific_terms if _text_overlaps_issue_terms(value, [term])
-    ]
-    if len(matched_specific_terms) >= 2:
-        return True
-    if matched_specific_terms and any(len(term) >= 8 for term in matched_specific_terms):
-        return True
-    return False
-
-
-def _specific_issue_terms_for_quality(integrated_issue: dict[str, Any]) -> list[str]:
-    issue_frame = _issue_frame_for_prompt(integrated_issue)
-    terms: list[str] = []
-    terms.extend(_checkpoint_issue_terms(issue_frame))
-    business_object = issue_frame.get("business_object") or {}
-    terms.extend(_string_list(business_object.get("raw_terms"), max_items=20))
-    terms.extend(_string_list(issue_frame.get("profile_matching_terms"), max_items=20))
-
-    grounding_text = _integrated_grounding_text(integrated_issue)
-    terms.extend(_NUMERIC_TOKEN_PATTERN.findall(grounding_text))
-    terms.extend(re.findall(r"[\"'“”‘’]([^\"'“”‘’]{2,40})[\"'“”‘’]", grounding_text))
-    for token in _content_tokens(grounding_text):
-        if _is_specific_issue_token(token):
-            terms.append(token)
-    return _unique_texts(terms, max_items=40)
-
-
-def _high_specific_issue_terms_for_quality(integrated_issue: dict[str, Any]) -> list[str]:
-    issue_frame = _issue_frame_for_prompt(integrated_issue)
-    terms: list[str] = []
-    business_object = issue_frame.get("business_object") or {}
-    terms.extend(_string_list(business_object.get("raw_terms"), max_items=20))
-    target_scope = issue_frame.get("target_scope") or {}
-    for key in (
-        "target_work",
-        "target_system",
-        "target_customer_or_industry",
-        "geography_or_market",
-    ):
-        terms.extend(_string_list(target_scope.get(key), max_items=20))
-
-    grounding_text = _integrated_grounding_text(integrated_issue)
-    terms.extend(_NUMERIC_TOKEN_PATTERN.findall(grounding_text))
-    terms.extend(re.findall(r"[\"'“”‘’]([^\"'“”‘’]{2,40})[\"'“”‘’]", grounding_text))
-    for token in _content_tokens(grounding_text):
-        if _is_high_specific_issue_token(token):
-            terms.append(token)
-    return _unique_texts([term for term in terms if _clean_issue_axis_phrase(term)], max_items=40)
-
-
-def _is_high_specific_issue_token(token: str) -> bool:
-    value = str(token or "").strip()
-    if len(value) < 5:
-        return False
-    if not _is_specific_issue_token(value):
-        return False
-    low_specific = {
-        "물류센터",
-        "업무협약",
-        "공통업무",
-        "인공지능",
-        "클라우드",
-        "데이터센터",
-        "자동화",
-        "컴퓨팅센터",
-    }
-    return value not in low_specific
-
-
-def _is_specific_issue_token(token: str) -> bool:
-    value = str(token or "").strip()
-    if len(value) < 4:
-        return False
-    lowered = value.casefold()
-    low_signal = {
-        "서비스",
-        "플랫폼",
-        "시스템",
-        "솔루션",
-        "사업",
-        "기술",
-        "기업",
-        "지원",
-        "활용",
-        "제공",
-        "구축",
-        "운영",
-        "확대",
-        "강화",
-        "디지털",
-        "전환",
-        "업무",
-        "효율성",
-        "전략",
-        "동향",
-        "피어사",
-        "경쟁사",
-    }
-    if lowered in {"lg", "cns", "sk", "ax", "sds"} or value in low_signal:
-        return False
-    if re.fullmatch(r"[A-Za-z]{2,4}", value):
-        return False
-    return True
-
-
-def _recommended_action_checkpoint_violation(
-    text: str,
-    *,
-    integrated_issue: dict[str, Any],
-) -> str:
-    value = str(text or "")
-    if re.search(r"제안서|PoC|레퍼런스|운영\s*계획|영업\s*대응", value, re.IGNORECASE):
-        return (
-            "체크포인트가 외부 실행 산출물 표현에 머물렀습니다. SK AX 내부에서 관찰·비교·추적할 "
-            "축과 후속 확인 데이터로 바꿔야 합니다."
-        )
-    if not re.search(r"SK\s*AX|자사|내부", value, re.IGNORECASE):
-        return "체크포인트에 SK AX 내부 관점이 부족합니다."
-
-    issue_frame = _issue_frame_for_prompt(integrated_issue)
-    issue_terms = _checkpoint_issue_terms(issue_frame)
-    if issue_terms and not _text_overlaps_issue_terms(value, issue_terms):
-        return "체크포인트에 현재 사건의 대상 사업·서비스·시스템·고객군 신호가 연결되지 않았습니다."
-    if not re.search(
-        r"비교|관찰|추적|모니터링|후속|확인|점검|구분|조정|축적|범위|역할|수치|일정|"
-        r"책임|리스크|조건|구조|변동",
-        value,
-    ):
-        return "체크포인트에 비교 축이나 후속 확인 기준이 부족합니다."
-    return ""
-
-
-def _checkpoint_issue_terms(issue_frame: dict[str, Any]) -> list[str]:
-    terms: list[str] = []
-    business_object = issue_frame.get("business_object") or {}
-    if business_object.get("name"):
-        terms.append(str(business_object.get("name")))
-    target_scope = issue_frame.get("target_scope") or {}
-    for key in (
-        "target_work",
-        "target_system",
-        "target_customer_or_industry",
-        "geography_or_market",
-    ):
-        terms.extend(_string_list(target_scope.get(key), max_items=10))
-    for item in _jsonish_list(issue_frame.get("numbers")):
-        if isinstance(item, dict):
-            terms.extend([str(item.get("metric") or ""), str(item.get("value") or "")])
-    return _unique_texts(terms, max_items=20)
-
-
-def _text_overlaps_issue_terms(text: str, issue_terms: list[str]) -> bool:
-    value = str(text or "").casefold()
-    for term in issue_terms:
-        clean_term = _clean_phrase(term)
-        if len(clean_term) < 2:
-            continue
-        if clean_term.casefold() in value:
-            return True
-        term_tokens = set(re.findall(r"[가-힣A-Za-z0-9&·+_-]{2,}", clean_term))
-        text_tokens = set(re.findall(r"[가-힣A-Za-z0-9&·+_-]{2,}", value))
-        if term_tokens and len(term_tokens & text_tokens) >= min(2, len(term_tokens)):
-            return True
-    return False
+    return "솔루션" in profile_terms
 
 
 def _off_topic_application_product_violation(
@@ -4701,14 +3781,13 @@ def _evidence_scoped_business_claim_violation(
     if not text or not label.startswith("skax_implication."):
         return ""
     text_value = str(text or "")
-    if "솔루션" in text_value and not _text_overlaps_issue_terms(
-        text_value,
-        _checkpoint_issue_terms(_issue_frame_for_prompt(integrated_issue or {})),
+    if "솔루션" in text_value and not (
+        _action_text_has_internal_strategy_checkpoint(text_value)
+        or _high_signal_issue_overlap_count(text_value, integrated_issue or {}) >= 2
     ):
         return (
-            "SK AX 영향/체크포인트를 근거가 약한 일반 솔루션 표현으로 썼습니다. "
-            "현재 사건에서 확인된 대상 사업·시스템·역할·수치·후속 확인 데이터 중심으로 "
-            "낮춰야 합니다."
+            "SK AX 영향/대응을 일반 솔루션 표현으로 썼습니다. 현재 사건에서 확인된 "
+            "전환 범위, 업무 영향도, 운영 책임, 검증 기준 중심으로 낮춰야 합니다."
         )
     solution_scope_violation = _solution_term_scope_violation(
         text_value,
@@ -4725,7 +3804,8 @@ def _evidence_scoped_business_claim_violation(
     ):
         return (
             "ProfileContext에 실행/구축 사례 근거가 없는데 성공 사례·구축 경험·운영 역량을 "
-            "사용했습니다. 현재 사건의 역할·범위·수치와 후속 확인 데이터로 낮춰야 합니다."
+            "사용했습니다. SK AX가 내부적으로 점검할 범위, 책임, 검증 기준, 운영 조건 중심으로 "
+            "낮춰야 합니다."
         )
     return ""
 
@@ -4736,6 +3816,7 @@ def _scope_expansion_guard_violation(
     label: str,
     integrated_issue: dict[str, Any],
     profile_context: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any] | None = None,
 ) -> str:
     if not text or _is_follow_up_or_watch_field(label):
         return ""
@@ -4747,10 +3828,6 @@ def _scope_expansion_guard_violation(
     )
     event_lower = event_text.casefold()
     context_lower = context_text.casefold()
-    performance_metric_observation = _is_performance_metric_observation(
-        value,
-        integrated_issue=integrated_issue,
-    )
 
     if _has_global_scope(value):
         if _scope_effect_claim(value) and not _has_global_scope(event_lower):
@@ -4777,10 +3854,10 @@ def _scope_expansion_guard_violation(
             "확인된 산업/고객군 범위로 낮춰야 합니다."
         )
 
-    if _has_status_strength_claim(value) and not _has_status_strength_support(event_lower):
+    if _has_status_strength_claim(value) and not _has_status_strength_event_support(event_lower):
         return (
-            "입지 강화·레퍼런스 확보·역량 검증처럼 지위 강화 표현을 썼지만 "
-            "사업자 선정, 대형 수주, 공식 협약, 레퍼런스 확보 등 직접 근거가 부족합니다. "
+            "지위 강화나 역량 검증처럼 강한 표현을 썼지만 "
+            "선정, 수주, 공식 계약, 실행 근거 등 직접 근거가 부족합니다. "
             "관찰 신호나 연결 사례 수준으로 낮춰야 합니다."
         )
 
@@ -4791,10 +3868,16 @@ def _scope_expansion_guard_violation(
             or _has_broad_expansion_claim(value)
             or _has_effectiveness_claim(value)
         )
-        and _relevant_profile_linkage_level(
-            profile_context,
-            integrated_issue=integrated_issue,
-            scope="peer",
+        and (
+            _relevant_profile_linkage_level_from_evaluation(
+                profile_linkage_evaluation,
+                scope="peer",
+            )
+            or _relevant_profile_linkage_level(
+                profile_context,
+                integrated_issue=integrated_issue,
+                scope="peer",
+            )
         )
         in {"high", "medium"}
         and not _has_concrete_profile_term(
@@ -4815,16 +3898,52 @@ def _scope_expansion_guard_violation(
         or _has_broad_expansion_claim(value)
         or _has_attention_growth_claim(value)
     ):
-        return (
-            "피어 시사점이 입지 강화/영역 확장/관심 반영 같은 추상 표현으로 끝났습니다. "
-            "현재 사건의 사실, 관련 피어 프로필 역량, 그 둘의 연결 의미를 명시해야 합니다."
-        )
-
-    if _has_broad_expansion_claim(value):
-        linkage_level = _relevant_profile_linkage_level(
+        peer_linkage_level = _relevant_profile_linkage_level_from_evaluation(
+            profile_linkage_evaluation,
+            scope="peer",
+        ) or _relevant_profile_linkage_level(
             profile_context,
             integrated_issue=integrated_issue,
-            scope="skax" if label.startswith("skax_implication") else "peer",
+            scope="peer",
+        )
+        has_issue_connection = _high_signal_issue_overlap_count(value, integrated_issue) >= 2
+        has_profile_connection = _has_concrete_profile_term(
+            value,
+            profile_context=profile_context,
+            integrated_issue=integrated_issue,
+            scope="peer",
+        )
+        if (
+            label == "analysis.impact_reason"
+            and has_issue_connection
+            and _has_status_strength_event_support(event_lower)
+        ):
+            return ""
+        attention_supported = not _has_attention_growth_claim(value) or re.search(
+            r"관심|주목",
+            event_lower,
+        )
+        if not (
+            has_issue_connection
+            and has_profile_connection
+            and peer_linkage_level in {"high", "medium"}
+            and attention_supported
+        ):
+            return (
+                "피어 시사점이 입지 강화/영역 확장/관심 반영 같은 강한 표현을 사용했지만 "
+                "현재 사건의 구체 사실과 피어 프로필 접점이 함께 보이지 않습니다. "
+                "사실-프로필-사업적 의미가 연결되도록 쓰거나 관찰 신호 수준으로 낮춰야 합니다."
+            )
+
+    if _has_broad_expansion_claim(value):
+        scope = "skax" if label.startswith("skax_implication") else "peer"
+        linkage_level = _relevant_profile_linkage_level_from_evaluation(
+            profile_linkage_evaluation,
+            scope=scope,
+        ) or _relevant_profile_linkage_level(
+            profile_context,
+            integrated_issue=integrated_issue,
+            scope=scope,
         )
         if (
             linkage_level not in {"high", "medium"}
@@ -4833,7 +3952,7 @@ def _scope_expansion_guard_violation(
         ):
             return (
                 "사업영역/서비스 확장 표현을 사용했지만 현재 사건과 관련 프로필의 연결 또는 "
-                "범위 확대 근거가 충분하지 않습니다. 연결 사례, 참여 기반, 레퍼런스 가능성처럼 "
+                "범위 확대 근거가 충분하지 않습니다. 연결 사례나 참여 기반처럼 "
                 "강도를 낮춰야 합니다."
             )
 
@@ -4843,34 +3962,24 @@ def _scope_expansion_guard_violation(
             "확인된 사업, 수요 신호, 비교 기준 변화로 낮춰야 합니다."
         )
 
-    if _has_effectiveness_claim(value) and not performance_metric_observation:
-        linkage_level = _relevant_profile_linkage_level(
+    if _has_effectiveness_claim(value):
+        scope = "skax" if label.startswith("skax_implication") else "peer"
+        linkage_level = _relevant_profile_linkage_level_from_evaluation(
+            profile_linkage_evaluation,
+            scope=scope,
+        ) or _relevant_profile_linkage_level(
             profile_context,
             integrated_issue=integrated_issue,
-            scope="skax" if label.startswith("skax_implication") else "peer",
+            scope=scope,
         )
         if linkage_level not in {"high", "medium"} or not _has_effect_scope(value):
             return (
                 "긍정적 영향·경쟁력 강화·운영 효율성 향상 같은 효과성 표현에 "
                 "현재 사건, 관련 프로필 역량, 기대효과 범위가 함께 보이지 않습니다. "
-                "관찰 신호, 검증 계기, 레퍼런스 가능성 수준으로 낮춰야 합니다."
+                "관찰 신호나 검증 계기 수준으로 낮춰야 합니다."
             )
 
     return ""
-
-
-def _is_performance_metric_observation(text: str, *, integrated_issue: dict[str, Any]) -> bool:
-    if _issue_frame_kind(integrated_issue) != "performance":
-        return False
-    value = str(text or "")
-    if re.search(r"입지|경쟁력|사업\s*확장|사업\s*영역\s*확장|긍정적\s*영향", value):
-        return False
-    return bool(
-        re.search(
-            r"매출|영업이익|순이익|영업이익률|수익성|실적|이익률|비용\s*구조",
-            value,
-        )
-    )
 
 
 def _has_global_scope(text: str) -> bool:
@@ -4919,11 +4028,12 @@ def _has_status_strength_claim(text: str) -> bool:
     )
 
 
-def _has_status_strength_support(text: str) -> bool:
+def _has_status_strength_event_support(text: str) -> bool:
     return bool(
         re.search(
-            r"최종\s*선정|사업자\s*선정|민간\s*참여자|공식\s*협약|실시협약|"
-            r"주주간\s*계약|대형\s*수주|수주|계약\s*체결|레퍼런스|선정|협약|구축사업",
+            r"최종\s*선정|사업자\s*선정|우선협상|민간\s*참여자|"
+            r"공식\s*협약|실시협약|주주간\s*계약|"
+            r"대형\s*수주|공급계약\s*체결|계약\s*체결|레퍼런스",
             str(text or ""),
         )
     )
@@ -4945,40 +4055,16 @@ def _has_broad_expansion_claim(text: str) -> bool:
 
 
 def _has_attention_growth_claim(text: str) -> bool:
-    return bool(
-        re.search(
-            r"관심[이가은을를\s]*(높|증가|확대|반영)|"
-            r"관심.{0,16}반영|"
-            r"관심.{0,16}(나타|보여|시사)|"
-            r"주목[을를이가\s]*(받|높)",
-            str(text or ""),
-        )
-    )
+    return bool(re.search(r"관심|주목", str(text or "")))
 
 
 def _high_signal_issue_overlap_count(text: str, integrated_issue: dict[str, Any]) -> int:
-    generic_tokens = {
-        "사업",
-        "사업을",
-        "사업의",
-        "부문",
-        "영역",
-        "영역을",
-        "공공",
-        "민간",
-        "기회",
-        "시장",
-        "서비스",
-        "인프라",
-        "고객",
-        "유사",
-    }
     issue_tokens = _issue_relevance_tokens(integrated_issue)
-    text_tokens = _content_tokens(str(text or ""))
+    text_tokens = _semantic_fingerprint_for_text(str(text or ""))
     overlap = {
         token
         for token in issue_tokens & text_tokens
-        if token not in generic_tokens and len(token) >= 2
+        if len(token) >= 2 and not _is_generic_business_term(token)
     }
     return len(overlap)
 
@@ -5005,55 +4091,40 @@ def _concrete_profile_terms(
     integrated_issue: dict[str, Any],
     scope: str,
 ) -> set[str]:
-    generic_terms = {
-        "ai",
-        "ax",
-        "id",
-        "name",
-        "사업",
-        "시장",
-        "서비스",
-        "인프라",
-        "글로벌",
-        "공공",
-        "민간",
-        "기업",
-        "중심",
-        "확장",
-        "강화",
-        "전환",
-        "역량",
-        "peer",
-        "skax",
-        "profile",
-        "snapshot",
-        "version",
-        "company",
-        "company_id",
-        "company_name",
-        "company_name_ko",
-        "peer_id",
-        "schema_version",
-        "generated_at",
-    }
-    prompt_profile = _profile_for_prompt(profile_context, integrated_issue=integrated_issue)
+    issue_context = _profile_linkage_issue_context(
+        integrated_issue=integrated_issue,
+        classification={},
+    )
     if scope == "skax":
-        chunks = [_json_dumps(prompt_profile.get("skax_profile") or {})]
+        profiles = [profile_context.get("skax_profile") or {}]
     else:
-        peer_profiles = prompt_profile.get("peer_profiles") or {}
-        chunks = []
+        peer_profiles = profile_context.get("peer_profiles") or {}
+        profiles = []
         if isinstance(peer_profiles, dict):
             for company_id in _companies_from_integrated_issue(integrated_issue):
-                chunks.append(_json_dumps(peer_profiles.get(company_id) or {}))
-    terms = set()
-    for chunk in chunks:
-        terms.update(_content_tokens(chunk))
+                profile = peer_profiles.get(company_id) or {}
+                if isinstance(profile, dict):
+                    profiles.append(profile)
+    terms: set[str] = set()
+    for profile in profiles:
+        if not isinstance(profile, dict):
+            continue
+        for entry in _profile_entries_for_linkage(profile):
+            for term in _extract_ranked_terms(
+                str(entry.get("text") or ""),
+                "profile_business_area",
+                issue_context,
+            ):
+                normalized = str(term.get("normalized") or "")
+                if float(term.get("weight") or 0.0) >= 0.5:
+                    terms.add(normalized)
     company_identity_terms = _company_identity_terms(integrated_issue)
     return {
         term
         for term in terms
-        if term not in generic_terms
-        and term not in company_identity_terms
+        if term not in company_identity_terms
+        and not _looks_like_source_noise(term, issue_context)
+        and not _looks_like_korean_function_word_or_ending(term)
         and len(term) >= 3
         and not re.fullmatch(r"\d+", term)
     }
@@ -5212,130 +4283,6 @@ def _profile_has_execution_case(
     return bool(re.search(r"성공\s*사례|구축\s*사례|레퍼런스\s*사례", profile_text))
 
 
-def _supplier_names_for_target_counterparty(integrated_issue: dict[str, Any]) -> list[str]:
-    main_company = str(integrated_issue.get("main_company") or "").strip()
-    if not main_company:
-        return []
-    target_patterns = _target_name_patterns(main_company)
-    if not target_patterns:
-        return []
-    evidence_text = _integrated_grounding_text(integrated_issue)
-    suppliers: list[str] = []
-    for target_pattern in target_patterns:
-        patterns = (
-            re.compile(
-                rf"([A-Za-z가-힣0-9&㈜\.·_-]{{2,30}})(?:가|이|는|은)\s+"
-                rf"[^.。!?\n]{{0,50}}?{target_pattern}\s*(?:와|과|하고)",
-                flags=re.IGNORECASE,
-            ),
-            re.compile(
-                rf"([A-Za-z가-힣0-9&㈜\.·_-]{{2,30}})\s*(?:와|과)\s*{target_pattern}",
-                flags=re.IGNORECASE,
-            ),
-        )
-        for pattern in patterns:
-            for match in pattern.finditer(evidence_text):
-                supplier = re.sub(r"\s+", " ", match.group(1)).strip(" ,.;:·-")
-                if supplier and _normalize_entity_token(supplier) not in _company_token_variants(
-                    main_company
-                ):
-                    suppliers.append(supplier)
-    return list(dict.fromkeys(suppliers))[:5]
-
-
-def _target_name_patterns(company_id: str) -> list[str]:
-    variants = expand_peer_aliases(company_id)
-    normalized_seen: set[str] = set()
-    patterns: list[str] = []
-    for variant in variants:
-        text = str(variant or "").strip()
-        normalized = _normalize_entity_token(text)
-        if not text or normalized in normalized_seen:
-            continue
-        normalized_seen.add(normalized)
-        escaped = re.escape(text)
-        patterns.append(escaped.replace(r"\ ", r"\s*").replace("_", r"[_\s]*"))
-    return patterns
-
-
-def _main_company_is_customer_or_buyer(integrated_issue: dict[str, Any]) -> bool:
-    main_company = str(integrated_issue.get("main_company") or "").strip()
-    if not main_company:
-        return False
-    evidence_text = _integrated_grounding_text(integrated_issue)
-    if not _SUPPLY_CONTRACT_PATTERN.search(evidence_text):
-        return False
-
-    main_tokens = _company_token_variants(main_company)
-    for item in _iter_dicts(integrated_issue):
-        for key in ("customers_or_industries", "customers", "customer", "clients", "client"):
-            if key not in item:
-                continue
-            for value in _jsonish_list(item.get(key)):
-                if _normalize_entity_token(value) in main_tokens:
-                    return True
-    return False
-
-
-def _company_token_variants(company: str) -> set[str]:
-    raw = str(company or "").strip()
-    if not raw:
-        return set()
-    variants = {
-        raw,
-        raw.replace("_", " "),
-        raw.replace("_", ""),
-        raw.upper(),
-        raw.replace("_", " ").upper(),
-    }
-    return {_normalize_entity_token(value) for value in variants if value}
-
-
-def _normalize_entity_token(value: Any) -> str:
-    return re.sub(r"[^0-9A-Za-z가-힣]+", "", str(value or "")).casefold()
-
-
-def _iter_dicts(value: Any) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    if isinstance(value, dict):
-        result.append(value)
-        for child in value.values():
-            result.extend(_iter_dicts(child))
-    elif isinstance(value, list):
-        for child in value:
-            result.extend(_iter_dicts(child))
-    return result
-
-
-def _grounding_text(
-    *,
-    integrated_issue: dict[str, Any],
-    profile_context: dict[str, Any] | None = None,
-) -> str:
-    parts: list[str] = []
-    for key in (
-        "headline",
-        "main_event",
-        "main_issue",
-        "one_line_summary",
-        "integrated_text",
-    ):
-        value = str(integrated_issue.get(key) or "").strip()
-        if value:
-            parts.append(value)
-    parts.extend(str(item or "") for item in integrated_issue.get("fact_summary") or [])
-    for _, fact_text in _fact_texts(integrated_issue):
-        parts.append(fact_text)
-    intelligence = integrated_issue.get("cluster_fact_intelligence")
-    if intelligence:
-        parts.append(_json_dumps(_cluster_fact_intelligence_for_prompt(intelligence)))
-    if profile_context:
-        parts.append(
-            _json_dumps(_profile_for_prompt(profile_context, integrated_issue=integrated_issue))
-        )
-    return "\n".join(parts)
-
-
 def _grounded_numeric_keys_for_issue(integrated_issue: dict[str, Any]) -> set[str]:
     chunks: list[str] = []
     for key in ("fact_basis", "key_numbers", "representative_sources"):
@@ -5374,10 +4321,6 @@ def _numeric_token_key(token: str) -> str:
     return f"{normalized_number}{unit}"
 
 
-def _integrated_grounding_text(integrated_issue: dict[str, Any]) -> str:
-    return _grounding_text(integrated_issue=integrated_issue, profile_context=None)
-
-
 def _sentence_count(text: str) -> int:
     return len(_split_sentences(text))
 
@@ -5387,7 +4330,7 @@ def _split_sentences(text: str) -> list[str]:
 
 
 def _mark_quality_gate_failed(result: dict[str, Any], violations: list[str]) -> dict[str, Any]:
-    out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+    out = _scrub_failed_output(json.loads(json.dumps(result, ensure_ascii=False, default=str)))
     out["is_valid_strategic_insight"] = False
     analysis = out.get("analysis") or {}
     implication = out.get("implication") or {}
@@ -5406,6 +4349,22 @@ def _mark_quality_gate_failed(result: dict[str, Any], violations: list[str]) -> 
     out["analysis"] = analysis
     out["implication"] = implication
     return out
+
+
+def _scrub_failed_output(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _scrub_failed_output(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [
+            cleaned for item in value if (cleaned := _scrub_failed_output(item)) not in ("", [], {})
+        ]
+    if isinstance(value, str):
+        return "" if _contains_high_risk_unsupported_claim(value) else value
+    return value
+
+
+def _contains_high_risk_unsupported_claim(text: str) -> bool:
+    return any(re.search(pattern, str(text or "")) for pattern in _UNSUPPORTED_CLAIM_PATTERNS)
 
 
 def _restore_valid_flags_if_structurally_safe(result: dict[str, Any]) -> dict[str, Any]:
@@ -5444,7 +4403,10 @@ def _attach_sentence_grounding(
     integrated_issue: dict[str, Any],
     profile_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+    out = _ensure_reasoning_debug_fields(
+        json.loads(json.dumps(result, ensure_ascii=False, default=str)),
+        integrated_issue=integrated_issue,
+    )
     grounding = _build_sentence_grounding(
         out,
         integrated_issue=integrated_issue,
@@ -5743,54 +4705,6 @@ def _minimal_quality_guard(
     implication = out.get("implication") or {}
     peer = implication.get("peer_implication") or {}
     skax = implication.get("skax_implication") or {}
-    frame_kind = _issue_frame_kind(integrated_issue)
-
-    if (
-        profile_context
-        and _profile_context_is_sparse(profile_context)
-        and frame_kind
-        in {
-            "performance",
-            "launch_or_service",
-            "selection_or_build",
-        }
-    ):
-        # Sparse profile should limit profile-based claims, not erase a grounded LLM analysis.
-        # Fill only truly missing fields so this guard remains mechanical and non-generative.
-        for key in ("analysis_summary", "market_signal", "impact_reason", "reason"):
-            if not str(analysis.get(key) or "").strip():
-                analysis[key] = _event_based_analysis_field(
-                    key,
-                    integrated_issue=integrated_issue,
-                )
-        if not _string_list(analysis.get("strategic_meaning"), max_items=3):
-            analysis["strategic_meaning"] = _event_based_strategic_meaning_candidates(
-                integrated_issue
-            )[:3]
-        if not str(peer.get("peer_meaning") or "").strip():
-            peer["peer_meaning"] = _event_based_peer_meaning(
-                integrated_issue=integrated_issue,
-                peer=peer,
-            )
-        if not str(peer.get("capability_change") or "").strip():
-            peer["capability_change"] = _event_based_capability_change(integrated_issue)
-        if not str(skax.get("why_important") or "").strip():
-            skax["why_important"] = _skax_checkpoint_field(
-                "why_important",
-                integrated_issue=integrated_issue,
-                profile_context=profile_context,
-            )
-        if not str(skax.get("potential_impact") or "").strip():
-            skax["potential_impact"] = _skax_checkpoint_field(
-                "potential_impact",
-                integrated_issue=integrated_issue,
-                profile_context=profile_context,
-            )
-        if not _string_list(skax.get("recommended_actions"), max_items=3):
-            skax["recommended_actions"] = _event_based_recommended_actions(
-                integrated_issue,
-                profile_context=profile_context,
-            )
 
     if _main_company_is_customer_or_buyer(integrated_issue):
         for key in ("analysis_summary", "market_signal", "impact_reason", "reason"):
@@ -5805,18 +4719,20 @@ def _minimal_quality_guard(
                     label=f"analysis.{key}",
                     integrated_issue=integrated_issue,
                 ):
-                    analysis[key] = _event_based_analysis_field(
-                        key,
-                        integrated_issue=integrated_issue,
-                    )
+                    analysis[key] = ""
         analysis["strategic_meaning"] = [
             _repair_customer_role_overstatement(item)
             for item in _string_list(analysis.get("strategic_meaning"), max_items=3)
         ]
-        analysis["strategic_meaning"] = _safe_event_based_strategic_meanings(
-            analysis.get("strategic_meaning"),
-            integrated_issue=integrated_issue,
-        )
+        analysis["strategic_meaning"] = [
+            item
+            for index, item in enumerate(analysis["strategic_meaning"], start=1)
+            if not _hard_quality_violation_for_text(
+                item,
+                label=f"analysis.strategic_meaning[{index}]",
+                integrated_issue=integrated_issue,
+            )
+        ]
         for key in ("peer_meaning", "capability_change"):
             if peer.get(key):
                 peer[key] = _repair_customer_role_overstatement(str(peer[key]))
@@ -5825,13 +4741,7 @@ def _minimal_quality_guard(
                     label=f"peer_implication.{key}",
                     integrated_issue=integrated_issue,
                 ):
-                    if key == "peer_meaning":
-                        peer[key] = _event_based_peer_meaning(
-                            integrated_issue=integrated_issue,
-                            peer=peer,
-                        )
-                    else:
-                        peer[key] = _event_based_capability_change(integrated_issue)
+                    peer[key] = ""
         for key in ("why_important", "potential_impact"):
             if skax.get(key):
                 skax[key] = _repair_customer_role_overstatement(str(skax[key]))
@@ -5850,11 +4760,8 @@ def _minimal_quality_guard(
             profile_context,
             integrated_issue=integrated_issue,
         ):
-            peer["peer_meaning"] = _event_based_peer_meaning(
-                integrated_issue=integrated_issue,
-                peer=peer,
-            )
-            peer["capability_change"] = _event_based_capability_change(integrated_issue)
+            peer["peer_meaning"] = ""
+            peer["capability_change"] = ""
 
     for key in ("analysis_summary", "market_signal", "impact_reason", "reason"):
         label = f"analysis.{key}"
@@ -5870,28 +4777,8 @@ def _minimal_quality_guard(
                 integrated_issue=integrated_issue,
                 profile_context=profile_context or {},
             )
-            or _issue_frame_mismatch_violation(
-                str(analysis[key]),
-                label=label,
-                integrated_issue=integrated_issue,
-            )
-            or _generic_insight_quality_violation(
-                str(analysis[key]),
-                label=label,
-                integrated_issue=integrated_issue,
-            )
-            or _reasoning_flow_quality_violation(
-                str(analysis[key]),
-                label=label,
-                integrated_issue=integrated_issue,
-                profile_context=profile_context or {},
-            )
         ):
-            analysis[key] = _profile_linked_analysis_field(
-                key,
-                integrated_issue=integrated_issue,
-                profile_context=profile_context or {},
-            )
+            analysis[key] = ""
 
     strategic_items = _string_list(analysis.get("strategic_meaning"), max_items=3)
     has_hard_or_scope_strategic_violation = any(
@@ -5906,29 +4793,24 @@ def _minimal_quality_guard(
             integrated_issue=integrated_issue,
             profile_context=profile_context or {},
         )
-        or _issue_frame_mismatch_violation(
-            item,
-            label=f"analysis.strategic_meaning[{index}]",
-            integrated_issue=integrated_issue,
-        )
-        or _generic_insight_quality_violation(
-            item,
-            label=f"analysis.strategic_meaning[{index}]",
-            integrated_issue=integrated_issue,
-        )
-        or _reasoning_flow_quality_violation(
-            item,
-            label=f"analysis.strategic_meaning[{index}]",
-            integrated_issue=integrated_issue,
-            profile_context=profile_context or {},
-        )
         for index, item in enumerate(strategic_items, start=1)
     )
     if has_hard_or_scope_strategic_violation:
-        analysis["strategic_meaning"] = _profile_linked_strategic_meanings(
-            integrated_issue=integrated_issue,
-            profile_context=profile_context or {},
-        )
+        analysis["strategic_meaning"] = [
+            item
+            for index, item in enumerate(strategic_items, start=1)
+            if not _hard_quality_violation_for_text(
+                item,
+                label=f"analysis.strategic_meaning[{index}]",
+                integrated_issue=integrated_issue,
+            )
+            and not _scope_expansion_guard_violation(
+                item,
+                label=f"analysis.strategic_meaning[{index}]",
+                integrated_issue=integrated_issue,
+                profile_context=profile_context or {},
+            )
+        ]
 
     for key in ("peer_meaning", "capability_change"):
         label = f"peer_implication.{key}"
@@ -5944,45 +4826,14 @@ def _minimal_quality_guard(
                 integrated_issue=integrated_issue,
                 profile_context=profile_context or {},
             )
-            or _issue_frame_mismatch_violation(
-                str(peer[key]),
-                label=label,
-                integrated_issue=integrated_issue,
-            )
-            or _generic_insight_quality_violation(
-                str(peer[key]),
-                label=label,
-                integrated_issue=integrated_issue,
-            )
-            or _reasoning_flow_quality_violation(
-                str(peer[key]),
-                label=label,
-                integrated_issue=integrated_issue,
-                profile_context=profile_context or {},
-            )
         ):
-            peer[key] = (
-                _profile_linked_peer_meaning(
-                    integrated_issue=integrated_issue,
-                    profile_context=profile_context or {},
-                    peer=peer,
-                )
-                if key == "peer_meaning"
-                else _profile_linked_capability_change(
-                    integrated_issue=integrated_issue,
-                    profile_context=profile_context or {},
-                )
-            )
+            peer[key] = ""
 
     for key in ("why_important", "potential_impact"):
         if skax.get(key) and (
             _hard_quality_violation_for_text(
                 str(skax[key]),
                 label=f"skax_implication.{key}",
-                integrated_issue=integrated_issue,
-            )
-            or _unsupported_claim_pattern_violation(
-                str(skax[key]),
                 integrated_issue=integrated_issue,
             )
             or _evidence_scoped_business_claim_violation(
@@ -5997,29 +4848,8 @@ def _minimal_quality_guard(
                 integrated_issue=integrated_issue,
                 profile_context=profile_context or {},
             )
-            or _skax_external_execution_copy_violation(str(skax[key]))
-            or _issue_frame_mismatch_violation(
-                str(skax[key]),
-                label=f"skax_implication.{key}",
-                integrated_issue=integrated_issue,
-            )
-            or _generic_insight_quality_violation(
-                str(skax[key]),
-                label=f"skax_implication.{key}",
-                integrated_issue=integrated_issue,
-            )
-            or _reasoning_flow_quality_violation(
-                str(skax[key]),
-                label=f"skax_implication.{key}",
-                integrated_issue=integrated_issue,
-                profile_context=profile_context or {},
-            )
         ):
-            skax[key] = _skax_checkpoint_field(
-                key,
-                integrated_issue=integrated_issue,
-                profile_context=profile_context,
-            )
+            skax[key] = ""
 
     _repair_result_numeric_grounding(
         analysis=analysis,
@@ -6047,15 +4877,6 @@ def _minimal_quality_guard(
                 integrated_issue=integrated_issue,
                 profile_context=profile_context or {},
             )
-            and not _unsupported_claim_pattern_violation(
-                item,
-                integrated_issue=integrated_issue,
-            )
-            and not _generic_insight_quality_violation(
-                item,
-                label=f"skax_implication.{field}[{index}]",
-                integrated_issue=integrated_issue,
-            )
         ]
     skax["recommended_actions"] = [
         action
@@ -6078,28 +4899,7 @@ def _minimal_quality_guard(
             label=f"skax_implication.recommended_actions[{index}]",
             integrated_issue=integrated_issue,
         )
-        and not _issue_frame_mismatch_violation(
-            action,
-            label=f"skax_implication.recommended_actions[{index}]",
-            integrated_issue=integrated_issue,
-        )
-        and not _generic_insight_quality_violation(
-            action,
-            label=f"skax_implication.recommended_actions[{index}]",
-            integrated_issue=integrated_issue,
-        )
-        and not _reasoning_flow_quality_violation(
-            action,
-            label=f"skax_implication.recommended_actions[{index}]",
-            integrated_issue=integrated_issue,
-            profile_context=profile_context or {},
-        )
     ]
-    if not _string_list(skax.get("recommended_actions"), max_items=3):
-        skax["recommended_actions"] = _event_based_recommended_actions(
-            integrated_issue,
-            profile_context=profile_context,
-        )
 
     out["analysis"] = analysis
     implication["peer_implication"] = peer
@@ -6114,64 +4914,6 @@ def _minimal_quality_guard(
             ],
         )
     return out
-
-
-def _skax_external_execution_copy_violation(text: str) -> bool:
-    return bool(
-        re.search(
-            r"제안서|PoC|레퍼런스|운영\s*계획|제안\s*방식|제안\s*기준|영업\s*대응",
-            str(text or ""),
-            flags=re.IGNORECASE,
-        )
-    )
-
-
-def _skax_checkpoint_field(
-    key: str,
-    *,
-    integrated_issue: dict[str, Any],
-    profile_context: dict[str, Any] | None = None,
-) -> str:
-    issue_frame = _issue_frame_for_prompt(integrated_issue)
-    frame_kind = str(issue_frame.get("frame_kind") or "")
-    if frame_kind == "performance":
-        if key == "why_important":
-            return (
-                "피어사의 실적 개선 신호는 SK AX가 유사 피어 동향을 볼 때 외형 성장과 "
-                "수익성 개선을 분리해 비교해야 하는 근거입니다."
-            )
-        return (
-            "후속 판단은 사업부별 기여도, 수익성 지속성, 비용 구조 변화가 확인될 때 "
-            "가능합니다. SK AX는 특정 사업영역 성과로 단정하지 말고 전사 재무 지표와 "
-            "사업부 기여 근거를 나눠 봐야 합니다."
-        )
-    business_object = issue_frame.get("business_object") or {}
-    subject = str(business_object.get("name") or "").strip() or (
-        _issue_subject_phrase(integrated_issue) or "현재 동향"
-    )
-    axes = ", ".join(_decision_axes_from_issue_frame(issue_frame)[:3])
-    followups = ", ".join(_checkpoint_followups_from_issue_frame(issue_frame)[:3])
-    skax_phrase = _profile_area_phrase(
-        profile_context or {},
-        integrated_issue=integrated_issue,
-        scope="skax",
-    )
-    skax_context = (
-        f"SK AX의 관련 사업/역량 중 {skax_phrase}"
-        if skax_phrase
-        else "현재 확인 가능한 SK AX 관련 사업/역량"
-    )
-    if key == "why_important":
-        return (
-            f"{subject}는 {skax_context}가 어느 지점까지 대응 가능한지 점검하게 하는 "
-            f"신호입니다. 기사에서 확인된 비교 축은 {axes}이며, 이 축이 있어야 "
-            "단순 관련성보다 실제 내부 대응 범위를 판단할 수 있습니다."
-        )
-    return (
-        f"후속 판단은 {followups}가 확인될 때 가능합니다. SK AX는 {skax_context}를 "
-        f"기준으로 {axes} 중 직접 책임질 수 있는 부분과 외부 보완이 필요한 부분을 "
-        "나눠 봐야 하며, 그래야 후속 사업에서 운영 책임과 리스크를 현실적으로 판단할 수 있습니다."
-    )
 
 
 def _has_required_output_structure(result: dict[str, Any]) -> bool:
@@ -6200,6 +4942,7 @@ def _ensure_safe_recommended_actions(
     *,
     integrated_issue: dict[str, Any],
     profile_context: dict[str, Any] | None = None,
+    action_artifact_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
     implication = out.get("implication") or {}
@@ -6210,387 +4953,64 @@ def _ensure_safe_recommended_actions(
         start=1,
     ):
         label = f"skax_implication.recommended_actions[{index}]"
-        if (
-            _recommended_action_quality_violation(
-                action,
-                label=label,
-                integrated_issue=integrated_issue,
-                profile_context=profile_context,
-            )
-            or _hard_quality_violation_for_text(
-                action, label=label, integrated_issue=integrated_issue
-            )
-            or _counterparty_role_action_violation(
-                action,
-                label=label,
-                integrated_issue=integrated_issue,
-            )
-            or _generic_insight_quality_violation(
-                action,
-                label=label,
-                integrated_issue=integrated_issue,
-            )
+        if _repair_action_violation(
+            action,
+            label=label,
+            integrated_issue=integrated_issue,
+            profile_context=profile_context or {},
+            action_artifact_plan=action_artifact_plan or {},
         ):
             continue
         safe_actions.append(action)
 
-    if not safe_actions:
-        safe_actions = _event_based_recommended_actions(
-            integrated_issue,
-            profile_context=profile_context,
-        )
     skax["recommended_actions"] = safe_actions[:3]
     implication["skax_implication"] = skax
     out["implication"] = implication
     return out
 
 
+def _repair_action_violation(
+    text: str,
+    *,
+    label: str,
+    integrated_issue: dict[str, Any],
+    profile_context: dict[str, Any],
+    action_artifact_plan: dict[str, Any] | None = None,
+) -> str:
+    violation = _recommended_action_quality_violation(
+        text,
+        label=label,
+        integrated_issue=integrated_issue,
+        profile_context=profile_context,
+    )
+    if violation:
+        return violation
+    if _hard_quality_violation_for_text(
+        text,
+        label=label,
+        integrated_issue=integrated_issue,
+    ):
+        return "대응방향이 현재 사건의 근거 범위를 벗어난 표현을 포함했습니다."
+    return _counterparty_role_action_violation(
+        text,
+        label=label,
+        integrated_issue=integrated_issue,
+    ) or _action_artifact_plan_violation(
+        text,
+        label=label,
+        action_artifact_plan=action_artifact_plan or {},
+    )
+
+
 def _event_based_recommended_actions(
     integrated_issue: dict[str, Any],
     *,
-    profile_context: dict[str, Any] | None = None,
+    action_artifact_plan: dict[str, Any] | None = None,
 ) -> list[str]:
-    issue_frame = _issue_frame_for_prompt(integrated_issue)
-    frame_kind = str(issue_frame.get("frame_kind") or "")
-    subject = _issue_display_subject(issue_frame, integrated_issue=integrated_issue)
-    main_fact = str(issue_frame.get("main_fact") or "").strip()
-    axes = _decision_axes_from_issue_frame(issue_frame)
-    followups = _checkpoint_followups_from_issue_frame(issue_frame)
-    issue_focus = _issue_focus_for_action(issue_frame)
-    axis_text = ", ".join(axes[:3])
-    followup_text = ", ".join(followups[:4])
-    fact_sentence = (
-        f"{main_fact.rstrip('.。')}." if main_fact else "현재 사건의 핵심 근거가 확인됐습니다."
-    )
-    skax_phrase = _profile_area_phrase(
-        profile_context or {},
-        integrated_issue=integrated_issue,
-        scope="skax",
-    )
-    skax_context = (
-        f"SK AX의 {skax_phrase}" if skax_phrase else "현재 확인 가능한 SK AX 관련 사업/역량"
-    )
-    skax_context_object = f"{skax_context}을 기준으로"
-    decision_reason = _decision_reason_from_issue_frame(issue_frame)
-
-    if frame_kind == "performance":
-        actions = [
-            (
-                f"SK AX는 {subject}와 유사한 실적 신호를 볼 때 {skax_context_object} 바로 "
-                f"연결해 단정하지 말고, 기사에서 확인된 {axis_text}를 분리해 봐야 합니다. "
-                "이렇게 해야 외형 성장, 수익성 변화, 특정 사업 기여도를 혼동하지 않고 "
-                "내부 사업 우선순위를 판단할 수 있습니다."
-            ),
-            (
-                f"후속으로는 {followup_text}를 확인해야 합니다. 이 정보가 있어야 "
-                "SK AX가 유사 실적 동향을 특정 역량 성과로 과대해석하지 않고, "
-                "어떤 사업 지표를 더 봐야 하는지 조정할 수 있습니다."
-            ),
-        ]
-        return actions
-
-    if frame_kind == "launch_or_service":
-        return [
-            (
-                f"SK AX는 {subject}와 유사한 흐름을 볼 때 {skax_context_object} "
-                f"{issue_focus}에 실제로 어떻게 닿는지 먼저 봐야 합니다. {fact_sentence} "
-                f"따라서 단순 기능 공개 여부보다 {axis_text}를 확인해야 하며, "
-                f"그래야 {decision_reason}를 내부적으로 판단할 수 있습니다."
-            ),
-            (
-                f"후속으로는 {followup_text}를 확인해야 합니다. 이 정보가 확인되어야 "
-                "SK AX가 같은 유형의 서비스·업무 적용 흐름에서 직접 대응할 영역과 "
-                "추가 검증이 필요한 영역을 나눠 조정할 수 있습니다."
-            ),
-        ]
-
-    if frame_kind == "selection_or_build":
-        return [
-            (
-                f"SK AX는 {subject}와 유사한 흐름을 볼 때 {skax_context_object} "
-                f"{issue_focus} 중 어디까지 직접 감당할 수 있는지 확인해야 합니다. "
-                f"{fact_sentence} 이 근거 때문에 {axis_text}를 분리해 봐야 하며, "
-                f"그래야 {decision_reason}를 현실적으로 판단할 수 있습니다."
-            ),
-            (
-                f"후속으로는 {followup_text}를 확인해야 합니다. 이 정보가 공개되어야 "
-                "SK AX가 유사 대형 과제에서 직접 맡을 범위, 파트너 보완이 필요한 범위, "
-                "내부 리스크 기준을 후속 상황에 맞게 조정할 수 있습니다."
-            ),
-        ]
-
-    actions = [
-        (
-            f"SK AX는 {subject}와 유사한 흐름을 볼 때 {skax_context_object} "
-            f"{issue_focus}와 어디에서 겹치는지 먼저 확인해야 합니다. {fact_sentence} "
-            f"이 근거 때문에 {axis_text}를 나눠 봐야 하며, 그래야 {decision_reason}를 "
-            "내부적으로 판단할 수 있습니다."
-        ),
-        (
-            f"후속으로는 {followup_text}를 확인해야 합니다. 이 정보가 확인되어야 "
-            "SK AX가 직접 점검할 영역, 외부 확인이 필요한 영역, 리스크 판단 기준을 "
-            "후속 상황에 맞게 조정할 수 있습니다."
-        ),
-    ]
-    return actions[:3]
-
-
-def _issue_focus_for_action(issue_frame: dict[str, Any]) -> str:
-    target_scope = issue_frame.get("target_scope") or {}
-    business_object = issue_frame.get("business_object") or {}
-    terms: list[str] = []
-    for key in ("target_system", "target_work", "target_customer_or_industry"):
-        terms.extend(_string_list(target_scope.get(key), max_items=4))
-    terms.extend(_string_list(business_object.get("raw_terms"), max_items=4))
-    if business_object.get("name"):
-        terms.append(str(business_object.get("name")))
-    cleaned = _unique_texts(
-        [_clean_issue_axis_phrase(term) for term in terms if _clean_issue_axis_phrase(term)],
-        max_items=3,
-    )
-    return ", ".join(cleaned) if cleaned else "현재 사건의 대상 업무·시스템·서비스"
-
-
-def _decision_axes_from_issue_frame(issue_frame: dict[str, Any]) -> list[str]:
-    axes: list[str] = []
-    target_scope = issue_frame.get("target_scope") or {}
-    business_object = issue_frame.get("business_object") or {}
-    action = issue_frame.get("action_or_event") or {}
-    numbers = issue_frame.get("numbers") or []
-
-    target_terms: list[str] = []
-    for key in ("target_system", "target_work", "target_customer_or_industry"):
-        target_terms.extend(_string_list(target_scope.get(key), max_items=4))
-    target_terms = _unique_texts(
-        [_clean_issue_axis_phrase(term) for term in target_terms if _clean_issue_axis_phrase(term)],
-        max_items=4,
-    )
-    if target_terms:
-        axes.append("대상 범위: " + ", ".join(_unique_texts(target_terms, max_items=3)))
-
-    raw_terms = _unique_texts(
-        [
-            _clean_issue_axis_phrase(term)
-            for term in _string_list(business_object.get("raw_terms"), max_items=5)
-            if _clean_issue_axis_phrase(term)
-        ],
-        max_items=5,
-    )
-    if raw_terms:
-        axes.append("사업·서비스 조건: " + ", ".join(_unique_texts(raw_terms, max_items=2)))
-
-    number_terms = []
-    for item in numbers:
-        if not isinstance(item, dict):
-            continue
-        metric = str(item.get("metric") or "").strip()
-        value = str(item.get("value") or "").strip()
-        unit = str(item.get("unit") or "").strip()
-        if not metric or not value:
-            continue
-        number_terms.append(" ".join(part for part in (metric, f"{value}{unit}") if part))
-    if number_terms:
-        axes.append("공개 수치: " + ", ".join(_unique_texts(number_terms, max_items=2)))
-
-    action_terms = [
-        _clean_issue_axis_phrase(term)
-        for term in _string_list(action.get("activity_types"), max_items=3)
-    ]
-    status = _clean_issue_axis_phrase(action.get("status"))
-    relation_terms = [*action_terms, status if status and status != "unclear" else ""]
-    relation_terms = _unique_texts(relation_terms, max_items=3)
-    if relation_terms:
-        axes.append("진행 단계·관계: " + ", ".join(relation_terms))
-
-    if not axes:
-        axes.extend(_checkpoint_axes_from_issue_frame(issue_frame)[:3])
-    return _unique_texts([axis for axis in axes if axis], max_items=4) or [
-        "현재 사건에서 확인된 대상 범위",
-        "참여 주체의 역할 범위",
-    ]
-
-
-def _decision_reason_from_issue_frame(issue_frame: dict[str, Any]) -> str:
-    frame_kind = str(issue_frame.get("frame_kind") or "")
-    action = issue_frame.get("action_or_event") or {}
-    status = str(action.get("status") or "").strip()
-    if frame_kind == "performance":
-        return "외형 성장과 실제 수익성 변화가 같은 방향인지"
-    if frame_kind == "launch_or_service":
-        return "기능 공개가 실제 업무 적용과 성과 변화로 이어지는지"
-    if frame_kind == "selection_or_build":
-        return "참여 사실과 실제 구축·운영 책임 범위를 구분할 수 있는지"
-    if frame_kind == "contract_or_transition":
-        return "계약 사실과 실제 전환 책임·운영 안정화 범위를 구분할 수 있는지"
-    if frame_kind == "partnership":
-        return "협력 발표와 실제 역할 분담·후속 계약 가능성을 구분할 수 있는지"
-    if status == "planned_or_under_review":
-        return "검토·계획 단계의 신호를 확정 성과로 과대해석하지 않을 수 있는지"
-    return "관련성 있는 동향과 실제 대응 책임을 구분할 수 있는지"
-
-
-def _issue_display_subject(
-    issue_frame: dict[str, Any],
-    *,
-    integrated_issue: dict[str, Any],
-) -> str:
-    business_object = issue_frame.get("business_object") or {}
-    candidates: list[str] = []
-    candidates.extend(_string_list(business_object.get("raw_terms"), max_items=10))
-    candidates.append(str(business_object.get("name") or ""))
-    candidates.append(_issue_subject_phrase(integrated_issue))
-    scored: list[tuple[int, str]] = []
-    for candidate in candidates:
-        text = _clean_issue_axis_phrase(candidate)
-        if not text:
-            continue
-        if len(text) > 45:
-            continue
-        score = len(text)
-        if re.search(r"협약|계약|선정|구축|전환|플랫폼|서비스|센터|인프라|자동화", text):
-            score += 20
-        if re.search(r"위한\s*업무협약|기념촬영|사진|전무|부사장", text):
-            score -= 40
-        scored.append((score, text))
-    if scored:
-        return max(scored, key=lambda item: item[0])[1]
-    return "현재 동향"
-
-
-def _clean_issue_axis_phrase(value: Any) -> str:
-    text = re.sub(r"\s+", " ", str(value or "").strip(" .。"))
-    if not text:
-        return ""
-    if text.casefold() in {
-        "general_update",
-        "reported_fact",
-        "core_fact",
-        "unique_fact",
-        "common_fact",
-        "partnership",
-        "collaboration",
-        "contract",
-        "selection",
-        "launch",
-        "performance",
-        "investment",
-        "mou",
-        "unclear",
-    }:
-        return ""
-    text = re.sub(r"^(이번|해당)\s+", "", text)
-    text = re.sub(r"^위한\s+", "", text)
-    if len(text) < 2:
-        return ""
-    if text in {"국가", "민간", "사업", "프로젝트", "분야"}:
-        return ""
-    if re.fullmatch(r"\d+", text):
-        return ""
-    if re.search(r"기념촬영|임직원|전무|부사장|사진|이미지", text):
-        return ""
-    return text
-
-
-def _checkpoint_axes_from_issue_frame(issue_frame: dict[str, Any]) -> list[str]:
-    axes: list[str] = []
-    business_object = issue_frame.get("business_object") or {}
-    target_scope = issue_frame.get("target_scope") or {}
-    for value in _string_list(business_object.get("raw_terms"), max_items=8):
-        if cleaned := _clean_issue_axis_phrase(value):
-            axes.append(cleaned)
-    if business_object.get("name"):
-        axes.append(_clean_issue_axis_phrase(business_object.get("name")))
-    if target_scope.get("target_work"):
-        axes.extend(
-            _clean_issue_axis_phrase(item)
-            for item in _string_list(target_scope.get("target_work"), max_items=8)
-        )
-    if target_scope.get("target_system"):
-        axes.extend(
-            _clean_issue_axis_phrase(item)
-            for item in _string_list(target_scope.get("target_system"), max_items=8)
-        )
-    if target_scope.get("target_customer_or_industry"):
-        axes.extend(
-            _clean_issue_axis_phrase(item)
-            for item in _string_list(target_scope.get("target_customer_or_industry"), max_items=8)
-        )
-    if issue_frame.get("numbers"):
-        number_values = [
-            str(item.get("value") or "").strip()
-            for item in issue_frame.get("numbers") or []
-            if isinstance(item, dict) and str(item.get("value") or "").strip()
-        ]
-        number_values = [
-            value for value in _unique_texts(number_values, max_items=4) if not value == "1"
-        ]
-        if any(_numeric_value_is_large(value) for value in number_values):
-            number_values = [
-                value
-                for value in number_values
-                if _numeric_value_is_large(value) or not _numeric_value_is_small_date_like(value)
-            ]
-        if number_values:
-            axes.append("공개 수치 " + "/".join(number_values))
-    if target_scope.get("geography_or_market"):
-        axes.extend(
-            _clean_issue_axis_phrase(item)
-            for item in _string_list(target_scope.get("geography_or_market"), max_items=8)
-        )
-    return _unique_texts([axis for axis in axes if axis], max_items=5) or [
-        "현재 사건의 대상 범위",
-        "참여 주체별 역할",
-        "후속 확인 데이터",
-    ]
-
-
-def _checkpoint_followups_from_issue_frame(issue_frame: dict[str, Any]) -> list[str]:
-    followups: list[str] = []
-    action = issue_frame.get("action_or_event") or {}
-    target_scope = issue_frame.get("target_scope") or {}
-    business_object = issue_frame.get("business_object") or {}
-    subject = _clean_issue_axis_phrase(business_object.get("name")) or "현재 사건"
-    if action.get("status") and action.get("status") != "unclear":
-        followups.append(f"{subject}의 확정 이후 실행 상태")
-    if target_scope.get("target_work"):
-        followups.extend(
-            f"{_clean_issue_axis_phrase(item)}의 후속 범위"
-            for item in _string_list(target_scope.get("target_work"), max_items=8)
-            if _clean_issue_axis_phrase(item)
-        )
-    if target_scope.get("target_system"):
-        followups.extend(
-            f"{_clean_issue_axis_phrase(item)}의 후속 변화"
-            for item in _string_list(target_scope.get("target_system"), max_items=8)
-            if _clean_issue_axis_phrase(item)
-        )
-    if issue_frame.get("numbers"):
-        followups.append("공개 수치의 후속 변동")
-    entities = issue_frame.get("entities") or []
-    if len(entities) >= 2:
-        followups.append("참여 주체별 역할 범위")
-    followups.append("추가 공시·협약·운영 책임 공개 여부")
-    return _unique_texts(followups, max_items=5)
-
-
-def _numeric_value_is_large(value: str) -> bool:
-    number = _numeric_value_float(value)
-    return number is not None and number > 31
-
-
-def _numeric_value_is_small_date_like(value: str) -> bool:
-    number = _numeric_value_float(value)
-    return number is not None and 1 <= number <= 31
-
-
-def _numeric_value_float(value: str) -> float | None:
-    text = re.sub(r"[^0-9.]", "", str(value or ""))
-    if not text:
-        return None
-    try:
-        return float(text)
-    except ValueError:
-        return None
+    """Deprecated: final action copy must come from LLM repair, not templates."""
+    del integrated_issue
+    del action_artifact_plan
+    return []
 
 
 def _has_relevant_peer_profile_context(
@@ -6625,30 +5045,23 @@ def _peer_profile_linkage(
     integrated_issue: dict[str, Any],
     company_id: str,
 ) -> dict[str, Any]:
-    prompt_profile = _profile_for_prompt(profile_context, integrated_issue=integrated_issue)
-    peer_profiles = prompt_profile.get("peer_profiles") or {}
-    profile = peer_profiles.get(company_id) if isinstance(peer_profiles, dict) else {}
-    if not isinstance(profile, dict) or not profile:
-        return {
-            "company": company_id,
-            "matched_profile_terms": [],
-            "linkage_level": "none",
-            "reason": "현재 이슈와 비교할 피어 프로필 본문이 없습니다.",
-        }
-    issue_tokens = _issue_relevance_tokens(integrated_issue)
-    profile_tokens = _content_tokens(_json_dumps(profile))
-    matched_terms = sorted(issue_tokens & profile_tokens)
-    level = _linkage_level_from_match_count(len(matched_terms))
-    reason = (
-        "현재 사건의 핵심 토큰이 피어 프로필의 사업영역/역량과 연결됩니다."
-        if level in {"high", "medium"}
-        else "현재 사건과 피어 프로필의 직접 접점이 약하므로 사건 기반 해석을 우선해야 합니다."
+    evaluation = _build_profile_linkage_evaluation(
+        integrated_issue=integrated_issue,
+        classification={},
+        profile_context=profile_context,
+    )
+    linkage = _profile_linkage_for_company(
+        evaluation,
+        company_id=company_id,
+        scope="peer",
     )
     return {
         "company": company_id,
-        "matched_profile_terms": matched_terms[:12],
-        "linkage_level": level,
-        "reason": reason,
+        "matched_profile_terms": _string_list(linkage.get("matched_terms"), max_items=12),
+        "linkage_level": str(linkage.get("linkage_level") or "none"),
+        "business_novelty_status": str(linkage.get("business_novelty_status") or ""),
+        "implication_mode": str(linkage.get("implication_mode") or ""),
+        "reason": str(linkage.get("reason") or "현재 이슈와 비교할 피어 프로필 본문이 없습니다."),
     }
 
 
@@ -6658,28 +5071,42 @@ def _relevant_profile_linkage_level(
     integrated_issue: dict[str, Any],
     scope: str,
 ) -> str:
-    prompt_profile = _profile_for_prompt(profile_context, integrated_issue=integrated_issue)
-    issue_tokens = _issue_relevance_tokens(integrated_issue)
-    if not issue_tokens:
-        return "none"
+    evaluation = _build_profile_linkage_evaluation(
+        integrated_issue=integrated_issue,
+        classification={},
+        profile_context=profile_context,
+    )
     if scope == "skax":
-        profile = prompt_profile.get("skax_profile") or {}
-        if not isinstance(profile, dict) or not profile:
-            return "none"
-        return _linkage_level_from_match_count(
-            len(issue_tokens & _content_tokens(_json_dumps(profile)))
-        )
-    peer_profiles = prompt_profile.get("peer_profiles") or {}
-    if not isinstance(peer_profiles, dict):
-        return "none"
+        linkage = evaluation.get("skax_linkage") if isinstance(evaluation, dict) else {}
+        return str((linkage or {}).get("linkage_level") or "none")
     best = "none"
-    for company_id in _companies_from_integrated_issue(integrated_issue):
-        profile = peer_profiles.get(company_id) or {}
-        if not isinstance(profile, dict) or not profile:
+    for linkage in _jsonish_list(evaluation.get("peer_linkages")):
+        if not isinstance(linkage, dict):
             continue
-        level = _linkage_level_from_match_count(
-            len(issue_tokens & _content_tokens(_json_dumps(profile)))
-        )
+        level = str(linkage.get("linkage_level") or "none")
+        if _linkage_rank(level) > _linkage_rank(best):
+            best = level
+    return best
+
+
+def _relevant_profile_linkage_level_from_evaluation(
+    profile_linkage_evaluation: dict[str, Any] | None,
+    *,
+    scope: str,
+) -> str:
+    evaluation = profile_linkage_evaluation or {}
+    if not isinstance(evaluation, dict):
+        return ""
+    if scope == "skax":
+        linkage = evaluation.get("skax_linkage") or {}
+        if not isinstance(linkage, dict):
+            return ""
+        return str(linkage.get("linkage_level") or "")
+    best = ""
+    for linkage in _jsonish_list(evaluation.get("peer_linkages")):
+        if not isinstance(linkage, dict):
+            continue
+        level = str(linkage.get("linkage_level") or "")
         if _linkage_rank(level) > _linkage_rank(best):
             best = level
     return best
@@ -6718,11 +5145,7 @@ def _unsupported_peer_profile_claim_violation(
         return None
     if not _mentions_profile_based_peer_claim(text):
         return None
-    if re.search(
-        r"부족|확인되지|단정하기\s*어렵|단정할\s*수\s*없|단정하지|아니라|"
-        r"사건\s*기반|낮춰|후속.{0,12}확인|해석하는\s*것이\s*안전",
-        text or "",
-    ):
+    if re.search(r"부족|확인되지|단정하기\s*어렵|사건\s*기반|낮춰", text or ""):
         return None
     return (
         "현재 사건과 직접 맞는 피어 프로필 접점이 없는데 사업영역/역량 기반 "
@@ -6817,9 +5240,6 @@ def _event_based_analysis_field(key: str, *, integrated_issue: dict[str, Any]) -
 def _event_based_analysis_summary(integrated_issue: dict[str, Any]) -> str:
     fact = _primary_issue_fact(integrated_issue)
     target = _main_company_display(integrated_issue)
-    frame_kind = _issue_frame_kind(integrated_issue)
-    if frame_kind == "performance":
-        return f"{fact} 이 사건은 특정 사업 확장보다 전사 실적과 수익성 지표를 관찰하는 카드입니다."
     if _main_company_is_customer_or_buyer(integrated_issue) and target:
         return (
             f"{fact} {target}는 원문상 계약 상대방으로 확인되며, 이 이슈는 계약 "
@@ -6869,8 +5289,6 @@ def _profile_linked_analysis_summary(
 ) -> str:
     fact = _primary_issue_fact(integrated_issue)
     subject = _issue_subject_phrase(integrated_issue)
-    if _issue_frame_kind(integrated_issue) == "performance":
-        return _event_based_analysis_summary(integrated_issue)
     profile_phrase = _profile_area_phrase(
         profile_context,
         integrated_issue=integrated_issue,
@@ -6879,22 +5297,21 @@ def _profile_linked_analysis_summary(
     if subject and profile_phrase:
         return (
             f"{fact} 이 사건은 피어 프로필의 {profile_phrase} 맥락이 "
-            f"{subject}와 연결되는 신호로 해석할 수 있습니다."
+            f"{_with_particle(subject, '과', '와')} 연결되는 신호로 해석할 수 있습니다."
         )
     return _event_based_analysis_summary(integrated_issue)
 
 
 def _profile_linked_market_signal(integrated_issue: dict[str, Any]) -> str:
     subject = _issue_subject_phrase(integrated_issue)
-    if _issue_frame_kind(integrated_issue) == "performance":
-        return _event_based_market_signal(integrated_issue)
-    issue_frame = _issue_frame_for_prompt(integrated_issue)
-    axes = ", ".join(_decision_axes_from_issue_frame(issue_frame)[:3])
-    if axes:
+    if re.search(
+        r"구축|센터|인프라|컴퓨팅|데이터\s*센터|GPU|반도체|서버|SPC|특수목적법인",
+        _integrated_grounding_text(integrated_issue),
+        flags=re.IGNORECASE,
+    ):
         return (
-            f"{subject or '현재 사건'}에서는 {axes}가 함께 확인됩니다. "
-            "따라서 유사 동향은 발표 여부만이 아니라 이 조건들이 실제 수행 단계에서 "
-            "어떻게 공개되는지를 기준으로 비교해야 합니다."
+            f"{subject or '현재 사건'}에서 구축 범위, 인프라 구성, 단계별 추진 일정이 "
+            "함께 제시되어 대규모 인프라 사업의 비교 기준이 구체화되고 있습니다."
         )
     return _event_based_market_signal(integrated_issue)
 
@@ -6905,21 +5322,15 @@ def _profile_linked_impact_reason(
     profile_context: dict[str, Any],
 ) -> str:
     subject = _issue_subject_phrase(integrated_issue)
-    if _issue_frame_kind(integrated_issue) == "performance":
-        return _event_based_impact_reason(integrated_issue)
     profile_phrase = _profile_area_phrase(
         profile_context,
         integrated_issue=integrated_issue,
         scope="peer",
     )
     if subject and profile_phrase:
-        issue_frame = _issue_frame_for_prompt(integrated_issue)
-        axes = ", ".join(_decision_axes_from_issue_frame(issue_frame)[:2])
         return (
-            f"{subject}이 확인되면서 해당 기업의 기존 사업 흐름 중 {profile_phrase}가 "
-            f"현재 사건의 {axes or '대상 범위와 후속 조건'}와 이어지는지 관찰할 수 있습니다. "
-            "다만 이 문장은 역할 확정이 아니라, 어떤 근거가 더 확인되어야 하는지 가르는 "
-            "비교 기준으로 해석해야 합니다."
+            f"{subject}이 확인되면서 피어 프로필의 {profile_phrase} 역량이 "
+            "현재 사건의 구축 범위와 추진 구조에 연결되는지 관찰할 수 있습니다."
         )
     return _event_based_impact_reason(integrated_issue)
 
@@ -6931,8 +5342,6 @@ def _profile_linked_strategic_meanings(
 ) -> list[str]:
     fact = _primary_issue_fact(integrated_issue)
     subject = _issue_subject_phrase(integrated_issue)
-    if _issue_frame_kind(integrated_issue) == "performance":
-        return _event_based_strategic_meaning_candidates(integrated_issue)[:3]
     profile_phrase = _profile_area_phrase(
         profile_context,
         integrated_issue=integrated_issue,
@@ -6940,12 +5349,9 @@ def _profile_linked_strategic_meanings(
     )
     meanings = [fact]
     if subject and profile_phrase:
-        issue_frame = _issue_frame_for_prompt(integrated_issue)
-        axes = ", ".join(_decision_axes_from_issue_frame(issue_frame)[:2])
         meanings.append(
-            f"해당 기업의 기존 사업 흐름 중 {profile_phrase}와 연결해 보면, 이번 사건은 "
-            f"{subject}에서 {axes or '대상 범위와 후속 조건'}가 실제로 어떻게 드러나는지 "
-            "확인하게 하는 신호입니다."
+            f"피어 프로필의 {profile_phrase} 맥락과 연결하면, 이번 사건은 "
+            f"{subject}에서 필요한 구축 범위와 운영 구조를 확인하는 신호입니다."
         )
     meanings.append(_profile_linked_market_signal(integrated_issue))
     return _normalize_recommended_actions(meanings)[:3]
@@ -6953,24 +5359,6 @@ def _profile_linked_strategic_meanings(
 
 def _event_based_market_signal(integrated_issue: dict[str, Any]) -> str:
     subject = _issue_subject_phrase(integrated_issue)
-    frame_kind = _issue_frame_kind(integrated_issue)
-    if frame_kind == "performance":
-        return (
-            "현재 근거에서는 매출, 이익, 이익률 같은 전사 재무 지표가 확인됩니다. "
-            "사업부별 기여도가 공개되지 않으면 특정 사업영역 성과로 연결하지 않는 것이 안전합니다."
-        )
-    if frame_kind == "launch_or_service":
-        return (
-            f"{subject or '현재 서비스 신호'}에서 적용 업무와 효과 수치가 함께 확인됩니다. "
-            "유사 동향은 기능 공개 여부보다 어떤 업무 시간이 줄었는지, 어떤 사용 대상의 "
-            "적응·처리 시간이 바뀌었는지를 비교해야 합니다."
-        )
-    if frame_kind == "selection_or_build":
-        return (
-            f"{subject or '현재 인프라 사업'}에서 참여 구조, 자원 규모, 구축 일정이 함께 "
-            "제시됐습니다. 유사 대형 인프라 동향은 선정 여부보다 실제 구축·운영 범위와 "
-            "후속 일정이 비교 기준이 됩니다."
-        )
     duration = _contract_duration_phrase(integrated_issue)
     scale = _contract_scale_phrase(integrated_issue)
     details = " ".join(item for item in (scale, duration) if item)
@@ -6984,22 +5372,6 @@ def _event_based_market_signal(integrated_issue: dict[str, Any]) -> str:
 def _event_based_impact_reason(integrated_issue: dict[str, Any]) -> str:
     subject = _issue_subject_phrase(integrated_issue)
     target = _main_company_display(integrated_issue)
-    frame_kind = _issue_frame_kind(integrated_issue)
-    if frame_kind == "performance":
-        return (
-            "매출 증가율, 영업이익 증가율, 순이익 증가율, 영업이익률이 함께 제시되어 "
-            "피어사의 전사 수익성 흐름을 비교할 근거가 됩니다."
-        )
-    if frame_kind == "launch_or_service":
-        return (
-            "플랫폼·서비스 공개 사실과 함께 적용 후 시간 절감 또는 적응 기간 단축 수치가 "
-            "제시되어, 유사 AI 업무혁신 동향을 기능명보다 업무 성과 지표로 비교할 근거가 됩니다."
-        )
-    if frame_kind == "selection_or_build":
-        return (
-            "사업자 선정, 참여 구조, 인프라 규모, 착공·구축 일정이 함께 제시되어 "
-            "대형 인프라 동향을 실행 조건 중심으로 비교할 근거가 됩니다."
-        )
     if _main_company_is_customer_or_buyer(integrated_issue) and target and subject:
         return (
             f"{target}의 역할은 계약 상대방으로 확인되는 수준이지만, {subject}의 "
@@ -7018,39 +5390,8 @@ def _event_based_strategic_meaning_candidates(integrated_issue: dict[str, Any]) 
     fact = _primary_issue_fact(integrated_issue)
     subject = _issue_subject_phrase(integrated_issue)
     target = _main_company_display(integrated_issue)
-    frame_kind = _issue_frame_kind(integrated_issue)
     if fact:
         candidates.append(fact)
-    if frame_kind == "performance":
-        candidates.append(
-            "이번 근거는 특정 사업영역의 확정 성과가 아니라 매출, 이익, 이익률을 분리해 "
-            "피어사의 전사 수익성 변화를 관찰해야 하는 실적 신호입니다."
-        )
-        candidates.append(
-            "사업부별 기여도가 원문에 공개되지 않았다면 물류, AI, 클라우드 같은 개별 사업 성과로 "
-            "단정하지 말고 후속 IR·실적자료에서 기여 사업과 수익성 지속성을 확인해야 합니다."
-        )
-        return candidates[:3]
-    if frame_kind == "launch_or_service":
-        candidates.append(
-            f"{subject or '현재 서비스'}는 단순 공개 사실보다 적용 업무와 효과 수치가 함께 "
-            "제시된 사례입니다."
-        )
-        candidates.append(
-            "유사 AI 업무혁신 동향은 기능명보다 어떤 업무 시간이 줄었는지, 어떤 사용자군의 "
-            "적응 기간이 단축됐는지를 기준으로 비교해야 합니다."
-        )
-        return candidates[:3]
-    if frame_kind == "selection_or_build":
-        candidates.append(
-            f"{subject or '현재 인프라 사업'}는 선정 사실뿐 아니라 참여 구조, 자원 규모, "
-            "구축 일정이 함께 제시된 대형 인프라 실행 신호입니다."
-        )
-        candidates.append(
-            "유사 사업에서는 기술명보다 참여사 역할, 자원·투자 규모, 착공·구축 일정, "
-            "운영 책임 공개 여부가 후속 비교 기준이 됩니다."
-        )
-        return candidates[:3]
     if subject:
         candidates.append(
             f"{subject}이 기사에서 확인된 만큼, 이 이슈는 단순 기능 도입보다 "
@@ -7098,6 +5439,13 @@ def _weak_analysis_statement(text: str, *, integrated_issue: dict[str, Any]) -> 
 
 
 def _issue_subject_phrase(integrated_issue: dict[str, Any]) -> str:
+    issue_text = " ".join(
+        str(integrated_issue.get(key) or "").strip()
+        for key in ("main_event", "main_issue", "headline", "one_line_summary")
+    )
+    if subject := _extract_issue_subject_from_text(issue_text):
+        return subject
+
     intelligence = integrated_issue.get("cluster_fact_intelligence") or {}
     if isinstance(intelligence, dict):
         main_event_facts = [
@@ -7111,14 +5459,14 @@ def _issue_subject_phrase(integrated_issue: dict[str, Any]) -> str:
         for item in main_event_facts:
             for value in _jsonish_list(item.get("products_or_services")):
                 text = re.sub(r"\s+", " ", str(value or "").strip(" ."))
-                if text and not _is_bad_issue_subject(text):
+                if text:
                     return text
         for item in main_event_facts:
             if subject := _extract_issue_subject_from_text(str(item.get("fact") or "")):
                 return subject
         for value in _jsonish_list(intelligence.get("products_or_services")):
             text = re.sub(r"\s+", " ", str(value or "").strip(" ."))
-            if text and not _is_bad_issue_subject(text):
+            if text:
                 return text
         for item in intelligence.get("common_facts") or []:
             if not isinstance(item, dict):
@@ -7130,17 +5478,11 @@ def _issue_subject_phrase(integrated_issue: dict[str, Any]) -> str:
                 continue
             for value in _jsonish_list(item.get("products_or_services")):
                 text = re.sub(r"\s+", " ", str(value or "").strip(" ."))
-                if text and not _is_bad_issue_subject(text):
+                if text:
                     return text
             if subject := _extract_issue_subject_from_text(str(item.get("fact") or "")):
                 return subject
 
-    issue_text = " ".join(
-        str(integrated_issue.get(key) or "").strip()
-        for key in ("main_issue", "main_event", "headline", "one_line_summary")
-    )
-    if subject := _extract_issue_subject_from_text(issue_text):
-        return subject
     return ""
 
 
@@ -7148,18 +5490,6 @@ def _fact_has_summary_role(item: dict[str, Any], role_name: str) -> bool:
     roles = {str(role or "") for role in _jsonish_list(item.get("summary_roles"))}
     role = str(item.get("summary_role") or "")
     return role_name in roles or role == role_name
-
-
-def _is_bad_issue_subject(text: str) -> bool:
-    value = str(text or "").strip()
-    if not value:
-        return True
-    return bool(
-        re.search(
-            r"팀장|전무|대표|부사장|상무|임원|기자|발표|주제|기념촬영|행사|포럼|세미나",
-            value,
-        )
-    )
 
 
 def _extract_issue_subject_from_text(text: str) -> str:
@@ -7180,8 +5510,6 @@ def _extract_issue_subject_from_text(text: str) -> str:
             "",
             subject,
         ).strip(" .")
-        if _is_bad_issue_subject(subject):
-            return ""
         return subject
     return ""
 
@@ -7240,8 +5568,6 @@ def _profile_linked_peer_meaning(
     peer: dict[str, Any],
 ) -> str:
     peer_name = str(peer.get("company_name_ko") or peer.get("company_id") or "타깃 피어").strip()
-    if _issue_frame_kind(integrated_issue) == "performance":
-        return _event_based_peer_meaning(integrated_issue=integrated_issue, peer=peer)
     fact = _primary_issue_fact(integrated_issue)
     fact_sentence = fact
     if peer_name and not re.search(re.escape(peer_name), fact_sentence, flags=re.IGNORECASE):
@@ -7253,16 +5579,12 @@ def _profile_linked_peer_meaning(
         scope="peer",
     )
     if profile_phrase:
-        connection_reason = _issue_profile_connection_reason(
-            integrated_issue=integrated_issue,
-            profile_phrase=profile_phrase,
-        )
         return (
-            f"{fact_sentence} 해당 기업의 기존 사업 흐름에서는 {profile_phrase}가 "
-            f"확인되고, 이번 사건에서는 {subject}가 확인됩니다. "
-            f"{connection_reason} 다만 현재 근거만으로는 해당 기업이 어느 수행 범위와 "
-            "운영 책임까지 맡는지 모두 확정하기 어렵기 때문에, 역할 확장이나 성과보다 "
-            "기존 사업 흐름이 실제 적용 장면과 이어지는 관찰 신호로 보는 것이 안전합니다."
+            f"{fact_sentence} 피어 프로필에서는 {profile_phrase}가 "
+            f"{_with_particle(subject, '과', '와')} 연결되는 배경으로 확인됩니다. "
+            "따라서 이 신호는 역할 확장이나 "
+            "성과를 단정하기보다, 해당 피어의 기존 사업 맥락이 현재 대형 과제와 만나는 "
+            "관찰 지점으로 해석하는 것이 안전합니다."
         )
     return _event_based_peer_meaning(integrated_issue=integrated_issue, peer=peer)
 
@@ -7273,49 +5595,18 @@ def _profile_linked_capability_change(
     profile_context: dict[str, Any],
 ) -> str:
     subject = _issue_subject_phrase(integrated_issue) or "현재 사건"
-    if _issue_frame_kind(integrated_issue) == "performance":
-        return _event_based_capability_change(integrated_issue)
     profile_phrase = _profile_area_phrase(
         profile_context,
         integrated_issue=integrated_issue,
         scope="peer",
     )
     if profile_phrase:
-        connection_reason = _issue_profile_connection_reason(
-            integrated_issue=integrated_issue,
-            profile_phrase=profile_phrase,
-        )
         return (
-            f"확인된 변화는 역량 확장 자체가 아니라 {subject}의 대상 업무·서비스·추진 구조가 "
-            f"해당 기업의 기존 사업 흐름 중 {profile_phrase}와 비교할 수 있는 형태로 "
-            f"드러났다는 점입니다. {connection_reason} 따라서 후속 비교는 해당 기업이 "
-            "어떤 적용 범위, 운영 역할, 성과 지표를 실제로 공개하는지에 맞춰야 합니다."
+            f"확인된 변화는 역량 확장 자체가 아니라 {subject}의 구축 범위와 추진 구조가 "
+            f"피어 프로필의 {profile_phrase} 맥락과 연결된다는 점입니다. 유사 사업에서는 "
+            "구축 범위, 운영 체계, 단계별 일정이 함께 비교될 수 있습니다."
         )
     return _event_based_capability_change(integrated_issue)
-
-
-def _issue_profile_connection_reason(
-    *,
-    integrated_issue: dict[str, Any],
-    profile_phrase: str,
-) -> str:
-    issue_terms = [
-        *_checkpoint_issue_terms(_issue_frame_for_prompt(integrated_issue)),
-        *_high_specific_issue_terms_for_quality(integrated_issue)[:5],
-    ]
-    clean_terms = [
-        _clean_issue_axis_phrase(term) for term in issue_terms if _clean_issue_axis_phrase(term)
-    ]
-    clean_terms = _unique_texts(clean_terms, max_items=4)
-    if clean_terms:
-        return (
-            f"연결 근거는 현재 사건의 {', '.join(clean_terms[:3])} 같은 구체 항목이 "
-            f"{profile_phrase}의 적용 장면을 판단하게 해준다는 점입니다."
-        )
-    return (
-        f"연결 근거는 현재 사건의 사업명·적용 범위가 {profile_phrase}와 비교할 수 있는 "
-        "축을 제공한다는 점입니다."
-    )
 
 
 def _profile_area_phrase(
@@ -7329,7 +5620,8 @@ def _profile_area_phrase(
         integrated_issue=integrated_issue,
         scope=scope,
     )
-    return "·".join(names[:3])
+    limit = 1 if scope == "skax" else 2
+    return "·".join(names[:limit])
 
 
 def _relevant_profile_area_names(
@@ -7417,26 +5709,6 @@ def _event_based_peer_meaning(
 ) -> str:
     peer_name = str(peer.get("company_name_ko") or peer.get("company_id") or "타깃 피어").strip()
     fact = _primary_issue_fact(integrated_issue)
-    frame_kind = _issue_frame_kind(integrated_issue)
-    if frame_kind == "performance":
-        return (
-            f"{fact} {peer_name}의 전사 매출·이익 지표가 개선된 실적 신호로 볼 수 있습니다. "
-            "다만 현재 근거만으로는 어떤 사업영역이 실적 개선을 견인했는지 단정할 수 없으므로, "
-            "특정 기술 성과나 사업 확장보다 재무 성과 관찰 카드로 해석하는 것이 안전합니다."
-        )
-    if frame_kind == "launch_or_service":
-        return (
-            f"{fact} {peer_name}의 현재 움직임은 서비스 공개 자체보다 적용 업무와 효과 수치가 "
-            "함께 제시됐다는 점에서 관찰할 수 있습니다. 다만 프로필 접점이 충분하지 않으면 "
-            "기존 역량 확장으로 단정하지 말고, 업무 적용 사례와 성과 지표가 확인된 사건으로 "
-            "낮춰 해석하는 것이 안전합니다."
-        )
-    if frame_kind == "selection_or_build":
-        return (
-            f"{fact} {peer_name}의 현재 움직임은 선정 사실뿐 아니라 참여 구조, 자원 규모, "
-            "구축 일정이 함께 제시된 대형 인프라 실행 신호로 볼 수 있습니다. 프로필 접점이 "
-            "부족하면 역량 강화로 단정하지 말고, 후속 역할·운영 책임 공개를 확인해야 합니다."
-        )
     if _main_company_is_customer_or_buyer(integrated_issue):
         return (
             f"{fact} {peer_name}는 원문상 계약 상대방으로 확인되지만, 최종 발주자 "
@@ -7451,25 +5723,6 @@ def _event_based_peer_meaning(
 
 
 def _event_based_capability_change(integrated_issue: dict[str, Any]) -> str:
-    frame_kind = _issue_frame_kind(integrated_issue)
-    if frame_kind == "performance":
-        return (
-            "확인된 변화는 특정 사업역량의 확장 자체가 아니라 매출 증가율, 영업이익 증가율, "
-            "순이익 증가율, 영업이익률 같은 전사 재무 지표가 함께 개선됐다는 점입니다. "
-            "사업부별 기여도는 후속 실적자료나 IR에서 별도로 확인해야 합니다."
-        )
-    if frame_kind == "launch_or_service":
-        return (
-            "확인된 변화는 역량 확장 자체가 아니라 적용 업무와 효과 수치가 구체화됐다는 점입니다. "
-            "플랫폼·서비스가 어떤 업무에 쓰였고 시간이 얼마나 줄었는지 "
-            "후속 사례와 함께 봐야 합니다."
-        )
-    if frame_kind == "selection_or_build":
-        return (
-            "확인된 변화는 역량 강화 자체가 아니라 선정 이후 참여 구조, 자원 규모, 구축 일정이 "
-            "구체화됐다는 점입니다. 실제 수행 범위와 운영 책임은 "
-            "후속 협약·공시에서 확인해야 합니다."
-        )
     subject = _issue_subject_phrase(integrated_issue) or "확인된 사업"
     duration = _contract_duration_phrase(integrated_issue)
     duration_text = f" {duration}도 함께 확인됩니다." if duration else ""
@@ -7661,34 +5914,6 @@ def _augment_sourced_evidence_ids(
     return out
 
 
-def _fact_texts(integrated_issue: dict[str, Any]) -> list[tuple[str, str]]:
-    items: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for basis in integrated_issue.get("fact_basis") or []:
-        if not isinstance(basis, dict):
-            continue
-        fact_ids = [str(item or "").strip() for item in basis.get("fact_ids") or []]
-        texts = [str(basis.get("fact") or ""), str(basis.get("evidence_text") or "")]
-        texts.extend(str(item or "") for item in basis.get("evidence_texts") or [])
-        combined = " ".join(text for text in texts if text)
-        for fact_id in fact_ids:
-            if not fact_id or fact_id in seen or not combined:
-                continue
-            items.append((fact_id, combined))
-            seen.add(fact_id)
-    for fact in integrated_issue.get("consolidated_facts") or []:
-        if not isinstance(fact, dict):
-            continue
-        fact_id = str(fact.get("fact_id") or "").strip()
-        if not fact_id or fact_id in seen:
-            continue
-        texts = [str(fact.get("fact") or "")]
-        texts.extend(str(item or "") for item in fact.get("evidence_texts") or [])
-        items.append((fact_id, " ".join(texts)))
-        seen.add(fact_id)
-    return items
-
-
 def _fact_is_referenced(fact_text: str, output_text: str, output_tokens: set[str]) -> bool:
     tokens = _content_tokens(fact_text)
     if len(tokens & output_tokens) >= 2:
@@ -7699,526 +5924,636 @@ def _fact_is_referenced(fact_text: str, output_text: str, output_tokens: set[str
     return False
 
 
-def _content_tokens(text: str) -> set[str]:
-    raw_tokens = re.findall(r"[가-힣A-Za-z0-9][가-힣A-Za-z0-9&+·_-]{1,}", text or "")
-    return {
-        normalized
-        for token in raw_tokens
-        if (normalized := _normalize_content_token(token))
-        and not _is_low_signal_content_token(normalized)
-    }
-
-
 def _is_low_signal_content_token(token: str) -> bool:
-    if len(token) <= 1:
-        return True
-    if token.isascii() and token.isupper() and len(token) <= 2:
-        return True
-    if re.fullmatch(r"\d+", token):
-        return len(token) <= 1
-    if token in {
-        "계약",
-        "계약은",
-        "계약을",
-        "사업",
-        "수주",
-        "체결",
-        "체결했다",
-        "규모",
-        "규모로",
-        "규모의",
-        "기간",
-        "기간은",
-        "최근",
-        "대비",
-        "해당",
-        "해당하",
-        "알려졌다",
-        "총액",
-        "원이다",
-        "일자는",
-        "전체",
-        "일부",
-        "대상",
-        "관련",
-        "확인",
-        "확인된",
-    }:
-        return True
-    return False
+    return _term_signal_weight(token, "output_text") <= 0.0
 
 
-def _normalize_content_token(token: str) -> str:
-    token = token.strip()
-    if len(token) <= 3:
-        return token
-    return re.sub(r"(으로|에서|에게|과|와|은|는|이|가|을|를|의)$", "", token)
-
-
-def _issue_relevance_tokens(
-    integrated_issue: dict[str, Any],
-    *,
-    extra_text: str = "",
-) -> set[str]:
-    if not isinstance(integrated_issue, dict):
-        return set()
-    parts: list[str] = []
-    if extra_text:
-        parts.append(extra_text)
-    for key in (
-        "headline",
-        "main_event",
-        "main_issue",
-        "one_line_summary",
-        "integrated_text",
-        "cluster_event_type",
-    ):
-        value = str(integrated_issue.get(key) or "").strip()
-        if value:
-            parts.append(value)
-    parts.extend(str(item or "") for item in integrated_issue.get("fact_summary") or [])
-    intelligence = integrated_issue.get("cluster_fact_intelligence") or {}
-    if isinstance(intelligence, dict):
-        for key in ("products_or_services", "customers_or_industries", "activity_types"):
-            parts.extend(str(item or "") for item in _jsonish_list(intelligence.get(key)))
-        for item in intelligence.get("unique_facts") or []:
-            if not isinstance(item, dict):
-                continue
-            parts.append(str(item.get("fact") or ""))
-            for key in ("products_or_services", "customers_or_industries", "activity_types"):
-                parts.extend(str(value or "") for value in _jsonish_list(item.get(key)))
-    tokens = _content_tokens("\n".join(parts))
-    company_tokens: set[str] = set()
-    for company_id in _companies_from_integrated_issue(integrated_issue):
-        company_tokens.update(_content_tokens(" ".join(expand_peer_aliases(company_id))))
-        company_tokens.update(_company_token_variants(company_id))
-    for supplier in _supplier_names_for_target_counterparty(integrated_issue):
-        company_tokens.update(_content_tokens(supplier))
-        company_tokens.add(_normalize_entity_token(supplier))
-    filtered = {
-        token
-        for token in tokens
-        if token not in company_tokens and not _is_low_signal_profile_relevance_token(token)
-    }
-    return _expand_profile_relevance_tokens(filtered)
-
-
-def _expand_profile_relevance_tokens(tokens: set[str]) -> set[str]:
-    expanded = set(tokens)
-    joined = " ".join(tokens)
-    if re.search(r"코어\s*뱅킹|뱅킹|은행|증권|보험|결제|카드|토큰증권|스테이블코인", joined):
-        expanded.add("금융")
-    if re.search(r"물류|창고|배송|로봇|rx", joined, flags=re.IGNORECASE):
-        expanded.add("물류")
-        expanded.add("로봇")
-    if re.search(r"보안|권한|접근|프라이버시|개인정보", joined):
-        expanded.add("보안")
-    return expanded
-
-
-def _profile_relevance_hint_text(
+def _two_section_fact_based_fallback(
+    original: dict[str, Any],
     *,
     integrated_issue: dict[str, Any],
-    classification: dict[str, Any],
-    bundle: dict[str, Any],
-) -> str:
-    parts: list[str] = []
-    parts.extend(_string_list(classification.get("sectors"), max_items=10))
-    parts.extend(_string_list(classification.get("matched_sectors"), max_items=10))
-    sector = str(classification.get("sector") or "").strip()
-    if sector:
-        parts.append(sector)
-    for detail in _jsonish_list(classification.get("matched_sector_details")):
-        if isinstance(detail, dict):
-            parts.append(str(detail.get("sector_name_ko") or ""))
-            parts.append(str(detail.get("keyword") or ""))
-
-    metadata = bundle.get("metadata") or {}
-    for detail in _jsonish_list(metadata.get("matched_sector_details")):
-        if isinstance(detail, dict):
-            parts.append(str(detail.get("sector_name_ko") or ""))
-            parts.append(str(detail.get("keyword") or ""))
-
-    representative_id = str(
-        integrated_issue.get("representative_id")
-        or (bundle.get("metadata") or {}).get("representative_id")
-        or ""
-    ).strip()
-    candidate_items = [
-        item for item in _jsonish_list(bundle.get("items")) if isinstance(item, dict)
-    ]
-    if representative_id:
-        selected_items = [
-            item
-            for item in candidate_items
-            if str(item.get("id") or "").strip() == representative_id
-        ]
-    else:
-        selected_items = candidate_items[:1]
-    for item in selected_items[:1]:
-        if not isinstance(item, dict):
-            continue
-        parts.append(str(item.get("title") or ""))
-        metadata_raw = item.get("metadata")
-        metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
-        parts.append(str(metadata.get("subtitle") or ""))
-        parts.append(str(item.get("content") or "")[:700])
-
-    for key in ("main_event", "main_issue", "one_line_summary"):
-        parts.append(str(integrated_issue.get(key) or ""))
-    return "\n".join(part for part in parts if part)
-
-
-def _is_low_signal_profile_relevance_token(token: str) -> bool:
-    if re.search(r"\d", token):
-        return True
-    if re.search(r"(했다|한다고|있다|있다고|됐다|되면|된다|이며|으로)$", token):
-        return True
-    return token in {
-        "공급계약",
-        "contract",
-        "AI·DX",
-        "ax",
-        "deal",
-        "개발",
-        "표준",
-        "플랫폼",
-        "포함한다",
-        "규모이다",
-        "itdaily",
-        "kr",
-        "seungyang",
-        "fast-pass",
-        "규모다",
-        "매출액",
-        "계약금",
-        "계약금액",
-        "금액",
-        "원으로",
-        "지난",
-        "연결기준",
-        "총액은",
-        "시장",
-        "분야",
-        "기업",
-        "전문기업",
-        "역할",
-        "직접",
-        "진행",
-        "수행",
-        "이벤트",
-        "이번",
-        "통해",
-        "전환",
-        "현대화",
-        "기반",
-        "기간",
-        "사업",
-        "프로젝트",
-        "주요",
-        "추진",
-        "제공",
-        "확대",
-        "시스템",
-        "공시를",
-        "근거가",
-        "기사로",
-        "내년",
-        "덧붙였다",
-        "동종",
-        "드러냈다",
-        "발주사와",
-        "밝혔다",
-        "변경을",
-        "부가세",
-        "사진",
-        "수금",
-        "실적이",
-        "아이티데일리",
-        "안내할",
-        "예정이라고",
-        "없이",
-        "이행",
-        "입지를",
-        "전했다",
-        "정정공시",
-        "제외한",
-        "조건",
-        "조건이",
-        "중이며",
-        "체결하며",
-        "체결했다고",
-        "최종",
-        "판단",
-        "피어사",
-        "한편",
-        "해당한다",
-        "핵심",
-        "협의를",
-        "확정되면",
-        "회사는",
-    }
-
-
-def _shrink_profile(profile: Any, *, relevance_tokens: set[str] | None = None) -> dict[str, Any]:
-    if not isinstance(profile, dict):
-        return {}
-    relevance_tokens = relevance_tokens or set()
-    identity_keys = (
-        "company_id",
-        "peer_id",
-        "company_name",
-        "company_name_ko",
-        "business_lines",
-    )
-    scalar_keys = (
-        # Broad company summaries often contain multiple business areas and can
-        # pull the model toward an unrelated profile branch. Use structured
-        # business areas and relevant examples instead.
-    )
-    relevant_item_keys = (
-        # Keep the prompt centered on profile structure. Detailed profile
-        # examples can overpower the current IntegratedIssue when the profile
-        # snapshot is broad or noisy.
-    )
-    passthrough_keys = (
-        "business_areas",
-        "core_capabilities",
-        "recent_keywords",
-        "capability_evolution",
-        "cautions",
-    )
-    out: dict[str, Any] = {}
-    for key in identity_keys:
-        if key not in profile:
-            continue
-        compacted = _compact_value(profile[key])
-        if compacted not in ({}, [], "", None):
-            out[key] = compacted
-
-    for key in scalar_keys:
-        if key not in profile:
-            continue
-        value = str(profile.get(key) or "").strip()
-        if not value:
-            continue
-        if relevance_tokens and _profile_relevance_score(value, relevance_tokens) <= 0:
-            continue
-        out[key] = _compact_value(value)
-
-    for key in relevant_item_keys:
-        if key not in profile:
-            continue
-        ranked = _rank_relevant_profile_items(
-            profile[key],
-            relevance_tokens=relevance_tokens,
-            max_items=3,
-        )
-        if ranked:
-            out[key] = ranked
-
-    for key in passthrough_keys:
-        if key not in profile:
-            continue
-        if key == "business_areas":
-            compacted = _relevant_business_areas_for_prompt(
-                profile[key],
-                relevance_tokens=relevance_tokens,
-            )
-        elif key == "capability_evolution":
-            compacted = _compact_capability_evolution_for_prompt(
-                profile[key],
-                relevance_tokens=relevance_tokens,
-            )
-        else:
-            compacted = _compact_value(profile[key])
-        if compacted not in ({}, [], "", None):
-            out[key] = compacted
-    return out
-
-
-def _relevant_business_areas_for_prompt(
-    value: Any,
-    *,
-    relevance_tokens: set[str],
-) -> list[Any]:
-    if not isinstance(value, list):
-        return []
-    if not relevance_tokens:
-        return [_compact_profile_item(item, include_evidence=False) for item in value[:5]]
-
-    ranked = _rank_relevant_profile_items(
-        value,
-        relevance_tokens=relevance_tokens,
-        max_items=5,
-    )
-    return ranked
-
-
-def _rank_relevant_profile_items(
-    value: Any,
-    *,
-    relevance_tokens: set[str],
-    max_items: int,
-) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    if not relevance_tokens:
-        return [
-            compacted
-            for item in value[:max_items]
-            if (compacted := _compact_profile_item(item)) not in ({}, [], "", None)
-        ]
-
-    scored: list[tuple[int, int, Any]] = []
-    for index, item in enumerate(value):
-        score = _profile_relevance_score(item, relevance_tokens)
-        if score > 0:
-            scored.append((score, -index, item))
-    scored.sort(reverse=True)
-    return [
-        compacted
-        for _, _, item in scored[:max_items]
-        if (compacted := _compact_profile_item(item, include_evidence=False))
-        not in ({}, [], "", None)
-    ]
-
-
-def _profile_relevance_score(value: Any, relevance_tokens: set[str]) -> int:
-    if not relevance_tokens:
-        return 0
-    item_text = _json_dumps(value) if isinstance(value, dict | list) else str(value)
-    item_tokens = _content_tokens(item_text)
-    score = 0
-    for issue_token in relevance_tokens:
-        for item_token in item_tokens:
-            if _tokens_semantically_close(issue_token, item_token):
-                score += 1
-                break
-    return score
-
-
-def _tokens_semantically_close(left: str, right: str) -> bool:
-    if not left or not right:
-        return False
-    if left == right:
-        return True
-    if len(left) < 3 or len(right) < 3:
-        return False
-    return left in right or right in left
-
-
-def _compact_profile_item(value: Any, *, include_evidence: bool = True) -> dict[str, Any] | Any:
-    if not isinstance(value, dict):
-        return _compact_value(value)
-    preferred_keys = (
-        "name",
-        "business_area",
-        "summary",
-        "recent_direction",
-        "core_capabilities",
-        "capabilities",
-        "change_type",
-        "period",
-        "confidence",
-        "source_ref",
-        "source_refs",
-    )
-    out: dict[str, Any] = {}
-    for key in preferred_keys:
-        if key not in value:
-            continue
-        compacted = _compact_value(value[key])
-        if compacted not in ({}, [], "", None):
-            out[key] = compacted
-    if include_evidence:
-        evidence = value.get("evidence_text") or value.get("evidence_texts")
-        compacted_evidence = _compact_evidence_value(evidence)
-        if compacted_evidence not in ({}, [], "", None):
-            out["evidence_hint"] = compacted_evidence
-    return out
-
-
-def _compact_evidence_value(value: Any) -> Any:
-    if isinstance(value, str):
-        return value[:260]
-    if isinstance(value, list):
-        return [_compact_evidence_value(item) for item in value[:2]]
-    if isinstance(value, dict):
-        text = str(value.get("text") or value.get("evidence_text") or "").strip()
-        return text[:260] if text else _compact_profile_item(value, include_evidence=False)
-    return _compact_value(value)
-
-
-def _compact_capability_evolution_for_prompt(
-    value: Any,
-    *,
-    relevance_tokens: set[str],
+    profile_context: dict[str, Any],
+    model: str,
+    profile_linkage_evaluation: dict[str, Any] | None = None,
+    action_artifact_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    out: dict[str, Any] = {}
-    for key in ("period", "watch_points"):
-        compacted = _compact_value(value.get(key))
-        if compacted not in ({}, [], "", None):
-            out[key] = compacted
-    changes = _rank_relevant_profile_items(
-        value.get("changes"),
-        relevance_tokens=relevance_tokens,
-        max_items=3,
+    """Build a conservative, evidence-scoped fallback when LLM repair overclaims.
+
+    This is intentionally generic: it uses only the current IntegratedIssue,
+    profile linkage level, and action plan signals. It does not encode a specific
+    article, company, or sector outcome.
+    """
+
+    fact_ids = list(_known_fact_ids(integrated_issue))[:5]
+    profile_linkage_evaluation = profile_linkage_evaluation or {}
+    action_artifact_plan = action_artifact_plan or {}
+    peer_linkage_level = _relevant_profile_linkage_level_from_evaluation(
+        profile_linkage_evaluation,
+        scope="peer",
     )
-    if relevance_tokens and not changes:
-        return {}
-    if changes:
-        out["changes"] = changes
-    elif not relevance_tokens:
-        out["changes"] = _compact_value(value.get("changes") or [])
-    overall_change = str(value.get("overall_change") or "").strip()
-    if overall_change and (
-        not relevance_tokens or _profile_relevance_score(overall_change, relevance_tokens) > 0
-    ):
-        out["overall_change"] = _compact_value(overall_change)
+    skax_linkage_level = _relevant_profile_linkage_level_from_evaluation(
+        profile_linkage_evaluation,
+        scope="skax",
+    )
+    has_peer_profile_link = peer_linkage_level in {"high", "medium"}
+    peer = {
+        "company_id": str(integrated_issue.get("main_company") or ""),
+        "company_name_ko": _main_company_display(integrated_issue),
+        "sourced_evidence_ids": fact_ids,
+    }
+    if has_peer_profile_link:
+        analysis_summary = _profile_linked_analysis_summary(
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+        )
+        strategic_meaning = [
+            _profile_linked_market_signal(integrated_issue),
+            _profile_linked_impact_reason(
+                integrated_issue=integrated_issue,
+                profile_context=profile_context,
+            ),
+        ]
+        market_signal = _profile_linked_market_signal(integrated_issue)
+        impact_reason = _profile_linked_impact_reason(
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+        )
+        reason = _profile_linked_analysis_field(
+            "reason",
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+        )
+        peer_meaning = _profile_linked_peer_meaning(
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+            peer=peer,
+        )
+        capability_change = _profile_linked_capability_change(
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+        )
+    else:
+        analysis_summary = _event_based_analysis_summary(integrated_issue)
+        primary_fact = _primary_issue_fact(integrated_issue)
+        strategic_meaning = [
+            item
+            for item in _event_based_strategic_meaning_candidates(integrated_issue)
+            if item != primary_fact
+        ][:2]
+        market_signal = _event_based_market_signal(integrated_issue)
+        impact_reason = _event_based_impact_reason(integrated_issue)
+        reason = _event_based_analysis_field("reason", integrated_issue=integrated_issue)
+        peer_meaning = _event_based_peer_meaning(integrated_issue=integrated_issue, peer=peer)
+        capability_change = _event_based_capability_change(integrated_issue)
+
+    peer_meaning = _fallback_peer_meaning_without_summary_repeat(
+        peer_meaning,
+        integrated_issue=integrated_issue,
+        profile_context=profile_context,
+        has_peer_profile_link=has_peer_profile_link,
+    )
+    skax = _fallback_skax_implication(
+        integrated_issue=integrated_issue,
+        profile_context=profile_context,
+        profile_linkage_level=skax_linkage_level,
+        action_artifact_plan=action_artifact_plan,
+    )
+    profile_linkage_payload = _fallback_profile_linkage_payload(
+        profile_linkage_evaluation,
+        integrated_issue=integrated_issue,
+    )
+    skax_response_linkage_payload = _fallback_skax_response_linkage_payload(
+        profile_linkage_evaluation,
+        integrated_issue=integrated_issue,
+        action_artifact_plan=action_artifact_plan,
+    )
+    result = {
+        "is_valid_strategic_insight": True,
+        "profile_linkage": profile_linkage_payload,
+        "skax_response_linkage": skax_response_linkage_payload,
+        "claim_strength": (
+            "moderate"
+            if (
+                profile_linkage_payload.get("linkage_level") in {"high", "medium"}
+                or skax_response_linkage_payload.get("response_mode") == "profile_based_action"
+            )
+            else "cautious"
+        ),
+        "grounding_summary": {
+            "used_fact_ids": fact_ids,
+            "used_profile_refs": _fallback_used_profile_refs(profile_linkage_evaluation),
+            "ungrounded_claims_removed": [],
+        },
+        "analysis": {
+            "is_valid_analysis": True,
+            "analysis_scope": "peer_and_industry",
+            "analysis_summary": analysis_summary,
+            "strategic_meaning": _normalize_recommended_actions(strategic_meaning)[:3],
+            "market_signal": market_signal,
+            "impact_level": (original.get("analysis") or {}).get("impact_level") or "low",
+            "impact_reason": impact_reason,
+            "risk_or_opportunity": _choice(
+                (original.get("analysis") or {}).get("risk_or_opportunity"),
+                _RISK_OR_OPPORTUNITY,
+                "neutral",
+            ),
+            "confidence": 0.65 if has_peer_profile_link else 0.55,
+            "reason": reason,
+        },
+        "implication": {
+            "is_valid_implication": True,
+            "implication_scope": "peer_and_skax",
+            "peer_implication": {
+                "company_id": peer["company_id"],
+                "company_name_ko": peer["company_name_ko"],
+                "peer_meaning": peer_meaning,
+                "capability_change": capability_change,
+                "sourced_evidence_ids": fact_ids,
+            },
+            "skax_implication": skax,
+            "follow_up_questions": [],
+            "watch_points": _fallback_watch_points(integrated_issue),
+            "confidence": 0.62 if skax_linkage_level in {"high", "medium"} else 0.52,
+            "evidence_label": "moderate" if has_peer_profile_link else "insufficient",
+            "provenance": {
+                "generator": "StrategicInsightAgent",
+                "prompt_version": _PROMPT_VERSION,
+                "model": model,
+                "used_fact_ids": fact_ids,
+                "used_context_layers": [
+                    "integrated_issue_fact_fallback",
+                    "profile_linkage_fallback",
+                    "action_plan_fallback",
+                ],
+                "run_at": datetime.now(UTC).isoformat(),
+            },
+        },
+    }
+    return result
+
+
+def _fallback_profile_linkage_payload(
+    profile_linkage_evaluation: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+) -> dict[str, Any]:
+    company_id = (_companies_from_integrated_issue(integrated_issue) or [""])[0]
+    linkage = _profile_linkage_for_company(
+        profile_linkage_evaluation,
+        company_id=company_id,
+        scope="peer",
+    )
+    matched_areas = _fallback_matched_profile_areas(linkage)
+    linkage_level = _choice(
+        linkage.get("linkage_level"),
+        {"high", "medium", "low", "none"},
+        "none",
+    )
+    implication_mode = str(linkage.get("implication_mode") or "")
+    if implication_mode == "profile_based":
+        interpretation_strength = "profile_based"
+    elif implication_mode == "new_business_signal":
+        interpretation_strength = "event_based"
+    elif linkage_level in {"high", "medium"}:
+        interpretation_strength = "cautious_profile_based"
+    else:
+        interpretation_strength = "observation_only"
+    return _normalize_llm_profile_linkage(
+        {
+            "peer_company": company_id or _main_company_display(integrated_issue),
+            "profile_evidence_available": bool(matched_areas)
+            or linkage_level in {"high", "medium"},
+            "matched_profile_areas": matched_areas,
+            "linkage_level": linkage_level,
+            "business_novelty_status": linkage.get("business_novelty_status"),
+            "allowed_interpretation_strength": interpretation_strength,
+            "reason": str(linkage.get("reason") or "").strip(),
+        }
+    )
+
+
+def _with_fallback_linkage_payloads(
+    result: dict[str, Any],
+    *,
+    profile_linkage_evaluation: dict[str, Any],
+    integrated_issue: dict[str, Any],
+    action_artifact_plan: dict[str, Any],
+) -> dict[str, Any]:
+    out = dict(result or {})
+    normalized_profile_linkage = _normalize_llm_profile_linkage(out.get("profile_linkage"))
+    if not normalized_profile_linkage.get(
+        "profile_evidence_available"
+    ) and not normalized_profile_linkage.get("matched_profile_areas"):
+        normalized_profile_linkage = _fallback_profile_linkage_payload(
+            profile_linkage_evaluation,
+            integrated_issue=integrated_issue,
+        )
+    normalized_skax_linkage = _normalize_skax_response_linkage(out.get("skax_response_linkage"))
+    if not normalized_skax_linkage.get(
+        "skax_profile_evidence_available"
+    ) and not normalized_skax_linkage.get("matched_skax_areas"):
+        normalized_skax_linkage = _fallback_skax_response_linkage_payload(
+            profile_linkage_evaluation,
+            integrated_issue=integrated_issue,
+            action_artifact_plan=action_artifact_plan,
+        )
+    out["profile_linkage"] = normalized_profile_linkage
+    out["skax_response_linkage"] = normalized_skax_linkage
+    if not out.get("claim_strength"):
+        out["claim_strength"] = (
+            "moderate"
+            if (
+                normalized_profile_linkage.get("linkage_level") in {"high", "medium"}
+                or normalized_skax_linkage.get("response_mode") == "profile_based_action"
+            )
+            else "cautious"
+        )
+    grounding_summary = _normalize_grounding_summary(
+        out.get("grounding_summary"),
+        integrated_issue=integrated_issue,
+    )
+    if not grounding_summary.get("used_profile_refs"):
+        grounding_summary["used_profile_refs"] = _fallback_used_profile_refs(
+            profile_linkage_evaluation
+        )
+    out["grounding_summary"] = grounding_summary
     return out
 
 
-def _compact_value(value: Any) -> Any:
-    if isinstance(value, str):
-        return value[:700]
-    if isinstance(value, list):
-        return [_compact_value(item) for item in value[:5]]
-    if isinstance(value, dict):
-        out: dict[str, Any] = {}
-        for key, nested in value.items():
-            compacted = _compact_value(nested)
-            if compacted not in ({}, [], "", None):
-                out[str(key)] = compacted
-            if len(out) >= 10:
-                break
-        return out
-    return value
+def _fallback_skax_response_linkage_payload(
+    profile_linkage_evaluation: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+    action_artifact_plan: dict[str, Any],
+) -> dict[str, Any]:
+    linkage = _profile_linkage_for_company(
+        profile_linkage_evaluation,
+        company_id="sk_ax",
+        scope="skax",
+    )
+    matched_areas = _fallback_matched_skax_areas(linkage)
+    linkage_level = _choice(
+        linkage.get("linkage_level"),
+        {"high", "medium", "low", "none"},
+        "none",
+    )
+    response_mode = str(linkage.get("implication_mode") or "")
+    if response_mode not in {
+        "profile_based_action",
+        "cautious_action",
+        "generic_monitoring_action",
+    }:
+        if linkage_level in {"high", "medium"}:
+            response_mode = "profile_based_action"
+        elif linkage_level == "low":
+            response_mode = "cautious_action"
+        else:
+            response_mode = "generic_monitoring_action"
+    if not matched_areas and response_mode == "profile_based_action":
+        response_mode = "cautious_action"
+    issue_terms = sorted(_action_plan_issue_terms(action_artifact_plan))[:8]
+    focus_terms = issue_terms or [_issue_subject_phrase(integrated_issue)]
+    focus_terms = [term for term in focus_terms if term]
+    return _normalize_skax_response_linkage(
+        {
+            "skax_profile_evidence_available": bool(matched_areas),
+            "matched_skax_areas": matched_areas,
+            "response_mode": response_mode,
+            "response_focus": focus_terms[:5],
+            "internal_checkpoints": _fallback_internal_checkpoints(
+                focus_terms=focus_terms,
+                action_artifact_plan=action_artifact_plan,
+            ),
+            "recommended_focus": _fallback_recommended_focus(
+                focus_terms=focus_terms,
+                linkage=linkage,
+            ),
+            "monitoring_points": _fallback_watch_points(integrated_issue),
+            "reason": str(linkage.get("reason") or "").strip(),
+        }
+    )
 
 
-def _parse_json_loose(text: str) -> Any:
-    text = (text or "").strip()
-    if not text:
-        return {}
-    if text.startswith("```"):
-        parts = text.split("```")
-        if len(parts) >= 2:
-            body = parts[1]
-            if body.startswith("json"):
-                body = body[4:]
-            text = body.strip()
-    if not text.startswith("{"):
-        first = text.find("{")
-        last = text.rfind("}")
-        if first >= 0 and last > first:
-            text = text[first : last + 1]
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+def _fallback_matched_profile_areas(linkage: dict[str, Any]) -> list[dict[str, Any]]:
+    areas = _jsonish_list(linkage.get("matched_business_areas"))
+    capabilities = _string_list(linkage.get("matched_capabilities"), max_items=5)
+    out: list[dict[str, Any]] = []
+    for area in areas[:5]:
+        if not isinstance(area, dict):
+            continue
+        name = str(area.get("name") or area.get("profile_area_name") or "").strip()
+        business_line = str(area.get("business_line") or "").strip()
+        raw_business_area = str(area.get("business_area") or "").strip()
+        raw_specificity = str(area.get("specificity_level") or "").strip()
+        business_area = raw_business_area or (name if raw_specificity == "business_area" else "")
+        matched_capabilities = (
+            _string_list(
+                area.get("matched_capabilities") or area.get("capabilities"),
+                max_items=8,
+            )
+            or capabilities[:3]
+        )
+        matched_products = _string_list(
+            area.get("matched_products_or_services") or area.get("products_or_services"),
+            max_items=8,
+        )
+        profile_capability = ", ".join(matched_capabilities[:3])
+        reason = _fallback_area_reason(area, linkage)
+        source_ref = _fallback_first_source_ref(area, linkage)
+        specificity_level = _choice(
+            area.get("specificity_level"),
+            {
+                "product_or_service",
+                "core_capability",
+                "business_area",
+                "business_line",
+                "profile_context",
+            },
+            (
+                "product_or_service"
+                if matched_products
+                else "core_capability"
+                if matched_capabilities
+                else "business_area"
+                if business_area
+                else "business_line"
+                if business_line
+                else "profile_context"
+            ),
+        )
+        if name or profile_capability or reason or source_ref:
+            out.append(
+                {
+                    "business_line": business_line,
+                    "business_area": business_area,
+                    "profile_area_name": name,
+                    "profile_capability": profile_capability,
+                    "matched_capabilities": matched_capabilities,
+                    "matched_products_or_services": matched_products,
+                    "matched_issue_terms": _string_list(
+                        area.get("matched_issue_terms") or area.get("matched_terms"),
+                        max_items=12,
+                    ),
+                    "evidence_text": str(area.get("evidence_text") or "").strip(),
+                    "why_relevant_to_issue": reason,
+                    "profile_source_ref": source_ref,
+                    "specificity_level": specificity_level,
+                }
+            )
+    if not out:
+        for capability in capabilities[:3]:
+            out.append(
+                {
+                    "business_line": "",
+                    "business_area": "",
+                    "profile_area_name": capability,
+                    "profile_capability": capability,
+                    "matched_capabilities": [capability],
+                    "matched_products_or_services": [],
+                    "matched_issue_terms": _string_list(
+                        linkage.get("matched_terms"),
+                        max_items=12,
+                    ),
+                    "evidence_text": "",
+                    "why_relevant_to_issue": str(linkage.get("reason") or "").strip(),
+                    "profile_source_ref": _fallback_first_source_ref({}, linkage),
+                    "specificity_level": "core_capability",
+                }
+            )
+    return out[:5]
+
+
+def _fallback_matched_skax_areas(linkage: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "business_line": item["business_line"],
+            "business_area": item["business_area"],
+            "profile_area_name": item["profile_area_name"],
+            "matched_capabilities": item["matched_capabilities"],
+            "matched_products_or_services": item["matched_products_or_services"],
+            "matched_issue_terms": item["matched_issue_terms"],
+            "evidence_text": item["evidence_text"],
+            "why_relevant_to_issue": item["why_relevant_to_issue"],
+            "profile_source_ref": item["profile_source_ref"],
+            "specificity_level": item["specificity_level"],
+        }
+        for item in _fallback_matched_profile_areas(linkage)
+    ]
+
+
+def _fallback_area_reason(area: dict[str, Any], linkage: dict[str, Any]) -> str:
+    matched_terms = _string_list(area.get("matched_terms"), max_items=6)
+    if matched_terms:
+        return "현재 이슈의 " + ", ".join(matched_terms[:4]) + " 신호와 연결됩니다."
+    return str(linkage.get("reason") or "").strip()
+
+
+def _fallback_first_source_ref(area: dict[str, Any], linkage: dict[str, Any]) -> str:
+    refs = _jsonish_list(area.get("source_refs")) or _jsonish_list(
+        linkage.get("matched_source_refs")
+    )
+    if not refs:
+        return ""
+    first = refs[0]
+    if isinstance(first, dict):
+        return str(first.get("source_ref") or first.get("id") or first.get("url") or "").strip()
+    return str(first).strip()
+
+
+def _fallback_internal_checkpoints(
+    *,
+    focus_terms: list[str],
+    action_artifact_plan: dict[str, Any],
+) -> list[str]:
+    checkpoint = _checkpoint_hint_from_action_plan(action_artifact_plan)
+    out = []
+    for term in focus_terms[:3]:
+        out.append(f"{term} 관련 {checkpoint}")
+    if not out:
+        out.append(checkpoint)
+    return out
+
+
+def _fallback_recommended_focus(
+    *,
+    focus_terms: list[str],
+    linkage: dict[str, Any],
+) -> list[str]:
+    level = _choice(linkage.get("linkage_level"), {"high", "medium", "low", "none"}, "none")
+    if focus_terms and level in {"high", "medium"}:
+        return [f"{term}와 연결된 직접 수행 범위와 보완 필요 영역" for term in focus_terms[:3]]
+    if focus_terms:
+        return [f"{term} 관련 후속 근거 확인과 보수적 대응 범위 점검" for term in focus_terms[:3]]
+    return ["후속 근거 확인과 대응 범위 점검"]
+
+
+def _fallback_used_profile_refs(profile_linkage_evaluation: dict[str, Any]) -> list[str]:
+    refs: list[str] = []
+    for linkage in [
+        *_jsonish_list(profile_linkage_evaluation.get("peer_linkages")),
+        profile_linkage_evaluation.get("skax_linkage"),
+    ]:
+        if not isinstance(linkage, dict):
+            continue
+        refs.extend(_string_list(linkage.get("matched_source_refs"), max_items=5))
+        for area in _jsonish_list(linkage.get("matched_business_areas")):
+            if isinstance(area, dict):
+                refs.extend(_string_list(area.get("source_refs"), max_items=5))
+    return list(dict.fromkeys(refs))[:12]
+
+
+def _fallback_peer_meaning_without_summary_repeat(
+    current: str,
+    *,
+    integrated_issue: dict[str, Any],
+    profile_context: dict[str, Any],
+    has_peer_profile_link: bool,
+) -> str:
+    subject = _issue_subject_phrase(integrated_issue) or "현재 사건"
+    profile_phrase = _profile_area_phrase(
+        profile_context,
+        integrated_issue=integrated_issue,
+        scope="peer",
+    )
+    if has_peer_profile_link and profile_phrase:
+        return (
+            f"피어 프로필에서는 {profile_phrase}가 "
+            f"{_with_particle(subject, '과', '와')} 연결되는 배경으로 확인됩니다. "
+            "따라서 이 신호는 역할 확장이나 성과를 단정하기보다, 기존 사업 맥락이 "
+            "현재 대형 과제와 만나는 관찰 지점으로 해석하는 것이 안전합니다."
+        )
+    if current and _primary_issue_fact(integrated_issue).rstrip(".") not in current:
+        return current
+    return (
+        f"{subject}은 피어사의 확정된 역할 변화보다 현재 사건의 대상 사업, "
+        "추진 범위, 후속 확인 기준이 구체화된 관찰 신호로 보는 것이 안전합니다."
+    )
+
+
+def _fallback_skax_implication(
+    *,
+    integrated_issue: dict[str, Any],
+    profile_context: dict[str, Any],
+    profile_linkage_level: str,
+    action_artifact_plan: dict[str, Any],
+) -> dict[str, Any]:
+    subject = _issue_subject_phrase(integrated_issue) or _primary_issue_fact(integrated_issue)
+    peer_profile = _profile_area_phrase(
+        profile_context,
+        integrated_issue=integrated_issue,
+        scope="peer",
+    )
+    skax_profile = _profile_area_phrase(
+        profile_context,
+        integrated_issue=integrated_issue,
+        scope="skax",
+    )
+    profile_comparison = _profile_comparison_phrase(
+        peer_profile=peer_profile,
+        skax_profile=skax_profile,
+        linkage_level=profile_linkage_level,
+    )
+    actions = _fallback_internal_actions(
+        subject=subject,
+        profile_comparison=profile_comparison,
+        action_artifact_plan=action_artifact_plan,
+    )
+    return {
+        "why_important": (
+            f"{_with_particle(subject, '은', '는')} 유사 고객군/유사 사업에서 "
+            "피어 신호와 SK AX의 대응 가능 범위를 "
+            "함께 비교해야 하는 사건입니다."
+        ),
+        "potential_impact": (
+            f"유사 사업에서는 {subject}의 구축 범위, 운영 책임, 일정 조건, 검증 기준이 "
+            f"함께 비교될 수 있으므로 SK AX는 {profile_comparison}을 기준으로 내부 "
+            "대응 범위와 보완 항목을 점검해야 합니다."
+        ),
+        "opportunities": [],
+        "threats": [],
+        "recommended_actions": actions,
+        "business_line_mapping": _safe_business_line_mapping(
+            profile_context,
+            integrated_issue=integrated_issue,
+        ),
+    }
+
+
+def _profile_comparison_phrase(
+    *,
+    peer_profile: str,
+    skax_profile: str,
+    linkage_level: str,
+) -> str:
+    if linkage_level in {"high", "medium"} and peer_profile and skax_profile:
+        return f"피어의 {peer_profile} 접점과 SK AX의 {skax_profile} 접점"
+    if skax_profile:
+        return f"SK AX의 {skax_profile} 접점"
+    if peer_profile:
+        return f"피어의 {peer_profile} 접점과 SK AX의 유사 사업 대응 범위"
+    return "현재 사건에서 확인된 대상 사업과 SK AX의 유사 사업 대응 범위"
+
+
+def _fallback_internal_actions(
+    *,
+    subject: str,
+    profile_comparison: str,
+    action_artifact_plan: dict[str, Any],
+) -> list[str]:
+    issue_term = _compact_issue_term(subject)
+    checkpoint_hint = _checkpoint_hint_from_action_plan(action_artifact_plan)
+    return [
+        (
+            f"SK AX는 {_with_particle(issue_term, '과', '와')} 유사한 사업에서 "
+            f"{profile_comparison}을 비교하고, "
+            "직접 수행할 범위와 외부 보완이 필요한 범위를 운영 책임 기준으로 점검해야 합니다."
+        ),
+        (
+            f"SK AX는 {issue_term} 대응 시 "
+            f"{_with_particle(checkpoint_hint, '을', '를')} 내부 확인 기준으로 구조화하고, "
+            "후속 사업자 선정·협약·서비스 개시 신호를 모니터링해야 합니다."
+        ),
+    ]
+
+
+def _compact_issue_term(subject: str) -> str:
+    text = re.sub(r"\s+", " ", str(subject or "").strip(" ."))
+    return text if len(text) <= 80 else f"{text[:77].rstrip()}..."
+
+
+def _checkpoint_hint_from_action_plan(action_artifact_plan: dict[str, Any]) -> str:
+    issue_terms = _action_plan_issue_terms(action_artifact_plan)
+    if any(re.search(r"GPU|컴퓨팅|인프라|센터|서버|클러스터", term, re.I) for term in issue_terms):
+        return "구축 범위, 용량 기준, 장애 대응, 보안·권한 통제"
+    if any(re.search(r"시스템|전환|현대화|단말|플랫폼", term, re.I) for term in issue_terms):
+        return "전환 범위, 업무 영향도, 일정 조건, 장애 대응"
+    return "범위, 책임, 일정 조건, 검증 기준, 리스크"
+
+
+def _fallback_watch_points(integrated_issue: dict[str, Any]) -> list[str]:
+    subject = _issue_subject_phrase(integrated_issue) or "현재 사업"
+    return [
+        f"{subject}의 후속 협약, 구축 완료, 서비스 개시 일정이 구체화되는지 확인합니다.",
+        "피어사의 수행 범위, 운영 책임, 추가 참여 구조가 원문 근거로 확인되는지 모니터링합니다.",
+    ]
+
+
+def _safe_business_line_mapping(
+    profile_context: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+) -> list[str]:
+    issue_tokens = _issue_relevance_tokens(integrated_issue)
+    candidates = _business_line_candidate_details(
+        profile_context,
+        integrated_issue=integrated_issue,
+    )
+    selected = []
+    for item in candidates:
+        name = str(item.get("name") or "").strip()
+        if name and (_content_tokens(name) & issue_tokens):
+            selected.append(name)
+    return selected[:2]
 
 
 def _known_fact_ids(integrated_issue: dict[str, Any]) -> set[str]:
@@ -8286,29 +6621,6 @@ def _first_peer_name(profile: dict[str, Any]) -> str:
     return ""
 
 
-def _string_list(value: Any, *, max_items: int) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        text = value.strip()
-        return [text] if text else []
-    if isinstance(value, list | tuple | set):
-        out: list[str] = []
-        for item in value:
-            text = str(item).strip()
-            if text:
-                out.append(text)
-            if len(out) >= max_items:
-                break
-        return out
-    return []
-
-
-def _choice(value: Any, allowed: set[str], default: str) -> str:
-    candidate = str(value or "").strip().lower()
-    return candidate if candidate in allowed else default
-
-
 def _evidence_label(value: Any, confidence: float) -> str:
     raw = str(value or "").strip().lower()
     if raw in _EVIDENCE_LABELS:
@@ -8335,13 +6647,6 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
-
-
-def _json_dumps(value: Any) -> str:
-    try:
-        return json.dumps(value, ensure_ascii=False, indent=2, default=str)
-    except (TypeError, ValueError):
-        return json.dumps(str(value), ensure_ascii=False)
 
 
 __all__ = ["StrategicInsightAgent"]
