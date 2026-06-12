@@ -1520,6 +1520,7 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
                 source_raw_article_ids=params["source_raw_article_ids"],
                 relation_source="source_raw_article_ids",
             )
+            sync_card_sources_for_cluster(card.get("cluster_id"))
         return card_id
     except Exception as e:
         log.error("카드 뉴스 저장 실패 | id=%s error=%s", card.get("id"), e)
@@ -1696,6 +1697,105 @@ def _is_missing_card_news_articles_table(exc: Exception) -> bool:
     return "card_news_articles" in text_repr and (
         "undefinedtable" in text_repr or "does not exist" in text_repr
     )
+
+
+def sync_card_sources_for_cluster(cluster_id: Any) -> int:
+    """Sync ACTIVE card provenance from all relevant processed raw articles in a cluster."""
+    try:
+        normalized_cluster_id = int(cluster_id)
+    except (TypeError, ValueError):
+        return 0
+    try:
+        with SessionLocal() as db:
+            result = db.execute(
+                text(
+                    """
+                    WITH ranked_articles AS (
+                        SELECT
+                            ra.cluster_id,
+                            ra.id,
+                            ra.title,
+                            ra.url,
+                            ra.source_name,
+                            ra.publisher,
+                            ra.published_at,
+                            ra.collected_at,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY ra.cluster_id
+                                ORDER BY
+                                    ra.published_at DESC NULLS LAST,
+                                    ra.collected_at DESC NULLS LAST,
+                                    ra.id DESC
+                            ) AS rn
+                        FROM raw_articles ra
+                        WHERE ra.cluster_id = :cluster_id
+                          AND ra.source_type = 'news'
+                          AND ra.processing_status = 'PROCESSED'
+                          AND ra.relevance_label = 'relevant'
+                    ),
+                    cluster_sources AS (
+                        SELECT
+                            cluster_id,
+                            ARRAY_AGG(
+                                id
+                                ORDER BY
+                                    published_at DESC NULLS LAST,
+                                    collected_at DESC NULLS LAST,
+                                    id DESC
+                            ) AS raw_ids,
+                            JSONB_AGG(
+                                JSONB_BUILD_OBJECT(
+                                    'index', rn,
+                                    'raw_article_id', id,
+                                    'title', COALESCE(title, ''),
+                                    'source_name', COALESCE(source_name, publisher, ''),
+                                    'url', COALESCE(url, ''),
+                                    'published_at', published_at,
+                                    'collected_at', collected_at
+                                )
+                                ORDER BY
+                                    published_at DESC NULLS LAST,
+                                    collected_at DESC NULLS LAST,
+                                    id DESC
+                            ) AS sources,
+                            JSONB_AGG(
+                                JSONB_BUILD_OBJECT(
+                                    'id', id,
+                                    'title', COALESCE(title, ''),
+                                    'url', COALESCE(url, ''),
+                                    'source_name', COALESCE(source_name, ''),
+                                    'publisher', COALESCE(publisher, ''),
+                                    'published_at', published_at,
+                                    'collected_at', collected_at
+                                )
+                                ORDER BY
+                                    published_at DESC NULLS LAST,
+                                    collected_at DESC NULLS LAST,
+                                    id DESC
+                            ) AS source_articles
+                        FROM ranked_articles
+                        GROUP BY cluster_id
+                    )
+                    UPDATE card_news cn
+                    SET source_raw_article_ids = cs.raw_ids,
+                        sources = cs.sources,
+                        source_articles = cs.source_articles
+                    FROM cluster_sources cs
+                    WHERE cn.status = 'ACTIVE'
+                      AND cn.cluster_id = cs.cluster_id
+                    """
+                ),
+                {"cluster_id": normalized_cluster_id},
+            )
+            db.commit()
+            return int(getattr(result, "rowcount", 0) or 0)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "card_news cluster source sync 실패 | cluster_id=%s error=%s",
+            cluster_id,
+            exc,
+        )
+        return 0
 
 
 def _source_ids_from_sources(value: Any) -> list[int]:

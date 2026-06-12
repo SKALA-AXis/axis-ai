@@ -3,6 +3,13 @@ name: CI
 on:
   push:
     branches: [main, develop, 'feat/**', 'fix/**']
+    # 문서만 바뀐 push 는 CI 를 skip → build-and-push(workflow_run) 도 미발동
+    # = 불필요한 이미지 재빌드·재배포 방지. 문서+코드 혼합 push 는 정상 실행.
+    # pull_request 에는 미적용 (required check 가 pending 으로 머지 막는 것 방지).
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'design/**'
   pull_request:
     branches: [main, develop]
   workflow_dispatch:
@@ -48,11 +55,59 @@ jobs:
       - name: Lint
         run: uv run ruff check src/
 
+      - name: Import boundaries (import-linter)
+        # 모듈 경계 가드 — agents→api 순환의 신규 유입 차단 (pyproject [tool.importlinter])
+        run: uv run lint-imports
+
+      - name: Cache mypy
+        # mypy 콜드런이 잡 시간의 큰 몫 — 의존성 lock 단위로 캐시
+        uses: actions/cache@v4
+        with:
+          path: .mypy_cache
+          key: mypy-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
       - name: Type check
         run: uv run mypy src/
 
       - name: Test
         run: uv run pytest tests/ -v
+
+  # 메인 이미지의 의존성 설치 레이어(builder)는 develop 머지 후 build-and-push 에서만
+  # 빌드돼 PR 단계 검증이 없었음 — 2026-06-11 torch CPU 인덱스 사고가 머지 후에야 발견됨.
+  # 빌드 영향 파일(Dockerfile/pyproject/uv.lock) 변경 PR 에서만 builder 스테이지를 빌드.
+  docker-main-deps-smoke:
+    name: Docker build smoke (main image deps)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect build-affecting changes
+        id: chg
+        run: |
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
+              | grep -qE '^(Dockerfile|pyproject\.toml|uv\.lock)$'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.chg.outputs.changed == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build main image builder stage
+        if: steps.chg.outputs.changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: builder
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=main-builder
+          cache-to: type=gha,scope=main-builder,mode=max
 
   docker-smoke:
     name: Docker build smoke (cron image)
@@ -72,6 +127,10 @@ jobs:
           tags: axis-ai-cron:ci-smoke
           platforms: linux/amd64
           push: false
+          # GHA 레이어 캐시 — 의존성 미변경 PR 의 smoke 빌드를 분→초 단위로.
+          # (registry buildcache 와 달리 Harbor 인증 불필요)
+          cache-from: type=gha,scope=cron-smoke
+          cache-to: type=gha,scope=cron-smoke,mode=max
 
       - name: Verify cron imports
         run: |

@@ -76,7 +76,7 @@ USER_PROMPT_TEMPLATE = """\
     "potential_impact": "SK AX 사업에 미칠 영향 1-2 문장",
     "opportunities": ["기회 1", "기회 2"],
     "threats": ["위협 1"],
-    "recommended_actions": ["..PoC 제안서 작성 추진", "..MSP 입찰 자격 검토"],
+    "recommended_actions": ["..적용 범위와 운영 책임 기준 점검", "..MSP 입찰 자격 검토"],
     "business_line_mapping": ["에이전틱AI", "MSP"]
   }},
   "follow_up_questions": ["...", "...", "..."],

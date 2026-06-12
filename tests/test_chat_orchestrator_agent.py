@@ -534,7 +534,9 @@ async def test_context_pdf_request_uses_history_when_retrieval_is_empty() -> Non
                 },
                 {
                     "role": "assistant",
-                    "content": "SK AX 관점에서는 운영 안정성과 보안 레퍼런스 메시지를 강화해야 합니다.",
+                    "content": (
+                        "SK AX 관점에서는 운영 안정성과 보안 레퍼런스 메시지를 강화해야 합니다."
+                    ),
                 },
             ],
         )

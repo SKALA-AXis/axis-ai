@@ -28,9 +28,7 @@ def test_analysis_unit_prefers_integrated_issue_and_detailed_package():
                         "source_article_ids": [10],
                     },
                     "analysis": {"analysis_summary": "전략 분석"},
-                    "implication": {
-                        "skax_implication": {"recommended_actions": ["대응방향"]}
-                    },
+                    "implication": {"skax_implication": {"recommended_actions": ["대응방향"]}},
                     "classification": {"sector": "ax"},
                     "validation": {"sc_score": 0.8},
                 },

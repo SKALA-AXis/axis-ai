@@ -14,9 +14,7 @@ class _FakeQdrantClient:
         self.points.extend(points)
 
     def get_collections(self) -> SimpleNamespace:
-        return SimpleNamespace(
-            collections=[SimpleNamespace(name=indexer.COLLECTION_DOCUMENTS)]
-        )
+        return SimpleNamespace(collections=[SimpleNamespace(name=indexer.COLLECTION_DOCUMENTS)])
 
 
 def test_index_can_exclude_card_news_analysis(monkeypatch):
@@ -86,8 +84,7 @@ def test_delete_assistant_knowledge_targets_selected_source_type(monkeypatch):
     assert calls[0]["collection_name"] == indexer.COLLECTION_DOCUMENTS
     query_filter = calls[0]["query_filter"].model_dump(mode="json")
     assert {
-        condition["key"]: condition["match"]["value"]
-        for condition in query_filter["must"]
+        condition["key"]: condition["match"]["value"] for condition in query_filter["must"]
     } == {
         "knowledge_version": indexer.ASSISTANT_KNOWLEDGE_VERSION,
         "source_type": "card_news_analysis",

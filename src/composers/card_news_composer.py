@@ -20,7 +20,7 @@ from src.analysis.models import AnalysisPackage
 from src.config.companies import company_name_ko
 from src.config.global_companies import global_company_name_ko
 from src.config.sectors import SECTOR_KEYWORDS, match_sectors
-from src.db.article_store import _generate_card_id, get_articles_by_ids
+from src.db.article_store import get_articles_by_ids
 
 log = logging.getLogger(__name__)
 
@@ -193,6 +193,8 @@ class CardNewsComposer:
         summary_lines = _plain_summary_lines(summary, use_llm=True)
         card_text = _card_text(title, summary_lines, summary, articles)
         event_type = _infer_event_type(summary, classification, card_text)
+        title = _business_context_title(title, summary=summary, event_type=event_type)
+        card_text = _card_text(title, summary_lines, summary, articles)
         sectors = _infer_sectors(classification, card_text)
         sector = sectors[0] if sectors else "other"
         exposure_score = _normalized_importance_score(
@@ -221,7 +223,7 @@ class CardNewsComposer:
         )
 
         db_record = _db_record(
-            card_id=_card_news_id(cluster_id, created_at),
+            card_id=_card_news_id(cluster_id, published_date),
             company=peer_id,
             cluster_id=cluster_id,
             title=title,
@@ -444,6 +446,8 @@ class CardNewsComposer:
 
         articles_text = _format_articles(articles)
         prompt = _ISSUE_CARD_PROMPT.replace("{articles_text}", articles_text)
+        created_at = _now_iso()
+        published_date = _published_date(articles, created_at)
 
         try:
             from src.observability import tracing_config
@@ -463,10 +467,11 @@ class CardNewsComposer:
             card_data = _parse_json(content)
 
             card = {
-                "id": _generate_card_id(company),
+                "id": _card_news_id(cluster_id, published_date),
                 "company": company,
                 "cluster_id": cluster_id,
                 "representative_id": representative_id,
+                "published_date": published_date,
                 "title": card_data.get("title", articles[0]["title"][:100]),
                 "summary_lines": card_data.get("summary_lines", []),
                 "event_type": card_data.get(
@@ -543,12 +548,20 @@ def _card_from_summary(
         classification.get("title"),
         articles[0].get("title"),
     )
+    title = _business_context_title(
+        title,
+        summary=summary,
+        event_type=str(classification.get("event_type") or summary.get("cluster_event_type") or ""),
+    )
+    created_at = _now_iso()
+    published_date = _published_date(articles, created_at)
 
     card = {
-        "id": _generate_card_id(effective_company),
+        "id": _card_news_id(cluster_id, published_date),
         "company": effective_company,
         "cluster_id": cluster_id,
         "representative_id": representative_id,
+        "published_date": published_date,
         "title": title[:100],
         "summary_lines": summary_lines,
         "event_type": classification.get("event_type", "tech"),
@@ -595,6 +608,7 @@ def _attach_card_news_schema_fields(card: dict[str, Any]) -> None:
         "id": card.get("id"),
         "company": card.get("company"),
         "cluster_id": card.get("cluster_id"),
+        "published_date": card.get("published_date"),
         "title": card.get("title"),
         "summary_lines": card.get("summary_lines", []),
         "event_type": card.get("event_type", "tech"),
@@ -636,6 +650,55 @@ def _first_non_empty(*values: Any) -> str:
         if text:
             return text
     return "피어사 주요 뉴스"
+
+
+def _business_context_title(title: str, *, summary: dict[str, Any], event_type: str) -> str:
+    value = _clean_card_editorial_text(title)
+    if not _is_financial_only_title(value):
+        return value
+    if str(event_type or summary.get("cluster_event_type") or "").casefold() not in {
+        "earnings",
+        "analyst_report",
+        "stock_market",
+    }:
+        return value
+    focus = _business_focus_from_summary(summary)
+    peer_name = company_name_ko(str(summary.get("main_company") or "")) or _first_non_empty(
+        summary.get("main_company"),
+        "",
+    )
+    if focus:
+        if "전망" in value or "목표" in value:
+            return f"{peer_name}, {focus} 성장 전망"
+        return f"{peer_name}, {focus} 중심 실적 변화"
+    return value
+
+
+def _is_financial_only_title(title: str) -> bool:
+    text = str(title or "")
+    if not re.search(r"매출|영업이익|순이익|실적|목표가|목표주가|주가", text):
+        return False
+    return not re.search(
+        r"클라우드|AI|에이전트|데이터센터|IT서비스|IT 서비스|SI|ITO|"
+        r"물류|플랫폼|솔루션|ERP|MSP|CSP|AX|SDV|모빌리티|보안|센터|"
+        r"사업|서비스|수주|계약|전환|구축",
+        text,
+        re.I,
+    )
+
+
+def _business_focus_from_summary(summary: dict[str, Any]) -> str:
+    facts = _summary_fact_text(summary)
+    focus_rules = (
+        (r"클라우드|MSP|CSP|데이터센터", "클라우드·AI 인프라"),
+        (r"AI\s*에이전트|생성형\s*AI|챗GPT|브리티|AX", "AI·AX 사업"),
+        (r"IT\s*서비스|IT서비스|SI|ITO|시스템통합|아웃소싱", "IT서비스 사업"),
+        (r"SDV|차량\s*SW|차량SW|모빌리티|내비게이션", "모빌리티 SW 사업"),
+        (r"물류|첼로|Cello", "디지털 물류 사업"),
+        (r"ERP|SCM|전환|구축|운영", "엔터프라이즈 IT 사업"),
+    )
+    matches = [label for pattern, label in focus_rules if re.search(pattern, facts, re.I)]
+    return "·".join(dict.fromkeys(matches[:2]))
 
 
 def _format_articles(articles: list[dict[str, Any]]) -> str:
@@ -685,8 +748,8 @@ def _load_source_articles(summary: dict[str, Any]) -> list[dict[str, Any]]:
     return get_articles_by_ids(article_ids) if article_ids else []
 
 
-def _card_news_id(cluster_id: int | None, created_at: str) -> str:
-    date_key = created_at[:10].replace("-", "")
+def _card_news_id(cluster_id: int | None, published_date: str) -> str:
+    date_key = published_date[:10].replace("-", "")
     suffix = f"{cluster_id:04d}" if cluster_id is not None else "0000"
     return f"CN-{date_key}-{suffix}"
 
@@ -2686,8 +2749,6 @@ def _clean_display_section_text(value: Any, *, section_type: str) -> str:
         r"SK\s*AX\s*프로필": "SK AX 사업 정보",
         r"관찰\s*지점": "후속 확인이 필요한 신호",
         r"해석하는\s*것이\s*안전합니다": "단정하기보다 후속 확인이 필요합니다",
-        r"제안서": "구조화 자료",
-        r"PoC": "사전 검증",
         r"고객에게\s*제시": "확인 가능하게 정리",
         r"linkage_level|business_novelty_status|profile_based|event_based": "",
     }
@@ -2771,9 +2832,10 @@ def _editorial_candidate_has_minimum_grounding(
         if not re.search(r"SK\s*AX|자사", value):
             return False
         skax_tokens = _grounding_tokens(_linkage_text(strategic_root.get("skax_response_linkage")))
-        if not issue_overlap and not _has_token_overlap(value, skax_tokens):
+        skax_overlap = bool(skax_tokens and _has_token_overlap(value, skax_tokens))
+        if not issue_overlap and not skax_overlap:
             return False
-        if skax_tokens and _has_token_overlap(value, skax_tokens):
+        if skax_overlap:
             return True
         return bool(re.search(r"현재\s*입력|보완|모니터링|내부|점검|구분", value))
     return True
@@ -2850,6 +2912,8 @@ def _first_text(*values: Any) -> str:
         if value is None:
             continue
         text = str(value).strip()
+        if _is_untranslated_english_text(text):
+            continue
         if text:
             return text
     return ""
@@ -2860,6 +2924,8 @@ def _bounded_detail_lines(*values: Any) -> list[str]:
     seen: set[str] = set()
     for value in values:
         for text in _detail_line_candidates(value):
+            if _is_untranslated_english_text(text):
+                continue
             key = _detail_line_key(text)
             if text and key and key not in seen and not _is_near_duplicate_detail(text, lines):
                 lines.append(text)
@@ -2875,6 +2941,8 @@ def _bounded_detail_items(*values: Any) -> list[str]:
     for value in values:
         for text in _list_string(value):
             line = re.sub(r"\s+", " ", text).strip()
+            if _is_untranslated_english_text(line):
+                continue
             key = _detail_line_key(line)
             if line and key and key not in seen and not _is_near_duplicate_detail(line, lines):
                 lines.append(line)
@@ -2888,6 +2956,18 @@ def _detail_line_key(text: str) -> str:
     key = re.sub(r"[\s.。!?！？,，]+", "", str(text or "")).strip()
     key = re.sub(r"(합니다|해야합니다|있습니다|됩니다|입니다)$", "", key)
     return key
+
+
+def _is_untranslated_english_text(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    hangul_count = len(re.findall(r"[가-힣]", value))
+    english_words = re.findall(r"[A-Za-z]{3,}", value)
+    if hangul_count == 0 and len(english_words) >= 5:
+        return True
+    alpha_count = len(re.findall(r"[A-Za-z]", value))
+    return len(value) >= 60 and alpha_count > max(12, hangul_count * 3)
 
 
 def _is_near_duplicate_detail(text: str, existing_lines: list[str]) -> bool:
@@ -2992,24 +3072,57 @@ def _rich_sources(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _media_assets(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    assets: list[dict[str, Any]] = []
+    candidates: list[tuple[float, int, dict[str, Any]]] = []
     seen: set[str] = set()
-    for article in articles:
+    for article_index, article in enumerate(articles):
         article_id = _optional_int(article.get("id"))
         title = str(article.get("title") or "").strip()
-        for url in _article_image_urls(article):
+        for image_index, url in enumerate(_article_image_urls(article)):
             if url in seen:
                 continue
             seen.add(url)
-            assets.append(
-                {
-                    "id": f"img-{article_id or len(assets) + 1}-{len(assets) + 1}",
-                    "type": "image",
-                    "url": url,
-                    "alt": title or "뉴스 본문 이미지",
-                }
-            )
-    return assets
+            asset = {
+                "id": f"img-{article_id or len(candidates) + 1}-{len(candidates) + 1}",
+                "type": "image",
+                "url": url,
+                "alt": title or "뉴스 본문 이미지",
+            }
+            score = _image_asset_score(url=url, article=article, image_index=image_index)
+            candidates.append((score, -article_index, asset))
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [asset for _, _, asset in candidates]
+
+
+def _image_asset_score(*, url: str, article: dict[str, Any], image_index: int) -> float:
+    text = " ".join(
+        [
+            str(article.get("title") or ""),
+            str(article.get("content") or "")[:300],
+            url,
+        ]
+    )
+    compact = text.casefold()
+    score = 10.0 - image_index * 0.25
+    if image_index == 0:
+        score += 1.0
+    if re.search(r"현장|행사|간담회|협약|mou|체결|센터|데이터센터|공장|회의|대표|부장", text, re.I):
+        score += 3.0
+    if re.search(r"ai|ax|클라우드|데이터센터|보안|솔루션|플랫폼|로봇|공장", text, re.I):
+        score += 1.5
+    if re.search(r"주가|차트|목표가|목표주가|거래량|실적표|종목|증권", text):
+        score -= 4.0
+    if re.search(r"1x1|spacer|blank|placeholder|transparent|pixel", compact):
+        score -= 8.0
+    if re.search(r"cdn-cgi/image/fit=cover/?$", compact):
+        score -= 6.0
+    if re.search(r"[?&](?:w|width)=8[0-9]\\b|[?&](?:h|height)=5[0-9]\\b", compact):
+        score -= 2.0
+    return score
+
+
+def _media_assets_for_cluster(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Compatibility shim for older callers/tests that name cluster-level media."""
+    return _media_assets(articles)
 
 
 def _article_image_urls(article: dict[str, Any]) -> list[str]:

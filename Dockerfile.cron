@@ -17,8 +17,10 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /usr/local/bin/
 COPY pyproject.toml uv.lock ./
 
 ENV UV_LINK_MODE=copy
-# cron group 만 export (--frozen 시 lock 전체가 섞여 torch 등 full deps 유입됨).
-RUN uv export --no-emit-project --no-hashes --group cron \
+# --only-group: 기존 --group 은 "프로젝트 deps + cron group" 이라 torch/playwright 등
+# full deps 가 유입돼 cron 이미지가 ~3.3GB 였음 (Harbor artifact 실측, 2026-06-11).
+# cron group 단독 export 로 의도했던 경량 이미지로 복원.
+RUN uv export --no-emit-project --no-hashes --only-group cron \
         --format requirements-txt -o /tmp/requirements.txt \
     && uv pip install --system --no-cache -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt

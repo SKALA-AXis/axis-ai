@@ -199,6 +199,13 @@ async def lifespan(app: FastAPI):
         preload_embedder()
     except Exception as e:
         log.warning("startup preload skipped: %s", e)
+    # langchain 경로 선로딩 — 에이전트들은 ChatOpenAI 를 지연 임포트하는데(transformers
+    # 체인 회피), 상주 서버에서는 첫 LLM 요청이 import 비용까지 떠안아 이벤트 루프를
+    # 막고 readiness 플랩을 유발했음 (2026-06-11 배포 순단 실측). startup 에서 1회 선로딩.
+    try:
+        import langchain_openai  # noqa: F401
+    except Exception as e:
+        log.warning("startup langchain preload skipped: %s", e)
     yield
     log.info("AXIS AI 서버 종료")
 

@@ -189,6 +189,8 @@ def test_card_news_from_analysis_package_adds_grounded_display_sections(monkeypa
     card = CardNewsComposer().generate_from_analysis_package(package)
     sections = {section["type"]: section for section in card["display_sections"]}
 
+    assert card["id"] == "CN-20260610-0001"
+    assert card["published_date"] == "2026-06-10"
     assert list(sections) == ["summary", "insight", "action"]
     assert len(sections["summary"]["items"]) == 3
     insight_text = " ".join(sections["insight"]["items"])
@@ -211,3 +213,192 @@ def test_card_news_from_analysis_package_adds_grounded_display_sections(monkeypa
     assert card["analysis_package"]["profile_linkage"] == package["profile_linkage"]
     assert card["analysis_package"]["skax_response_linkage"] == package["skax_response_linkage"]
     assert card["analysis_package"]["grounding_summary"] == package["grounding_summary"]
+
+
+def test_card_news_action_section_filters_actions_without_issue_grounding() -> None:
+    package = {
+        "integrated_issue": {
+            "cluster_id": 2,
+            "main_company": "samsung_sds",
+            "cluster_event_type": "partnership",
+            "headline": "삼성SDS, 클라우드 보안 협력 강화",
+            "main_event": "삼성SDS가 클라우드 보안 협력을 강화했다.",
+            "fact_summary": [
+                "삼성SDS가 클라우드 보안 협력을 강화했다.",
+                "파트너 기술을 활용해 기업 고객의 보안 모니터링을 확대한다.",
+                "클라우드 환경의 취약점 점검과 후속 조치 체계를 보강한다.",
+            ],
+            "fact_basis": [
+                {
+                    "summary_line_index": 1,
+                    "fact_ids": ["fact:1"],
+                    "source_article_ids": [10],
+                }
+            ],
+            "representative_sources": [{"published_at": "2026-06-10T00:00:00+09:00"}],
+        },
+        "implication": {
+            "frontend": {
+                "suggested_actions": [
+                    "제안서에는 모델 기능 비교와 별도로 전사 적용 범위표를 둡니다.",
+                    "PoC 검증표는 답변 품질 중심이 아니라 업무 단위별 검증으로 바꿉니다.",
+                    (
+                        "SK AX는 클라우드 보안 협력 확대와 유사한 사업에서 "
+                        "운영 책임과 보안 모니터링 범위를 비교 점검해야 합니다."
+                    ),
+                ],
+            },
+            "skax_implication": {
+                "recommended_actions": [
+                    "제안서에는 모델 기능 비교와 별도로 전사 적용 범위표를 둡니다.",
+                    "PoC 검증표는 답변 품질 중심이 아니라 업무 단위별 검증으로 바꿉니다.",
+                    (
+                        "SK AX는 클라우드 보안 협력 확대와 유사한 사업에서 "
+                        "운영 책임과 보안 모니터링 범위를 비교 점검해야 합니다."
+                    ),
+                ],
+            },
+            "peer_implication": {
+                "peer_meaning": (
+                    "클라우드 보안 협력 확대는 기업 고객 보안 운영 범위가 넓어지는 신호입니다."
+                )
+            },
+        },
+        "sentence_grounding": {
+            "entries": [
+                {
+                    "path": "skax_implication.recommended_actions[0]",
+                    "grounding_type": "fact",
+                    "needs_review": False,
+                },
+                {
+                    "path": "skax_implication.recommended_actions[1]",
+                    "grounding_type": "fact",
+                    "needs_review": False,
+                },
+                {
+                    "path": "skax_implication.recommended_actions[2]",
+                    "grounding_type": "fact",
+                    "needs_review": False,
+                },
+            ]
+        },
+        "validation": {"classification": {"event_type": "partnership", "sector": "ax"}},
+    }
+
+    card = CardNewsComposer().generate_from_analysis_package(package)
+    sections = {section["type"]: section for section in card["display_sections"]}
+    action_text = " ".join(sections["action"]["items"])
+
+    assert "제안서" not in action_text
+    assert "PoC" not in action_text
+    assert "검증표" not in action_text
+    assert "SK AX" in action_text
+    assert "운영 책임" in action_text
+
+
+def test_card_news_from_cluster_summary_uses_source_published_date(monkeypatch):
+    import src.composers.card_news_composer as composer_module
+
+    monkeypatch.setattr(
+        composer_module,
+        "get_articles_by_ids",
+        lambda article_ids: [
+            {
+                "id": 25771,
+                "title": "포스코DX, AI와 사람의 협업 시대를 선도",
+                "content": "포스코DX가 AI 협업 기술을 소개했다.",
+                "source_name": "naver_news",
+                "url": "https://example.com/25771",
+                "published_at": "2026-03-04T09:00:00+09:00",
+            }
+        ],
+    )
+
+    card = CardNewsComposer().generate_from_cluster(
+        cluster_id=25771,
+        representative_id=25771,
+        company="posco_dx",
+        classification={"event_type": "tech_release", "sector": "ax"},
+        summary={
+            "is_valid_summary": True,
+            "main_company": "posco_dx",
+            "headline": "포스코DX, AI와 사람의 협업 시대를 선도",
+            "fact_summary": ["포스코DX가 AI 협업 기술을 소개했다."],
+        },
+    )
+
+    assert card["id"] == "CN-20260304-25771"
+    assert card["published_date"] == "2026-03-04"
+
+
+def test_financial_only_card_title_adds_business_context():
+    card = CardNewsComposer().generate(
+        summary={
+            "cluster_id": 36061,
+            "main_company": "samsung_sds",
+            "cluster_event_type": "earnings",
+            "headline": "삼성SDS, 지난해 매출과 영업이익 증가",
+            "fact_summary": [
+                "삼성SDS는 지난해 매출 13조9299억원과 영업이익 9571억원을 기록했다.",
+                "클라우드&AI 부문 매출은 3조5872억원으로 전년 대비 7% 증가했다.",
+                "AI 솔루션 영역에서 생성형 AI 서비스 확산을 추진한다.",
+            ],
+            "source_article_ids": [36061],
+            "is_valid_summary": True,
+        },
+        classification={"event_type": "earnings", "sector": "infra"},
+        articles=[
+            {
+                "id": 36061,
+                "title": "삼성SDS, 지난해 영업익 9571억",
+                "published_at": "2026-01-22T00:00:00+09:00",
+                "source_name": "news",
+                "url": "https://example.com/36061",
+            }
+        ],
+    )
+
+    assert card["title"] == "삼성SDS, 클라우드·AI 인프라·AI·AX 사업 중심 실적 변화"
+    assert card["display"]["background_asset_url"] == "/png.png"
+
+
+def test_card_cover_uses_best_cluster_image_not_first_placeholder():
+    card = CardNewsComposer().generate(
+        summary={
+            "cluster_id": 36301,
+            "main_company": "samsung_sds",
+            "headline": "삼성SDS, 구미에 AI 데이터센터 건립",
+            "fact_summary": [
+                "삼성SDS가 구미에 AI 데이터센터를 건립하기로 했다.",
+                "구미 AI 데이터센터 건립을 위한 양해각서를 체결했다.",
+                "AI 인프라 경쟁력을 강화할 계획이다.",
+            ],
+            "source_article_ids": [1, 2],
+            "is_valid_summary": True,
+        },
+        classification={"event_type": "investment", "sector": "infra"},
+        articles=[
+            {
+                "id": 1,
+                "title": "삼성SDS, 신규 구미 AI 데이터센터 건립에 4273억원 투자",
+                "published_at": "2026-01-02T00:00:00+09:00",
+                "source_name": "news",
+                "url": "https://example.com/a",
+                "metadata": {"image_urls": ["https://static.sedaily.com/img/1X1.png"]},
+            },
+            {
+                "id": 2,
+                "title": "삼성SDS, 경상북도와 AI 데이터센터 건립 MOU 체결",
+                "content": "삼성SDS와 경상북도, 구미시 관계자가 협약식 현장에서 기념 촬영했다.",
+                "published_at": "2026-01-08T00:00:00+09:00",
+                "source_name": "news",
+                "url": "https://example.com/b",
+                "metadata": {
+                    "image_urls": ["https://cdn.example.com/news/photo/20260108/datacenter-mou.jpg"]
+                },
+            },
+        ],
+    )
+
+    assert card["display"]["background_asset_url"].endswith("datacenter-mou.jpg")
