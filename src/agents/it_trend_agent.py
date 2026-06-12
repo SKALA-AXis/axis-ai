@@ -1028,6 +1028,7 @@ def _build_persistence_rows(
                     "peer_alignment": peers,
                     "impact_matrix": [c for c in impact_matrix if c["trend_theme"] == keyword],
                     "forecasts": forecasts,
+                    "final_one_liner": final_one_liner,
                     "leading_companies": det.get("leading_companies", []),
                     "evidence_source_links": evidence_source_links,
                     "intensity": det.get("intensity"),
