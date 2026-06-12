@@ -184,30 +184,6 @@ kubectl logs -f job/axis-ingest-now-XXXX -n skala3-finalproj-class3-team13
 
 ---
 
-## TL;DR — 이 브랜치(`feat/crawler-v4`)에서 바뀐 것
-
-| 분류 | 변경 | 영향 |
-|---|---|---|
-| **모니터링 Peer 4사 확장** | `samsung_sds`, `lg_cns` → `+ hyundai_autoever`, `+ posco_dx` | 모든 크롤러·재무 모듈 4 peer 지원 |
-| **BigKinds 완전 제거** | `sources/bigkinds.py` 삭제, `BIGKINDS_API_KEY` env 제거 | Track A에서 빠짐 |
-| **버그 수정** | `naver_research.py`의 LG CNS itemCode `034730`(=SK Inc.) → `064400` | 그동안 LG CNS 리서치 페이지가 아니라 SK 지주 리서치를 긁고 있었음 |
-| **현대오토에버·포스코DX 뉴스룸 추가** | `OfficialNewsroomCrawler`에 generic Playwright 방식 추가 | best-effort 셀렉터, W7에서 검증 보강 예정 |
-| **v3 파이프라인 전환** | 5-node ingestion graph: crawl → credibility → dedup → classify → issue_card → evidence | ImplicationAgent / ValidationAgent / WeakSignalAgent → `_deprecated/`로 이관 |
-| **EvidenceAgent 신설** | 검증 첨부 4종(source_links/provenance/financial_refs/mbb_refs) 자동 부착 | 환각 방지 1차 방어선이 SC → Evidence Chain으로 이동 |
-| **FinancialLinkerAgent 신설** | 카드 ↔ 재무 segment QoQ/YoY 매칭 + vs SK AX 결정적 비교 4지표 | DART OpenAPI 실수치 기반 |
-| **classification_agent v3** | 트렌드 섹터(5종) + **결정적 노출도** 산식 (LLM 5축 점수 폐기) | 추적·재현 가능한 점수 |
-| **`data/peer_financials/` 신설** | 4개 peer + sk_ax JSON, DART OpenAPI 실수치 + segment/AI비중 stub | FinancialLinkerAgent 입력 |
-| **ParserAgent 추가** | PyMuPDF 기반 PDF/문서 payload 파싱 | IR·증권사 리포트·산업 동향 PDF에 공통 적용 |
-| **크롤러 결과 JSON 통일** | `crawler_results/*.json` 배열 포맷 사용 | JSONL 대신 일반 JSON으로 저장/전처리 |
-| **`company_tier` 추가** | `self`, `domestic`, `overseas` 구분 | SK AX=self, 기존 config 회사=domestic, 향후 global_companies=overseas |
-| **전처리 runner 분리** | `run_preprocess_once.py`는 크롤링 없이 저장된 JSON만 처리 | `--source-type news`처럼 결과 파일 내부 source_type 기준 필터 |
-| **homepage crawler 정리** | 미사용 `company_homepage` 계열 제거 | 공식/회사 뉴스는 `company_news` 흐름으로 관리 |
-| **RSS 제거 / 글로벌 공식 뉴스룸 추가** | `rss` 소스 제거, `global_newsroom` 추가 | 해외 peer 공식 발표는 `source_type=official`로 수집 |
-| **공통 PDF 파서 추가** | IR, 증권사 리포트, SPRi/BCG 등 PDF payload 추출 | page text/table/image 후보를 JSON extra에 보존 |
-| **전처리 source별 라우팅** | 기사형/문서형/구조화 신호를 분리 | DART·IR·증권사 리포트는 관련도 판단 없이 parser quality 후 보존 |
-
----
-
 ## 이 레포의 책임
 
 ```
@@ -248,103 +224,36 @@ FastAPI 내부 서버 (SpringBoot에서만 호출)
 
 ---
 
-## 프로젝트 구조
+## 프로젝트 구조 (2026-06-12 실측)
 
 ```
 axis-ai/
-├── CLAUDE.md                       # Claude Code 컨텍스트
-├── README.md                       # 이 파일
-├── Dockerfile
-├── pyproject.toml                  # uv 의존성 정의
-├── uv.lock                         # 잠금 파일 — 반드시 커밋
-├── run_crawler_once.py             # 크롤러 1회 실행 (Track A/B 선택)
-├── run_all_once.py                 # DB 크롤링 → DB 전처리 순차 실행
-├── run_local_crawler_once.py       # 크롤러 1회 실행 후 crawler_results/*.json 저장
-├── run_preprocess_once.py          # 저장된 crawler JSON만 전처리하는 로컬 runner
-├── run_pipeline_once.py            # 파이프라인 1회 실행 스크립트 (디버깅용)
-├── .env.example
-│
-├── data/                           # ★ 신설: 재무 데이터 (FinancialLinkerAgent 입력)
-│   ├── peer_financials/
-│   │   ├── samsung_sds.json        # DART OpenAPI 실수치 + segment/AI비중 stub
-│   │   ├── lg_cns.json
-│   │   ├── hyundai_autoever.json
-│   │   └── posco_dx.json
-│   ├── sk_ax_financials.json       # SK 지주(holding) 매출 — _scope_warning 마킹
-│   └── ir_samples/                 # IR PDF 샘플 (ParserAgent 입력)
-│
+├── CLAUDE.md / README.md
+├── pyproject.toml / uv.lock         # uv 관리 (pip 금지). torch 는 CPU 인덱스 핀
+├── Dockerfile                       # API 서버 (torch+cpu, Playwright)
+├── Dockerfile.cron                  # CronJob 경량 이미지 (--only-group cron)
 ├── src/
-│   ├── api/
-│   │   ├── main.py                 # uvicorn 진입점
-│   │   └── router.py               # FastAPI 엔드포인트
-│   │
-│   ├── agents/                     # ── v3 에이전트 ──
-│   │   ├── crawler_agent.py        # 4 peer 크롤러 오케스트레이션
-│   │   ├── credibility_agent.py    # Gate 2: 출처 신뢰도 분류
-│   │   ├── dedup_agent.py          # Gate 3: 중복 제거 + 클러스터링
-│   │   ├── classification_agent.py # ★ v3: 트렌드 섹터 5종 + 결정적 노출도
-│   │   ├── issue_card_agent.py     # GPT-4o로 3줄 요약 + 시사점 생성
-│   │   ├── evidence_agent.py       # ★ 신설: 검증 첨부 4종 부착
-│   │   ├── financial_linker_agent.py # ★ 신설: 카드 ↔ 재무 segment 매칭 + vs SK AX
-│   │   ├── parser_agent.py         # PDF/문서 payload 공통 파싱
-│   │   ├── parser_quality_agent.py # 파서 결과 품질 점검
-│   │   ├── notification_agent.py   # 본문 데이터 빌더 (v4: backend SES SDK 발송)
-│   │   ├── sector_keywords.py      # 섹터 분류 키워드 사전
-│   │   └── _deprecated/            # ← v1 에이전트 보관소
-│   │       ├── implication_agent.py    # SK AX 시사점 (보류)
-│   │       ├── validation_agent_sc.py  # SC 검증 (Evidence Chain으로 대체)
-│   │       └── weak_signal_agent.py    # 약한 신호 (W7에 부활 예정)
-│   │
-│   ├── crawler/                    # ── 크롤러 ──
-│   │   ├── base.py                 # SOURCE_CREDIBILITY, DailyLimitGuard, RawArticle
-│   │   ├── base_crawler.py         # 크롤러 공통 부모 클래스
-│   │   ├── batch_processor.py      # Track A/B 오케스트레이션 + DART CORP_CODES (4 peer)
-│   │   ├── scheduler.py            # APScheduler + PEER_KEYWORDS (4 peer)
-│   │   ├── result_writer.py        # crawler_results/*.json 저장 공통 유틸
-│   │   ├── playwright_client.py    # 공통 Playwright 헤드리스 클라이언트
-│   │   ├── article_filter.py       # HTML 문자열 정리 유틸
-│   │   ├── parsers/
-│   │   │   ├── article_content.py  # HTML 본문/이미지 추출
-│   │   │   ├── content.py          # readability 본문 추출
-│   │   │   ├── dedup.py            # URL 해시 중복 제거
-│   │   │   ├── link_check.py       # URL 접근성 검사
-│   │   │   └── pdf_payload.py      # PDF 텍스트/표 후보/이미지 후보 추출
-│   │   ├── monitors/
-│   │   │   └── keepalive.py        # Supabase/Qdrant keepalive
-│   │   ├── local/                  # run_local_crawler_once.py 전용 로컬 실행 사본
-│   │   └── sources/                # 파이프라인용 소스별 크롤러
-│   │       ├── naver.py            # Naver News API
-│   │       ├── dart.py             # DART OpenAPI 공시
-│   │       ├── company_news.py     # 회사 공식 뉴스/뉴스룸
-│   │       ├── global_newsroom.py  # 해외 peer 공식 뉴스룸(source_type=official)
-│   │       ├── bcg.py              # BCG 산업 동향
-│   │       ├── spri.py             # SPRi 산업 동향 PDF
-│   │       ├── stock.py            # 시장 데이터
-│   │       ├── keyword.py          # 네이버 데이터랩 검색 트렌드
-│   │       ├── official.py         # 공식 뉴스룸 (SDS/LGCNS + hyundai/posco generic)
-│   │       ├── naver_research.py   # 네이버 금융 리서치 (4 peer, itemCode 버그 수정)
-│   │       └── jobs.py             # 사람인 채용 (4 peer)
-│   │
-│   ├── pipeline/
-│   │   ├── ingestion_graph.py      # ★ v3 5-노드 수집 파이프라인 (1시간)
-│   │   └── delivery_graph.py       # 전달 파이프라인 (오전 8:30 이메일)
-│   │
-│   ├── rag/
-│   │   ├── embedder.py             # BGE-M3 Dense+Sparse 원샷
-│   │   ├── hybrid_search.py        # Qdrant RRF (Dense×Sparse Top-50 → Top-20)
-│   │   └── reranker.py             # BGE-reranker-v2-m3 → Top-10
-│   │
-│   ├── db/
-│   │   ├── article_store.py        # raw_articles · issue_cards · evidence_chain CRUD
-│   │   ├── postgres.py             # SQLAlchemy 엔진·세션
-│   │   └── qdrant_client.py        # Qdrant 클라이언트
-│   │
-│   └── schemas.py                  # Pydantic 모델 (ai-internal-api.yaml에서 생성)
-│
-└── tests/
+│   ├── api/                         # FastAPI router + 도메인별 *_schemas.py
+│   ├── contracts/                   # 레이어 중립 공용 스키마 (chat·today_insight)
+│   ├── agents/                      # LLM 에이전트
+│   │   ├── strategic_insight_agent.py + strategic_insight/   # prompts·utils·profile_linkage
+│   │   ├── briefing_generation_agent.py + briefing/          # support·prompts·data_layer·basis_builder·display_copy
+│   │   ├── mixer_analysis_agent.py · today_insight_agent.py · chat_orchestrator_agent.py
+│   │   ├── it_trend_agent.py · insight_cascade_agent.py · issue_integration 계열
+│   │   └── context/                 # capability_evolution, weekly_digest 등
+│   ├── pipeline/                    # analysis_flow_graph(분석 DAG)·delivery_graph·supervisor_graph
+│   ├── rag/                         # embedder(BGE-M3)·hybrid_search·reranker
+│   ├── crawler/                     # base + sources/(매체별)·parsers/·monitors/
+│   ├── preprocessing/               # relevance(신뢰도)·dedup(클러스터링)·classification(섹터/노출도)
+│   ├── analysis/ services/ composers/ extractors/ evaluators/ parsers/
+│   ├── db/                          # postgres·article_store·briefing_reports·qdrant_client
+│   ├── config/ middleware/ observability/
+│   └── schemas.py                   # ai-internal-api.yaml 생성본 (수동 수정 금지)
+├── scripts/                         # cron 진입점 외
+└── tests/                           # 표적 실행 권장 (전체는 CI)
 ```
 
----
+> 거대 에이전트 분해 이력: axis-infra `docs/structure-tasks/agent-split-design.md`
 
 ## 모니터링 Peer 4사
 
@@ -405,39 +314,29 @@ RSS/Google News RSS는 현재 크롤러 흐름에서 제거되었습니다. 해�
 
 ---
 
-## v3 수집 파이프라인 (`ingestion_graph.py`)
+## 수집·분석 파이프라인 (실측)
+
+수집은 `/pipeline/run` 이 트리거 — 크롤링 → `preprocessing/`(relevance → dedup →
+classification) → DB 저장. 분석은 `pipeline/analysis_flow_graph.py` (8노드):
 
 ```
-[ crawl ] → [ credibility ] → [ dedup ] → [ classify ] → [ issue_card ] → [ evidence ]
-   ↓             ↓               ↓             ↓              ↓               ↓
-원문 수집    Gate 2 신뢰도    Gate 3 중복    트렌드 섹터    GPT-4o 카드    검증 첨부 4종
-PG 전량저장  Low/Unverified   코사인 0.90   + 결정적       3줄 요약        부착
-            제외             클러스터링    노출도         + 시사점        (source/provenance/
-                                                                          financial/mbb)
+issue_integrate → profile_context → build_analysis_context → strategic_insight → validate
+  validate pass → assemble → card_writer → END        (fail → human_review → END)
+
+LLM 노드만 retry (1s 시작, 2배 backoff, 최대 2회)
 ```
 
-- 매시간 실행. 두 파이프라인은 PostgreSQL을 통해서만 데이터 교환.
-- `_GPT_WORKERS=5`: 분류·카드 생성 GPT-4o 호출 병렬도 (rate limit 고려).
-- 실패한 노드는 `state.errors`에 누적. `human_review_flags`에 ID 추가.
+> ⚠️ 과거 문서의 "ingestion_graph.py 5노드"는 v3 설계안 — 해당 파일은 존재하지 않음.
 
-### 결정적 노출도 산식 (v3)
-
-LLM 점수가 아닌 **추적·재현 가능**한 결정적 입력값 기반.
+### 결정적 노출도 산식 — 확정 (2026-06-12 팀 결정: 코드가 정본)
 
 ```
-exposure_score = 0.40·cluster_size_norm
-               + 0.30·credibility_max
-               + 0.20·peer_mention_rate
-               + 0.10·tier1_diversity
-
-high     ≥ 0.70
-medium   0.40 ~ 0.70
-low      < 0.40
+exposure_score = 0.70·cluster_size_score + 0.30·company_mention_score
+high ≥ 0.65          (src/preprocessing/classification.py)
 ```
 
-> v1의 LLM 5축(긴급·주목·참고)은 폐기. API 스키마는 호환을 위해 `importance` deprecated 표시 유지.
-
----
+> 1차 미팅 스펙(0.40/0.30/0.20/0.10 4항)은 폐기. LLM 점수가 아닌 추적·재현 가능한
+> 결정적 입력값 기반이라는 원칙은 동일.
 
 ## v3 전달 파이프라인 (`delivery_graph.py`)
 
@@ -617,20 +516,24 @@ IR 분기·연간 PDF 샘플. ParserAgent 입력.
 
 ---
 
-## FastAPI 내부 엔드포인트
+## FastAPI 내부 엔드포인트 (2026-06-12 실측)
 
 SpringBoot에서만 호출. 8001 포트 외부 노출 금지.
 
 | Method | Path | 설명 |
 |---|---|---|
-| `GET`  | `/health` | 헬스체크 (DB·Qdrant 연결 확인) |
-| `POST` | `/pipeline/run` | 수집 파이프라인 실행 (비동기) |
-| `POST` | `/pipeline/delivery` | 전달 파이프라인 실행 (이메일 발송) |
-| `POST` | `/search` | BGE-M3 하이브리드 검색 |
-| `POST` | `/gen-search` | Generative Search (RAG + GPT-4o + SC 검증) |
-| `POST` | `/weak-signal/run` | 약한 신호 감지기 (W7 활성 예정) |
-
----
+| `GET`  | `/healthz` · `/health` | 헬스체크 (경량 probe / 상세 진단) |
+| `POST` | `/pipeline/run` | 수집 파이프라인 (매시간, 202 비동기) |
+| `POST` | `/pipeline/delivery` | 브리핑 본문 데이터 (발송은 backend SES) |
+| `POST` | `/briefing/generate` | 브리핑 생성 — 저장본 재사용(read-through 캐시) 기본 |
+| `GET`  | `/api/cards` · `/api/cards/today` | 카드 조회 |
+| `POST` | `/chat` · `/chat/pdf` | 어시스턴트 (RAG 실구현 경로) |
+| `POST` | `/today-insight/generate` · `/insight/generate` | 인사이트 |
+| `POST` | `/mixer/analyze` (+`/stream` SSE) | 믹서 |
+| `POST` | `/global/trends/run` | 글로벌 트렌드 (5-phase) |
+| `POST` | `/search` · `/gen-search` | ⚠️ TODO 스텁 (실검색은 /chat 경로) |
+| `POST` | `/link/verify` | 링크 검증 |
+| `POST` | `/weak-signal/run` | 501 (운영 경로 미연결) |
 
 ## 로컬 개발 세팅
 
