@@ -1126,7 +1126,7 @@ def _evidence_source_links(global_rows: list[dict[str, Any]], keyword: str) -> l
                 "title": str(row.get("title") or "원문 기사")[:160],
                 "url": url,
                 "source_name": str(row.get("source_name") or row.get("publisher") or "")[:80],
-                "published_at": _iso(row.get("published_at") or row.get("collected_at")),
+                "published_at": _iso(row.get("published_at") or row.get("collected_at")) or "",
             }
         )
         if len(links) >= 3:
