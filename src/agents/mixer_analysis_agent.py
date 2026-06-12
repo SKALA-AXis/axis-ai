@@ -35,9 +35,9 @@ from src.agents.implication_agent import ImplicationAgent
 from src.middleware.analysis_ledger import with_ledger_writeback
 from src.observability.langfuse_client import tracing_config
 from src.services.agent_output_validation import (
-    clip_final_one_liner,
-    clip_implication,
-    clip_string,
+    clip_string as _base_clip_string,
+)
+from src.services.agent_output_validation import (
     confidence_in_range,
 )
 from src.services.analysis_units import (
@@ -64,7 +64,8 @@ _LLM_MODEL = _QUICK_LLM_MODEL  # legacy fallback for older callers/tests.
 _PROMPT_VERSION = "mixer-v3.1-linked-results-insight"
 _MAX_CARDS = int(os.getenv("MIXER_MAX_CARDS", "20"))
 _MIN_CARDS = 2
-
+_MIXER_FINAL_ONE_LINER_MAX = int(os.getenv("MIXER_FINAL_ONE_LINER_MAX", "260"))
+_MIXER_IMPLICATION_MAX = int(os.getenv("MIXER_SK_AX_IMPLICATION_MAX", "1200"))
 # 믹서 실행 단계 — SSE progress 용. 에이전트가 실제로 넘는 단계 경계만 emit 한다
 # (prepare: 카드/이슈 로드, analyze: 메인 LLM, synthesize: 대응방향 LLM, finalize: 추론 정리).
 ProgressFn = Callable[[str, str, int, int], None]
@@ -76,6 +77,19 @@ _PROGRESS_STAGES: dict[str, str] = {
 }
 _PROGRESS_ORDER: list[str] = ["prepare", "analyze", "synthesize", "finalize"]
 _PROGRESS_TOTAL = len(_PROGRESS_ORDER)
+
+
+def clip_string(value: Any, max_length: int, *, suffix: str = "") -> str:
+    """Mixer output should not persist visual ellipses; UI can decide display length."""
+    return _base_clip_string(value, max_length, suffix=suffix).rstrip()
+
+
+def clip_final_one_liner(value: Any, *, max_length: int = _MIXER_FINAL_ONE_LINER_MAX) -> str:
+    return clip_string(value, max_length)
+
+
+def clip_implication(value: Any, *, max_length: int = _MIXER_IMPLICATION_MAX) -> str:
+    return clip_string(value, max_length)
 
 
 def _emit_progress(progress: "ProgressFn | None", stage: str) -> None:
@@ -411,6 +425,7 @@ radar_axis_interpretations:
 - 전망/계획/추정은 확정 사실처럼 쓰지 마세요.
 - follow-up 질문은 만들지 마세요.
 - 같은 문장을 말만 바꿔 반복하지 마세요.
+- 줄임표("…", "...")로 문장을 생략하지 마세요. 각 문장은 끝까지 완결하세요.
 - 사용자에게 보여주는 문장에는 “이 결론에 도달한다”, “이 비교 축이 성립한다”,
   “공통패턴과 비교포인트에서 드러나듯이” 같은 내부 판단 과정 표현을 쓰지 마세요.
 - rationale은 내부 추론 로그가 아니라, 사용자가 읽을 수 있는 근거 설명이어야 합니다.
@@ -555,6 +570,7 @@ _MIXER_REPAIR_PROMPT = """\
 - action은 “어떤 사업 판단을 어떻게 바꾼다/정한다/재배분한다/상품화한다”가 보여야 합니다.
 - 제안서 작성, 대시보드 표시, 다음 모니터링 항목 같은 프로그램 산출물 중심 action은 제거하세요.
 - 근거와 연결되지 않는 일반 과제는 제거하세요.
+- 줄임표("…", "...")로 문장을 생략하지 말고, 문장을 끝까지 완결하세요.
 
 ## 다시 쓰기 기준
 
