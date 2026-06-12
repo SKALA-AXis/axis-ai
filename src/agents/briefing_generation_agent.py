@@ -18,10 +18,47 @@ import os
 import re
 import sys
 from datetime import UTC, date, datetime, time, timedelta
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from src.agents.briefing.basis_builder import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
+    _BRIEFING_SYNTHESIS_PROMPT_VERSION,
+    _LLM_MODEL,
+    _PROMPT_VERSION,
+    _action_details_from_analysis_packages,
+    _analysis_basis_block,
+    _analysis_package_entries,
+    _and_particle,
+    _basis_evidence,
+    _brief_sentence,
+    _brief_sentences,
+    _briefing_action_reason,
+    _briefing_basis_from_analysis_packages,
+    _briefing_clause,
+    _briefing_customer_scope,
+    _briefing_decision_focus,
+    _briefing_synthesis_quality_issues,
+    _briefing_synthesis_revision_prompt,
+    _combine_blocks,
+    _comparison_finding,
+    _dedupe_action_pairs,
+    _display_sk_ax_title,
+    _executive_action_details_from_entries,
+    _front_evidence_card_ids,
+    _get_llm,
+    _invalid_synthesis_card_ids,
+    _join_korean,
+    _limit_sentences,
+    _llm,
+    _merge_briefing_basis_synthesis,
+    _normalize_synthesis_action_details,
+    _normalize_synthesis_block,
+    _parse_json_object,
+    _recommended_action_pairs,
+    _refine_briefing_basis_with_llm,
+    _sanitize_synthesis_list,
+    _valid_card_ids,
+)
 from src.agents.briefing.data_layer import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
     _DEFAULT_LIMIT,
     _DEFAULT_MOCK_PATH,
@@ -52,6 +89,52 @@ from src.agents.briefing.data_layer import (  # noqa: F401  — 분리 모듈 re
     _load_mock_items,
     _normalize_card_row,
     _normalize_mock_item,
+)
+from src.agents.briefing.display_copy import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
+    _DISPLAY_COPY_PROMPT_VERSION,
+    _MAX_MARKET_ITEMS,
+    _MAX_SKAX_ITEMS,
+    _analysis_packages_from_result,
+    _basis_signal_phrases_from_result,
+    _basis_signal_sentence_from_result,
+    _brief_noun_phrase,
+    _business_signal_phrase,
+    _compact_visible_item,
+    _company_detail_phrases_from_result,
+    _description_needs_detail,
+    _detailed_basis_sentence_from_result,
+    _display_card_signal_index,
+    _display_copy_quality_issues,
+    _display_copy_visible_items,
+    _display_copy_visible_texts,
+    _display_payload_structure,
+    _filter_focus_phrases,
+    _find_display_item_source,
+    _find_key_change_by_type,
+    _format_key_number_context,
+    _grounded_sk_ax_description,
+    _is_too_similar,
+    _is_vague_display_text,
+    _key_change_card_coverage_issues,
+    _key_number_context_phrase,
+    _looks_like_key_number,
+    _mentions_any_source_company,
+    _merge_flow,
+    _merge_key_change_cards,
+    _merge_market_reading,
+    _merge_sk_ax_view,
+    _merged_display_list,
+    _normalize_similarity_text,
+    _period_from_report,
+    _recommended_action_sentences_from_result,
+    _repair_sk_ax_view_descriptions,
+    _sanitize_flow_step_items,
+    _shares_keyword,
+    _sk_ax_description_from_title,
+    _source_company_names,
+    _strip_terminal_punctuation,
+    _subject_particle,
+    _update_text_field,
 )
 from src.agents.briefing.prompts import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
     _briefing_basis_synthesis_view,
@@ -86,7 +169,7 @@ from src.agents.briefing.support import (  # noqa: F401  — 분리 모듈 re-ex
 )
 
 if TYPE_CHECKING:
-    from langchain_openai import ChatOpenAI
+    pass
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
@@ -96,10 +179,8 @@ if str(_REPO_ROOT) not in sys.path:
 from src.config.env_loader import load_profile  # noqa: E402
 from src.db.briefing_reports import load_briefing_report, save_briefing_report  # noqa: E402
 from src.services.analysis_units import (  # noqa: E402
-    QUALITY_SUMMARY_ONLY_FALLBACK,
     analysis_units_from_cards,
     card_like_from_units,
-    confidence_penalty_for_flags,
     quality_flags_for_units,
     source_integrated_issue_ids,
 )
@@ -108,29 +189,7 @@ log = logging.getLogger(__name__)
 
 BriefingType = Literal["daily", "weekly", "monthly"]
 
-_PROMPT_VERSION = "briefing-generation-v0.3-period-briefing"
-_BRIEFING_SYNTHESIS_PROMPT_VERSION = "briefing-synthesis-v0.4-integrated-issue-frontend-contract"
-_DISPLAY_COPY_PROMPT_VERSION = "briefing-display-copy-v0.24-patterned-llm-guarded"
-_LLM_MODEL = os.getenv("BRIEFING_LLM_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o"
 _MAX_DISPLAY_CARDS = 3
-_MAX_MARKET_ITEMS = 3
-_MAX_SKAX_ITEMS = 3
-
-_llm: ChatOpenAI | None = None
-
-
-def _get_llm() -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
-    global _llm
-    if _llm is None:
-        _llm = ChatOpenAI(
-            model=_LLM_MODEL,
-            temperature=0.1,
-            max_completion_tokens=2400,
-            model_kwargs={"response_format": {"type": "json_object"}},
-        )
-    return _llm
 
 
 class BriefingGenerationAgent:
@@ -432,663 +491,6 @@ def _provenance_base(
     return provenance
 
 
-def _briefing_basis_from_analysis_packages(
-    *,
-    selected_cards: list[dict[str, Any]],
-    period: dict[str, Any],
-    user_context: str | None,
-) -> dict[str, Any]:
-    card_ids = [card["id"] for card in selected_cards]
-    units = analysis_units_from_cards(selected_cards)
-    integrated_issue_ids = source_integrated_issue_ids(units)
-    quality_flags = quality_flags_for_units(units)
-    entries = _analysis_package_entries(selected_cards)
-    analysis_summaries = [entry["analysis_summary"] for entry in entries]
-    market_signals = [entry["market_signal"] for entry in entries]
-    strategic_meanings = [
-        text
-        for entry in entries
-        for text in _json_list(entry.get("strategic_meaning"))
-        if str(text).strip()
-    ]
-    peer_moves = [entry["peer_meaning"] for entry in entries]
-    sk_reasons = [entry["sk_why"] for entry in entries]
-    sk_impacts = [entry["sk_impact"] for entry in entries]
-    action_details = _action_details_from_analysis_packages(entries)
-    recommended_actions = [
-        str(item.get("action") or "").strip()
-        for item in action_details
-        if str(item.get("action") or "").strip()
-    ]
-    confidence_values = [
-        value
-        for entry in entries
-        for value in (
-            entry.get("analysis_confidence"),
-            entry.get("implication_confidence"),
-            entry.get("validation_score"),
-        )
-        if isinstance(value, (int, float))
-    ]
-    confidence = (
-        round(sum(confidence_values) / len(confidence_values), 2) if confidence_values else 0.0
-    )
-    if quality_flags:
-        confidence = round(
-            max(0.0, confidence - confidence_penalty_for_flags(quality_flags)),
-            2,
-        )
-    fallback = f"{period['label']} 기간에 확인된 카드뉴스 기반 브리핑입니다."
-    lead_finding = _combine_blocks(
-        market_signals or analysis_summaries,
-        fallback,
-        max_items=2,
-        max_chars=220,
-    )
-    common_finding = _combine_blocks(
-        market_signals or analysis_summaries,
-        fallback,
-        max_items=2,
-        max_chars=180,
-    )
-    common_rationale = _combine_blocks(analysis_summaries, common_finding, max_items=2)
-    comparison_finding = _comparison_finding(entries)
-    comparison_rationale = _combine_blocks(peer_moves or analysis_summaries, comparison_finding)
-    hidden_finding = _combine_blocks(
-        strategic_meanings or market_signals,
-        common_finding,
-        max_items=2,
-        max_chars=180,
-    )
-    hidden_rationale = _combine_blocks(strategic_meanings or analysis_summaries, hidden_finding)
-    strategy_values: list[object] = [
-        item for item in (recommended_actions or sk_impacts or sk_reasons)
-    ]
-    strategy_finding = _combine_blocks(
-        strategy_values,
-        _display_sk_ax_title(selected_cards),
-        max_items=2,
-        max_chars=220,
-    )
-    strategy_rationale = _combine_blocks(sk_reasons or sk_impacts, strategy_finding)
-    if user_context and user_context.strip():
-        strategy_rationale = _first_text(strategy_rationale, user_context.strip())
-    return {
-        "basis_id": f"BR-BASIS-{period['date_from']:%Y%m%d}",
-        "briefing_insight": lead_finding,
-        "lead": {
-            "finding": lead_finding,
-            "evidence_card_ids": card_ids,
-        },
-        "core_change": {
-            "finding": comparison_finding,
-            "rationale": comparison_rationale,
-            "evidence": _basis_evidence(entries),
-            "evidence_card_ids": card_ids,
-        },
-        "common_pattern": _analysis_basis_block(common_finding, common_rationale, entries),
-        "comparison_point": _analysis_basis_block(
-            comparison_finding,
-            comparison_rationale,
-            entries,
-        ),
-        "hidden_conclusion": _analysis_basis_block(hidden_finding, hidden_rationale, entries),
-        "strategy_implication": {
-            "finding": strategy_finding,
-            "rationale": strategy_rationale,
-            "evidence": _basis_evidence(entries),
-            "evidence_card_ids": card_ids,
-        },
-        "recommended_action_basis": _dedupe_keep_order(
-            [str(item).strip() for item in sk_reasons + sk_impacts if str(item).strip()]
-        ),
-        "action_details": action_details,
-        "recommended_actions": recommended_actions,
-        "confidence": confidence,
-        "sources_used": card_ids,
-        "source_integrated_issue_ids": integrated_issue_ids,
-        "quality_flags": quality_flags,
-        "provenance": {
-            "prompt_version": _PROMPT_VERSION,
-            "source_card_ids": card_ids,
-            "source_integrated_issue_ids": integrated_issue_ids,
-            "quality_flags": quality_flags,
-            "analysis_basis": (
-                "integrated_issues.id -> card_news.evidence_payload.analysis_package "
-                "integrated_issue+analysis+implication+classification+validation"
-            ),
-        },
-    }
-
-
-def _analysis_package_entries(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
-    for card in cards:
-        package = _analysis_package(card)
-        analysis = _json_dict(package.get("analysis"))
-        implication = _json_dict(package.get("implication"))
-        peer = _json_dict(implication.get("peer_implication"))
-        skax = _json_dict(implication.get("skax_implication"))
-        validation = _json_dict(package.get("validation"))
-        integrated = _json_dict(package.get("integrated_issue"))
-        entries.append(
-            {
-                "card_id": card.get("id"),
-                "integrated_issue_id": card.get("integrated_issue_id")
-                or package.get("integrated_issue_id")
-                or integrated.get("integrated_issue_id"),
-                "company_label": _company_label(card),
-                "main_issue": _first_text(integrated.get("main_issue"), card.get("title")),
-                "analysis_summary": _first_text(
-                    analysis.get("analysis_summary"),
-                    integrated.get("integrated_text"),
-                    card.get("title"),
-                ),
-                "market_signal": _first_text(analysis.get("market_signal")),
-                "strategic_meaning": _json_list(analysis.get("strategic_meaning")),
-                "peer_meaning": _first_text(
-                    peer.get("peer_meaning"),
-                    peer.get("capability_change"),
-                ),
-                "sk_why": _first_text(skax.get("why_important")),
-                "sk_impact": _first_text(skax.get("potential_impact")),
-                "recommended_actions": _json_list(skax.get("recommended_actions")),
-                "analysis_confidence": _safe_float(
-                    analysis.get("confidence"),
-                    default=-1.0,
-                ),
-                "implication_confidence": _safe_float(
-                    implication.get("confidence"),
-                    default=-1.0,
-                ),
-                "validation_score": _safe_float(validation.get("sc_score"), default=-1.0),
-            }
-        )
-    return entries
-
-
-def _analysis_basis_block(
-    finding: str,
-    rationale: str,
-    entries: list[dict[str, Any]],
-) -> dict[str, Any]:
-    return {
-        "finding": finding,
-        "rationale": rationale,
-        "evidence": _basis_evidence(entries),
-        "evidence_card_ids": [
-            str(entry.get("card_id")) for entry in entries if entry.get("card_id")
-        ],
-    }
-
-
-def _basis_evidence(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    evidence = []
-    for entry in entries:
-        text_value = _first_text(entry.get("market_signal"), entry.get("analysis_summary"))
-        if entry.get("card_id") and text_value:
-            evidence.append(
-                {
-                    "card_id": entry["card_id"],
-                    "integrated_issue_id": entry.get("integrated_issue_id"),
-                    "text": text_value,
-                }
-            )
-    return evidence
-
-
-def _comparison_finding(entries: list[dict[str, Any]]) -> str:
-    phrases = []
-    for entry in entries[:3]:
-        company = str(entry.get("company_label") or "").strip()
-        signal = _brief_sentence(
-            _first_text(entry.get("peer_meaning"), entry.get("analysis_summary")),
-            max_chars=80,
-        )
-        if company and signal:
-            phrases.append(f"{company}: {signal}")
-    if phrases:
-        return " / ".join(phrases)
-    return _combine_blocks(
-        [entry.get("analysis_summary") for entry in entries],
-        "기간 내 카드뉴스에서 경쟁사별 움직임이 확인되었습니다.",
-        max_items=2,
-        max_chars=180,
-    )
-
-
-def _action_details_from_analysis_packages(
-    entries: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    if not entries:
-        return []
-    return _executive_action_details_from_entries(entries)
-
-
-def _executive_action_details_from_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    evidence = _basis_evidence(entries)
-    evidence_card_ids = _front_evidence_card_ids(entries)
-    focus = _briefing_decision_focus(entries)
-    focus_clause = _briefing_clause(focus)
-    customer_scope = _briefing_customer_scope(entries)
-    comparison = _briefing_clause(
-        _comparison_finding(entries)
-        or _combine_blocks(
-            [entry.get("peer_meaning") for entry in entries],
-            "고객군별 의사결정 기준 차이",
-            max_items=2,
-            max_chars=120,
-        )
-    )
-    return [
-        {
-            "action": _clip_text(
-                (
-                    f"SK AX는 {customer_scope} 고객군을 우선 공략 범위로 두고, "
-                    f"{focus_clause}를 기준으로 오퍼링 책임 조직과 "
-                    "리스크 승인 권한을 지정한다."
-                ),
-                max_chars=300,
-            ),
-            "why": _briefing_action_reason(entries, fallback=focus),
-            "use_case": "사업 우선순위",
-            "evidence": evidence,
-            "evidence_card_ids": evidence_card_ids,
-        },
-        {
-            "action": _clip_text(
-                (
-                    "SK AX는 사업 라인별 오퍼링을 하나의 AX 상품으로 묶지 말고 "
-                    f"{comparison}에 맞춰 분리 상품화한다. 고객군별 영업 우선순위, "
-                    "가격/계약 조건, 보안·데이터 거버넌스 기준을 다르게 둔다."
-                ),
-                max_chars=300,
-            ),
-            "why": _briefing_action_reason(
-                entries,
-                fallback="카드별 고객군과 경쟁 신호가 서로 다른 의사결정 기준을 보여준다.",
-            ),
-            "use_case": "오퍼링/상품화",
-            "evidence": evidence,
-            "evidence_card_ids": evidence_card_ids,
-        },
-        {
-            "action": _clip_text(
-                (
-                    "SK AX는 브리핑 안건을 정보 공유가 아니라 자원 배분 의사결정으로 다룬다. "
-                    f"{focus_clause}와 연결된 수주 전환, 규제 일정, 운영 KPI가 확인되면 "
-                    "전담 인력, 파트너십 후보, 레퍼런스 확보 예산을 재배분한다."
-                ),
-                max_chars=300,
-            ),
-            "why": _combine_blocks(
-                [entry.get("market_signal") for entry in entries],
-                "기간 내 반복 신호를 사업 자원 배분 기준으로 반영할 필요가 있다.",
-                max_items=2,
-                max_chars=240,
-            ),
-            "use_case": "자원 배분/시장 대응",
-            "evidence": evidence,
-            "evidence_card_ids": evidence_card_ids,
-        },
-    ]
-
-
-def _briefing_decision_focus(entries: list[dict[str, Any]]) -> str:
-    return _combine_blocks(
-        [
-            *[entry.get("sk_why") for entry in entries],
-            *[entry.get("sk_impact") for entry in entries],
-            *[entry.get("market_signal") for entry in entries],
-            *[text for entry in entries for text in _json_list(entry.get("strategic_meaning"))],
-        ],
-        "입력에서 확인된 고객 평가 기준 변화",
-        max_items=2,
-        max_chars=140,
-    )
-
-
-def _briefing_action_reason(entries: list[dict[str, Any]], *, fallback: str) -> str:
-    return _combine_blocks(
-        [
-            *[entry.get("sk_why") for entry in entries],
-            *[entry.get("sk_impact") for entry in entries],
-            *[entry.get("analysis_summary") for entry in entries],
-        ],
-        fallback,
-        max_items=2,
-        max_chars=240,
-    )
-
-
-def _briefing_customer_scope(entries: list[dict[str, Any]]) -> str:
-    text_value = " ".join(
-        str(value or "")
-        for entry in entries
-        for value in (
-            entry.get("main_issue"),
-            entry.get("analysis_summary"),
-            entry.get("market_signal"),
-            entry.get("sk_why"),
-            entry.get("sk_impact"),
-            " ".join(str(item) for item in _json_list(entry.get("strategic_meaning"))),
-        )
-    )
-    scopes: list[str] = []
-    if any(token in text_value for token in ("금융", "토큰증권", "디지털자산", "결제", "정산")):
-        scopes.append("금융")
-    if any(token in text_value for token in ("공공", "행정", "부처", "교육", "학교", "기관")):
-        scopes.append("공공/교육")
-    if any(token in text_value for token in ("제조", "공장", "설비", "물류", "로봇")):
-        scopes.append("제조/운영")
-    if any(token in text_value for token in ("보안", "데이터 통제", "프라이빗", "거버넌스")):
-        scopes.append("보안·데이터 통제")
-    scope = _join_korean(_dedupe_keep_order(scopes[:3]))
-    return scope or "입력에서 확인된"
-
-
-def _briefing_clause(value: object) -> str:
-    text_value = re.sub(r"\s+", " ", str(value or "")).strip()
-    return text_value.rstrip(".。!！?？")
-
-
-def _refine_briefing_basis_with_llm(
-    *,
-    briefing_basis: dict[str, Any],
-    selected_cards: list[dict[str, Any]],
-    period: dict[str, Any],
-    user_context: str | None,
-    llm: Any | None,
-) -> dict[str, Any]:
-    """Use LLM only to synthesize briefing-level judgment from integrated issues.
-
-    The deterministic basis remains the source of truth for ids, provenance, and
-    fallback content. The model may rewrite judgment structure, but cannot add
-    new evidence ids or facts outside the supplied analysis units.
-    """
-
-    if llm is None and not os.getenv("OPENAI_API_KEY"):
-        log.info("Briefing basis synthesis skipped: OPENAI_API_KEY is not set")
-        return briefing_basis
-
-    context = _briefing_synthesis_context(
-        briefing_basis=briefing_basis,
-        selected_cards=selected_cards,
-        period=period,
-        user_context=user_context,
-    )
-    messages = [
-        ("system", _briefing_synthesis_system_prompt()),
-        ("human", _briefing_synthesis_user_prompt(context)),
-    ]
-    try:
-        response = (llm or _get_llm()).invoke(messages)
-    except Exception as exc:  # pragma: no cover - external API safety net
-        log.warning("Briefing basis synthesis failed | error=%s", exc)
-        return briefing_basis
-
-    parsed = _parse_json_object(getattr(response, "content", response))
-    if not parsed:
-        return briefing_basis
-    issues = _briefing_synthesis_quality_issues(parsed, selected_cards)
-    if issues:
-        revision_messages = [
-            ("system", _briefing_synthesis_system_prompt()),
-            ("human", _briefing_synthesis_revision_prompt(context, parsed, issues)),
-        ]
-        try:
-            revision_response = (llm or _get_llm()).invoke(revision_messages)
-        except Exception as exc:  # pragma: no cover - external API safety net
-            log.warning("Briefing basis synthesis revision failed | error=%s", exc)
-        else:
-            revised = _parse_json_object(getattr(revision_response, "content", revision_response))
-            if revised:
-                parsed = revised
-        remaining_issues = _briefing_synthesis_quality_issues(parsed, selected_cards)
-        if remaining_issues:
-            log.info(
-                "Briefing basis synthesis rejected | issues=%s",
-                remaining_issues,
-            )
-            return briefing_basis
-    return _merge_briefing_basis_synthesis(briefing_basis, parsed, selected_cards)
-
-
-def _briefing_synthesis_revision_prompt(
-    context: dict[str, Any],
-    draft: dict[str, Any],
-    issues: list[str],
-) -> str:
-    return "\n".join(
-        [
-            "# Task",
-            "아래 draft_basis에서 감지된 품질 이슈만 고쳐 다시 JSON 객체로 반환하세요.",
-            "",
-            "# Detected Issues",
-            json.dumps(issues, ensure_ascii=False, indent=2),
-            "",
-            "# Rules",
-            "- Output Schema는 최초 요청과 동일합니다.",
-            "- 입력 source_card_ids 밖의 id를 쓰지 않습니다.",
-            "- integrated_issues/analysis/implication 근거 밖의 내용을 만들지 않습니다.",
-            "- immediate/watch 분류 이유가 드러나게 reason을 고칩니다.",
-            "",
-            "# Source Analysis Units",
-            json.dumps(context.get("analysis_units") or [], ensure_ascii=False, indent=2),
-            "",
-            "# Draft Basis",
-            json.dumps(draft, ensure_ascii=False, indent=2),
-        ]
-    )
-
-
-def _briefing_synthesis_quality_issues(
-    draft: dict[str, Any],
-    selected_cards: list[dict[str, Any]],
-) -> list[str]:
-    allowed_ids = {str(card.get("id")) for card in selected_cards if card.get("id")}
-    issues: list[str] = []
-    if not _first_text(draft.get("executive_summary"), draft.get("briefing_insight")):
-        issues.append("executive_summary 또는 briefing_insight가 비어 있습니다.")
-    invalid_ids = _invalid_synthesis_card_ids(draft, allowed_ids)
-    if invalid_ids:
-        issues.append(f"입력 source_card_ids 밖의 id가 사용되었습니다: {invalid_ids}")
-    if not _json_list(draft.get("immediate_trends")) and not _json_list(draft.get("watch_trends")):
-        issues.append("immediate_trends 또는 watch_trends 중 최소 하나가 필요합니다.")
-    return issues
-
-
-def _invalid_synthesis_card_ids(value: object, allowed_ids: set[str]) -> list[str]:
-    invalid: list[str] = []
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if key in {"evidence_card_ids", "related_card_ids"}:
-                ids = [str(card_id) for card_id in _json_list(item) if str(card_id).strip()]
-                invalid.extend(card_id for card_id in ids if card_id not in allowed_ids)
-            elif key == "related_card_id":
-                card_id = str(item or "").strip()
-                if card_id and card_id not in allowed_ids:
-                    invalid.append(card_id)
-            else:
-                invalid.extend(_invalid_synthesis_card_ids(item, allowed_ids))
-    elif isinstance(value, list):
-        for item in value:
-            invalid.extend(_invalid_synthesis_card_ids(item, allowed_ids))
-    return _dedupe_keep_order(invalid)
-
-
-def _merge_briefing_basis_synthesis(
-    base: dict[str, Any],
-    synthesis: dict[str, Any],
-    selected_cards: list[dict[str, Any]],
-) -> dict[str, Any]:
-    updated = copy.deepcopy(base)
-    allowed_ids = {str(card.get("id")) for card in selected_cards if card.get("id")}
-    summary = _first_text(synthesis.get("executive_summary"), synthesis.get("briefing_insight"))
-    if summary:
-        updated["briefing_insight"] = _brief_sentences(
-            summary,
-            max_sentences=2,
-            max_chars=240,
-        )
-    for key in (
-        "lead",
-        "core_change",
-        "common_pattern",
-        "comparison_point",
-        "hidden_conclusion",
-        "strategy_implication",
-    ):
-        block = _normalize_synthesis_block(
-            synthesis.get(key),
-            fallback=updated.get(key),
-            allowed_ids=allowed_ids,
-        )
-        if block:
-            updated[key] = block
-    for key in (
-        "recommended_action_basis",
-        "recommended_actions",
-        "immediate_trends",
-        "watch_trends",
-        "sections",
-        "evidence_summary",
-    ):
-        values = _json_list(synthesis.get(key))
-        if values:
-            updated[key] = _sanitize_synthesis_list(values, allowed_ids=allowed_ids)
-    action_details = _normalize_synthesis_action_details(
-        synthesis.get("action_details"),
-        allowed_ids=allowed_ids,
-    )
-    if action_details:
-        updated["action_details"] = action_details
-        updated["recommended_actions"] = [
-            str(item.get("action") or "").strip()
-            for item in action_details
-            if str(item.get("action") or "").strip()
-        ]
-    confidence = _safe_float(synthesis.get("confidence"), default=-1.0)
-    if 0 <= confidence <= 1:
-        updated["confidence"] = round(confidence, 2)
-    provenance = _json_dict(updated.get("provenance"))
-    provenance["briefing_synthesis_prompt_version"] = _BRIEFING_SYNTHESIS_PROMPT_VERSION
-    provenance["briefing_synthesis_model"] = _LLM_MODEL
-    updated["provenance"] = provenance
-    return updated
-
-
-def _normalize_synthesis_block(
-    value: object,
-    *,
-    fallback: object,
-    allowed_ids: set[str],
-) -> dict[str, Any]:
-    source = _json_dict(value)
-    fallback_block = _json_dict(fallback)
-    finding = _brief_sentences(
-        _first_text(source.get("finding"), source.get("title"), source.get("summary")),
-        max_sentences=2,
-        max_chars=240,
-    )
-    if not finding:
-        return fallback_block
-    evidence_ids = _valid_card_ids(
-        source.get("evidence_card_ids") or source.get("related_card_ids"),
-        allowed_ids=allowed_ids,
-        fallback=fallback_block.get("evidence_card_ids"),
-    )
-    return {
-        **fallback_block,
-        "finding": finding,
-        "rationale": _brief_sentences(
-            _first_text(source.get("rationale"), source.get("reason"), source.get("description")),
-            max_sentences=3,
-            max_chars=320,
-        )
-        or fallback_block.get("rationale")
-        or finding,
-        "evidence_card_ids": evidence_ids,
-    }
-
-
-def _sanitize_synthesis_list(values: list[Any], *, allowed_ids: set[str]) -> list[Any]:
-    sanitized: list[Any] = []
-    for value in values:
-        if isinstance(value, dict):
-            current = copy.deepcopy(value)
-            if "evidence_card_ids" in current:
-                current["evidence_card_ids"] = _valid_card_ids(
-                    current.get("evidence_card_ids"),
-                    allowed_ids=allowed_ids,
-                )
-            if "related_card_ids" in current:
-                current["related_card_ids"] = _valid_card_ids(
-                    current.get("related_card_ids"),
-                    allowed_ids=allowed_ids,
-                )
-            if "related_card_id" in current:
-                card_id = str(current.get("related_card_id") or "").strip()
-                if card_id not in allowed_ids:
-                    current.pop("related_card_id", None)
-            sanitized.append(current)
-            continue
-        text_value = str(value or "").strip()
-        if text_value:
-            sanitized.append(text_value)
-    return sanitized
-
-
-def _normalize_synthesis_action_details(
-    value: object,
-    *,
-    allowed_ids: set[str],
-) -> list[dict[str, Any]]:
-    actions: list[dict[str, Any]] = []
-    for item in _json_list(value):
-        if not isinstance(item, dict):
-            continue
-        action = _brief_sentences(item.get("action"), max_sentences=2, max_chars=280)
-        if not action:
-            continue
-        actions.append(
-            {
-                "action": action,
-                "why": _brief_sentences(
-                    item.get("why") or item.get("reason"),
-                    max_sentences=2,
-                    max_chars=260,
-                ),
-                "use_case": _first_text(item.get("use_case"), "사업 우선순위"),
-                "evidence_card_ids": _valid_card_ids(
-                    item.get("evidence_card_ids"),
-                    allowed_ids=allowed_ids,
-                ),
-            }
-        )
-    return actions[:3]
-
-
-def _valid_card_ids(
-    value: object,
-    *,
-    allowed_ids: set[str],
-    fallback: object = None,
-) -> list[str]:
-    ids = [
-        card_id
-        for card_id in (str(item).strip() for item in _json_list(value))
-        if card_id and card_id in allowed_ids
-    ]
-    if not ids and fallback is not None:
-        ids = [
-            card_id
-            for card_id in (str(item).strip() for item in _json_list(fallback))
-            if card_id and card_id in allowed_ids
-        ]
-    return _dedupe_keep_order(ids)
-
-
 def _refine_display_copy_with_llm(
     *,
     report: dict[str, Any],
@@ -1143,179 +545,6 @@ def _refine_display_copy_with_llm(
     return _merge_display_copy(report, parsed, selected_cards=selected_cards)
 
 
-def _display_copy_quality_issues(
-    draft: dict[str, Any],
-    selected_cards: list[dict[str, Any]],
-) -> list[str]:
-    issues: list[str] = []
-    unit_quality_flags = _dedupe_keep_order(
-        [
-            str(flag)
-            for card in selected_cards
-            for flag in _json_list(card.get("quality_flags"))
-            if str(flag).strip()
-        ]
-    )
-    if QUALITY_SUMMARY_ONLY_FALLBACK in unit_quality_flags:
-        issues.append(
-            "summary_only_fallback 품질 플래그가 있는 분석 단위가 포함되어 있습니다. "
-            "카드 표시 요약이 아니라 integrated_issue, analysis, implication 근거로 "
-            "다시 작성하세요."
-        )
-    steps = _json_list(_nested_get(draft, "interpretation_flow", "steps"))
-    typed_steps = [step for step in steps if isinstance(step, dict)]
-    if len(typed_steps) < 4:
-        issues.append("interpretation_flow는 반드시 4단계가 모두 있어야 합니다.")
-    steps_without_items = [step for step in typed_steps if not _json_list(step.get("items"))]
-    if steps_without_items:
-        issues.append(
-            "interpretation_flow의 각 step은 title/description 대신 items를 가져야 합니다. "
-            "items는 단계별로 최소 1개, 최대 3개까지 작성하세요."
-        )
-
-    texts = _display_copy_visible_texts(draft)
-    strong_terms = ("두각", "입지", "경쟁 우위", "주도하고", "선도하고")
-    if any(term in text for text in texts for term in strong_terms):
-        issues.append(
-            "근거보다 강한 평가 표현이 포함되어 있습니다. '두각', '시장 입지', "
-            "'경쟁 우위', '주도', '선도' 같은 표현은 analysis_units에 같은 "
-            "의미의 근거가 없으면 '확인됩니다', '부각되고 있습니다', "
-            "'중요성이 커지고 있습니다'처럼 낮춰 쓰세요."
-        )
-    weak_patterns = (
-        "중요성이 커지고",
-        "중요성을 부각",
-        "중요한 역할",
-        "핵심 요소로 자리",
-        "강조하고 있습니다",
-        "경쟁력을 강화",
-        "성장을 도모",
-        "전략적 포지셔닝",
-    )
-    weak_hits = [text for text in texts if any(pattern in text for pattern in weak_patterns)]
-    if weak_hits:
-        issues.append(
-            "화면 문장에 이유 없는 중요도/성과 표현이 포함되어 있습니다. "
-            "'중요성이 커지고 있습니다', '강조하고 있습니다', '경쟁력을 강화하고 있습니다' "
-            "같은 표현은 실제 근거와 고객 평가 변화, 오퍼링 변화, 경쟁 방식 변화로 "
-            "구체화하세요."
-        )
-    for item in _display_copy_visible_items(draft):
-        if not isinstance(item, dict):
-            continue
-        title = str(item.get("title") or "")
-        description = str(item.get("description") or "")
-        why = str(item.get("why_important") or "")
-        if description and title and _is_too_similar(description, [title], threshold=0.64):
-            issues.append(
-                "description이 title을 반복합니다. description은 실제 근거와 "
-                "그 근거가 title을 지지하는 이유를 설명해야 합니다."
-            )
-            break
-        if why and (
-            _is_too_similar(why, [title, description], threshold=0.62)
-            or any(pattern in why for pattern in weak_patterns)
-        ):
-            issues.append(
-                "why_important가 title/description을 반복하거나 추상적으로 끝납니다. "
-                "고객 평가, 오퍼링 우선순위, 책임 조직, 자원 배분 중 무엇이 바뀌는지 "
-                "구체적으로 쓰세요."
-            )
-            break
-    for name in _dedupe_keep_order([_company_label(card) for card in selected_cards]):
-        if not name:
-            continue
-        count = sum(text.count(name) for text in texts)
-        if count > 8:
-            issues.append(
-                f"{name} 회사명이 {count}회 반복됩니다. 정확성이 필요한 곳만 남기고 "
-                "나머지는 문맥형 표현으로 바꾸세요."
-            )
-
-    competitor = _find_key_change_by_type(draft, "competitor_move")
-    if isinstance(competitor, dict):
-        title = str(competitor.get("title") or "")
-        if any(_company_label(card) and _company_label(card) in title for card in selected_cards):
-            issues.append(
-                "competitor_move.title이 특정 회사 하나의 움직임처럼 보입니다. "
-                "경쟁사 움직임을 묶은 경쟁 방식 변화로 다시 쓰세요."
-            )
-    coverage_issues = _key_change_card_coverage_issues(draft, selected_cards)
-    issues.extend(coverage_issues)
-    return issues
-
-
-def _key_change_card_coverage_issues(
-    draft: dict[str, Any],
-    selected_cards: list[dict[str, Any]],
-) -> list[str]:
-    company_names = _dedupe_keep_order(
-        [name for name in (_company_label(card) for card in selected_cards) if name]
-    )
-    if len(company_names) < 2:
-        return []
-    required_count = min(2, len(company_names))
-    issues: list[str] = []
-    for insight_type, label in (
-        ("market_signal", "시장 신호"),
-        ("competitor_move", "경쟁사 움직임"),
-    ):
-        item = _find_key_change_by_type(draft, insight_type)
-        if not isinstance(item, dict):
-            continue
-        text = " ".join(
-            str(item.get(key) or "") for key in ("title", "description", "why_important")
-        )
-        mentioned = [name for name in company_names if name in text]
-        if len(mentioned) < required_count:
-            issues.append(
-                f"{label} 카드가 입력 카드 전체를 충분히 반영하지 못했습니다. "
-                f"description에 최소 {required_count}개 대표 회사/카드 신호를 "
-                "근거로 포함하고, 그 신호들이 왜 하나의 브리핑 판단으로 묶이는지 "
-                "설명하세요."
-            )
-    return issues
-
-
-def _display_copy_visible_texts(value: object) -> list[str]:
-    texts: list[str] = []
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if key in {"evidence_card_ids", "evidence_refs", "provenance"}:
-                continue
-            texts.extend(_display_copy_visible_texts(item))
-    elif isinstance(value, list):
-        for item in value:
-            texts.extend(_display_copy_visible_texts(item))
-    elif isinstance(value, str):
-        stripped = value.strip()
-        if stripped:
-            texts.append(stripped)
-    return texts
-
-
-def _display_copy_visible_items(draft: dict[str, Any]) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    for item in _json_list(draft.get("key_change_cards")):
-        if isinstance(item, dict):
-            items.append(item)
-    for step in _json_list(_nested_get(draft, "interpretation_flow", "steps")):
-        if not isinstance(step, dict):
-            continue
-        items.append(step)
-        for item in _json_list(step.get("items")):
-            if isinstance(item, dict):
-                items.append(item)
-    return items
-
-
-def _find_key_change_by_type(draft: dict[str, Any], insight_type: str) -> dict[str, Any] | None:
-    for item in _json_list(draft.get("key_change_cards")):
-        if isinstance(item, dict) and item.get("insight_type") == insight_type:
-            return item
-    return None
-
-
 def _display_copy_context(
     report: dict[str, Any],
     selected_cards: list[dict[str, Any]],
@@ -1334,81 +563,6 @@ def _display_copy_context(
         "card_signal_index": _display_card_signal_index(selected_cards),
         "analysis_units": [_compact_analysis_unit_for_display(card) for card in selected_cards],
     }
-
-
-def _display_card_signal_index(selected_cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    index: list[dict[str, Any]] = []
-    for card in selected_cards:
-        package = _analysis_package(card)
-        integrated = _json_dict(package.get("integrated_issue"))
-        analysis = _json_dict(package.get("analysis"))
-        implication = _json_dict(package.get("implication"))
-        peer = _json_dict(implication.get("peer_implication"))
-        skax = _json_dict(implication.get("skax_implication"))
-        business_signals = [
-            _compact_visible_item(item, ("signal", "description"))
-            for item in _json_list(integrated.get("business_signals"))
-            if isinstance(item, dict)
-        ]
-        key_numbers = [
-            _compact_visible_item(item, ("value", "context"))
-            for item in _json_list(integrated.get("key_numbers"))
-            if isinstance(item, dict)
-        ]
-        index.append(
-            {
-                "card_id": card.get("id"),
-                "company_label": _company_label(card),
-                "main_issue": _first_text(integrated.get("main_issue"), card.get("title")),
-                "business_signals": business_signals[:3],
-                "key_numbers": key_numbers[:3],
-                "market_signal": _first_text(analysis.get("market_signal")),
-                "analysis_summary": _first_text(analysis.get("analysis_summary")),
-                "peer_meaning": _first_text(peer.get("peer_meaning")),
-                "skax_why": _first_text(skax.get("why_important")),
-                "recommended_actions": [
-                    str(action).strip()
-                    for action in _json_list(skax.get("recommended_actions"))[:3]
-                    if str(action).strip()
-                ],
-            }
-        )
-    return index
-
-
-def _display_payload_structure(value: object) -> object:
-    if isinstance(value, dict):
-        return {key: _display_payload_structure(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_display_payload_structure(value[0])] if value else []
-    if isinstance(value, str):
-        return "string"
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, (int, float)):
-        return "number"
-    if value is None:
-        return None
-    return type(value).__name__
-
-
-def _parse_json_object(value: object) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    text_value = str(value or "").strip()
-    if not text_value:
-        return {}
-    try:
-        parsed = json.loads(text_value)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text_value, flags=re.DOTALL)
-        if not match:
-            return {}
-        try:
-            parsed = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return {}
-    return parsed if isinstance(parsed, dict) else {}
 
 
 def _merge_display_copy(
@@ -1461,498 +615,6 @@ def _refresh_contract_payload(
     updated = copy.deepcopy(report)
     updated.update(contract_payload)
     return updated
-
-
-def _period_from_report(report: dict[str, Any]) -> dict[str, Any]:
-    try:
-        start = date.fromisoformat(str(report.get("date_from")))
-        end = date.fromisoformat(str(report.get("date_to")))
-    except ValueError:
-        return {}
-    return {
-        "date_from": start,
-        "date_to": end,
-        "label": str(report.get("period_label") or ""),
-    }
-
-
-def _update_text_field(target: dict[str, Any], source: dict[str, Any], key: str) -> None:
-    value = str(source.get(key) or "").strip()
-    if value:
-        target[key] = value
-
-
-def _merge_key_change_cards(updated: dict[str, Any], display_copy: dict[str, Any]) -> None:
-    source_items = [
-        item for item in _json_list(display_copy.get("key_change_cards")) if isinstance(item, dict)
-    ]
-    if not source_items:
-        source_items = [
-            item
-            for item in _json_list(_nested_get(display_copy, "core_change", "items"))
-            if isinstance(item, dict)
-        ]
-    current_items = [
-        item for item in _json_list(updated.get("key_change_cards")) if isinstance(item, dict)
-    ]
-    if not current_items:
-        current_items = [
-            item
-            for item in _json_list(_nested_get(updated, "core_change", "items"))
-            if isinstance(item, dict)
-        ]
-    if not source_items:
-        return
-    by_type = {
-        str(item.get("insight_type")): item
-        for item in source_items
-        if str(item.get("insight_type") or "").strip()
-    }
-    for index, item in enumerate(current_items):
-        source = by_type.get(str(item.get("insight_type")))
-        if source is None and index < len(source_items):
-            source = source_items[index]
-        if not isinstance(source, dict):
-            continue
-        for key in ("title", "description", "why_important"):
-            _update_text_field(item, source, key)
-        if str(item.get("insight_type")) == "competitor_move":
-            title = str(item.get("title") or "")
-            if _mentions_any_source_company(title, updated):
-                item["title"] = "경쟁사들은 기술 신호를 운영 패키지와 성장 논리로 묶고 있습니다."
-        if not item.get("description"):
-            _update_text_field(item, source, "summary")
-            if item.get("summary"):
-                item["description"] = item.pop("summary")
-        item.pop("summary", None)
-        item.pop("so_what", None)
-    updated["key_change_cards"] = current_items
-    updated["core_change"] = {"items": copy.deepcopy(current_items)}
-
-
-def _merge_flow(updated: dict[str, Any], display_copy: dict[str, Any]) -> None:
-    source_steps = _json_list(_nested_get(display_copy, "interpretation_flow", "steps"))
-    current = _json_dict(updated.get("interpretation_flow"))
-    current_steps = [step for step in _json_list(current.get("steps")) if isinstance(step, dict)]
-    for index, step in enumerate(current_steps):
-        source = _find_display_item_source(source_steps, step, index)
-        if isinstance(source, dict):
-            source_items = _json_list(source.get("items"))
-            if not source_items and (source.get("title") or source.get("description")):
-                source_items = [
-                    {
-                        "seq": 1,
-                        "title": source.get("title"),
-                        "description": source.get("description"),
-                        "evidence_card_ids": source.get("evidence_card_ids"),
-                    }
-                ]
-            if source_items:
-                merged_items = _merged_display_list(
-                    source_items=source_items,
-                    current_items=[
-                        item for item in _json_list(step.get("items")) if isinstance(item, dict)
-                    ],
-                    fields=("title", "description"),
-                    max_items=3,
-                    fill_remaining=False,
-                )
-                if merged_items:
-                    step["items"] = _sanitize_flow_step_items({**step, "items": merged_items[:3]})
-                else:
-                    step.pop("items", None)
-            else:
-                step.pop("items", None)
-        else:
-            if step.get("items"):
-                step["items"] = _sanitize_flow_step_items(step)
-        step.pop("title", None)
-        step.pop("description", None)
-        step.pop("one_liner", None)
-    if current_steps:
-        current["steps"] = current_steps
-        updated["interpretation_flow"] = current
-
-
-def _sanitize_flow_step_items(step: dict[str, Any]) -> list[dict[str, Any]]:
-    parent_title = str(step.get("title") or "")
-    parent_description = str(step.get("description") or "")
-    items: list[dict[str, Any]] = []
-    seen_titles: list[str] = []
-    seen_descriptions: list[str] = []
-    for item in _json_list(step.get("items")):
-        if not isinstance(item, dict):
-            continue
-        title = str(item.get("title") or "").strip()
-        description = str(item.get("description") or "").strip()
-        if not title or not description:
-            continue
-        if _is_too_similar(title, [parent_title], threshold=0.9):
-            continue
-        if _is_too_similar(description, [parent_description], threshold=0.9):
-            continue
-        if _is_too_similar(title, seen_titles, threshold=0.82):
-            continue
-        if _is_too_similar(description, seen_descriptions, threshold=0.78):
-            continue
-        clean_item = _compact_visible_item(
-            item,
-            ("title", "description", "evidence_card_ids"),
-        )
-        clean_item["seq"] = len(items) + 1
-        items.append(clean_item)
-        seen_titles.append(title)
-        seen_descriptions.append(description)
-        if len(items) >= 3:
-            break
-    return items
-
-
-def _merge_market_reading(updated: dict[str, Any], display_copy: dict[str, Any]) -> None:
-    source_items = _json_list(display_copy.get("market_reading"))
-    current_items = [
-        item for item in _json_list(updated.get("market_reading")) if isinstance(item, dict)
-    ]
-    merged_items = _merged_display_list(
-        source_items=source_items,
-        current_items=current_items,
-        fields=("title", "description"),
-        max_items=_MAX_MARKET_ITEMS,
-    )
-    if merged_items:
-        updated["market_reading"] = merged_items
-
-
-def _merge_sk_ax_view(updated: dict[str, Any], display_copy: dict[str, Any]) -> None:
-    source_items = _json_list(display_copy.get("sk_ax_view"))
-    current_items = [
-        item for item in _json_list(updated.get("sk_ax_view")) if isinstance(item, dict)
-    ]
-    merged_items = _merged_display_list(
-        source_items=source_items,
-        current_items=current_items,
-        fields=("title", "description"),
-        max_items=_MAX_SKAX_ITEMS,
-    )
-    if merged_items:
-        updated["sk_ax_view"] = _repair_sk_ax_view_descriptions(merged_items, updated)
-
-
-def _merged_display_list(
-    *,
-    source_items: list[Any],
-    current_items: list[dict[str, Any]],
-    fields: tuple[str, ...],
-    max_items: int,
-    fill_remaining: bool = True,
-) -> list[dict[str, Any]]:
-    typed_sources = [item for item in source_items if isinstance(item, dict)]
-    if not typed_sources:
-        return current_items[:max_items]
-    merged_items: list[dict[str, Any]] = []
-    for index, source in enumerate(typed_sources[:max_items]):
-        current = current_items[index] if index < len(current_items) else {}
-        merged: dict[str, Any] = {
-            "seq": source.get("seq") or current.get("seq") or index + 1,
-        }
-        for key in fields:
-            value = str(source.get(key) or "").strip()
-            if value:
-                merged[key] = value
-            elif current.get(key):
-                merged[key] = current[key]
-        evidence = source.get("evidence_card_ids") or current.get("evidence_card_ids")
-        if evidence:
-            merged["evidence_card_ids"] = evidence
-        merged_items.append(merged)
-    if fill_remaining:
-        for index in range(len(merged_items), min(len(current_items), max_items)):
-            current = copy.deepcopy(current_items[index])
-            current["seq"] = current.get("seq") or index + 1
-            merged_items.append(current)
-    return merged_items
-
-
-def _mentions_any_source_company(text: str, result: dict[str, Any]) -> bool:
-    value = str(text or "")
-    if not value:
-        return False
-    for name in _source_company_names(result):
-        if name and name in value:
-            return True
-    return False
-
-
-def _source_company_names(result: dict[str, Any]) -> list[str]:
-    names: list[str] = []
-    for detail in _json_list(result.get("hidden_details")):
-        if not isinstance(detail, dict):
-            continue
-        package = _json_dict(detail.get("analysis_package"))
-        peer = _json_dict(_nested_get(package, "implication", "peer_implication"))
-        company = _first_text(
-            peer.get("company_name_ko"),
-            detail.get("company_label"),
-            _nested_get(package, "integrated_issue", "main_company"),
-        )
-        if company:
-            names.append(company)
-    return _dedupe_keep_order(names)
-
-
-def _repair_sk_ax_view_descriptions(
-    items: list[dict[str, Any]],
-    result: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    repaired: list[dict[str, Any]] = []
-    seen_descriptions: list[str] = []
-    for item in items:
-        current = copy.deepcopy(item)
-        title = str(current.get("title") or "").strip()
-        description = str(current.get("description") or "").strip()
-        grounded = _grounded_sk_ax_description(title, result)
-        if grounded:
-            current["description"] = grounded
-        elif (
-            not description
-            or _is_too_similar(description, [title], threshold=0.7)
-            or _is_too_similar(description, seen_descriptions, threshold=0.72)
-            or _is_vague_display_text(description)
-            or _description_needs_detail(description)
-        ):
-            current["description"] = grounded or _sk_ax_description_from_title(title)
-        seen_descriptions.append(str(current.get("description") or ""))
-        repaired.append(current)
-    return repaired
-
-
-def _sk_ax_description_from_title(title: str) -> str:
-    normalized = str(title or "")
-    if any(token in normalized for token in ("성과", "KPI", "수치", "지표")):
-        return (
-            "고객은 기능 도입 자체보다 도입 후 장애, 통제, 생산성 문제가 "
-            "얼마나 줄어드는지를 먼저 확인하려 합니다. 따라서 임원 의사결정에서는 "
-            "적용 현장, 측정 지표, 안정화 기준을 사업 우선순위와 책임 조직 기준으로 "
-            "함께 묶어야 합니다."
-        )
-    if any(token in normalized for token in ("레퍼런스", "사례")):
-        return (
-            "같은 구축 이력도 적용 현장, 운영 전환 과정, 확산 결과를 함께 보여줄 때 "
-            "기술 공급 사례가 아니라 신뢰 가능한 운영 실적으로 읽힙니다."
-        )
-    if any(token in normalized for token in ("보안", "데이터 통제", "프라이빗")):
-        return (
-            "고객이 외부 모델 활용보다 데이터 통제와 책임 범위를 먼저 확인할 수 있으므로, "
-            "구축 방식과 운영 거버넌스를 오퍼링 필수 조건과 리스크 승인 기준으로 "
-            "함께 정해야 합니다."
-        )
-    if any(token in normalized for token in ("운영 시나리오", "운영 패키지", "통합")):
-        return (
-            "개별 기능보다 도입 후 운영 흐름을 먼저 보여주면 고객이 적용 범위, "
-            "리스크 감소 방식, 성과 확인 지점을 더 빠르게 판단할 수 있습니다."
-        )
-    return (
-        "이 시사점은 기술 설명을 회사 행동으로 바꾸는 부분이므로, 고객군, "
-        "적용 범위, 책임 조직, 기대 효과를 한 번에 판단할 수 있게 결정 기준을 정해야 합니다."
-    )
-
-
-def _grounded_sk_ax_description(
-    title: str,
-    result: dict[str, Any] | None,
-) -> str:
-    if not result:
-        return ""
-    basis = _detailed_basis_sentence_from_result(
-        result,
-        focus_text=title,
-    ) or _basis_signal_sentence_from_result(result)
-    actions = _recommended_action_sentences_from_result(result)
-    if not basis:
-        return ""
-    normalized = str(title or "")
-    if any(token in normalized for token in ("운영 성과", "리스크", "실행 근거")):
-        return (
-            f"{basis} 이 근거는 고객의 관심이 기능 보유 여부보다 도입 후 "
-            "운영 불확실성을 얼마나 낮출 수 있는지로 옮겨가고 있음을 보여줍니다. "
-            "그래서 임원 의사결정에서는 기능 목록보다 줄일 운영 문제, 책임 범위, "
-            "성과 측정 기준을 오퍼링 조건으로 먼저 확정해야 합니다."
-        )
-    if any(token in normalized for token in ("운영 시나리오", "운영 설계", "제안서 메시지")):
-        return (
-            f"{basis} 이 신호는 고객이 단일 기능보다 도입 후 운영 흐름과 "
-            "책임 범위를 함께 판단한다는 뜻입니다. 따라서 SK AX는 기술 항목을 "
-            "나열하기보다 데이터 수집, 이상 감지, 현장 적용, 성과 확인 책임을 "
-            "오퍼링과 책임 조직에 함께 배정해야 합니다."
-        )
-    if any(token in normalized for token in ("프라이빗", "보안", "데이터 통제")):
-        return (
-            f"{basis} 따라서 데이터 통제 방식, 책임 범위, 운영 거버넌스를 "
-            "리스크 승인 게이트로 정해야 고객이 도입 리스크를 판단할 수 있습니다."
-        )
-    if any(token in normalized for token in ("성과 수치", "KPI", "지표", "적용 현장")):
-        return (
-            f"{basis} 이 신호는 고객이 구축 여부보다 적용 현장에서 어떤 문제가 "
-            "줄고 어떤 지표로 개선을 확인할 수 있는지를 보려 한다는 뜻입니다. "
-            "따라서 메시지는 플랫폼 기능보다 운영 장면, 측정 지표, 안착 기준을 "
-            "앞세워야 합니다."
-        )
-    if any(token in normalized for token in ("레퍼런스", "사례")):
-        return (
-            f"{basis} 이미 가진 사례도 구축 사실보다 적용 현장, 운영 전환 과정, "
-            "확산 결과 순서로 보여줄 때 신뢰 가능한 운영 실적으로 읽힙니다."
-        )
-    if actions:
-        return (
-            f"{basis} 이 근거를 회사 행동으로 옮길 때는 기능명보다 고객의 "
-            "운영 판단에 필요한 적용 범위, 책임 구조, 성과 확인 방식을 먼저 정해야 합니다."
-        )
-    return basis
-
-
-def _detailed_basis_sentence_from_result(
-    result: dict[str, Any],
-    *,
-    focus_text: str = "",
-) -> str:
-    phrases = _company_detail_phrases_from_result(result, focus_text=focus_text)
-    if not phrases:
-        return ""
-    joined = _join_korean(phrases[:2])
-    return f"구체적으로는 {joined}{_subject_particle(joined)} 확인됩니다."
-
-
-def _company_detail_phrases_from_result(
-    result: dict[str, Any],
-    *,
-    focus_text: str = "",
-) -> list[str]:
-    phrases: list[str] = []
-    for detail in _json_list(result.get("hidden_details")):
-        if not isinstance(detail, dict):
-            continue
-        package = _json_dict(detail.get("analysis_package"))
-        company = _first_text(
-            _nested_get(package, "implication", "peer_implication", "company_name_ko"),
-            detail.get("company_label"),
-        )
-        signal = _business_signal_phrase(package)
-        number_context = _key_number_context_phrase(package, signal)
-        if company and signal and number_context:
-            phrases.append(f"{company}의 {number_context}와 연결된 {signal}")
-        elif company and signal:
-            phrases.append(f"{company}의 {signal}")
-    phrases = _dedupe_keep_order(phrases)
-    focused = _filter_focus_phrases(phrases, focus_text)
-    return focused or phrases
-
-
-def _business_signal_phrase(package: dict[str, Any]) -> str:
-    integrated = _json_dict(package.get("integrated_issue"))
-    signals = [
-        item for item in _json_list(integrated.get("business_signals")) if isinstance(item, dict)
-    ]
-    first_signal = signals[0] if signals else {}
-    return _brief_noun_phrase(
-        _first_text(
-            first_signal.get("signal"),
-            first_signal.get("description"),
-            _nested_get(package, "analysis", "market_signal"),
-        ),
-        max_chars=58,
-    )
-
-
-def _key_number_context_phrase(package: dict[str, Any], signal: str = "") -> str:
-    integrated = _json_dict(package.get("integrated_issue"))
-    key_numbers = [
-        item for item in _json_list(integrated.get("key_numbers")) if isinstance(item, dict)
-    ]
-    preferred = [
-        item for item in key_numbers if _shares_keyword(signal, _first_text(item.get("context")))
-    ]
-    values: list[str] = []
-    for item in preferred[:3]:
-        if not isinstance(item, dict):
-            continue
-        value = _first_text(item.get("value"))
-        context = _first_text(item.get("context"))
-        if value and _looks_like_key_number(value):
-            values.append(_format_key_number_context(value, context))
-    return "·".join(_dedupe_keep_order(values))
-
-
-def _format_key_number_context(value: str, context: str) -> str:
-    if context:
-        return f"{context} {value}"
-    return value
-
-
-def _looks_like_key_number(value: str) -> bool:
-    text = str(value or "").strip()
-    if len(text) > 24:
-        return False
-    return bool(re.search(r"\d", text))
-
-
-def _filter_focus_phrases(phrases: list[str], focus_text: str) -> list[str]:
-    focus = str(focus_text or "")
-    if not focus:
-        return []
-    keyword_groups = [
-        ("프라이빗", "보안", "데이터 통제", "AI", "클라우드"),
-        ("로봇", "자동화", "제조", "스마트팩토리", "SW", "운영"),
-        ("성과", "KPI", "수치", "지표", "리스크"),
-    ]
-    active = [group for group in keyword_groups if any(token in focus for token in group)]
-    if not active:
-        return []
-    tokens = {token for group in active for token in group}
-    return [phrase for phrase in phrases if any(token in phrase for token in tokens)]
-
-
-def _shares_keyword(left: str, right: str) -> bool:
-    left_text = str(left or "")
-    right_text = str(right or "")
-    if not left_text or not right_text:
-        return False
-    tokens = ("로봇", "AI", "클라우드", "스마트", "매출", "생산", "투입", "프라이빗")
-    return any(token in left_text and token in right_text for token in tokens)
-
-
-def _basis_signal_sentence_from_result(result: dict[str, Any]) -> str:
-    signals = _basis_signal_phrases_from_result(result)
-    if not signals:
-        return ""
-    joined = _join_korean(signals[:2])
-    return f"{joined}{_subject_particle(joined)} 근거로 확인되고 있습니다."
-
-
-def _basis_signal_phrases_from_result(result: dict[str, Any]) -> list[str]:
-    phrases: list[str] = []
-    for package in _analysis_packages_from_result(result):
-        integrated = _json_dict(package.get("integrated_issue"))
-        analysis = _json_dict(package.get("analysis"))
-        package_phrases: list[str] = []
-        for signal in _json_list(integrated.get("business_signals")):
-            if isinstance(signal, dict):
-                package_phrases.append(_brief_noun_phrase(signal.get("signal"), max_chars=44))
-        package_phrases.append(_brief_noun_phrase(analysis.get("market_signal"), max_chars=58))
-        package_phrases.append(_brief_noun_phrase(analysis.get("impact_reason"), max_chars=58))
-        phrases.extend([phrase for phrase in package_phrases if phrase][:1])
-    return _dedupe_keep_order([phrase for phrase in phrases if phrase])
-
-
-def _recommended_action_sentences_from_result(result: dict[str, Any]) -> list[str]:
-    actions: list[str] = []
-    for package in _analysis_packages_from_result(result):
-        skax = _json_dict(_nested_get(package, "implication", "skax_implication"))
-        actions.extend(
-            str(action).strip() for action in _json_list(skax.get("recommended_actions"))
-        )
-    return _dedupe_keep_order(
-        [_brief_sentence(action, max_chars=100) for action in actions if action]
-    )
 
 
 def _company_issue_sentence_from_result(result: dict[str, Any]) -> str:
@@ -2023,49 +685,6 @@ def _company_issue_phrases_from_result(result: dict[str, Any]) -> list[str]:
     return _dedupe_keep_order(phrases)
 
 
-def _analysis_packages_from_result(result: dict[str, Any]) -> list[dict[str, Any]]:
-    packages: list[dict[str, Any]] = []
-    for detail in _json_list(result.get("hidden_details")):
-        if isinstance(detail, dict):
-            package = _json_dict(detail.get("analysis_package"))
-            if package:
-                packages.append(package)
-    return packages
-
-
-def _brief_noun_phrase(value: object, *, max_chars: int) -> str:
-    phrase = _brief_sentence(value, max_chars=max_chars)
-    return _strip_terminal_punctuation(phrase)
-
-
-def _subject_particle(value: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "이"
-    code = ord(text[-1])
-    if 0xAC00 <= code <= 0xD7A3 and (code - 0xAC00) % 28 == 0:
-        return "가"
-    return "이"
-
-
-def _is_vague_display_text(value: str) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return True
-    vague_markers = (
-        "기능 설명보다",
-        "실행 근거",
-        "수요 변화",
-        "사업 방향",
-        "고객 설득 메시지",
-        "중시하고 있습니다",
-        "포지셔닝",
-        "제안 초반에는 기능 목록보다",
-        "어떤 운영 문제가 줄고",
-    )
-    return any(marker in text for marker in vague_markers) and len(text) < 90
-
-
 def _needs_more_grounding(value: str, result: dict[str, Any] | None) -> bool:
     if not result:
         return False
@@ -2077,33 +696,6 @@ def _needs_more_grounding(value: str, result: dict[str, Any] | None) -> bool:
         *signals,
     ]
     return not any(term and term in text for term in grounding_terms)
-
-
-def _find_display_item_source(
-    source_items: list[Any],
-    current_item: dict[str, Any],
-    fallback_index: int,
-) -> dict[str, Any] | None:
-    current_seq = current_item.get("seq")
-    current_label = str(
-        current_item.get("label")
-        or current_item.get("insight_type")
-        or current_item.get("use_case")
-        or ""
-    )
-    for source in source_items:
-        if not isinstance(source, dict):
-            continue
-        if current_seq is not None and source.get("seq") == current_seq:
-            return source
-        source_label = str(
-            source.get("label") or source.get("insight_type") or source.get("use_case") or ""
-        )
-        if current_label and source_label == current_label:
-            return source
-    if fallback_index < len(source_items) and isinstance(source_items[fallback_index], dict):
-        return source_items[fallback_index]
-    return None
 
 
 def _average_confidence(selected_cards: list[dict[str, Any]]) -> float:
@@ -2150,29 +742,6 @@ def _aggregate_text(
         return _brief_sentence(texts[0], max_chars=max_chars)
     joined = " ".join(_brief_sentence(text, max_chars=110) for text in texts[:max_items])
     return _clip_text(joined, max_chars=max_chars)
-
-
-def _combine_blocks(
-    values: list[object],
-    fallback: str,
-    *,
-    max_items: int = 2,
-    max_chars: int = 240,
-) -> str:
-    seen: set[str] = set()
-    blocks: list[str] = []
-    for value in values:
-        text_value = str(value or "").strip()
-        key = re.sub(r"\s+", " ", text_value)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        blocks.append(key)
-        if len(blocks) >= max_items:
-            break
-    if not blocks:
-        return _brief_sentence(fallback, max_chars=max_chars)
-    return _clip_text(" ".join(blocks), max_chars=max_chars)
 
 
 def _first_distinct_text(values: list[object]) -> str:
@@ -3081,30 +1650,6 @@ def _empty_report(
     }
 
 
-def _recommended_action_pairs(selected_cards: list[dict[str, Any]]) -> list[tuple[str, str]]:
-    pairs: list[tuple[str, str]] = []
-    for card in selected_cards:
-        package = _analysis_package(card)
-        skax = _json_dict(_nested_get(package, "implication", "skax_implication"))
-        why = _first_text(skax.get("why_important"), skax.get("potential_impact"))
-        for action in _json_list(skax.get("recommended_actions")):
-            action_text = str(action or "").strip()
-            if action_text:
-                pairs.append((action_text, why))
-    return _dedupe_action_pairs(pairs)
-
-
-def _dedupe_action_pairs(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    seen: set[str] = set()
-    result: list[tuple[str, str]] = []
-    for action, why in pairs:
-        key = re.sub(r"\s+", " ", action).strip()
-        if key and key not in seen:
-            seen.add(key)
-            result.append((action, why))
-    return result
-
-
 def _action_use_case(_action: str) -> str:
     return "SK AX 관점"
 
@@ -3219,14 +1764,6 @@ def _display_sk_ax_view(
     ][:_MAX_SKAX_ITEMS]
 
 
-def _display_sk_ax_title(selected_cards: list[dict[str, Any]]) -> str:
-    for action, _why in _recommended_action_pairs(selected_cards):
-        title = _brief_sentence(action)
-        if title:
-            return title
-    return ""
-
-
 def _display_evidence_ids(
     selected_cards: list[dict[str, Any]],
     default_evidence: list[Any],
@@ -3235,27 +1772,6 @@ def _display_evidence_ids(
     if evidence_ids:
         return evidence_ids
     return [str(card["id"]) for card in selected_cards if card.get("id")]
-
-
-def _join_korean(values: list[str]) -> str:
-    cleaned = [value for value in values if value]
-    if not cleaned:
-        return ""
-    if len(cleaned) == 1:
-        return cleaned[0]
-    if len(cleaned) == 2:
-        return f"{cleaned[0]}{_and_particle(cleaned[0])} {cleaned[1]}"
-    return f"{', '.join(cleaned[:-1])}, {cleaned[-1]}"
-
-
-def _and_particle(value: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "와"
-    code = ord(text[-1])
-    if 0xAC00 <= code <= 0xD7A3 and (code - 0xAC00) % 28 == 0:
-        return "와"
-    return "과"
 
 
 def _key_change_cards_payload(
@@ -3537,10 +2053,6 @@ def _competitor_importance_sentence(entries: list[dict[str, Any]]) -> str:
     return "이 움직임은 같은 방향의 경쟁 신호가 반복될 때 고객군 우선순위를 바꿀 수 있습니다."
 
 
-def _strip_terminal_punctuation(value: str) -> str:
-    return str(value or "").rstrip(" .。!?！？")
-
-
 def _combine_company_signals(entries: list[dict[str, Any]], key: str) -> str:
     phrases = []
     for entry in entries[:3]:
@@ -3566,25 +2078,6 @@ def _select_distinct_sentence(
     if not _is_too_similar(fallback_sentence, avoid):
         return fallback_sentence
     return _generic_distinct_sentence(avoid, max_chars=max_chars)
-
-
-def _is_too_similar(value: str, others: list[str], *, threshold: float = 0.82) -> bool:
-    normalized = _normalize_similarity_text(value)
-    if not normalized:
-        return False
-    for other in others:
-        other_normalized = _normalize_similarity_text(other)
-        if not other_normalized:
-            continue
-        if normalized == other_normalized:
-            return True
-        if SequenceMatcher(None, normalized, other_normalized).ratio() >= threshold:
-            return True
-    return False
-
-
-def _normalize_similarity_text(value: str) -> str:
-    return re.sub(r"\s+", " ", str(value or "").strip().lower())
 
 
 def _generic_distinct_sentence(avoid: list[str], *, max_chars: int) -> str:
@@ -3880,25 +2373,6 @@ def _evidence_texts(package: dict[str, Any]) -> list[str]:
         if isinstance(item, dict) and str(item.get("evidence_text") or "").strip():
             texts.append(str(item["evidence_text"]).strip())
     return texts[:5]
-
-
-def _brief_sentence(value: object, max_chars: int = 120) -> str:
-    text_value = _limit_sentences(str(value or "").strip(), max_sentences=1)
-    return _clip_text(text_value, max_chars=max_chars)
-
-
-def _brief_sentences(value: object, *, max_sentences: int, max_chars: int) -> str:
-    text_value = _limit_sentences(str(value or "").strip(), max_sentences=max_sentences)
-    return _clip_text(text_value, max_chars=max_chars)
-
-
-def _limit_sentences(value: str, max_sentences: int) -> str:
-    text_value = " ".join(str(value or "").split())
-    if not text_value:
-        return ""
-    sentences = re.split(r"(?<=[.!?。！？])\s+", text_value)
-    selected = [sentence.strip() for sentence in sentences if sentence.strip()][:max_sentences]
-    return " ".join(selected) if selected else text_value
 
 
 def _frontend_display_payload(result: dict[str, Any]) -> dict[str, Any]:
@@ -4581,12 +3055,6 @@ def _front_key_numbers(integrated: dict[str, Any]) -> list[dict[str, str]]:
         if value and _looks_like_key_number(value):
             numbers.append({"value": value, "context": context})
     return numbers
-
-
-def _front_evidence_card_ids(entries: list[dict[str, Any]]) -> list[str]:
-    return _dedupe_keep_order(
-        [str(entry.get("card_id")) for entry in entries if entry.get("card_id")]
-    )
 
 
 def _entry_evidence_card_ids(entry: dict[str, Any]) -> list[str]:
@@ -5616,17 +4084,6 @@ def _grounded_why_important(value: str, result: dict[str, Any]) -> str:
     if not basis:
         return value
     return f"{basis} 따라서 {str(value).removeprefix('따라서 ').strip()}"
-
-
-def _description_needs_detail(value: str) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return True
-    return len(text) < 95 or len(re.split(r"(?<=[.!?。！？])\s+", text)) <= 1
-
-
-def _compact_visible_item(item: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
-    return {key: item[key] for key in keys if item.get(key) not in (None, "", [])}
 
 
 def _strip_default_hidden_fields(value: object) -> object:
