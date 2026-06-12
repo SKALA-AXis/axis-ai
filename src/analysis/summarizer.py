@@ -1570,6 +1570,11 @@ def _build_extracted_facts(
     """기사 fact note에 안정적인 fact_id를 붙여 요약 가능한 fact 목록으로 변환한다."""
     facts: list[dict[str, Any]] = []
     counters: dict[int, int] = {}
+    article_by_id = {
+        _article_numeric_id(article): article
+        for article in articles
+        if _article_numeric_id(article) > 0
+    }
 
     def add_fact(
         *,
@@ -1586,6 +1591,11 @@ def _build_extracted_facts(
         text = normalize_korean_spacing(raw_fact)
         evidence = normalize_korean_spacing(evidence_text or raw_fact)
         if not text or not evidence:
+            return
+        if _fact_is_off_topic_for_article(
+            f"{text} {evidence}",
+            article=article_by_id.get(article_id) or {},
+        ):
             return
         if _is_duplicate_extracted_fact(facts, article_id, text, evidence):
             return
@@ -2183,6 +2193,72 @@ def _similar_selected_fact_penalty(
 
 def _fact_similarity_text(fact: dict[str, Any]) -> str:
     return str(fact.get("normalized_fact") or fact.get("evidence_text") or "").strip()
+
+
+def _fact_is_off_topic_for_article(text: str, *, article: dict[str, Any]) -> bool:
+    title = str(article.get("title") or "").strip()
+    if not title:
+        return False
+    title_tokens = _article_topic_tokens(title)
+    if len(title_tokens) < 2:
+        return False
+    value = str(text or "")
+    fact_tokens = _article_topic_tokens(value)
+    if title_tokens & fact_tokens:
+        return False
+    if _article_company_alias_mentioned(value, article):
+        return False
+    return True
+
+
+def _article_topic_tokens(text: str) -> set[str]:
+    stopwords = {
+        "속보",
+        "단독",
+        "특징주",
+        "정부",
+        "사업",
+        "참여",
+        "선정",
+        "체결",
+        "규모",
+        "지원",
+        "구축",
+        "확보",
+        "운용",
+        "관련",
+        "오늘",
+        "이번",
+    }
+    return {
+        token
+        for token in _article_similarity_tokens(text)
+        if len(token) >= 2 and token not in stopwords and not token.isdigit()
+    }
+
+
+def _article_similarity_tokens(text: str) -> set[str]:
+    return {
+        token.lower()
+        for token in re.findall(r"[가-힣A-Za-z0-9]{2,}", str(text or ""))
+        if len(token) >= 2
+    }
+
+
+def _article_company_alias_mentioned(text: str, article: dict[str, Any]) -> bool:
+    companies = [
+        *_normalize_string_list(article.get("company")),
+        *_normalize_string_list(article.get("matched_companies")),
+        *_normalize_string_list(article.get("matched_company")),
+    ]
+    value = str(text or "")
+    for company_id in companies:
+        aliases = _PEER_ALIASES.get(company_id) or COMPANY_ALIASES.get(company_id) or []
+        if any(
+            alias and re.search(re.escape(str(alias)), value, re.IGNORECASE) for alias in aliases
+        ):
+            return True
+    return False
 
 
 def _summarize_from_fact_ids(

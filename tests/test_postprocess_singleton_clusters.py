@@ -106,6 +106,76 @@ def test_small_lg_cns_anthropic_cluster_merges_to_large_cluster_with_llm(monkeyp
     assert candidates[0].target.cluster_id == 46656
 
 
+def test_llm_confirmed_merge_survives_high_min_score(monkeypatch) -> None:
+    monkeypatch.setattr(postprocess, "_title_llm_same_event", lambda *args, **kwargs: True)
+    source = SourceCluster(
+        cluster_id=35605,
+        article_ids=[35605],
+        titles=["티오리, 포스코DX에 LLM 보안 솔루션 '알파프리즘' 공급"],
+        snippets=["티오리가 포스코DX에 LLM 보안 솔루션 알파프리즘을 공급한다."],
+        title="티오리, 포스코DX에 LLM 보안 솔루션 '알파프리즘' 공급",
+        article_count=1,
+        event_at=None,
+    )
+    target = Cluster(
+        cluster_id=35607,
+        article_count=1,
+        article_ids=[35607],
+        titles=["포스코DX, LLM 보안 솔루션 '티오리 알파프리즘' 전사 적용"],
+        snippets=["포스코DX가 티오리의 LLM 보안 솔루션 알파프리즘을 전사 적용한다."],
+        latest_event_at=None,
+    )
+
+    candidates = _find_candidates(
+        sources=[source],
+        targets=[target],
+        max_time_gap_hours=72,
+        min_score=0.72,
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].score >= 0.72
+
+
+def test_llm_confirmed_merge_does_not_get_dropped_as_ambiguous(monkeypatch) -> None:
+    monkeypatch.setattr(postprocess, "_title_llm_same_event", lambda *args, **kwargs: True)
+    source = SourceCluster(
+        cluster_id=100,
+        article_ids=[100],
+        titles=["삼성SDS, 국가 AI 컴퓨팅센터 사업 참여"],
+        snippets=["삼성SDS가 국가 AI 컴퓨팅센터 구축 사업의 민간 참여자로 확정됐다."],
+        title="삼성SDS, 국가 AI 컴퓨팅센터 사업 참여",
+        article_count=1,
+        event_at=None,
+    )
+    small_target = Cluster(
+        cluster_id=101,
+        article_count=2,
+        article_ids=[101, 102],
+        titles=["삼성SDS, AI 컴퓨팅센터 참여 확정"],
+        snippets=["삼성SDS가 국가 AI 컴퓨팅센터 사업에 참여한다."],
+        latest_event_at=None,
+    )
+    large_target = Cluster(
+        cluster_id=201,
+        article_count=5,
+        article_ids=[201, 202, 203, 204, 205],
+        titles=["삼성SDS 컨소시엄, 국가 AI 컴퓨팅센터 구축 사업자로 선정"],
+        snippets=["삼성SDS 컨소시엄이 국가 AI 컴퓨팅센터 구축 사업자로 선정됐다."],
+        latest_event_at=None,
+    )
+
+    candidates = _find_candidates(
+        sources=[source],
+        targets=[small_target, large_target],
+        max_time_gap_hours=72,
+        min_score=0.72,
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].target.cluster_id == 201
+
+
 def test_group_merge_skips_sources_already_merged_to_large_target() -> None:
     source = SourceCluster(
         cluster_id=46655,
