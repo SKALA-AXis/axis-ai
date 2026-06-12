@@ -9,6 +9,7 @@ from src.agents.briefing_generation_agent import (
     _normalize_mock_item,
 )
 from src.api.briefing_schemas import BriefingGenerateRequest, BriefingGenerateResponse
+from src.api.router import _agent_failure_reason
 
 
 def _mock_item(
@@ -210,6 +211,32 @@ def test_briefing_schema_accepts_integrated_issue_ids():
     request = BriefingGenerateRequest(integrated_issue_ids=["111"])
 
     assert request.integrated_issue_ids == ["111"]
+
+
+def test_briefing_empty_period_returns_empty_success_payload():
+    result = asyncio.run(
+        BriefingGenerationAgent().generate(
+            briefing_type="daily",
+            anchor_date="2026-06-04",
+            use_mock=True,
+            mock_items=[
+                _mock_item(
+                    "CN-1",
+                    "11111111-1111-1111-1111-111111111111",
+                    created_at="2026-06-03T09:00:00+09:00",
+                )
+            ],
+            refine_display_copy=False,
+        )
+    )
+
+    response = BriefingGenerateResponse.model_validate(result)
+    assert response.status == "completed"
+    assert response.error_message == "기간 조건에 맞는 카드뉴스가 없습니다."
+    assert response.selected_cards == []
+    assert response.related_card_ids == []
+    assert result["result_kind"] == "empty_briefing"
+    assert _agent_failure_reason(result) == ""
 
 
 def test_briefing_rewrites_program_actions_for_executives():
