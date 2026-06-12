@@ -21,12 +21,12 @@ if TYPE_CHECKING:
     from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
-from src.api.today_insight_schemas import (
+from src.config.companies import COMPANIES
+from src.config.company_tiers import SELF_COMPANY_IDS
+from src.contracts.today_insight_schemas import (
     TodayInsightGenerateRequest,
     TodayInsightGenerateResponse,
 )
-from src.config.companies import COMPANIES
-from src.config.company_tiers import SELF_COMPANY_IDS
 from src.db.postgres import SessionLocal
 from src.observability.langfuse_client import tracing_config
 from src.services.profile_context_loader import ProfileContextLoader
