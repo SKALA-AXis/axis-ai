@@ -36,14 +36,6 @@ _DISPLAY_ITEM_MIN = 1
 _DISPLAY_ITEM_PREFERRED = 3
 _DISPLAY_ITEM_MAX = 5
 
-_FRONTEND_PEER_IDS = {
-    "sk_ax",
-    "samsung_sds",
-    "lg_cns",
-    "hyundai_autoever",
-    "posco_dx",
-}
-
 _FRONTEND_SECTOR_IDS = {
     "security",
     "ax",
@@ -3441,7 +3433,7 @@ def _validation_sc_score(
 
 def _normalize_peer_id(value: Any) -> str | None:
     peer_id = str(value or "").strip()
-    return peer_id if peer_id in _FRONTEND_PEER_IDS else None
+    return peer_id or None
 
 
 def _normalize_sector(value: Any) -> str:
