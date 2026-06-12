@@ -10,6 +10,7 @@ card_news는 화면과 저장 매핑에 필요한 card id anchor로 사용하고
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import logging
@@ -198,13 +199,19 @@ class BriefingGenerationAgent:
             )
 
         _ = ratios, mock_source_items
-        briefing_basis = _briefing_basis_from_analysis_packages(
+        # 아래 동기 호출들(CPU 합성·sync llm.invoke·DB 쓰기)을 to_thread 로 격리 —
+        # async generate 가 이벤트 루프에서 직접 실행하면 GPT 왕복 동안 루프가 멈춰
+        # readiness/liveness probe 무응답 → 단일 replica 순단 (2026-06-11 실측, issue #146).
+        # router.py 의 delivery_graph 처리(L291)와 동일 패턴.
+        briefing_basis = await asyncio.to_thread(
+            _briefing_basis_from_analysis_packages,
             selected_cards=selected_cards,
             period=period,
             user_context=user_context,
         )
         if refine_display_copy:
-            briefing_basis = _refine_briefing_basis_with_llm(
+            briefing_basis = await asyncio.to_thread(
+                _refine_briefing_basis_with_llm,
                 briefing_basis=briefing_basis,
                 selected_cards=selected_cards,
                 period=period,
@@ -223,13 +230,14 @@ class BriefingGenerationAgent:
             provenance_base=provenance_base,
         )
         if refine_display_copy:
-            report = _refine_display_copy_with_llm(
+            report = await asyncio.to_thread(
+                _refine_display_copy_with_llm,
                 report=report,
                 selected_cards=selected_cards,
                 llm=self._llm,
             )
         if save:
-            save_briefing_report(report, selected_cards=selected_cards)
+            await asyncio.to_thread(save_briefing_report, report, selected_cards=selected_cards)
         return report
 
 
