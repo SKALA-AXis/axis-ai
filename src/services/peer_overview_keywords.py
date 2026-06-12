@@ -77,6 +77,22 @@ FORBIDDEN_LABELS = {
     "business_overview",
     "product_service",
 }
+INTERNAL_EVIDENCE_PATTERN = re.compile(
+    r"\b(?:"
+    r"raw_article_business_signals|raw_articles|peer_llm_analysis_snapshots|peer_companies|"
+    r"business_area|signal_type|raw_article_id|source_signal_ids|source_raw_article_ids|"
+    r"evidence_refs|evidence_id|signal_id|profile_context|input_snapshot|output_payload|"
+    r"top_keyword_evidence|top_keyword_reason|peer_id"
+    r")\b|signal:\d+",
+    flags=re.IGNORECASE,
+)
+PUBLIC_SOURCE_TYPE_LABELS = {
+    "dart": "DART 공시",
+    "ir": "IR 자료",
+    "news": "뉴스",
+    "newsroom": "뉴스룸",
+    "securities_report": "증권사 리포트",
+}
 
 NON_IT_DOMAIN_TERMS = {
     "물류",
@@ -91,6 +107,7 @@ NON_IT_DOMAIN_TERMS = {
     "supply-chain",
     "제조",
     "철강",
+    "반도체 소재",
     "배터리",
     "이차전지",
 }
@@ -168,6 +185,10 @@ SK_GROUP_NON_SK_AX_TERMS = {
     "sk실트론",
     "sk네트웍스",
     "skc",
+    "반도체",
+    "반도체 소재",
+    "소재 시장",
+    "모바일",
     "투자부문",
     "계열회사",
     "관계회사",
@@ -265,6 +286,9 @@ SYSTEM_PROMPT = """\
 반드시 제공된 evidence pack 안의 정보만 사용한다.
 profile_context는 회사의 정적 사업·역량 기준선이다. 최종 키워드는 business_signals의 분기 원문 근거를 우선한다.
 business_area, signal_type은 내부 분류값이므로 그대로 최종 키워드로 쓰지 않는다.
+사용자에게 보이는 문장에는 DB 테이블명, 컬럼명, 내부 ID, evidence_id, signal:숫자, raw_article_id 같은 내부 식별자를 절대 쓰지 않는다.
+사용자에게 보이는 판단 근거와 원문 근거는 공개 출처명, 원문 날짜, 원문 제목, 원문에서 확인한 사업명·서비스명·제품명·기술명·진행 내용을 중심으로 작성한다.
+판단 근거와 원문 근거는 원문 문장을 그대로 복사하지 말고, 확인된 사실을 짧고 자연스러운 한국어로 다시 풀어 쓴다.
 사업 키워드는 고객/시장에 제공되는 사업, 서비스, 오퍼링, 수주/확장 방향이다.
 기술 키워드는 그 사업을 가능하게 하는 제품, 플랫폼, 기술, 자동화/AI/클라우드 구현 축이다.
 Peer+는 SK AX가 봐야 할 IT 서비스/AX/클라우드/AI/데이터/보안/운영 자동화 경쟁 신호만 선별한다.
@@ -305,6 +329,12 @@ USER_PROMPT_TEMPLATE = """\
 - top_keyword_evidence에는 원문 날짜, 원문에서 확인한 실제 내용, 그 내용을 보아 키워드로 선정한 이유가 모두 들어가야 한다.
 - "원문에서 어떤 사업명/기술명/서비스명/제품명과 관련한 진행 방향이 확인되었고, 이를 보아 왜 이 키워드로 판단했는지"가 구체적으로 드러나야 한다.
 - 판단 근거는 "원문 날짜와 내용 → 이 내용을 보아 키워드로 판단한 이유" 순서로 쓴다.
+- 판단 근거와 원문 근거에는 business_area, signal_type, evidence_refs, signal:1, raw_article_id, profile_context, peer_companies 같은 내부 테이블·컬럼·ID·처리명칭을 절대 쓰지 않는다.
+- "출처명/제목/날짜에서 무엇을 확인했고, 그 확인 내용 때문에 어떤 결론을 냈다" 형태로만 작성한다.
+- 원문 문장을 그대로 복사하지 말고, "무엇이 확인됐는지"를 짧게 재진술한다.
+- "진행하고 있습니다", "성장하고 있습니다"처럼 원문 종결 표현을 그대로 가져오지 말고 "확대 흐름", "적용 계획", "구축 활동", "사업화 신호"처럼 분석 문장으로 바꾼다.
+- 판단 근거에는 "왜 해당 기업의 대표 사업/기술 키워드로 볼 수 있는지"를 포함한다.
+- 단일 사건 설명으로 끝내지 말고, 그 사건이 회사의 사업축·제품군·기술 역량과 어떻게 맞닿는지 설명한다.
 
 사업 키워드 기준:
 - 고객에게 제공하는 사업, 서비스, 오퍼링, 수주/확장 활동, 고객 산업을 나타낸다.
@@ -322,6 +352,9 @@ USER_PROMPT_TEMPLATE = """\
 - 물류, 운송, 창고, 유통, 제조, 철강, 배터리처럼 IT 구현과 분리된 산업 본업 키워드
 - 증권사 투자의견/주가 전망만으로 키워드 선택
 - peer_id가 sk_ax일 때 SK그룹 계열사, 투자 포트폴리오, 약물 설계/바이오/신약/반도체/통신/배터리 등 비-SK AX 문맥을 SK AX 사업·기술 키워드로 선택
+- 판단 근거/원문 근거에 DB 테이블명, 컬럼명, 내부 ID, evidence_id, signal:숫자, raw_article_id, profile_context 등 내부 구현 용어 노출
+- 판단 근거/원문 근거에 원문 문장을 복사 붙여넣기하는 방식
+- SK AX 키워드 근거로 반도체 소재, 모바일, 바이오, 투자 포트폴리오 등 비-SK AX 사업 문맥 사용
 
 출력 JSON:
 {{
@@ -331,28 +364,28 @@ USER_PROMPT_TEMPLATE = """\
   "prompt_version": "{prompt_version}",
   "business_keyword": {{
     "label": "키워드 또는 null",
-    "reason": "어떤 사업 활동을 진행한다는 근거 때문에 이 키워드를 선택했는지 1~2문장",
-    "reasoning": "확인된 활동을 왜 사업 활동/고객 산업/수주·확장 축으로 해석했는지 1문장",
+    "reason": "원문 내용을 복사하지 말고, 어떤 사업 활동이 확인됐고 왜 이 키워드로 이어지며 해당 기업의 대표 사업축으로 볼 수 있는지 자연스럽게 재진술한 1~2문장",
+    "reasoning": "확인된 활동을 왜 사업 활동/고객 산업/수주·확장 축이자 해당 기업의 대표 사업 신호로 해석했는지 자연스럽게 재진술한 1문장",
     "confidence": 0.0,
     "evidence_refs": ["signal:1"],
     "source_urls": ["https://example.com"],
-    "evidence_summary": "구체적인 진행 내용과 원문 근거 요약 1문장"
+    "evidence_summary": "공개 출처명, 원문 날짜, 제목, 원문에서 확인한 구체적 내용을 복붙 없이 요약한 1문장"
   }},
   "technology_keyword": {{
     "label": "키워드 또는 null",
-    "reason": "이 키워드를 선택한 판단 요약 1~2문장",
-    "reasoning": "확인된 활동을 왜 기술 구현/제품/플랫폼 축으로 해석했는지 1문장",
+    "reason": "원문 내용을 복사하지 말고, 어떤 기술 활동이 확인됐고 왜 이 키워드로 이어지며 해당 기업의 대표 기술축으로 볼 수 있는지 자연스럽게 재진술한 1~2문장",
+    "reasoning": "확인된 활동을 왜 기술 구현/제품/플랫폼 축이자 해당 기업의 대표 기술 신호로 해석했는지 자연스럽게 재진술한 1문장",
     "confidence": 0.0,
     "evidence_refs": ["signal:2"],
     "source_urls": ["https://example.com"],
-    "evidence_summary": "구체적인 진행 내용과 원문 근거 요약 1문장"
+    "evidence_summary": "공개 출처명, 원문 날짜, 제목, 원문에서 확인한 구체적 내용을 복붙 없이 요약한 1문장"
   }},
   "top_keyword": "사업 키워드\\n기술 키워드",
   "top_keyword_reason": "분기 원문 기반 사업 신호에서 사업 방향과 기술 구현 축을 분리해 선택했다는 설명",
   "top_keyword_basis": "LLM grounded selection · signals N · articles M · confidence X",
   "top_keyword_evidence": [
-    "{peer_name} 사업 키워드 기준: 키워드. 근거 내용: [YYYY-MM-DD] 원문 제목/요약에서 사업명·서비스명·수주·확장 방향과 관련해 확인된 실제 내용. 판단 이유: 이 원문 내용을 보아 왜 이 표현을 사업 키워드로 선정했는지.",
-    "{peer_name} 기술 키워드 기준: 키워드. 근거 내용: [YYYY-MM-DD] 원문 제목/요약에서 기술명·제품명·플랫폼명·구현 방향과 관련해 확인된 실제 내용. 판단 이유: 이 원문 내용을 보아 왜 이 표현을 기술 키워드로 선정했는지."
+    "{peer_name} 사업 키워드 기준: 키워드. 근거 내용: [YYYY-MM-DD] 출처명, 원문 제목에서 확인된 사업 활동을 자연스럽게 요약한 문장. 판단 이유: 확인된 사업 활동이 왜 이 키워드로 이어지고, 왜 해당 기업의 대표 사업축으로 볼 수 있는지 설명한 문장.",
+    "{peer_name} 기술 키워드 기준: 키워드. 근거 내용: [YYYY-MM-DD] 출처명, 원문 제목에서 확인된 기술 활동을 자연스럽게 요약한 문장. 판단 이유: 확인된 기술 활동이 왜 이 키워드로 이어지고, 왜 해당 기업의 대표 기술축으로 볼 수 있는지 설명한 문장."
   ],
   "top_keyword_evidence_urls": ["https://example.com"],
   "rejected_candidates": [
@@ -388,6 +421,10 @@ VALIDATION_RETRY_PROMPT_TEMPLATE = """\
 - info 문구는 추론 단계명을 나열하지 말고 2~3문장 선정 이유로 작성한다.
 - info 문구에는 원문 날짜, 원문에서 확인한 실제 내용, 그 내용을 보아 키워드로 선정한 이유를 포함한다.
 - 사업명, 기술명, 서비스명, 제품명, 수주/확장/구축/출시/도입 같은 진행 방향 중 근거에 있는 내용을 포함한다.
+- info 문구에는 DB 테이블명, 컬럼명, 내부 ID, evidence_id, signal:숫자, raw_article_id, profile_context 같은 내부 구현 용어를 절대 쓰지 않는다.
+- 공개 출처명, 원문 제목, 원문 날짜, 원문에서 확인한 실제 내용으로만 설명한다.
+- 원문 문장을 그대로 복사하지 말고 자연스럽게 요약·재진술한다.
+- "진행하고 있습니다", "성장하고 있습니다" 같은 원문 종결 표현을 그대로 쓰지 않는다.
 - 입력에 없는 사실은 쓰지 않는다.
 
 원래 요청:
@@ -944,6 +981,7 @@ def normalize_result(result: dict[str, Any], evidence_pack: dict[str, Any], *, m
     result.setdefault("top_keyword_basis", build_basis(result, evidence_pack))
     result["top_keyword_evidence"] = normalize_evidence_lines(result, evidence_pack)
     result["top_keyword_evidence_urls"] = normalize_evidence_urls(result)
+    sanitize_user_visible_result_fields(result)
     normalize_trace_reasoning_fields(result)
 
 
@@ -1020,6 +1058,9 @@ def validate_result(result: dict[str, Any], evidence_pack: dict[str, Any]) -> No
     ]
     if len(evidence_lines) < 2:
         errors.append("top_keyword_evidence must include business and technology explanation lines")
+    for index, line in enumerate(evidence_lines):
+        if contains_internal_evidence_marker(line):
+            errors.append(f"top_keyword_evidence[{index}] exposes internal implementation markers")
     if errors:
         raise ValueError("; ".join(errors))
 
@@ -1063,22 +1104,34 @@ def normalize_evidence_lines(result: dict[str, Any], evidence_pack: dict[str, An
         )
         reason = str(item.get("reason") or "")
         reasoning = str(item.get("reasoning") or "")
-        source_basis = compact_text(
-            " / ".join(filter(None, evidence_texts)) or evidence_summary, 260
+        source_basis = " / ".join(filter(None, evidence_texts)) or concise_public_claim(
+            evidence_summary,
+            max_chars=260,
         )
         fallback_reason = (
             reason
             or reasoning
             or f"이 원문 내용을 보아 {label}이 {peer_name}의 {axis_name} 방향을 직접 보여줘 {axis_name} 키워드로 선정했습니다."
         )
+        grounded_reason = build_grounded_judgment_reason(
+            axis_name=axis_name,
+            label=label,
+            source_context=build_source_context(evidence_details),
+            model_reason=fallback_reason,
+            company_context=build_company_context(evidence_pack, axis_name),
+        )
         canonical_line = (
             f"{peer_name} {axis_name} 키워드 기준: {label}. "
             f"근거 내용: {source_basis}. "
-            f"판단 이유: {compact_text(fallback_reason, 240)}"
+            f"판단 이유: {grounded_reason}"
         )
         stored_line = lines[axis_index] if axis_index < len(lines) else ""
-        if has_required_evidence_detail(stored_line):
-            generated.append(stored_line)
+        if (
+            has_required_evidence_detail(stored_line)
+            and not contains_internal_evidence_marker(stored_line)
+            and not has_generic_judgment_reason(stored_line)
+        ):
+            generated.append(sanitize_public_evidence_text(stored_line))
         else:
             generated.append(canonical_line)
     return generated
@@ -1105,14 +1158,174 @@ def has_required_evidence_detail(line: str) -> bool:
     )
 
 
+def has_generic_judgment_reason(line: str) -> bool:
+    reason = line.split("판단 이유:", 1)[1] if "판단 이유:" in line else line
+    normalized = normalize_korean_spacing(reason)
+    generic_patterns = (
+        "이 원문 내용을 보아",
+        "원문 내용을 보아",
+        "이 내용을 보아",
+        "원문에",
+        "확인되어 선정",
+        "대표 키워드로 선정",
+        "키워드로 선정되었습니다",
+        "키워드로 선정했습니다",
+    )
+    return any(pattern in normalized for pattern in generic_patterns)
+
+
+def build_grounded_judgment_reason(
+    *,
+    axis_name: str,
+    label: str,
+    source_context: str,
+    model_reason: str,
+    company_context: str,
+) -> str:
+    clean_source = sanitize_public_evidence_text(source_context)
+    clean_reason = sanitize_public_evidence_text(model_reason)
+    clean_company_context = sanitize_public_evidence_text(company_context)
+
+    if not clean_source:
+        clean_source = f"{label}과 연결되는 공개 자료"
+
+    if has_generic_judgment_reason(clean_reason) or not clean_reason:
+        interpretation = f"{label}과 직접 연결되는 사업·기술 흐름으로 해석됩니다"
+    else:
+        interpretation = naturalize_reason_clause(clean_reason)
+
+    if clean_company_context:
+        mainness = (
+            f"또한 기존 {axis_name} 축인 {clean_company_context}와 맞닿아 있어 "
+            f"단발성 이슈보다 핵심 {axis_name} 키워드로 볼 수 있습니다"
+        )
+    else:
+        mainness = (
+            f"확인된 활동이 고객 제공 가치와 실행 역량을 함께 보여주므로 "
+            f"핵심 {axis_name} 키워드로 볼 수 있습니다"
+        )
+
+    return trim_without_ellipsis(
+        f"{clean_source}에서 {label}과 연결되는 내용이 확인됐습니다. "
+        f"{interpretation}. {mainness}. "
+        f"이 때문에 {label}을 핵심 {axis_name} 키워드로 판단했습니다.",
+        520,
+    )
+
+
+def normalize_korean_spacing(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def build_source_context(evidence_details: list[dict[str, str]]) -> str:
+    if not evidence_details:
+        return ""
+    contexts = []
+    for detail in evidence_details[:2]:
+        date_value = detail.get("date") or "날짜 미확인"
+        source = detail.get("source") or "공개 출처"
+        title = detail.get("title") or "제목 미확인"
+        contexts.append(f"[{date_value}] {source}, {title}")
+    return " / ".join(contexts)
+
+
+def build_company_context(evidence_pack: dict[str, Any], axis_name: str) -> str:
+    profile = evidence_pack.get("profile_context")
+    if not isinstance(profile, dict):
+        return ""
+
+    terms: list[str] = []
+    if axis_name == "사업":
+        for item in profile.get("business_areas") or []:
+            if isinstance(item, dict):
+                append_public_term(terms, item.get("name"))
+                append_public_term(terms, item.get("recent_direction"))
+        for item in profile.get("strategic_focus") or []:
+            if isinstance(item, dict):
+                append_public_term(terms, item.get("business_area"))
+                append_public_term(terms, item.get("summary"))
+    else:
+        for item in profile.get("core_capabilities") or []:
+            append_public_term(terms, item)
+        for item in profile.get("business_areas") or []:
+            if isinstance(item, dict):
+                append_public_term(terms, item.get("name"))
+
+    unique_terms: list[str] = []
+    seen = set()
+    for term in terms:
+        lowered = term.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        unique_terms.append(term)
+        if len(unique_terms) >= 2:
+            break
+    if not unique_terms:
+        return ""
+    return "·".join(unique_terms)
+
+
+def append_public_term(terms: list[str], value: Any) -> None:
+    text_value = concise_public_claim(value, max_chars=36)
+    if not text_value:
+        return
+    if contains_internal_evidence_marker(text_value):
+        return
+    blocked = {"정적 회사 프로필 기준선이다", "최종 키워드는"}
+    if any(fragment in text_value for fragment in blocked):
+        return
+    terms.append(text_value)
+
+
+def naturalize_reason_clause(value: str) -> str:
+    text_value = normalize_korean_spacing(value).rstrip(".")
+    replacements = (
+        (
+            r"(.+?)을\s*결합하여\s*(.+?)을\s*지원하는\s*사업을\s*진행하고\s*있습니다$",
+            r"\1을 결합해 \2을 지원하는 사업 흐름이 확인됩니다",
+        ),
+        (
+            r"(.+?)을\s*결합하여\s*(.+?)을\s*지원하는\s*사업을\s*진행하고\s*있다$",
+            r"\1을 결합해 \2을 지원하는 사업 흐름이 확인됩니다",
+        ),
+        (r"지원하는\s*사업을\s*진행하고\s*있습니다$", "지원 사업을 추진하는 흐름이 확인됩니다"),
+        (r"지원하는\s*사업을\s*진행하고\s*있다$", "지원 사업을 추진하는 흐름이 확인됩니다"),
+        (r"진행하고\s*있습니다$", "추진하는 방향이 드러납니다"),
+        (r"진행하고\s*있다$", "추진하는 방향이 드러납니다"),
+        (r"성장하고\s*있습니다$", "성장 흐름으로 확인됩니다"),
+        (r"성장하고\s*있다$", "성장 흐름으로 확인됩니다"),
+        (r"확인됐다$", "확인됩니다"),
+        (r"확인되었습니다$", "확인됩니다"),
+        (r"확인됩니다$", "확인됩니다"),
+        (r"제시됐다$", "제시됩니다"),
+        (r"제시되었습니다$", "제시됩니다"),
+        (r"보여줍니다$", "보여줍니다"),
+        (r"보입니다$", "보입니다"),
+    )
+    for pattern, replacement in replacements:
+        if re.search(pattern, text_value):
+            return re.sub(pattern, replacement, text_value)
+
+    if text_value.endswith(("때문에", "이기 때문에", "되기 때문에", "주기 때문에")):
+        return text_value
+    if text_value.endswith(("합니다", "습니다")):
+        return text_value
+    if text_value.endswith("다"):
+        return text_value[:-1].rstrip() + "다는 점이 확인됩니다"
+    return f"{text_value}로 해석됩니다"
+
+
 def lookup_evidence_detail(evidence_pack: dict[str, Any], ref: str) -> dict[str, str]:
     for item in evidence_pack.get("business_signals") or []:
         if item.get("evidence_id") == ref:
             return {
-                "date": compact_text(item.get("date") or "날짜 미확인", 20),
-                "title": compact_text(item.get("title") or "제목 미확인", 120),
-                "summary": compact_text(
-                    item.get("summary") or item.get("evidence_text") or "원문 요약 없음", 260
+                "date": display_date(item.get("date") or "날짜 미확인"),
+                "source": public_source_label(item),
+                "title": concise_public_title(item.get("title") or "제목 미확인"),
+                "summary": paraphrase_public_claim(
+                    item.get("summary") or item.get("evidence_text") or "원문 요약 없음",
+                    max_chars=240,
                 ),
             }
     return {}
@@ -1120,14 +1333,122 @@ def lookup_evidence_detail(evidence_pack: dict[str, Any], ref: str) -> dict[str,
 
 def format_evidence_detail(detail: dict[str, str]) -> str:
     date_value = detail.get("date") or "날짜 미확인"
+    source = detail.get("source") or "공개 출처"
     title = detail.get("title") or "제목 미확인"
     summary = detail.get("summary") or "원문 요약 없음"
-    date_prefix = (
-        f"[{date_value}]"
-        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", date_value)
-        else f"[{date_value}]"
+    return f"[{date_value}] {source}, {title} - {summary}"
+
+
+def public_source_label(item: dict[str, Any]) -> str:
+    source_name = compact_text(item.get("source_name"), 80)
+    if source_name:
+        return sanitize_public_evidence_text(source_name)
+    source_type = str(item.get("source_type") or "").strip().lower()
+    return PUBLIC_SOURCE_TYPE_LABELS.get(source_type, "공개 출처")
+
+
+def contains_internal_evidence_marker(value: str) -> bool:
+    return bool(INTERNAL_EVIDENCE_PATTERN.search(value or ""))
+
+
+def sanitize_public_evidence_text(value: Any) -> str:
+    text_value = compact_text(value, 1000)
+    text_value = INTERNAL_EVIDENCE_PATTERN.sub("공개 근거", text_value)
+    text_value = re.sub(r"\s+", " ", text_value).strip()
+    text_value = re.sub(r"(공개 근거[와과, ]*){2,}", "공개 근거 ", text_value)
+    return text_value.strip(" ,;")
+
+
+def display_date(value: Any) -> str:
+    text_value = str(value or "").strip()
+    if not text_value:
+        return "날짜 미확인"
+    match = re.search(r"\d{4}-\d{2}-\d{2}", text_value)
+    if match:
+        return match.group(0)
+    return sanitize_public_evidence_text(text_value)
+
+
+def concise_public_title(value: Any) -> str:
+    text_value = sanitize_public_evidence_text(value)
+    return trim_without_ellipsis(text_value, 100) or "제목 미확인"
+
+
+def concise_public_claim(value: Any, *, max_chars: int) -> str:
+    text_value = sanitize_public_evidence_text(value)
+    if not text_value:
+        return ""
+    text_value = remove_source_boilerplate(text_value)
+    return trim_without_ellipsis(text_value, max_chars)
+
+
+def paraphrase_public_claim(value: Any, *, max_chars: int) -> str:
+    text_value = concise_public_claim(value, max_chars=max_chars * 2)
+    if not text_value:
+        return ""
+
+    text_value = re.sub(
+        r"(.+?)에\s*따라\s+(.+?)\s*시장(?:은|는)?\s*지속적으로\s*성장하고\s*있(?:습니다|다)",
+        r"\1에 따른 \2 시장 성장 흐름",
+        text_value,
     )
-    return compact_text(f"{date_prefix} {title} - {summary}", 320)
+    text_value = re.sub(r"^(.{1,30}?)(?:은|는)\s+", "", text_value)
+    text_value = re.sub(
+        r"(.+?)을\s*기업\s*업무\s*자동화에\s*적용한다고\s*밝혔(?:습니다|다)",
+        r"\1의 기업 업무 자동화 적용 계획",
+        text_value,
+    )
+    text_value = re.sub(
+        r"(.+?)를\s*기업\s*업무\s*자동화에\s*적용한다고\s*밝혔(?:습니다|다)",
+        r"\1의 기업 업무 자동화 적용 계획",
+        text_value,
+    )
+    text_value = re.sub(r"진행하고\s*있(?:습니다|다)", "추진 흐름", text_value)
+    text_value = re.sub(r"성장하고\s*있(?:습니다|다)", "성장 흐름", text_value)
+    text_value = re.sub(r"확대하고\s*있(?:습니다|다)", "확대 흐름", text_value)
+    text_value = re.sub(r"밝혔(?:습니다|다)", "공개", text_value)
+    text_value = re.sub(r"제시했(?:습니다|다)", "제시", text_value)
+    return trim_without_ellipsis(text_value, max_chars)
+
+
+def remove_source_boilerplate(value: str) -> str:
+    text_value = re.sub(r"\[[0-9]{4}-[0-9]{2}-[0-9]{2}\]\s*", "", value)
+    return text_value.strip(" -")
+
+
+def trim_without_ellipsis(value: str, max_chars: int) -> str:
+    text_value = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text_value) <= max_chars:
+        return text_value
+
+    sentence_end = max(
+        text_value.rfind(".", 0, max_chars),
+        text_value.rfind("다.", 0, max_chars),
+        text_value.rfind("요.", 0, max_chars),
+    )
+    if sentence_end >= max_chars // 2:
+        return text_value[: sentence_end + 1].strip()
+
+    cut = text_value.rfind(" ", 0, max_chars)
+    if cut < max_chars // 2:
+        cut = max_chars
+    return text_value[:cut].rstrip(" ,;:-")
+
+
+def sanitize_user_visible_result_fields(result: dict[str, Any]) -> None:
+    for key in ("top_keyword_reason", "top_keyword_basis"):
+        if result.get(key):
+            result[key] = sanitize_public_evidence_text(result[key])
+    for keyword_key in ("business_keyword", "technology_keyword"):
+        item = keyword_item(result, keyword_key)
+        for field in ("reason", "reasoning", "evidence_summary"):
+            if item.get(field):
+                item[field] = sanitize_public_evidence_text(item[field])
+    result["top_keyword_evidence"] = [
+        sanitize_public_evidence_text(line)
+        for line in result.get("top_keyword_evidence") or []
+        if str(line).strip()
+    ]
 
 
 def collect_evidence_ids(evidence_pack: dict[str, Any]) -> set[str]:
@@ -1187,41 +1508,21 @@ def save_result_to_db(
         "peer_ids": [peer_id],
     }
 
-    update_result = db.execute(
+    db.execute(
         text(
             """
             UPDATE peer_llm_analysis_snapshots
             SET
-                scope = 'company',
-                reference_peer_id = 'sk_ax',
-                schema_version = :schema_version,
-                status = 'active',
-                evidence_hash = :evidence_hash,
-                input_snapshot = CAST(:input_snapshot AS jsonb),
-                output_payload = CAST(:output_payload AS jsonb),
-                analysis_trace = CAST(:analysis_trace AS jsonb),
-                provenance = CAST(:provenance AS jsonb),
-                confidence = :confidence,
-                source_raw_article_ids = :source_raw_article_ids,
-                source_signal_ids = :source_signal_ids,
-                source_metric_ids = CAST('{}' AS BIGINT[]),
-                peer_ids = :peer_ids,
-                generated_at = NOW(),
-                expires_at = NOW() + INTERVAL '120 days',
+                status = 'archived',
                 updated_at = NOW()
             WHERE analysis_type = :analysis_type
-              AND scope = 'company'
               AND peer_id = :peer_id
               AND comparison_mode = :comparison_mode
-              AND prompt_version = :prompt_version
-              AND COALESCE(model_name, '') = COALESCE(:model_name, '')
-              AND output_payload->>'period' = :period
+              AND status = 'active'
             """
         ),
         params,
     )
-    if update_result.rowcount and update_result.rowcount > 0:
-        return
 
     db.execute(
         text(
@@ -1272,31 +1573,6 @@ def save_result_to_db(
                 NOW(),
                 NOW() + INTERVAL '120 days'
             )
-            ON CONFLICT (
-                analysis_type,
-                peer_id,
-                comparison_mode,
-                evidence_hash,
-                prompt_version,
-                (COALESCE(model_name, ''))
-            )
-            DO UPDATE SET
-                scope = EXCLUDED.scope,
-                reference_peer_id = EXCLUDED.reference_peer_id,
-                schema_version = EXCLUDED.schema_version,
-                status = 'active',
-                input_snapshot = EXCLUDED.input_snapshot,
-                output_payload = EXCLUDED.output_payload,
-                analysis_trace = EXCLUDED.analysis_trace,
-                provenance = EXCLUDED.provenance,
-                confidence = EXCLUDED.confidence,
-                source_raw_article_ids = EXCLUDED.source_raw_article_ids,
-                source_signal_ids = EXCLUDED.source_signal_ids,
-                source_metric_ids = EXCLUDED.source_metric_ids,
-                peer_ids = EXCLUDED.peer_ids,
-                generated_at = NOW(),
-                expires_at = EXCLUDED.expires_at,
-                updated_at = NOW()
             """
         ),
         params,
@@ -1445,9 +1721,11 @@ def estimate_text_tokens(text_value: str, model: str) -> int:
 def iso_date(value: Any) -> str | None:
     if value is None:
         return None
-    if isinstance(value, datetime | date):
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
         return value.isoformat()
-    return str(value)
+    return display_date(value)
 
 
 def print_or_write_json(payload: dict[str, Any], output: str | None) -> None:
