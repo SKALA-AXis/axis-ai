@@ -213,27 +213,39 @@ def main() -> None:
                         deleted,
                     )
                     continue
+                saved_card_id = str(result.get("saved_card_id") or "")
                 if args.update_existing_in_place:
                     if existing_card_id:
                         transient_card_id = str(card.get("id") or "")
                         card["id"] = existing_card_id
                         saved_card_id = save_card_news(card)
-                        sync_card_sources_for_cluster(cluster_id)
+                        if saved_card_id:
+                            sync_card_sources_for_cluster(cluster_id)
                         if transient_card_id and transient_card_id != existing_card_id:
                             _mark_card_deleted(transient_card_id)
-                        created += 1
-                        log.info(
-                            (
-                                "card_news backfill updated in place | %d/%d "
-                                "cluster_id=%s card_id=%s transient_id=%s title=%s"
-                            ),
-                            index,
-                            len(targets),
-                            cluster_id,
-                            saved_card_id or existing_card_id,
-                            transient_card_id,
-                            card.get("title"),
-                        )
+                        if saved_card_id:
+                            created += 1
+                            log.info(
+                                (
+                                    "card_news backfill updated in place | %d/%d "
+                                    "cluster_id=%s card_id=%s transient_id=%s title=%s"
+                                ),
+                                index,
+                                len(targets),
+                                cluster_id,
+                                saved_card_id,
+                                transient_card_id,
+                                card.get("title"),
+                            )
+                        else:
+                            errors += 1
+                            log.error(
+                                "card_news backfill save failed | %d/%d cluster_id=%s card_id=%s",
+                                index,
+                                len(targets),
+                                cluster_id,
+                                existing_card_id,
+                            )
                         continue
                     log.warning(
                         "card_news backfill skip | cluster_id=%s reason=no_existing_card",
@@ -241,16 +253,27 @@ def main() -> None:
                     )
                     skipped += 1
                     continue
-                created += 1
-                sync_card_sources_for_cluster(cluster_id)
-                log.info(
-                    "card_news backfill created | %d/%d cluster_id=%s card_id=%s title=%s",
-                    index,
-                    len(targets),
-                    cluster_id,
-                    card.get("id"),
-                    card.get("title"),
-                )
+                if saved_card_id:
+                    created += 1
+                    sync_card_sources_for_cluster(cluster_id)
+                    log.info(
+                        "card_news backfill created | %d/%d cluster_id=%s card_id=%s title=%s",
+                        index,
+                        len(targets),
+                        cluster_id,
+                        saved_card_id,
+                        card.get("title"),
+                    )
+                else:
+                    errors += 1
+                    log.error(
+                        "card_news backfill save failed | %d/%d cluster_id=%s card_id=%s title=%s",
+                        index,
+                        len(targets),
+                        cluster_id,
+                        card.get("id"),
+                        card.get("title"),
+                    )
             else:
                 if args.update_existing_in_place and existing_card_id:
                     deleted = _mark_card_deleted(existing_card_id)

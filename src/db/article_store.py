@@ -1602,7 +1602,7 @@ def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
     source_articles = _source_articles_payload(card, source_ids)
     return {
         "id": card["id"],
-        "company": card.get("company") or card.get("peer_id"),
+        "company": card.get("company") or card.get("peer_id") or _resolve_peer_company_id(card),
         "cluster_id": card.get("cluster_id"),
         "title": card["title"][:500],
         "summary_lines": card.get("summary_lines", []),
