@@ -328,24 +328,26 @@ class BatchProcessor:
                 )
             )
         if "global_newsroom" in requested and global_company_ids:
+            is_realtime = bool(run_context and run_context.collection_mode == "realtime")
             shared_crawlers.extend(
                 (
                     f"global_newsroom[{company_id}]",
                     GlobalNewsroomCrawler(
                         company=company_id,
-                        start_date=_window_date(effective_window, "start"),
-                        end_date=_window_date(effective_window, "end"),
+                        start_date=None if is_realtime else _window_date(effective_window, "start"),
+                        end_date=None if is_realtime else _window_date(effective_window, "end"),
                     ),
                 )
                 for company_id in global_company_ids
             )
         elif "global_newsroom" in requested and not keywords:
+            is_realtime = bool(run_context and run_context.collection_mode == "realtime")
             shared_crawlers.append(
                 (
                     "global_newsroom",
                     GlobalNewsroomCrawler(
-                        start_date=_window_date(effective_window, "start"),
-                        end_date=_window_date(effective_window, "end"),
+                        start_date=None if is_realtime else _window_date(effective_window, "start"),
+                        end_date=None if is_realtime else _window_date(effective_window, "end"),
                     ),
                 )
             )

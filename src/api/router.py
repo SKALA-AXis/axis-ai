@@ -538,7 +538,7 @@ async def _run_collection_track(
             _count_result_items(results, "classified_clusters"),
             news_postprocess,
             _count_result_items(delivery_results, "card_news"),
-            _count_result_items(delivery_results, "indexed_card_ids"),
+            _count_result_items(delivery_results, "indexed_vector_ids"),
             _count_result_items(delivery_results, "errors"),
         )
     except Exception:

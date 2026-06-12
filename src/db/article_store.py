@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
+from src.config.company_tiers import SELF_COMPANY_IDS, resolve_company_id
 from src.crawler.base import CrawlRunContext, RawArticle
 from src.db.postgres import SessionLocal
 
@@ -1493,6 +1494,13 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
     `UndefinedColumn` 발생 → 기존 v1 컬럼만 사용하는 fallback INSERT 로 자동 재시도.
     """
     try:
+        if _is_self_company_card(card):
+            log.info(
+                "카드 뉴스 저장 제외 | id=%s company=%s reason=self company",
+                card.get("id"),
+                card.get("company") or card.get("peer_id") or card.get("peer_company_id"),
+            )
+            return None
         params = _card_news_insert_params(card)
         try:
             card_id = _execute_v2_insert(card_id=card["id"], params=params)
@@ -1527,6 +1535,14 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
     except Exception as e:
         log.error("카드 뉴스 저장 실패 | id=%s error=%s", card.get("id"), e)
     return None
+
+
+def _is_self_company_card(card: dict[str, Any]) -> bool:
+    for key in ("peer_company_id", "company", "peer_id"):
+        company_id = resolve_company_id(str(card.get(key) or ""))
+        if company_id in SELF_COMPANY_IDS:
+            return True
+    return False
 
 
 def _execute_v2_insert(*, card_id: str, params: dict[str, Any]) -> Optional[str]:
