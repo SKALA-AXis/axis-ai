@@ -873,13 +873,17 @@ def _phase5_forecast_synthesis(
             for p in peers
         ]
     prompt = (
-        "당신은 SK AX 의 글로벌 IT 트렌드 시나리오 분석가입니다.\n"
+        "당신은 SK AX 의 글로벌 IT 트렌드 편집자이자 시나리오 분석가입니다.\n"
         "다음 입력으로 다음 세 가지를 산출하세요:\n"
         "1. forecasts — 각 horizon (1Q, 6M, 1Y) 별 baseline narrative + "
         "sk_ax_impact + drivers + risk_level + recommended_response\n"
-        "2. final_one_liner — SK AX 임원 한 명이 5초 안에 이해할 한 줄\n"
+        "2. final_one_liner — 개별 keyword 요약이 아니라 글로벌 6사 뉴스룸 전체를 "
+        "관통하는 최신 IT 흐름 "
+        "한 줄. 45~90자 한국어, 1문장, '뉴스룸', '공통적으로', '모델 성능' 같은 모호한 표현 금지. "
+        "제품 경험, 업무 실행, AI 인프라 운영, 산업 적용 중 실제 입력에서 강한 축을 묶어 쓰세요.\n"
         "3. sk_ax_implication — SK AX 가 가져야 할 자세 / 행동 권고 (3 문장 이하)\n"
-        "4. per_keyword — 각 trend 별 title (한 줄) + summary (1~2 문장) + implication (한 줄)\n"
+        "4. per_keyword — 각 trend 별 title (한 줄) + summary (1문장) + implication (한 줄). "
+        "summary는 변화 신호 카드에 들어가므로 final_one_liner와 같은 문장을 반복하지 마세요.\n"
         "5. confidence — 전반적 자신감 (0.0~1.0)\n\n"
         "응답 JSON object:\n"
         '{"forecasts": [{"horizon":"1Q","scenario":"baseline","narrative":"...",'
@@ -948,7 +952,10 @@ def _phase5_forecast_synthesis(
 
     return {
         "forecasts": forecasts,
-        "final_one_liner": str(data.get("final_one_liner") or "")[:300],
+        "final_one_liner": (
+            _clean_global_headline(str(data.get("final_one_liner") or ""))
+            or _fallback_global_headline(detections)
+        )[:300],
         "sk_ax_implication": str(data.get("sk_ax_implication") or "")[:600],
         "confidence": _confidence_in_range(data.get("confidence", 0.6)),
         "per_keyword_title": per_keyword_title,
@@ -988,6 +995,7 @@ def _build_persistence_rows(
         aligned_peers = [p["peer_id"] for p in peers if p["alignment_type"] == "aligned"]
         evidence_card_ids = [cid for p in peers for cid in p.get("evidence_card_ids", []) if cid]
         evidence_raw_ids = _evidence_raw_ids(global_rows, keyword)
+        evidence_source_links = _evidence_source_links(global_rows, keyword)
         impact_score = _impact_score_for_keyword(det, peers)
         keyword_confidence = _trend_confidence_for_keyword(
             det=det,
@@ -1021,6 +1029,7 @@ def _build_persistence_rows(
                     "impact_matrix": [c for c in impact_matrix if c["trend_theme"] == keyword],
                     "forecasts": forecasts,
                     "leading_companies": det.get("leading_companies", []),
+                    "evidence_source_links": evidence_source_links,
                     "intensity": det.get("intensity"),
                     "frequency_delta_pct": det.get("frequency_delta_pct"),
                     "confidence_factors": {
@@ -1100,6 +1109,31 @@ def _evidence_raw_ids(global_rows: list[dict[str, Any]], keyword: str) -> list[i
     return ids
 
 
+def _evidence_source_links(global_rows: list[dict[str, Any]], keyword: str) -> list[dict[str, str]]:
+    pattern = _keyword_regex(keyword)
+    links: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for row in global_rows:
+        haystack = ((row.get("title") or "") + " " + (row.get("content") or ""))[:2000]
+        if not pattern.search(haystack.lower()):
+            continue
+        url = str(row.get("url") or "").strip()
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        links.append(
+            {
+                "title": str(row.get("title") or "원문 기사")[:160],
+                "url": url,
+                "source_name": str(row.get("source_name") or row.get("publisher") or "")[:80],
+                "published_at": _iso(row.get("published_at") or row.get("collected_at")),
+            }
+        )
+        if len(links) >= 3:
+            break
+    return links
+
+
 def _impact_score_for_keyword(det: dict[str, Any], peers: list[dict[str, Any]]) -> float:
     """결정적 산식 — frequency × intensity × peer_alignment_coverage."""
     mention_count = float(det.get("mention_count", 0) or 0)
@@ -1134,6 +1168,36 @@ def _fallback_summary(keyword: str, det: dict[str, Any]) -> str:
         f"글로벌 6사 newsroom 에서 '{keyword}' 가 {det.get('mention_count', 0)} 건 등장. "
         f"주도 기업: {leading}. intensity={det.get('intensity')}."
     )
+
+
+def _clean_global_headline(value: str) -> str:
+    text = re.sub(r"\s+", " ", value or "").strip()
+    banned_fragments = ("뉴스룸", "공통적으로", "최신 트렌드", "한 줄")
+    if not text or any(fragment in text for fragment in banned_fragments):
+        return ""
+    return text
+
+
+def _fallback_global_headline(detections: list[dict[str, Any]]) -> str:
+    categories = {str(d.get("keyword_category") or "") for d in detections}
+    keywords = {str(d.get("theme") or "").lower() for d in detections}
+    product_signal = bool(keywords & {"copilot", "ai agent", "edge ai", "llm", "generative ai"})
+    infra_signal = bool(
+        categories & {"ai_infra", "cloud"} or keywords & {"gpu", "inference", "cloud"}
+    )
+    industry_signal = bool(keywords & {"robotics", "security", "partnership"})
+
+    parts: list[str] = []
+    if product_signal:
+        parts.append("제품 경험")
+    if infra_signal:
+        parts.append("AI 인프라 운영")
+    if industry_signal:
+        parts.append("산업 적용")
+    if not parts:
+        parts = ["제품 경험", "인프라 운영", "산업 적용"]
+    axes = ", ".join(parts)
+    return f"글로벌 피어사들은 AI를 별도 기능이 아니라 {axes}의 기본 레이어로 확장하고 있습니다."
 
 
 # ──────────────────────────────────────────────────────────────────────────
