@@ -1318,7 +1318,7 @@ def _frontend_implication_from_result(
             payload["precedent_link"] = peer.get("precedent_link")
     if implication.get("evidence_label"):
         payload["evidence_label"] = implication.get("evidence_label")
-    return payload
+    return _with_structured_frontend_blocks(payload)
 
 
 def _implication_from_result(
@@ -1428,7 +1428,7 @@ def _sync_frontend_implication_from_display_sections(
     if action_items:
         payload["response_directions"] = action_items
         payload["suggested_actions"] = action_items
-    return payload
+    return _cleanup_public_frontend_implication(payload)
 
 
 def _sync_implication_frontend_from_display_sections(
@@ -1444,6 +1444,183 @@ def _sync_implication_frontend_from_display_sections(
         if isinstance(skax, dict):
             skax["recommended_actions"] = frontend["suggested_actions"]
     return payload
+
+
+def _cleanup_public_frontend_implication(frontend: dict[str, Any]) -> dict[str, Any]:
+    """Format frontend copy as conclusion + evidence without changing meaning."""
+
+    cleaned = dict(frontend or {})
+    for key in (
+        "why_important",
+        "potential_impact",
+        "peer_capability_change",
+    ):
+        if key in cleaned:
+            cleaned[key] = _public_copy_cleanup(cleaned.get(key))
+    for key in (
+        "key_implications",
+        "peer_implications",
+        "skax_implications",
+        "suggested_actions",
+        "response_directions",
+        "skax_checkpoints",
+    ):
+        if key not in cleaned:
+            continue
+        section = (
+            "action"
+            if key in {"suggested_actions", "response_directions", "skax_checkpoints"}
+            else "insight"
+        )
+        cleaned[key] = [
+            formatted
+            for item in _list_string(cleaned.get(key))
+            if (
+                formatted := _format_public_frontend_item(
+                    _public_copy_cleanup(item), section=section
+                )
+            )
+        ]
+    if "follow_up_questions" in cleaned:
+        cleaned["follow_up_questions"] = [
+            _public_copy_cleanup(item) for item in _list_string(cleaned.get("follow_up_questions"))
+        ]
+    return _with_structured_frontend_blocks(cleaned)
+
+
+def _with_structured_frontend_blocks(frontend: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(frontend or {})
+    if not payload.get("key_implication_blocks"):
+        payload["key_implication_blocks"] = _structured_blocks_from_labeled_lines(
+            payload.get("key_implications") or payload.get("peer_implications")
+        )
+    if not payload.get("response_direction_blocks"):
+        payload["response_direction_blocks"] = _structured_blocks_from_labeled_lines(
+            payload.get("response_directions")
+            or payload.get("suggested_actions")
+            or payload.get("skax_checkpoints")
+        )
+    if not payload.get("skax_checkpoint_blocks"):
+        payload["skax_checkpoint_blocks"] = payload.get("response_direction_blocks") or []
+    for key in (
+        "key_implication_blocks",
+        "response_direction_blocks",
+        "skax_checkpoint_blocks",
+    ):
+        payload[key] = _clean_structured_blocks(payload.get(key))
+    return payload
+
+
+def _clean_structured_blocks(value: Any) -> list[dict[str, str]]:
+    blocks: list[dict[str, str]] = []
+    for item in _list_value(value):
+        if not isinstance(item, dict):
+            continue
+        main = _public_copy_cleanup(item.get("main"))
+        detail = _public_copy_cleanup(item.get("detail"))
+        if main:
+            blocks.append({"main": main, "detail": detail})
+    return blocks
+
+
+def _structured_blocks_from_labeled_lines(lines: Any) -> list[dict[str, str]]:
+    blocks: list[dict[str, str]] = []
+    for line in _list_string(lines):
+        block = _split_main_detail_block(line)
+        if block["main"]:
+            blocks.append(block)
+    return blocks
+
+
+def _split_main_detail_block(text: str) -> dict[str, str]:
+    value = re.sub(r"\s+", " ", str(text or "").strip())
+    if not value:
+        return {"main": "", "detail": ""}
+
+    value = re.sub(r"^핵심\s*(?:시사점|대응)\s*:\s*", "", value).strip()
+    parts = re.split(r"\s*근거\s*/?\s*설명\s*:\s*", value, maxsplit=1)
+    main = parts[0].strip() if parts else ""
+    detail = parts[1].strip() if len(parts) == 2 else ""
+
+    main = re.sub(r"^핵심\s*(?:시사점|대응)\s*:\s*", "", main).strip()
+    detail = re.sub(r"^근거\s*/?\s*설명\s*:\s*", "", detail).strip()
+    return {
+        "main": _public_copy_cleanup(main),
+        "detail": _public_copy_cleanup(detail),
+    }
+
+
+def _format_public_frontend_item(value: Any, *, section: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if re.match(r"^핵심\s*(시사점|대응)\s*:", text):
+        return text
+    conclusion, evidence = _split_public_conclusion_evidence(text)
+    if not conclusion or not evidence:
+        return text
+    heading = "핵심 대응" if section == "action" else "핵심 시사점"
+    return f"{heading}: {conclusion}\n근거/설명: {evidence}"
+
+
+def _split_public_conclusion_evidence(value: Any) -> tuple[str, str]:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    sentences = _public_sentences(text)
+    if len(sentences) >= 2:
+        conclusion_count = (
+            2 if _first_sentence_is_too_thin(sentences[0]) and len(sentences) >= 3 else 1
+        )
+        return (
+            " ".join(sentences[:conclusion_count]).strip(),
+            " ".join(sentences[conclusion_count:]).strip(),
+        )
+
+    # Some generated copy is one long sentence. Split only on reasoning
+    # connectors so the original logic is preserved.
+    for pattern in (
+        r"\s+(기사에서는|근거는|이\s*근거|따라서|다만|그래야|이\s*기준|이\s*정보|후속으로는)\s+",
+        r"\s+(때문에|확인되므로|확인되어야)\s+",
+    ):
+        match = re.search(pattern, text)
+        if match and match.start() >= 35:
+            return text[: match.start()].strip(), text[match.start() :].strip()
+    return "", ""
+
+
+def _public_sentences(value: Any) -> list[str]:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return []
+    normalized = re.sub(r"(다\.|[.!?。])\s+", r"\1\n", text)
+    return [part.strip() for part in normalized.splitlines() if part.strip()]
+
+
+def _first_sentence_is_too_thin(sentence: str) -> bool:
+    text = str(sentence or "").strip()
+    if len(text) < 45:
+        return True
+    return bool(re.search(r"^(이번|해당|현재)\s", text)) and not re.search(
+        r"때문|근거|확인|보여|의미|따라서|다만|왜|기준",
+        text,
+    )
+
+
+def _public_copy_cleanup(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    replacements = (
+        (r"통합\s*결과에서는", "기사에서는"),
+        (r"통합\s*결과", "기사"),
+        (r"피어\s*프로필", "해당 기업의 기존 사업 흐름"),
+        (r"자사\s*프로필", "SK AX의 관련 사업/역량"),
+        (r"피어\s*쪽", "해당 기업"),
+        (r"피어사", "해당 기업"),
+        (r"\blinkage\b", "연결 지점"),
+        (r"프로필\s*접점", "이어지는 흐름"),
+        (r"접점", "연결 지점"),
+    )
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text.strip()
 
 
 def _editorial_insight_candidates_from_strategy(
