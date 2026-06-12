@@ -398,17 +398,28 @@ def test_strategic_insight_agent_returns_separated_blocks():
         "analysis": {
             "is_valid_analysis": True,
             "analysis_scope": "peer_and_industry",
-            "analysis_summary": "피어사의 확인된 사업 신호가 고객 적용 범위를 넓히고 있습니다.",
+            "analysis_summary": (
+                "토큰증권 컨설팅과 테스트베드 구축 근거가 피어사의 적용 범위를 구체화합니다."
+            ),
             "strategic_meaning": [
-                "통합 이슈의 근거 사실은 피어사의 고객 제안 범위가 넓어졌음을 보여줍니다.",
-                "프로필의 기존 역량과 이번 근거가 연결되며 적용 장면이 더 구체화됩니다.",
+                (
+                    "토큰증권 기능분석 컨설팅 근거는 피어사의 기존 금융 IT 역량이 "
+                    "고객 검토 단계와 연결되는지 보게 합니다."
+                ),
+                (
+                    "테스트베드 구축 근거는 단순 기능 보유보다 검증 환경과 "
+                    "적용 범위를 함께 확인해야 한다는 신호입니다."
+                ),
             ],
             "market_signal": (
                 "토큰증권 기능분석 컨설팅과 테스트베드 구축처럼 고객은 적용 범위와 "
                 "검증 기준을 함께 봅니다."
             ),
             "impact_level": "high",
-            "impact_reason": "통합 이슈의 fact_basis와 프로필 역량이 같은 방향을 가리킵니다.",
+            "impact_reason": (
+                "토큰증권 컨설팅과 테스트베드 구축 fact_basis가 "
+                "프로필의 금융 IT 역량과 비교할 수 있는 근거입니다."
+            ),
             "risk_or_opportunity": "opportunity",
             "confidence": 0.82,
             "reason": "c43682_a43100_f1 근거와 business_signals를 기반으로 해석했습니다.",
@@ -420,30 +431,32 @@ def test_strategic_insight_agent_returns_separated_blocks():
                 "company_id": company_id,
                 "company_name_ko": company_name,
                 "peer_meaning": (
-                    "피어사는 확인된 사업명과 검증 단계를 기존 역량과 연결해 "
-                    "고객 적용 범위를 설명하고 있습니다."
+                    "피어사는 토큰증권 컨설팅과 테스트베드 구축 근거를 기존 금융 IT 역량과 "
+                    "연결해 고객 적용 범위와 검증 단계를 함께 보여주고 있습니다."
                 ),
                 "capability_change": (
-                    "프로필의 기존 역량이 이번 통합 이슈의 적용 장면으로 연결됩니다."
+                    "프로필의 금융 IT 역량이 이번 토큰증권 컨설팅과 "
+                    "테스트베드 구축의 적용 장면으로 연결됩니다."
                 ),
                 "sourced_evidence_ids": ["c43682_a43100_f1", "not-in-input"],
             },
             "skax_implication": {
                 "why_important": (
-                    "SK AX도 고객 제안에서 적용 범위와 검증 기준을 함께 보여줘야 합니다."
+                    "SK AX도 유사 금융 IT 검증 과제를 볼 때 적용 범위와 "
+                    "검증 기준을 내부 비교 축으로 둬야 합니다."
                 ),
                 "potential_impact": (
-                    "통합 이슈에서 적용 범위와 검증 기준이 함께 확인되므로 고객은 "
-                    "제안 단계에서 실행 범위와 확인 기준을 비교할 수 있습니다. 따라서 "
-                    "SK AX는 제안서에서 적용 범위와 PoC 확인 기준을 분리해 설명해야 합니다."
+                    "토큰증권 컨설팅과 테스트베드 구축에서 적용 범위와 검증 기준이 함께 확인되므로 "
+                    "SK AX는 유사 과제에서 직접 책임질 실행 범위와 추가 확인이 필요한 검증 기준을 "
+                    "분리해 봐야 합니다."
                 ),
-                "opportunities": ["적용 범위와 검증 기준을 묶은 제안 구성을 만들 수 있습니다."],
+                "opportunities": ["적용 범위와 검증 기준을 내부 비교 기준으로 정리할 수 있습니다."],
                 "threats": ["검증 근거가 약하면 고객 비교 단계에서 설득력이 낮아질 수 있습니다."],
                 "recommended_actions": [
                     (
                         "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 실행 범위와 "
-                        "검증 기준을 따로 비교할 수 있습니다. 따라서 SK AX 제안서에서 "
-                        "적용 범위와 검증 기준을 별도 항목으로 설명합니다."
+                        "검증 기준을 따로 비교할 수 있습니다. 따라서 SK AX는 내부 점검에서 "
+                        "직접 책임질 적용 범위와 추가 확인이 필요한 검증 기준을 분리합니다."
                     )
                 ],
                 "business_line_mapping": [TEST_LINE_A, TEST_LINE_B, TEST_LINE_INVALID],
@@ -495,26 +508,25 @@ def test_strategic_insight_agent_returns_separated_blocks():
     sent_messages = llm.invoke.call_args_list[0].args[0]
     full_prompt = "\n".join(message["content"] for message in sent_messages)
     user_prompt = sent_messages[1]["content"]
-    assert "피어 프로필 기반 시사점 생성" in user_prompt
+    assert "사업 맥락 기반 시사점 생성" in user_prompt
     assert "사실 기반 해석" in user_prompt
     assert "최종 시사점으로 끝내지 않습니다" in user_prompt
-    assert "피어사의 기존 사업영역/역량" in user_prompt
-    assert "피어사가 원래 어떤 역량/사업영역을 갖고 있었는지" in user_prompt
-    assert "business_area/core_capability/recent_direction" in user_prompt
+    assert "ComparableContext" in user_prompt
+    assert "matched_cases" in user_prompt
+    assert "ProfileContext 는 matched_cases 보다 우선하지 않습니다" in user_prompt
     assert "기존 역량이 이번 사건에서 어떤 적용 장면" in user_prompt
-    assert "SK AX 프로필 기반 대응 생성" in user_prompt
-    assert "profile_context 나 recent context 가 없거나" in user_prompt
+    assert "IssueFrame" in user_prompt
+    assert "SK AX 관점 체크포인트 생성" in user_prompt
     assert "SK AX profile_context 의 관련 사업영역/역량" in user_prompt
-    assert (
-        "현재 상태 → 왜 바꿔야 하는가 → 무엇을 바꿔야 하는가 → 바꾸면 무엇이 달라지는가"
-        in user_prompt
-    )
+    assert "현재 사건의 사업 구조 + 해당 기업의 기존 사업 흐름과의 연결" in user_prompt
+    assert "사업 비교 인사이트" in user_prompt
     for vague_claim in ("기술적 우위", "선점", "격차", "경쟁 심화"):
         assert vague_claim in full_prompt
     assert "business_line_mapping" in user_prompt
-    for action_context in ("제안서", "PoC", "레퍼런스 비교표"):
-        assert action_context in user_prompt
-    assert "SK AX 프로필과 연결되지 않은 대응방향" in user_prompt
+    for default_artifact in ("제안서", "PoC", "레퍼런스 비교표"):
+        assert default_artifact not in user_prompt
+    assert "SK AX 프로필과 연결되지 않은 체크포인트" not in user_prompt
+    assert "SK AX 프로필이 없는데 SK AX의 특정 역량/사업영역" in user_prompt
     review_messages = llm.invoke.call_args_list[1].args[0]
     review_prompt = review_messages[1]["content"]
     assert "전략 QA reviewer" in review_messages[0]["content"]
@@ -695,11 +707,22 @@ def test_strategic_insight_agent_marks_invalid_when_abstract_actions_survive_rep
         "analysis": {
             "is_valid_analysis": True,
             "analysis_scope": "peer_and_industry",
-            "analysis_summary": "피어사의 통합 이슈는 고객 적용 범위와 검증 기준을 보여줍니다.",
-            "strategic_meaning": ["입력 근거에서 고객 적용 장면과 검증 단계가 함께 확인됩니다."],
+            "analysis_summary": (
+                "토큰증권 컨설팅과 테스트베드 구축 근거는 고객 적용 범위와 "
+                "검증 기준을 함께 보여줍니다."
+            ),
+            "strategic_meaning": [
+                (
+                    "토큰증권 컨설팅 근거에서 고객 적용 장면과 "
+                    "테스트베드 검증 단계가 함께 확인됩니다."
+                )
+            ],
             "market_signal": "고객은 도입 기능보다 적용 범위와 검증 기준을 함께 확인합니다.",
             "impact_level": "high",
-            "impact_reason": "통합 이슈에서 고객 적용과 검증 단계 근거가 함께 확인됩니다.",
+            "impact_reason": (
+                "토큰증권 컨설팅과 테스트베드 구축 근거에서 "
+                "고객 적용과 검증 단계가 함께 확인됩니다."
+            ),
             "risk_or_opportunity": "opportunity",
             "confidence": 0.8,
             "reason": "입력 fact_basis를 기반으로 판단했습니다.",
@@ -711,25 +734,39 @@ def test_strategic_insight_agent_marks_invalid_when_abstract_actions_survive_rep
                 "company_id": company_id,
                 "company_name_ko": company_name,
                 "peer_meaning": (
-                    "피어사는 입력 근거를 기존 역량과 연결해 고객 적용 범위를 설명합니다."
+                    "피어사는 토큰증권 컨설팅과 테스트베드 구축 근거를 "
+                    "기존 역량과 연결해 고객 적용 범위를 설명합니다."
                 ),
                 "capability_change": (
-                    "고객 적용 범위와 검증 단계까지 프로필 역량의 연결 범위가 넓어집니다."
+                    "고객 적용 범위와 테스트베드 검증 단계까지 "
+                    "프로필 역량의 연결 범위가 구체화됩니다."
                 ),
                 "sourced_evidence_ids": ["c43682_a43100_f1"],
             },
             "skax_implication": {
-                "why_important": "SK AX 제안에서도 적용 범위와 검증 기준을 보여줘야 합니다.",
-                "potential_impact": (
-                    "고객은 입력 근거의 적용 범위와 검증 기준을 비교할 수 있습니다. "
-                    "따라서 SK AX는 제안서에서 적용 범위와 검증 기준을 분리해 설명해야 합니다."
+                "why_important": (
+                    "SK AX 내부 점검에서도 적용 범위와 검증 기준을 분리해 봐야 합니다."
                 ),
-                "opportunities": ["적용 범위와 검증 기준을 포함한 제안서 개발"],
+                "potential_impact": (
+                    "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 적용 범위와 "
+                    "검증 기준을 비교할 수 있습니다. 따라서 SK AX는 직접 책임질 실행 범위와 "
+                    "추가 확인이 필요한 검증 기준을 내부적으로 분리해야 합니다."
+                ),
+                "opportunities": ["적용 범위와 검증 기준을 내부 비교 기준으로 정리"],
                 "threats": ["검증 근거가 약하면 고객 비교 단계에서 설득력이 낮아질 수 있습니다."],
                 "recommended_actions": [
-                    "제안서에 적용 범위와 검증 기준 강조",
-                    "제안서에 적용 범위와 검증 기준 강조",
-                    "운영 모델에서 적용 범위와 검증 책임을 별도 항목으로 설명합니다.",
+                    "적용 범위와 검증 기준 강조",
+                    "적용 범위와 검증 기준 강조",
+                    (
+                        "토큰증권 컨설팅과 테스트베드 구축 신호를 기준으로, SK AX는 "
+                        "직접 책임질 적용 범위와 추가 확인이 필요한 검증 책임을 "
+                        "내부 비교 항목으로 분리해 점검합니다."
+                    ),
+                    (
+                        "후속 토큰증권 테스트베드 적용 범위가 확인되면, SK AX는 "
+                        "운영 책임과 검증 기준 중 내부 역량으로 감당할 항목과 "
+                        "외부 확인이 필요한 항목을 나눠 조정합니다."
+                    ),
                 ],
                 "business_line_mapping": [TEST_LINE_A],
             },
@@ -756,13 +793,14 @@ def test_strategic_insight_agent_marks_invalid_when_abstract_actions_survive_rep
     assert result["implication"]["is_valid_implication"] is True
     assert "quality_gate_failed" not in result["analysis"]["reason"]
     assert actions
-    assert actions == [
-        "제안서에 적용 범위와 검증 기준 강조",
-        "운영 모델에서 적용 범위와 검증 책임을 별도 항목으로 설명합니다.",
-    ]
+    assert len(actions) >= 1
     action_text = " ".join(actions)
-    assert "적용 범위" in action_text
-    assert "검증" in action_text
+    assert "SK AX" in action_text
+    assert "제안서" not in action_text
+    assert "PoC" not in action_text
+    assert "레퍼런스" not in action_text
+    assert "범위" in action_text
+    assert "후속" in action_text or "내부" in action_text
     assert (
         result["implication"]["peer_implication"]["sourced_evidence_ids"]
         == llm_payload["implication"]["peer_implication"]["sourced_evidence_ids"]
@@ -876,26 +914,28 @@ def test_strategic_insight_agent_repairs_overstated_relationship_and_generic_sig
                     "후속 검증 가능성을 분리해 봐야 합니다."
                 ),
                 "potential_impact": (
-                    "고객은 지분 취득처럼 실행 계약 이전 단계의 관계도 후속 사업 접점으로 "
-                    "비교할 수 있습니다. 따라서 SK AX는 제안서에서 고객 접점, 관계 수준, "
-                    "후속 PoC 전환 기준을 분리해 설명해야 합니다."
+                    "지분 취득 신호는 실행 계약 이전의 관계 수준과 후속 사업 접점 여부를 "
+                    "나눠 봐야 하는 근거입니다. SK AX는 유사 동향에서 투자 관계, 실제 과제 "
+                    "전환 여부, 후속 공시를 내부 비교 축으로 추적해야 합니다."
                 ),
                 "opportunities": [
-                    "투자 관계와 후속 PoC 전환 기준을 함께 제시하는 제안 구성을 만들 수 있습니다."
+                    "투자 관계와 후속 실행 계약 전환 여부를 같은 기준으로 축적할 수 있습니다."
                 ],
                 "threats": [
                     "관계 수준을 구분하지 못하면 실행 계약 근거를 가진 경쟁사와 "
                     "비교될 때 설명력이 낮아질 수 있습니다."
                 ],
                 "recommended_actions": [
-                    "지분 취득 신호 때문에 고객은 실행 계약 이전 단계의 관계 수준과 후속 "
-                    "PoC 전환 가능성을 따로 비교할 수 있습니다. 따라서 SK AX 제안서에서 "
-                    "고객 접점의 관계 수준과 후속 PoC 전환 기준을 별도 항목으로 설명합니다."
+                    "SK AX는 고객사 지분 2% 취득 결의와 유사한 동향을 볼 때 관계 수준, "
+                    "실제 과제 전환 여부, 후속 공시를 같은 기준으로 축적해야 합니다. "
+                    "자사 관련 사업 접점이 실행 계약으로 이어지는지 내부적으로 비교해야 합니다."
                 ],
                 "business_line_mapping": [TEST_LINE_A],
             },
             "follow_up_questions": ["지분 취득 이후 실제 공동 과제가 열리는지 확인이 필요합니다."],
-            "watch_points": ["후속 공시나 고객 사례에서 PoC 전환 기준이 구체화되는지 확인합니다."],
+            "watch_points": [
+                "후속 공시나 고객 사례에서 실제 과제 전환 기준이 구체화되는지 확인합니다."
+            ],
             "confidence": 0.75,
             "evidence_label": "moderate",
         },
@@ -1024,34 +1064,33 @@ def test_strategic_insight_agent_self_review_revises_vague_impact_and_actions():
                 },
                 "skax_implication": {
                     "why_important": (
-                        "SK AX 제안에서도 기능 설명보다 적용 범위와 검증 환경 설명이 중요해집니다."
+                        "SK AX도 토큰증권 컨설팅과 테스트베드 구축 신호를 "
+                        "유사 동향 비교 축으로 봐야 합니다."
                     ),
                     "potential_impact": (
-                        "통합 이슈에서 적용 범위와 검증 환경이 함께 확인되므로 고객은 "
-                        "제안 단계에서 실행 범위와 확인 기준을 비교할 수 있습니다. "
-                        "따라서 SK AX는 제안서에서 적용 범위와 PoC 검증 항목을 "
-                        "분리해 설명해야 합니다."
+                        "토큰증권 컨설팅과 테스트베드 구축에서 적용 범위와 검증 환경이 "
+                        "함께 확인되므로 SK AX는 유사 동향에서 대상 업무, 검증 환경, "
+                        "후속 운영 책임이 어떻게 구체화되는지 내부적으로 비교해야 합니다."
                     ),
                     "opportunities": [
-                        ("제안서에서 적용 범위와 PoC 검증 항목을 묶어 제시할 수 있습니다.")
+                        ("적용 범위와 검증 환경 변화를 같은 기준으로 축적할 수 있습니다.")
                     ],
                     "threats": [
                         (
-                            "고객이 검증 환경 근거를 직접 비교하면 "
-                            "검증 근거가 약한 제안은 설득력이 낮아질 수 있습니다."
+                            "검증 환경 근거가 약하면 유사 동향 비교에서 대응 범위를 과하게 "
+                            "단정할 수 있습니다."
                         )
                     ],
                     "recommended_actions": [
                         (
-                            "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 적용 "
-                            "범위와 운영 책임을 따로 판단할 수 있습니다. 따라서 SK AX "
-                            "토큰증권 제안서의 적용 범위표와 운영 책임 정리를 별도 섹션으로 "
-                            "재구성할 필요가 있습니다."
+                            "SK AX는 토큰증권 컨설팅과 테스트베드 구축 신호를 볼 때 대상 업무, "
+                            "검증 환경, 운영 책임을 같은 기준으로 축적해야 합니다. 자사 관련 "
+                            "사업이 이 축과 어디에서 겹치는지 내부적으로 비교해야 합니다."
                         ),
                         (
-                            "테스트베드 구축 신호 때문에 고객은 PoC 통과 기준을 확인하려 "
-                            "합니다. 따라서 SK AX PoC에서는 관련 검증 항목과 고객 확인 "
-                            "기준을 함께 검증하는 구조로 재구성할 필요가 있습니다."
+                            "후속 확인은 테스트베드 구축 범위와 검증 환경의 실제 운영 조건에 "
+                            "맞춰야 합니다. 이 데이터가 쌓여야 SK AX가 직접 점검할 영역과 "
+                            "외부 확인이 필요한 영역을 나눌 수 있습니다."
                         ),
                     ],
                     "business_line_mapping": [TEST_LINE_A],
@@ -1353,30 +1392,33 @@ def test_strategic_insight_agent_repairs_when_review_still_has_quality_violation
                 "sourced_evidence_ids": ["c43682_a43100_f1"],
             },
             "skax_implication": {
-                "why_important": "SK AX 제안에서도 검증 환경과 운영 책임 설명이 중요합니다.",
-                "potential_impact": (
-                    "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 제안에서 컨설팅 "
-                    "범위와 검증 항목을 함께 비교할 수 있습니다. 따라서 SK AX는 "
-                    "제안서에서 적용 업무 범위와 PoC "
-                    "검증 항목을 분리해 설명해야 합니다."
+                "why_important": (
+                    "SK AX도 토큰증권 컨설팅과 테스트베드 구축 신호를 "
+                    "유사 동향 비교 축으로 봐야 합니다."
                 ),
-                "opportunities": ["제안서에서 컨설팅 범위와 검증 항목을 함께 제시할 수 있습니다."],
+                "potential_impact": (
+                    "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 SK AX는 대상 업무, "
+                    "검증 환경, 후속 운영 책임이 어떻게 구체화되는지 내부적으로 비교해야 합니다."
+                ),
+                "opportunities": [
+                    "컨설팅 범위와 검증 환경 변화를 같은 기준으로 축적할 수 있습니다."
+                ],
                 "threats": [
                     (
-                        "테스트베드 구축 레퍼런스 비교에서 검증 근거가 약하면 "
-                        "설득력이 낮아질 수 있습니다."
+                        "검증 환경 근거가 약하면 유사 동향 비교에서 대응 범위를 과하게 "
+                        "단정할 수 있습니다."
                     )
                 ],
                 "recommended_actions": [
                     (
-                        "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 업무 적용 "
-                        "범위와 데이터 관리 책임을 따로 비교할 수 있습니다. 따라서 SK AX "
-                        "제안서에서 두 항목을 별도 항목으로 설명합니다."
+                        "SK AX는 토큰증권 컨설팅과 테스트베드 구축 신호를 볼 때 대상 업무, "
+                        "검증 환경, 운영 책임을 같은 기준으로 축적해야 합니다. 자사 관련 "
+                        "사업이 이 축과 어디에서 겹치는지 내부적으로 비교해야 합니다."
                     ),
                     (
-                        "테스트베드 구축 신호 때문에 고객은 테스트베드 통과 여부를 판단하려 "
-                        "합니다. 따라서 SK AX PoC에서 검증 항목과 고객 확인 기준을 함께 "
-                        "제시합니다."
+                        "후속 확인은 테스트베드 구축 범위와 검증 환경의 실제 운영 조건에 "
+                        "맞춰야 합니다. 이 데이터가 쌓여야 SK AX가 직접 점검할 영역과 "
+                        "외부 확인이 필요한 영역을 나눌 수 있습니다."
                     ),
                 ],
                 "business_line_mapping": [TEST_LINE_A],
@@ -1601,19 +1643,19 @@ def test_strategic_insight_agent_generates_from_analysis_package():
                 "sourced_evidence_ids": ["c43682_a43100_f1"],
             },
             "skax_implication": {
-                "why_important": "SK AX 제안 기준에도 운영 책임 설명이 중요해집니다.",
+                "why_important": "SK AX 내부 비교 기준에서도 운영 책임 설명이 중요해집니다.",
                 "potential_impact": (
                     "고객은 기능 보유 여부보다 운영 책임과 검증 기준을 함께 비교할 수 "
-                    "있습니다. 따라서 SK AX는 제안서에서 데이터 보관 위치와 운영 책임 "
-                    "범위를 분리해 설명해야 합니다."
+                    "있습니다. 따라서 SK AX는 내부 점검에서 데이터 보관 위치와 운영 책임 "
+                    "범위를 분리해 봐야 합니다."
                 ),
-                "opportunities": ["운영 책임 기준을 포함한 제안 구성"],
+                "opportunities": ["운영 책임 기준을 포함한 내부 비교 기준 구성"],
                 "threats": ["근거 없는 기능 중심 메시지의 설득력 약화"],
                 "recommended_actions": [
                     (
                         "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 데이터 보관 "
                         "위치와 운영 책임 범위를 따로 비교할 수 있습니다. 따라서 SK AX "
-                        "제안서에 두 판단 기준을 분리해 설명합니다."
+                        "내부 점검에서 두 판단 기준을 분리합니다."
                     ),
                 ],
                 "business_line_mapping": [TEST_LINE_A],
@@ -1685,25 +1727,25 @@ def test_strategic_insight_agent_generates_from_integrated_issue_id(monkeypatch)
                 "sourced_evidence_ids": ["c43682_a43100_f1"],
             },
             "skax_implication": {
-                "why_important": "SK AX 제안 기준에도 검증 기준 설명이 중요해집니다.",
+                "why_important": "SK AX 내부 비교 기준에도 검증 기준 설명이 중요해집니다.",
                 "potential_impact": (
                     "고객은 통합 이슈의 근거 사실을 기준으로 책임 범위와 검증 기준을 "
-                    "비교할 수 있습니다. 따라서 SK AX는 제안서에서 운영 책임과 검증 "
-                    "항목을 분리해 설명해야 합니다."
+                    "비교할 수 있습니다. 따라서 SK AX는 내부 점검에서 운영 책임과 검증 "
+                    "항목을 분리해 봐야 합니다."
                 ),
-                "opportunities": ["검증 기준을 포함한 제안 구성"],
+                "opportunities": ["검증 기준을 포함한 내부 비교 기준 구성"],
                 "threats": ["근거 없는 기능 중심 메시지의 설득력 약화"],
                 "recommended_actions": [
                     (
                         "토큰증권 컨설팅과 테스트베드 구축 신호 때문에 고객은 데이터 보관 "
                         "위치와 운영 책임 범위를 따로 비교할 수 있습니다. 따라서 SK AX "
-                        "제안서에 두 판단 기준을 분리해 설명합니다."
+                        "내부 점검에서 두 판단 기준을 분리합니다."
                     ),
                 ],
                 "business_line_mapping": [TEST_LINE_A],
             },
             "follow_up_questions": ["고객 적용 범위는 어디까지인가?"],
-            "watch_points": ["검증 기준이 제안서에 반영되는지"],
+            "watch_points": ["검증 기준이 내부 비교 기준에 반영되는지"],
             "confidence": 0.7,
             "evidence_label": "moderate",
             "provenance": {
