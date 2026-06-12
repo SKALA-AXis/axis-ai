@@ -1603,10 +1603,15 @@ def _build_extracted_facts(
             article=article_by_id.get(article_id) or {},
         ):
             return
+        activity = activity_type or cluster_event_type
+        if _is_market_data_fact(f"{text} {evidence}") and _normalize_event_type(activity) not in {
+            "stock_market",
+            "analyst_report",
+        }:
+            return
         if _is_duplicate_extracted_fact(facts, article_id, text, evidence):
             return
         counters[article_id] = counters.get(article_id, 0) + 1
-        activity = activity_type or cluster_event_type
         inferred_type = _normalize_fact_type(
             fact_type=fact_type,
             text=f"{text} {evidence}",
@@ -2005,6 +2010,32 @@ def _is_financial_only_fact(text: str) -> bool:
         return False
     return bool(
         re.search(r"매출|영업이익|순이익|주가|시가총액|증가|감소|흑자|적자|억원|조원|%", value)
+    )
+
+
+def _is_market_data_fact(text: str) -> bool:
+    value = str(text or "")
+    if not value:
+        return False
+    strong_terms = (
+        "주가",
+        "현재가",
+        "전일대비",
+        "등락률",
+        "거래량",
+        "시가총액",
+        "목표주가",
+        "투자의견",
+    )
+    if any(term in value for term in strong_terms):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:KOSPI|KOSDAQ)\b|전\s*거래일|장\s*(초반|마감)|"
+            r"(?:상승|하락|급등|급락)\s*(?:마감|출발|전환)",
+            value,
+            re.I,
+        )
     )
 
 
