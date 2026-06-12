@@ -1318,7 +1318,7 @@ def _frontend_implication_from_result(
             payload["precedent_link"] = peer.get("precedent_link")
     if implication.get("evidence_label"):
         payload["evidence_label"] = implication.get("evidence_label")
-    return payload
+    return _with_structured_frontend_blocks(payload)
 
 
 def _implication_from_result(
@@ -1485,7 +1485,69 @@ def _cleanup_public_frontend_implication(frontend: dict[str, Any]) -> dict[str, 
         cleaned["follow_up_questions"] = [
             _public_copy_cleanup(item) for item in _list_string(cleaned.get("follow_up_questions"))
         ]
-    return cleaned
+    return _with_structured_frontend_blocks(cleaned)
+
+
+def _with_structured_frontend_blocks(frontend: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(frontend or {})
+    if not payload.get("key_implication_blocks"):
+        payload["key_implication_blocks"] = _structured_blocks_from_labeled_lines(
+            payload.get("key_implications") or payload.get("peer_implications")
+        )
+    if not payload.get("response_direction_blocks"):
+        payload["response_direction_blocks"] = _structured_blocks_from_labeled_lines(
+            payload.get("response_directions")
+            or payload.get("suggested_actions")
+            or payload.get("skax_checkpoints")
+        )
+    if not payload.get("skax_checkpoint_blocks"):
+        payload["skax_checkpoint_blocks"] = payload.get("response_direction_blocks") or []
+    for key in (
+        "key_implication_blocks",
+        "response_direction_blocks",
+        "skax_checkpoint_blocks",
+    ):
+        payload[key] = _clean_structured_blocks(payload.get(key))
+    return payload
+
+
+def _clean_structured_blocks(value: Any) -> list[dict[str, str]]:
+    blocks: list[dict[str, str]] = []
+    for item in _list_value(value):
+        if not isinstance(item, dict):
+            continue
+        main = _public_copy_cleanup(item.get("main"))
+        detail = _public_copy_cleanup(item.get("detail"))
+        if main:
+            blocks.append({"main": main, "detail": detail})
+    return blocks
+
+
+def _structured_blocks_from_labeled_lines(lines: Any) -> list[dict[str, str]]:
+    blocks: list[dict[str, str]] = []
+    for line in _list_string(lines):
+        block = _split_main_detail_block(line)
+        if block["main"]:
+            blocks.append(block)
+    return blocks
+
+
+def _split_main_detail_block(text: str) -> dict[str, str]:
+    value = re.sub(r"\s+", " ", str(text or "").strip())
+    if not value:
+        return {"main": "", "detail": ""}
+
+    value = re.sub(r"^핵심\s*(?:시사점|대응)\s*:\s*", "", value).strip()
+    parts = re.split(r"\s*근거\s*/?\s*설명\s*:\s*", value, maxsplit=1)
+    main = parts[0].strip() if parts else ""
+    detail = parts[1].strip() if len(parts) == 2 else ""
+
+    main = re.sub(r"^핵심\s*(?:시사점|대응)\s*:\s*", "", main).strip()
+    detail = re.sub(r"^근거\s*/?\s*설명\s*:\s*", "", detail).strip()
+    return {
+        "main": _public_copy_cleanup(main),
+        "detail": _public_copy_cleanup(detail),
+    }
 
 
 def _format_public_frontend_item(value: Any, *, section: str) -> str:
