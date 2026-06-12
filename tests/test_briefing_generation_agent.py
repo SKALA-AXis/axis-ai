@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from src.agents import briefing_generation_agent as briefing_module
+from src.agents.briefing import data_layer as briefing_data_layer
 from src.agents.briefing_generation_agent import (
     BriefingGenerationAgent,
     _display_copy_context,
@@ -330,7 +330,8 @@ def test_briefing_uses_integrated_issues_as_primary_lookup(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(briefing_module, "_fetch_period_integrated_issue_rows", fake_rows)
+    # 분리 후 실호출자는 src.agents.briefing.data_layer 내부 — 그 모듈 바인딩을 패치해야 효과 있음
+    monkeypatch.setattr(briefing_data_layer, "_fetch_period_integrated_issue_rows", fake_rows)
 
     result = asyncio.run(
         BriefingGenerationAgent().generate(
