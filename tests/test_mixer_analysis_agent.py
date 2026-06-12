@@ -10,6 +10,7 @@ from src.api.mixer_schemas import MixerAnalysisRequest, MixerAnalysisResponse
 from src.services.analysis_units import (
     QUALITY_SUMMARY_ONLY_FALLBACK,
     AnalysisUnit,
+    analysis_unit_from_card,
 )
 
 
@@ -129,6 +130,35 @@ def _unit(card_id: str, issue_id: str, *, flags: list[str] | None = None) -> Ana
         card={"id": card_id, "title": f"{card_id} 제목", "company": "samsung_sds"},
         quality_flags=flags or [],
     )
+
+
+def test_analysis_unit_preserves_source_published_at_for_mixer_prompt():
+    unit = analysis_unit_from_card(
+        {
+            "id": "CN-1",
+            "title": "원문 날짜 보존",
+            "company": "samsung_sds",
+            "source_raw_article_ids": [10],
+            "source_links": [
+                {
+                    "raw_article_id": 10,
+                    "title": "원문 기사",
+                    "source_name": "연합뉴스",
+                    "published_at": "2026-06-10T09:30:00+09:00",
+                    "url": "https://example.com/news",
+                }
+            ],
+            "evidence_payload": {
+                "analysis": {"analysis_summary": "분석"},
+                "implication": {"skax_implication": {"why_important": "시사점"}},
+            },
+        }
+    )
+
+    card = unit.to_card_like()
+    assert card["evidence_payload"]["source_links"][0]["published_at"].startswith("2026-06-10")
+    prompt = mixer_module._format_analysis_units([card])
+    assert "2026-06-10T09:30:00+09:00" in prompt
 
 
 def test_mixer_accepts_integrated_issue_ids_and_exposes_sources(monkeypatch):

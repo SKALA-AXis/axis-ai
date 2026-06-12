@@ -36,6 +36,7 @@ class AnalysisUnit:
     validation: dict[str, Any] = field(default_factory=dict)
     source_raw_article_ids: list[int] = field(default_factory=list)
     evidence_refs: list[dict[str, Any]] = field(default_factory=list)
+    source_links: list[dict[str, Any]] = field(default_factory=list)
     display_summary: list[str] = field(default_factory=list)
     card: dict[str, Any] = field(default_factory=dict)
     integrated_issue_row: dict[str, Any] = field(default_factory=dict)
@@ -82,10 +83,13 @@ class AnalysisUnit:
                 "implication": self.implication,
                 "classification": self.classification,
                 "validation": self.validation,
+                "source_links": list(self.source_links),
                 "evidence_refs": self.evidence_refs,
                 "quality_flags": list(self.quality_flags),
             }
         )
+        if self.source_links and not card.get("sources"):
+            card["sources"] = list(self.source_links)
         card["evidence_payload"] = evidence_payload
         card["analysis_package"] = package
         return card
@@ -97,6 +101,7 @@ class AnalysisUnit:
             "anchor_id": self.anchor_id,
             "title": _unit_title(self),
             "source_raw_article_ids": list(self.source_raw_article_ids),
+            "source_links": list(self.source_links),
             "evidence_refs": list(self.evidence_refs),
             "display_summary": list(self.display_summary),
             "quality_flags": list(self.quality_flags),
@@ -199,6 +204,11 @@ def analysis_unit_from_card(card: dict[str, Any]) -> AnalysisUnit:
         issue_row=issue_row,
         evidence_payload=evidence_payload,
     )
+    source_links = (
+        _json_list(evidence_payload.get("source_links"))
+        or _json_list(card.get("source_links"))
+        or _json_list(card.get("sources"))
+    )
     source_ids = _int_list(
         card.get("source_raw_article_ids")
         or integrated_issue.get("source_article_ids")
@@ -224,6 +234,7 @@ def analysis_unit_from_card(card: dict[str, Any]) -> AnalysisUnit:
         validation=validation,
         source_raw_article_ids=source_ids,
         evidence_refs=evidence_refs,
+        source_links=source_links,
         display_summary=display_summary,
         card=card,
         integrated_issue_row=issue_row,
@@ -260,9 +271,27 @@ def _fetch_card_rows(card_ids: list[str]) -> list[dict[str, Any]]:
             ii.content_digest AS ii_content_digest,
             ii.evidence AS ii_evidence,
             ii.issue_frame AS ii_issue_frame,
-            ii.sources AS ii_sources
+            ii.sources AS ii_sources,
+            COALESCE(src.source_links, '[]'::jsonb) AS source_links
         FROM card_news cn
         LEFT JOIN integrated_issues ii ON ii.id = cn.integrated_issue_id
+        LEFT JOIN LATERAL (
+            SELECT jsonb_agg(
+                       jsonb_build_object(
+                           'raw_article_id', ra.id,
+                           'title', ra.title,
+                           'source_name',
+                           COALESCE(NULLIF(ra.source_name, ''), NULLIF(ra.publisher, '')),
+                           'publisher', ra.publisher,
+                           'published_at', ra.published_at,
+                           'url', ra.url
+                       )
+                       ORDER BY ra.published_at DESC NULLS LAST, ra.id DESC
+                   ) AS source_links
+              FROM raw_articles ra
+             WHERE ra.id = cn.primary_raw_article_id
+                OR ra.id = ANY(COALESCE(cn.source_raw_article_ids, '{{}}'::bigint[]))
+        ) src ON TRUE
         WHERE cn.id IN ({placeholders})
     """)
     sql_legacy = text(f"""
@@ -282,8 +311,26 @@ def _fetch_card_rows(card_ids: list[str]) -> list[dict[str, Any]]:
             sources,
             evidence_payload,
             validation_pass,
-            validation_sc_score
+            validation_sc_score,
+            COALESCE(src.source_links, '[]'::jsonb) AS source_links
         FROM card_news
+        LEFT JOIN LATERAL (
+            SELECT jsonb_agg(
+                       jsonb_build_object(
+                           'raw_article_id', ra.id,
+                           'title', ra.title,
+                           'source_name',
+                           COALESCE(NULLIF(ra.source_name, ''), NULLIF(ra.publisher, '')),
+                           'publisher', ra.publisher,
+                           'published_at', ra.published_at,
+                           'url', ra.url
+                       )
+                       ORDER BY ra.published_at DESC NULLS LAST, ra.id DESC
+                   ) AS source_links
+              FROM raw_articles ra
+             WHERE ra.id = card_news.primary_raw_article_id
+                OR ra.id = ANY(COALESCE(card_news.source_raw_article_ids, '{{}}'::bigint[]))
+        ) src ON TRUE
         WHERE id IN ({placeholders})
     """)
     try:
@@ -330,7 +377,8 @@ def _fetch_integrated_issue_rows(integrated_issue_ids: list[str]) -> list[dict[s
             ii.content_digest AS ii_content_digest,
             ii.evidence AS ii_evidence,
             ii.issue_frame AS ii_issue_frame,
-            ii.sources AS ii_sources
+            ii.sources AS ii_sources,
+            COALESCE(src.source_links, '[]'::jsonb) AS source_links
         FROM integrated_issues ii
         LEFT JOIN LATERAL (
             SELECT *
@@ -340,6 +388,23 @@ def _fetch_integrated_issue_rows(integrated_issue_ids: list[str]) -> list[dict[s
             ORDER BY cn.created_at DESC
             LIMIT 1
         ) cn ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT jsonb_agg(
+                       jsonb_build_object(
+                           'raw_article_id', ra.id,
+                           'title', ra.title,
+                           'source_name',
+                           COALESCE(NULLIF(ra.source_name, ''), NULLIF(ra.publisher, '')),
+                           'publisher', ra.publisher,
+                           'published_at', ra.published_at,
+                           'url', ra.url
+                       )
+                       ORDER BY ra.published_at DESC NULLS LAST, ra.id DESC
+                   ) AS source_links
+              FROM raw_articles ra
+             WHERE ra.id = cn.primary_raw_article_id
+                OR ra.id = ANY(COALESCE(cn.source_raw_article_ids, '{{}}'::bigint[]))
+        ) src ON TRUE
         WHERE ii.id IN ({placeholders})
     """)
     try:
@@ -359,6 +424,7 @@ def _normalize_row(row: dict[str, Any]) -> dict[str, Any]:
     row["sources"] = _json_list(row.get("sources"))
     row["evidence_payload"] = _json_dict(row.get("evidence_payload"))
     row["source_raw_article_ids"] = _int_list(row.get("source_raw_article_ids"))
+    row["source_links"] = _json_list(row.get("source_links"))
     row["summary_lines"] = _json_list(row.get("summary_lines"))
     row["integrated_issue_id"] = _first_text(row.get("integrated_issue_id"), row.get("ii_id"))
     return row
