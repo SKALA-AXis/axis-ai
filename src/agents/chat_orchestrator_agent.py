@@ -22,7 +22,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, StateGraph
 from sqlalchemy import text
 
-from src.api.chat_schemas import ChatTurnRequest
+from src.contracts.chat_schemas import ChatTurnRequest
 from src.db.postgres import SessionLocal
 from src.observability.langfuse_client import (
     get_current_trace_id,

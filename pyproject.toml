@@ -108,7 +108,10 @@ name = "agents must not import api"
 type = "forbidden"
 source_modules = ["src.agents"]
 forbidden_modules = ["src.api"]
-ignore_imports = [
-    "src.agents.chat_orchestrator_agent -> src.api.chat_schemas",
-    "src.agents.today_insight_agent -> src.api.today_insight_schemas",
-]
+ignore_imports = []
+
+[[tool.importlinter.contracts]]
+name = "contracts is a leaf layer (no api/agents/services/pipeline imports)"
+type = "forbidden"
+source_modules = ["src.contracts"]
+forbidden_modules = ["src.api", "src.agents", "src.services", "src.pipeline", "src.db"]
