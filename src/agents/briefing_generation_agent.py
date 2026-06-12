@@ -94,7 +94,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 
 from src.config.env_loader import load_profile  # noqa: E402
-from src.db.briefing_reports import save_briefing_report  # noqa: E402
+from src.db.briefing_reports import load_briefing_report, save_briefing_report  # noqa: E402
 from src.services.analysis_units import (  # noqa: E402
     QUALITY_SUMMARY_ONLY_FALLBACK,
     analysis_units_from_cards,
@@ -175,11 +175,17 @@ class BriefingGenerationAgent:
         mock_path: str | Path | None = None,
         mock_items: list[dict[str, Any]] | None = None,
         refine_display_copy: bool = True,
+        reuse_saved: bool = True,
     ) -> dict[str, Any]:
         """기간에 맞는 카드뉴스를 모아 브리핑 payload를 반환한다.
 
         ``card_ids``가 들어와도 기간 필터는 유지한다. 즉, 일간 브리핑이면 해당 일자
         범위에 속한 카드만 브리핑 근거로 사용된다.
+
+        ``reuse_saved=True`` 이고 필터 없는 기본형 요청이면 ``briefing_reports`` 에
+        저장된 동일 기간 브리핑을 재사용한다 (과거 기간은 무기한, 진행 중 기간은
+        TTL 30분). LLM 정제(최대 4회 GPT 호출)를 매 조회마다 반복하지 않기 위한
+        read-through 캐시 — 기본형 요청은 생성 후 항상 저장해 캐시를 채운다.
         """
 
         load_profile()
@@ -191,6 +197,24 @@ class BriefingGenerationAgent:
             if use_mock or mock_path or mock_items
             else "integrated_issue_period_lookup"
         )
+        report_id = _briefing_id(briefing_type, period["date_from"])
+        # 캐시 가능한 요청 = 저장본(report_id 단위)과 내용이 동일해지는 요청.
+        # 필터·사용자 맥락이 붙으면 저장본과 다른 결과라 재사용·적재 모두 제외.
+        cacheable_request = (
+            source_mode != "mock_fixture"
+            and refine_display_copy
+            and not requested_card_ids
+            and not requested_integrated_issue_ids
+            and not peer_ids
+            and not sectors
+            and not user_context
+            and title is None
+        )
+        if reuse_saved and cacheable_request:
+            saved = await asyncio.to_thread(load_briefing_report, report_id)
+            if saved is not None and _saved_report_is_fresh(saved["completed_at"], period):
+                log.info("Briefing 저장본 재사용 | id=%s", report_id)
+                return saved["payload"]
         if source_mode == "mock_fixture":
             mock_source_items = _load_mock_items(mock_path=mock_path, mock_items=mock_items)
             selected_cards = _fetch_mock_period_cards(
@@ -225,7 +249,6 @@ class BriefingGenerationAgent:
             for issue_id in requested_integrated_issue_ids
             if issue_id not in set(selected_integrated_issue_ids)
         ]
-        report_id = _briefing_id(briefing_type, period["date_from"])
         provenance_base = _provenance_base(
             requested_card_ids=requested_card_ids,
             requested_integrated_issue_ids=requested_integrated_issue_ids,
@@ -285,9 +308,32 @@ class BriefingGenerationAgent:
                 selected_cards=selected_cards,
                 llm=self._llm,
             )
-        if save:
+        if save or cacheable_request:
+            # 기본형 요청은 save 플래그와 무관하게 저장 — 다음 조회가 재사용하도록
+            # 캐시를 채운다 (id 단위 UPSERT 라 중복 적재 없음).
             await asyncio.to_thread(save_briefing_report, report, selected_cards=selected_cards)
         return report
+
+
+# 진행 중 기간 브리핑의 재사용 허용 시간. 수집 파이프라인이 1시간 주기라
+# 30분이면 최신 카드 반영 지연이 수집 주기의 절반을 넘지 않는다.
+_REUSE_TTL_CURRENT_PERIOD = timedelta(minutes=30)
+
+
+def _saved_report_is_fresh(completed_at: Any, period: dict[str, Any]) -> bool:
+    """저장된 브리핑을 재사용해도 되는지 판단한다.
+
+    기간이 끝난 브리핑(과거 일/주/월)은 근거 데이터가 더 늘지 않으므로 항상
+    재사용하고, 오늘이 포함된 진행 중 기간은 TTL 안에서만 재사용한다.
+    """
+
+    date_to = period.get("date_to")
+    if isinstance(date_to, date) and date_to < datetime.now(KST).date():
+        return True
+    if not isinstance(completed_at, datetime):
+        return False
+    completed = completed_at if completed_at.tzinfo else completed_at.replace(tzinfo=UTC)
+    return datetime.now(UTC) - completed.astimezone(UTC) <= _REUSE_TTL_CURRENT_PERIOD
 
 
 def _resolve_period(
