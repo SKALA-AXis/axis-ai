@@ -1544,9 +1544,19 @@ def _split_main_detail_block(text: str) -> dict[str, str]:
 
     main = re.sub(r"^핵심\s*(?:시사점|대응)\s*:\s*", "", main).strip()
     detail = re.sub(r"^근거\s*/?\s*설명\s*:\s*", "", detail).strip()
+    return _compact_main_detail(main=main, detail=detail)
+
+
+def _compact_main_detail(*, main: str, detail: str) -> dict[str, str]:
+    main_text = _public_copy_cleanup(main)
+    detail_text = _public_copy_cleanup(detail)
+    sentences = _public_sentences(main_text)
+    if len(sentences) >= 2:
+        main_text = sentences[0]
+        detail_text = " ".join([*sentences[1:], detail_text]).strip()
     return {
-        "main": _public_copy_cleanup(main),
-        "detail": _public_copy_cleanup(detail),
+        "main": _public_copy_cleanup(main_text),
+        "detail": _public_copy_cleanup(detail_text),
     }
 
 
@@ -1554,13 +1564,21 @@ def _format_public_frontend_item(value: Any, *, section: str) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    if re.match(r"^핵심\s*(시사점|대응)\s*:", text):
-        return text
-    conclusion, evidence = _split_public_conclusion_evidence(text)
-    if not conclusion or not evidence:
-        return text
     heading = "핵심 대응" if section == "action" else "핵심 시사점"
-    return f"{heading}: {conclusion}\n근거/설명: {evidence}"
+    if re.match(r"^핵심\s*(시사점|대응)\s*:", text):
+        block = _split_main_detail_block(text)
+        if not block["main"]:
+            return ""
+        if block["detail"]:
+            return f"{heading}: {block['main']}\n근거/설명: {block['detail']}"
+        return f"{heading}: {block['main']}"
+    main, detail = _split_public_conclusion_evidence(text)
+    if not main or not detail:
+        return text
+    block = _compact_main_detail(main=main, detail=detail)
+    if block["detail"]:
+        return f"{heading}: {block['main']}\n근거/설명: {block['detail']}"
+    return f"{heading}: {block['main']}"
 
 
 def _split_public_conclusion_evidence(value: Any) -> tuple[str, str]:
@@ -1716,11 +1734,18 @@ def _editorial_insight_candidates_from_strategy(
             summary,
             peer_name=peer_name,
         )
-        text = (
-            f"유사 사업의 비교 기준도 단순 선정 여부보다 {criteria_phrase} 중심으로 "
-            f"좁혀질 수 있습니다. 후속 단계에서 공개되는 {competition_variable}은 "
-            "피어사의 실제 실행력을 판단하는 핵심 변수로 남습니다."
-        )
+        if _generic_competition_insight_candidate(
+            summary,
+            criteria_phrase=criteria_phrase,
+            competition_variable=competition_variable,
+        ):
+            text = ""
+        else:
+            text = (
+                f"유사 사업의 비교 기준도 단순 선정 여부보다 {criteria_phrase} 중심으로 "
+                f"좁혀질 수 있습니다. 후속 단계에서 공개되는 {competition_variable}은 "
+                "피어사의 실제 실행력을 판단하는 핵심 변수로 남습니다."
+            )
     elif market_signal:
         text = _ensure_card_sentence(_clean_card_editorial_text(market_signal))
     else:
@@ -2416,6 +2441,47 @@ def _generic_criteria_phrase(text: str) -> bool:
         "검증",
         "운영 조건",
         "모니터링",
+    }
+
+
+def _generic_competition_insight_candidate(
+    summary: dict[str, Any],
+    *,
+    criteria_phrase: str,
+    competition_variable: str,
+) -> bool:
+    criteria = {
+        re.sub(r"\s+", " ", item).strip()
+        for item in re.split(r"[,/·]", str(criteria_phrase or ""))
+        if re.sub(r"\s+", " ", item).strip()
+    }
+    if not criteria:
+        return True
+    frame_defaults = set(_event_frame_criteria(summary))
+    if not criteria.issubset(frame_defaults):
+        return False
+
+    issue_terms = _specific_public_issue_terms(summary)
+    if issue_terms and _has_token_overlap(competition_variable, issue_terms):
+        return False
+    return True
+
+
+def _specific_public_issue_terms(summary: dict[str, Any]) -> set[str]:
+    intelligence = summary.get("cluster_fact_intelligence") or {}
+    terms: list[str] = []
+    if isinstance(intelligence, dict):
+        terms.extend(_list_string(intelligence.get("products_or_services")))
+        terms.extend(_list_string(intelligence.get("customers_or_industries")))
+        terms.extend(_list_string(intelligence.get("target_systems")))
+    terms.append(_display_subject_from_summary(summary))
+    fact_text = _summary_fact_text(summary)
+    terms.extend(re.findall(r"[\"'“”‘’]([^\"'“”‘’]{2,45})[\"'“”‘’]", fact_text))
+    return {
+        token
+        for term in terms
+        for token in _grounding_tokens(term)
+        if len(token) >= 3 and not _low_specificity_display_match_term(token)
     }
 
 
