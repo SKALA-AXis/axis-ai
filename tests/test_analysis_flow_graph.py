@@ -214,7 +214,7 @@ def test_supervisor_graph_routes_human_review_on_fake_numeric():
             "src.pipeline.analysis_flow_graph.save_integrated_issue",
             return_value="11111111-1111-1111-1111-111111111111",
         ),
-        patch("src.pipeline.analysis_flow_graph.save_card_news"),
+        patch("src.pipeline.analysis_flow_graph.save_card_news", return_value="CN-REVIEW"),
         patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
     ):
         result = graph.invoke(
@@ -229,7 +229,8 @@ def test_supervisor_graph_routes_human_review_on_fake_numeric():
     assert validation is not None
     assert validation.passed is False
     assert "numeric_violations" in validation.to_dict()
-    assert result.get("card_news_id") is None
+    assert result.get("card_news_id") == "CN-REVIEW"
+    assert result.get("card_news_payload", {}).get("evaluation_payload") is None
     assert any("news:cluster_42" in f for f in (result.get("human_review_flags") or []))
 
 

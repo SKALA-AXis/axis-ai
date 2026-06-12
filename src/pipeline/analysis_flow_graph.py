@@ -10,8 +10,7 @@ design/01-analysis-pipeline-implementation-plan.md §3.1 + 외부 리뷰 (2026-0
 
     issue_integrate  →  profile_context  →  build_analysis_context
         →  strategic_insight  →  validate
-        → pass → assemble → card_writer → END
-        → fail → human_review → END
+        → assemble → card_writer → END
 
 순서 변경 근거 (외부 리뷰 R-1):
 * IntegratedIssue 가 만들어진 후 main_company / mentioned_peer_companies 가 확정되어야
@@ -499,13 +498,6 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
     }
 
 
-def _route_after_validate(state: SupervisorState) -> str:
-    validation = state.get("validation")
-    if validation is None:
-        return "fail"
-    return "pass" if validation.passed else "fail"
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Hard validation (W2-3) — numeric / certainty / evidence chain
 # ─────────────────────────────────────────────────────────────────────────────
@@ -899,14 +891,12 @@ def build_supervisor_graph(deps: SupervisorDeps | None = None) -> Any:
     g.add_edge("profile_context", "build_analysis_context")
     g.add_edge("build_analysis_context", "strategic_insight")
     g.add_edge("strategic_insight", "validate")
-    g.add_conditional_edges(
-        "validate",
-        _route_after_validate,
-        {"pass": "assemble", "fail": "human_review"},
-    )
+    # Validation remains attached to the card payload, but it should not block
+    # historical/realtime card creation. Downstream quality filters can decide
+    # whether to hide or regenerate a card without losing the clustered event.
+    g.add_edge("validate", "assemble")
     g.add_edge("assemble", "card_writer")
     g.add_edge("card_writer", END)
-    g.add_edge("human_review", END)
     return g.compile()
 
 

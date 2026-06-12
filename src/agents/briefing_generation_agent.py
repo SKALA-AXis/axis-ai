@@ -18,28 +18,169 @@ import os
 import re
 import sys
 from datetime import UTC, date, datetime, time, timedelta
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
-from zoneinfo import ZoneInfo
+
+from src.agents.briefing.basis_builder import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
+    _BRIEFING_SYNTHESIS_PROMPT_VERSION,
+    _LLM_MODEL,
+    _PROMPT_VERSION,
+    _action_details_from_analysis_packages,
+    _analysis_basis_block,
+    _analysis_package_entries,
+    _and_particle,
+    _basis_evidence,
+    _brief_sentence,
+    _brief_sentences,
+    _briefing_action_reason,
+    _briefing_basis_from_analysis_packages,
+    _briefing_clause,
+    _briefing_customer_scope,
+    _briefing_decision_focus,
+    _briefing_synthesis_quality_issues,
+    _briefing_synthesis_revision_prompt,
+    _combine_blocks,
+    _comparison_finding,
+    _dedupe_action_pairs,
+    _display_sk_ax_title,
+    _executive_action_details_from_entries,
+    _front_evidence_card_ids,
+    _get_llm,
+    _invalid_synthesis_card_ids,
+    _join_korean,
+    _limit_sentences,
+    _llm,
+    _merge_briefing_basis_synthesis,
+    _normalize_synthesis_action_details,
+    _normalize_synthesis_block,
+    _parse_json_object,
+    _recommended_action_pairs,
+    _refine_briefing_basis_with_llm,
+    _sanitize_synthesis_list,
+    _valid_card_ids,
+)
+from src.agents.briefing.data_layer import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
+    _DEFAULT_LIMIT,
+    _DEFAULT_MOCK_PATH,
+    _MAX_LIMIT,
+    _SECTOR_FILTER_FETCH_MULTIPLIER,
+    _analysis_from_integrated_issue,
+    _analysis_package_from_integrated_issue_row,
+    _append_in_filter,
+    _append_integrated_issue_card_filter,
+    _append_integrated_issue_peer_filter,
+    _append_integrated_issue_sector_filter,
+    _card_from_integrated_issue_row,
+    _classification_from_integrated_issue_row,
+    _clip_text,
+    _consolidated_facts_from_period_evidence,
+    _dedupe_keep_order,
+    _fact_basis_from_period_evidence,
+    _fact_summary_from_issue_brief,
+    _fetch_mock_period_cards,
+    _fetch_period_analysis_units,
+    _fetch_period_cards,
+    _fetch_period_integrated_issue_rows,
+    _filter_by_sectors,
+    _first_source_published_at,
+    _implication_from_integrated_issue,
+    _integrated_issue_from_period_row,
+    _is_missing_integrated_issue_storage,
+    _load_mock_items,
+    _normalize_card_row,
+    _normalize_mock_item,
+)
+from src.agents.briefing.display_copy import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
+    _DISPLAY_COPY_PROMPT_VERSION,
+    _MAX_MARKET_ITEMS,
+    _MAX_SKAX_ITEMS,
+    _analysis_packages_from_result,
+    _basis_signal_phrases_from_result,
+    _basis_signal_sentence_from_result,
+    _brief_noun_phrase,
+    _business_signal_phrase,
+    _compact_visible_item,
+    _company_detail_phrases_from_result,
+    _description_needs_detail,
+    _detailed_basis_sentence_from_result,
+    _display_card_signal_index,
+    _display_copy_quality_issues,
+    _display_copy_visible_items,
+    _display_copy_visible_texts,
+    _display_payload_structure,
+    _filter_focus_phrases,
+    _find_display_item_source,
+    _find_key_change_by_type,
+    _format_key_number_context,
+    _grounded_sk_ax_description,
+    _is_too_similar,
+    _is_vague_display_text,
+    _key_change_card_coverage_issues,
+    _key_number_context_phrase,
+    _looks_like_key_number,
+    _mentions_any_source_company,
+    _merge_flow,
+    _merge_key_change_cards,
+    _merge_market_reading,
+    _merge_sk_ax_view,
+    _merged_display_list,
+    _normalize_similarity_text,
+    _period_from_report,
+    _recommended_action_sentences_from_result,
+    _repair_sk_ax_view_descriptions,
+    _sanitize_flow_step_items,
+    _shares_keyword,
+    _sk_ax_description_from_title,
+    _source_company_names,
+    _strip_terminal_punctuation,
+    _subject_particle,
+    _update_text_field,
+)
+from src.agents.briefing.prompts import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
+    _briefing_basis_synthesis_view,
+    _briefing_contract_schema_hint,
+    _briefing_synthesis_context,
+    _briefing_synthesis_system_prompt,
+    _briefing_synthesis_user_prompt,
+    _display_copy_revision_prompt,
+    _display_copy_schema_hint,
+    _display_copy_system_prompt,
+    _display_copy_user_prompt,
+)
+from src.agents.briefing.support import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
+    KST,
+    _analysis_package,
+    _analysis_package_from_sources,
+    _compact_analysis_package,
+    _compact_analysis_unit_for_display,
+    _company_label,
+    _first_from_list,
+    _first_int,
+    _first_text,
+    _int_list,
+    _iso_or_none,
+    _json_dict,
+    _json_list,
+    _nested_get,
+    _optional_int,
+    _parse_datetime,
+    _safe_float,
+    _str_values,
+)
 
 if TYPE_CHECKING:
-    from langchain_openai import ChatOpenAI
+    pass
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from sqlalchemy import text  # noqa: E402
 
 from src.config.env_loader import load_profile  # noqa: E402
-from src.db.briefing_reports import save_briefing_report  # noqa: E402
-from src.db.postgres import SessionLocal  # noqa: E402
+from src.db.briefing_reports import load_briefing_report, save_briefing_report  # noqa: E402
 from src.services.analysis_units import (  # noqa: E402
-    QUALITY_SUMMARY_ONLY_FALLBACK,
     analysis_units_from_cards,
     card_like_from_units,
-    confidence_penalty_for_flags,
     quality_flags_for_units,
     source_integrated_issue_ids,
 )
@@ -48,40 +189,7 @@ log = logging.getLogger(__name__)
 
 BriefingType = Literal["daily", "weekly", "monthly"]
 
-KST = ZoneInfo("Asia/Seoul")
-_PROMPT_VERSION = "briefing-generation-v0.3-period-briefing"
-_BRIEFING_SYNTHESIS_PROMPT_VERSION = "briefing-synthesis-v0.4-integrated-issue-frontend-contract"
-_DISPLAY_COPY_PROMPT_VERSION = "briefing-display-copy-v0.24-patterned-llm-guarded"
-_LLM_MODEL = os.getenv("BRIEFING_LLM_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o"
-_DEFAULT_LIMIT = 20
-_MAX_LIMIT = 50
-_SECTOR_FILTER_FETCH_MULTIPLIER = 5
 _MAX_DISPLAY_CARDS = 3
-_MAX_MARKET_ITEMS = 3
-_MAX_SKAX_ITEMS = 3
-_DEFAULT_MOCK_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "crawler"
-    / "crawler_results"
-    / "mixer_mock"
-    / "mixer_analysis_packages_20260522.json"
-)
-
-_llm: ChatOpenAI | None = None
-
-
-def _get_llm() -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
-    global _llm
-    if _llm is None:
-        _llm = ChatOpenAI(
-            model=_LLM_MODEL,
-            temperature=0.1,
-            max_completion_tokens=2400,
-            model_kwargs={"response_format": {"type": "json_object"}},
-        )
-    return _llm
 
 
 class BriefingGenerationAgent:
@@ -126,11 +234,17 @@ class BriefingGenerationAgent:
         mock_path: str | Path | None = None,
         mock_items: list[dict[str, Any]] | None = None,
         refine_display_copy: bool = True,
+        reuse_saved: bool = True,
     ) -> dict[str, Any]:
         """기간에 맞는 카드뉴스를 모아 브리핑 payload를 반환한다.
 
         ``card_ids``가 들어와도 기간 필터는 유지한다. 즉, 일간 브리핑이면 해당 일자
         범위에 속한 카드만 브리핑 근거로 사용된다.
+
+        ``reuse_saved=True`` 이고 필터 없는 기본형 요청이면 ``briefing_reports`` 에
+        저장된 동일 기간 브리핑을 재사용한다 (과거 기간은 무기한, 진행 중 기간은
+        TTL 30분). LLM 정제(최대 4회 GPT 호출)를 매 조회마다 반복하지 않기 위한
+        read-through 캐시 — 기본형 요청은 생성 후 항상 저장해 캐시를 채운다.
         """
 
         load_profile()
@@ -142,6 +256,24 @@ class BriefingGenerationAgent:
             if use_mock or mock_path or mock_items
             else "integrated_issue_period_lookup"
         )
+        report_id = _briefing_id(briefing_type, period["date_from"])
+        # 캐시 가능한 요청 = 저장본(report_id 단위)과 내용이 동일해지는 요청.
+        # 필터·사용자 맥락이 붙으면 저장본과 다른 결과라 재사용·적재 모두 제외.
+        cacheable_request = (
+            source_mode != "mock_fixture"
+            and refine_display_copy
+            and not requested_card_ids
+            and not requested_integrated_issue_ids
+            and not peer_ids
+            and not sectors
+            and not user_context
+            and title is None
+        )
+        if reuse_saved and cacheable_request:
+            saved = await asyncio.to_thread(load_briefing_report, report_id)
+            if saved is not None and _saved_report_is_fresh(saved["completed_at"], period):
+                log.info("Briefing 저장본 재사용 | id=%s", report_id)
+                return saved["payload"]
         if source_mode == "mock_fixture":
             mock_source_items = _load_mock_items(mock_path=mock_path, mock_items=mock_items)
             selected_cards = _fetch_mock_period_cards(
@@ -176,7 +308,6 @@ class BriefingGenerationAgent:
             for issue_id in requested_integrated_issue_ids
             if issue_id not in set(selected_integrated_issue_ids)
         ]
-        report_id = _briefing_id(briefing_type, period["date_from"])
         provenance_base = _provenance_base(
             requested_card_ids=requested_card_ids,
             requested_integrated_issue_ids=requested_integrated_issue_ids,
@@ -236,9 +367,32 @@ class BriefingGenerationAgent:
                 selected_cards=selected_cards,
                 llm=self._llm,
             )
-        if save:
+        if save or cacheable_request:
+            # 기본형 요청은 save 플래그와 무관하게 저장 — 다음 조회가 재사용하도록
+            # 캐시를 채운다 (id 단위 UPSERT 라 중복 적재 없음).
             await asyncio.to_thread(save_briefing_report, report, selected_cards=selected_cards)
         return report
+
+
+# 진행 중 기간 브리핑의 재사용 허용 시간. 수집 파이프라인이 1시간 주기라
+# 30분이면 최신 카드 반영 지연이 수집 주기의 절반을 넘지 않는다.
+_REUSE_TTL_CURRENT_PERIOD = timedelta(minutes=30)
+
+
+def _saved_report_is_fresh(completed_at: Any, period: dict[str, Any]) -> bool:
+    """저장된 브리핑을 재사용해도 되는지 판단한다.
+
+    기간이 끝난 브리핑(과거 일/주/월)은 근거 데이터가 더 늘지 않으므로 항상
+    재사용하고, 오늘이 포함된 진행 중 기간은 TTL 안에서만 재사용한다.
+    """
+
+    date_to = period.get("date_to")
+    if isinstance(date_to, date) and date_to < datetime.now(KST).date():
+        return True
+    if not isinstance(completed_at, datetime):
+        return False
+    completed = completed_at if completed_at.tzinfo else completed_at.replace(tzinfo=UTC)
+    return datetime.now(UTC) - completed.astimezone(UTC) <= _REUSE_TTL_CURRENT_PERIOD
 
 
 def _resolve_period(
@@ -303,893 +457,6 @@ def _clean_ids(values: list[str] | None) -> list[str]:
     return out
 
 
-def _fetch_period_analysis_units(
-    *,
-    period: dict[str, Any],
-    card_ids: list[str] | None,
-    integrated_issue_ids: list[str] | None,
-    peer_ids: list[str] | None,
-    sectors: list[str] | None,
-    limit: int,
-) -> list[Any]:
-    """Load briefing inputs from ``integrated_issues`` as the primary store.
-
-    ``card_news`` is used only to resolve a display/card anchor id and, while
-    analysis/implication results are still not normalized into their own table,
-    as a backward-compatible source for ``evidence_payload.analysis_package``.
-    """
-
-    rows = _fetch_period_integrated_issue_rows(
-        period=period,
-        card_ids=card_ids,
-        integrated_issue_ids=integrated_issue_ids,
-        peer_ids=peer_ids,
-        sectors=sectors,
-        limit=limit,
-    )
-    cards = [_card_from_integrated_issue_row(row) for row in rows]
-    return analysis_units_from_cards(cards)
-
-
-def _fetch_period_integrated_issue_rows(
-    *,
-    period: dict[str, Any],
-    card_ids: list[str] | None,
-    integrated_issue_ids: list[str] | None,
-    peer_ids: list[str] | None,
-    sectors: list[str] | None,
-    limit: int,
-) -> list[dict[str, Any]]:
-    fetch_limit = max(1, min(int(limit or _DEFAULT_LIMIT), _MAX_LIMIT))
-    params: dict[str, Any] = {
-        "start_at": period["start_at"],
-        "end_at": period["end_exclusive_at"],
-        "limit": fetch_limit,
-    }
-    where = [
-        "ii.status = 'active'",
-        "ii.is_current = TRUE",
-        "anchor.card_id IS NOT NULL",
-        "COALESCE(src.latest_published_at, ii.created_at) >= :start_at",
-        "COALESCE(src.latest_published_at, ii.created_at) < :end_at",
-    ]
-    _append_in_filter(where, params, "ii.id::text", "integrated_issue_id", integrated_issue_ids)
-    _append_integrated_issue_card_filter(where, params, card_ids)
-    _append_integrated_issue_peer_filter(where, params, peer_ids)
-    _append_integrated_issue_sector_filter(where, params, sectors)
-
-    sql = f"""
-        SELECT
-            ii.id::text AS integrated_issue_id,
-            ii.issue_key,
-            ii.cluster_id,
-            ii.representative_raw_article_id,
-            ii.main_company,
-            ii.event_type,
-            ii.source_family,
-            ii.scope_type,
-            ii.is_valid,
-            ii.confidence,
-            ii.status,
-            ii.is_current,
-            ii.headline,
-            ii.one_line_summary,
-            ii.analyzed_source_ids,
-            ii.source_ids,
-            ii.sectors,
-            ii.mentioned_peer_companies,
-            ii.content_summary,
-            ii.content_detailed_explanation,
-            ii.issue_brief,
-            ii.analysis_ready_inputs,
-            ii.content_digest,
-            ii.issue_frame,
-            ii.sources AS issue_sources,
-            ii.evidence AS issue_evidence,
-            ii.quality AS issue_quality,
-            ii.metadata AS issue_metadata,
-            ii.payload AS issue_payload,
-            ii.created_at AS issue_created_at,
-            ii.updated_at AS issue_updated_at,
-            COALESCE(src.sources_json, '[]'::jsonb) AS source_links,
-            COALESCE(src.source_names, ARRAY[]::text[]) AS source_names,
-            src.first_published_at,
-            src.latest_published_at,
-            COALESCE(ev.evidence_refs_json, '[]'::jsonb) AS evidence_refs,
-            COALESCE(sec.sections_json, '[]'::jsonb) AS content_sections,
-            anchor.card_id AS anchor_card_id,
-            anchor.peer_id AS anchor_peer_id,
-            anchor.importance AS anchor_importance,
-            anchor.importance_score AS anchor_importance_score,
-            anchor.evidence_payload AS anchor_evidence_payload,
-            anchor.created_at AS anchor_created_at,
-            COALESCE(src.latest_published_at, ii.created_at) AS basis_at
-        FROM integrated_issues ii
-        LEFT JOIN LATERAL (
-            SELECT
-                jsonb_agg(
-                    jsonb_build_object(
-                        'raw_article_id', s.raw_article_id,
-                        'article_id', s.raw_article_id,
-                        'title', s.title,
-                        'source_name', s.source_name,
-                        'publisher', s.publisher,
-                        'source_type', s.source_type,
-                        'published_at', s.published_at,
-                        'url', s.url,
-                        'relevance_label', s.relevance_label,
-                        'relevance_score', s.relevance_score
-                    )
-                    ORDER BY s.source_order, s.id
-                ) AS sources_json,
-                array_agg(DISTINCT COALESCE(NULLIF(s.source_name, ''), NULLIF(s.publisher, '')))
-                    FILTER (
-                        WHERE COALESCE(
-                            NULLIF(s.source_name, ''),
-                            NULLIF(s.publisher, '')
-                        ) IS NOT NULL
-                    )
-                    AS source_names,
-                MIN(s.published_at) AS first_published_at,
-                MAX(s.published_at) AS latest_published_at
-            FROM integrated_issue_source_articles s
-            WHERE s.integrated_issue_id = ii.id
-        ) src ON TRUE
-        LEFT JOIN LATERAL (
-            SELECT
-                jsonb_agg(
-                    jsonb_build_object(
-                        'evidence_ref_id', e.evidence_ref_id,
-                        'text', e.evidence_text,
-                        'evidence_text', e.evidence_text,
-                        'source_ids', e.source_ids,
-                        'reference_payload', e.reference_payload
-                    )
-                    ORDER BY e.id
-                ) AS evidence_refs_json
-            FROM integrated_issue_evidence_references e
-            WHERE e.integrated_issue_id = ii.id
-        ) ev ON TRUE
-        LEFT JOIN LATERAL (
-            SELECT
-                jsonb_agg(
-                    jsonb_build_object(
-                        'section_key', s.section_key,
-                        'title', s.title,
-                        'summary', s.summary,
-                        'details', s.details,
-                        'key_points', s.key_points,
-                        'raw_article_ids', s.raw_article_ids,
-                        'evidence_ref_ids', s.evidence_ref_ids,
-                        'section_payload', s.section_payload
-                    )
-                    ORDER BY s.section_order, s.id
-                ) AS sections_json
-            FROM integrated_issue_content_sections s
-            WHERE s.integrated_issue_id = ii.id
-        ) sec ON TRUE
-        LEFT JOIN LATERAL (
-            SELECT
-                cn.id AS card_id,
-                COALESCE(cn.peer_company_id, cn.company) AS peer_id,
-                cn.importance,
-                cn.importance_score,
-                cn.evidence_payload,
-                cn.created_at
-            FROM card_news cn
-            WHERE cn.integrated_issue_id = ii.id
-              AND COALESCE(cn.status, 'ACTIVE') = 'ACTIVE'
-            ORDER BY
-                cn.importance_score DESC NULLS LAST,
-                cn.created_at DESC
-            LIMIT 1
-        ) anchor ON TRUE
-        WHERE {" AND ".join(where)}
-        ORDER BY
-            COALESCE(anchor.importance_score, ii.confidence, 0.0) DESC,
-            COALESCE(src.latest_published_at, ii.created_at) DESC,
-            ii.updated_at DESC
-        LIMIT :limit
-    """
-
-    try:
-        with SessionLocal() as db:
-            rows = db.execute(text(sql), params).mappings().all()
-    except Exception as exc:  # noqa: BLE001
-        if _is_missing_integrated_issue_storage(exc):
-            log.info("BriefingGenerationAgent integrated_issues storage unavailable")
-            return []
-        log.exception("BriefingGenerationAgent integrated_issues 기간 조회 실패 | error=%s", exc)
-        return []
-    return [dict(row) for row in rows]
-
-
-def _append_integrated_issue_card_filter(
-    where: list[str],
-    params: dict[str, Any],
-    card_ids: list[str] | None,
-) -> None:
-    cleaned = [str(value).strip() for value in card_ids or [] if str(value).strip()]
-    if not cleaned:
-        return
-    placeholders = []
-    for index, value in enumerate(cleaned):
-        key = f"requested_card_id_{index}"
-        placeholders.append(f":{key}")
-        params[key] = value
-    where.append(
-        "EXISTS ("
-        "SELECT 1 FROM card_news req "
-        "WHERE req.integrated_issue_id = ii.id "
-        f"AND req.id IN ({', '.join(placeholders)})"
-        ")"
-    )
-
-
-def _append_integrated_issue_peer_filter(
-    where: list[str],
-    params: dict[str, Any],
-    peer_ids: list[str] | None,
-) -> None:
-    cleaned = [str(value).strip() for value in peer_ids or [] if str(value).strip()]
-    if not cleaned:
-        return
-    placeholders = []
-    for index, value in enumerate(cleaned):
-        key = f"issue_peer_id_{index}"
-        placeholders.append(f":{key}")
-        params[key] = value
-    array_sql = f"ARRAY[{', '.join(placeholders)}]::text[]"
-    where.append(
-        f"(ii.main_company IN ({', '.join(placeholders)}) "
-        f"OR ii.mentioned_peer_companies && {array_sql})"
-    )
-
-
-def _append_integrated_issue_sector_filter(
-    where: list[str],
-    params: dict[str, Any],
-    sectors: list[str] | None,
-) -> None:
-    cleaned = [str(value).strip() for value in sectors or [] if str(value).strip()]
-    if not cleaned:
-        return
-    placeholders = []
-    for index, value in enumerate(cleaned):
-        key = f"issue_sector_{index}"
-        placeholders.append(f":{key}")
-        params[key] = value
-    where.append(f"ii.sectors && ARRAY[{', '.join(placeholders)}]::text[]")
-
-
-def _card_from_integrated_issue_row(row: dict[str, Any]) -> dict[str, Any]:
-    issue_id = _first_text(row.get("integrated_issue_id"), row.get("id"))
-    integrated_issue = _integrated_issue_from_period_row(row)
-    source_links = _json_list(row.get("source_links")) or _json_list(
-        integrated_issue.get("representative_sources")
-    )
-    evidence_refs = _json_list(row.get("evidence_refs")) or _json_list(
-        integrated_issue.get("fact_basis")
-    )
-    package = _analysis_package_from_integrated_issue_row(
-        row,
-        integrated_issue=integrated_issue,
-        source_links=source_links,
-        evidence_refs=evidence_refs,
-    )
-    anchor_card_id = _first_text(row.get("anchor_card_id"))
-    anchor_id = anchor_card_id or issue_id
-    sector = _first_text(
-        _first_from_list(row.get("sectors")),
-        _nested_get(package, "classification", "sector"),
-        "other",
-    )
-    company = _first_text(
-        integrated_issue.get("main_company"),
-        row.get("main_company"),
-        row.get("anchor_peer_id"),
-    )
-    source_raw_article_ids = _int_list(
-        integrated_issue.get("source_article_ids")
-        or integrated_issue.get("cluster_article_ids")
-        or row.get("source_ids")
-    )
-    evidence_payload = {
-        "integrated_issue_id": issue_id,
-        "analysis_package": package,
-        "integrated_issue": integrated_issue,
-        "analysis": _json_dict(package.get("analysis")),
-        "implication": _json_dict(package.get("implication")),
-        "classification": _json_dict(package.get("classification")),
-        "validation": _json_dict(package.get("validation")),
-        "source_links": source_links,
-        "evidence_refs": evidence_refs,
-        "content_sections": _json_list(row.get("content_sections")),
-        "analysis_basis_source": "integrated_issues",
-    }
-    return {
-        "id": anchor_id,
-        "card_id": anchor_card_id or None,
-        "integrated_issue_id": issue_id or None,
-        "title": _first_text(
-            integrated_issue.get("main_issue"),
-            integrated_issue.get("headline"),
-            integrated_issue.get("one_line_summary"),
-            row.get("headline"),
-            issue_id,
-        ),
-        # Do not use card_news.summary_lines in the integrated issue path.
-        "summary_lines": [],
-        "display_summary": _json_list(integrated_issue.get("fact_summary")),
-        "event_type": _first_text(
-            integrated_issue.get("cluster_event_type"),
-            row.get("event_type"),
-        ),
-        "importance": _first_text(row.get("anchor_importance"), "medium"),
-        "importance_score": _safe_float(row.get("anchor_importance_score"), default=-1.0),
-        "company": company,
-        "peer_id": _first_text(row.get("anchor_peer_id"), company),
-        "sector": sector,
-        "sectors": _str_values(row.get("sectors")) or [sector],
-        "sources": source_links,
-        "source_raw_article_ids": source_raw_article_ids,
-        "primary_raw_article_id": _first_int(source_raw_article_ids),
-        "evidence_payload": evidence_payload,
-        "analysis_package": package,
-        "has_analysis_package": bool(package.get("analysis") or package.get("implication")),
-        "evidence_card_ids": [anchor_id] if anchor_id else [],
-        "validation_pass": _nested_get(package, "validation", "pass"),
-        "validation_sc_score": _nested_get(package, "validation", "sc_score"),
-        "created_at": _iso_or_none(row.get("issue_created_at")),
-        "basis_at": _iso_or_none(row.get("basis_at") or row.get("latest_published_at")),
-        "analysis_basis_source": "integrated_issues",
-    }
-
-
-def _integrated_issue_from_period_row(row: dict[str, Any]) -> dict[str, Any]:
-    payload = _json_dict(row.get("issue_payload"))
-    issue = _json_dict(payload.get("integrated_issue")) or (
-        dict(payload) if payload.get("is_valid_summary") else {}
-    )
-    content_digest = _json_dict(row.get("content_digest"))
-    issue_frame = _json_dict(row.get("issue_frame"))
-    source_links = _json_list(row.get("source_links")) or _json_list(row.get("issue_sources"))
-    evidence_refs = _json_list(row.get("evidence_refs"))
-    sectors = _str_values(row.get("sectors"))
-    source_ids = _int_list(row.get("source_ids"))
-    analyzed_ids = _int_list(row.get("analyzed_source_ids"))
-    issue.update(
-        {
-            "integrated_issue_id": _first_text(row.get("integrated_issue_id")),
-            "bundle_id": issue.get("bundle_id") or row.get("issue_key"),
-            "cluster_id": issue.get("cluster_id") or row.get("cluster_id"),
-            "representative_id": issue.get("representative_id")
-            or row.get("representative_raw_article_id"),
-            "source_article_ids": issue.get("source_article_ids") or source_ids,
-            "cluster_article_ids": issue.get("cluster_article_ids") or source_ids,
-            "analyzed_article_ids": issue.get("analyzed_article_ids") or analyzed_ids,
-            "main_company": issue.get("main_company") or row.get("main_company"),
-            "mentioned_peer_companies": issue.get("mentioned_peer_companies")
-            or _str_values(row.get("mentioned_peer_companies")),
-            "cluster_event_type": issue.get("cluster_event_type") or row.get("event_type"),
-            "sectors": issue.get("sectors") or sectors,
-            "headline": issue.get("headline") or row.get("headline"),
-            "main_issue": issue.get("main_issue") or row.get("headline"),
-            "one_line_summary": issue.get("one_line_summary") or row.get("one_line_summary"),
-            "integrated_text": issue.get("integrated_text")
-            or row.get("content_detailed_explanation")
-            or row.get("content_summary"),
-            "fact_summary": issue.get("fact_summary")
-            or _fact_summary_from_issue_brief(row.get("issue_brief"), content_digest),
-            "content_digest": issue.get("content_digest") or content_digest,
-            "issue_frame": issue.get("issue_frame") or issue_frame,
-            "representative_sources": issue.get("representative_sources") or source_links,
-            "fact_basis": issue.get("fact_basis")
-            or _fact_basis_from_period_evidence(evidence_refs),
-            "consolidated_facts": issue.get("consolidated_facts")
-            or _consolidated_facts_from_period_evidence(evidence_refs),
-            "confidence": issue.get("confidence") or row.get("confidence") or 0.0,
-            "is_valid_summary": issue.get("is_valid_summary", row.get("is_valid", True)),
-        }
-    )
-    return {key: value for key, value in issue.items() if value not in (None, "", [], {})}
-
-
-def _analysis_package_from_integrated_issue_row(
-    row: dict[str, Any],
-    *,
-    integrated_issue: dict[str, Any],
-    source_links: list[Any],
-    evidence_refs: list[Any],
-) -> dict[str, Any]:
-    anchor_evidence = _json_dict(row.get("anchor_evidence_payload"))
-    legacy_package = _json_dict(anchor_evidence.get("analysis_package"))
-    classification = _json_dict(
-        legacy_package.get("classification")
-    ) or _classification_from_integrated_issue_row(row, integrated_issue=integrated_issue)
-    analysis = _json_dict(legacy_package.get("analysis")) or _analysis_from_integrated_issue(
-        row,
-        integrated_issue=integrated_issue,
-        evidence_refs=evidence_refs,
-    )
-    implication = _json_dict(
-        legacy_package.get("implication")
-    ) or _implication_from_integrated_issue(
-        integrated_issue=integrated_issue,
-        analysis=analysis,
-    )
-    validation = _json_dict(legacy_package.get("validation")) or {
-        "pass": bool(integrated_issue.get("is_valid_summary", row.get("is_valid", True))),
-        "sc_score": _safe_float(row.get("confidence"), default=0.0),
-    }
-    package = dict(legacy_package)
-    package.update(
-        {
-            "integrated_issue_id": _first_text(row.get("integrated_issue_id")),
-            "bundle_id": integrated_issue.get("bundle_id") or row.get("issue_key"),
-            "integrated_issue": integrated_issue,
-            "summary": integrated_issue,
-            "analysis": analysis,
-            "implication": implication,
-            "classification": classification,
-            "validation": validation,
-            "sources": source_links,
-            "evidence_refs": evidence_refs,
-            "analysis_basis_source": "integrated_issues",
-            "legacy_analysis_package_source": (
-                "card_news.evidence_payload.analysis_package" if legacy_package else None
-            ),
-        }
-    )
-    return package
-
-
-def _classification_from_integrated_issue_row(
-    row: dict[str, Any],
-    *,
-    integrated_issue: dict[str, Any],
-) -> dict[str, Any]:
-    sectors = _str_values(integrated_issue.get("sectors") or row.get("sectors"))
-    sector = sectors[0] if sectors else ""
-    company = _first_text(integrated_issue.get("main_company"), row.get("main_company"))
-    return {
-        "sector": sector,
-        "sectors": sectors,
-        "company": company,
-        "companies": [company] if company else [],
-        "peer_id": company,
-        "event_type": _first_text(
-            integrated_issue.get("cluster_event_type"),
-            row.get("event_type"),
-        ),
-        "importance": _first_text(row.get("anchor_importance"), "medium"),
-        "importance_score": _safe_float(row.get("anchor_importance_score"), default=0.0),
-        "representative_id": integrated_issue.get("representative_id")
-        or row.get("representative_raw_article_id"),
-    }
-
-
-def _analysis_from_integrated_issue(
-    row: dict[str, Any],
-    *,
-    integrated_issue: dict[str, Any],
-    evidence_refs: list[Any],
-) -> dict[str, Any]:
-    facts = _fact_basis_from_period_evidence(evidence_refs)
-    summary = _first_text(
-        integrated_issue.get("integrated_text"),
-        integrated_issue.get("one_line_summary"),
-        integrated_issue.get("main_issue"),
-        row.get("content_summary"),
-    )
-    market_signal = _first_text(
-        integrated_issue.get("one_line_summary"),
-        integrated_issue.get("main_issue"),
-        summary,
-    )
-    strategic_meaning = _dedupe_keep_order(
-        [
-            _first_text(integrated_issue.get("content_digest", {}).get("detailed_explanation")),
-            *[
-                str(item.get("text") or item.get("evidence_text") or "").strip()
-                for item in facts[:2]
-                if isinstance(item, dict)
-            ],
-        ]
-    )
-    return {
-        "is_valid_analysis": bool(integrated_issue.get("is_valid_summary", True)),
-        "analysis_summary": summary,
-        "market_signal": market_signal,
-        "strategic_meaning": strategic_meaning[:3],
-        "impact_reason": summary,
-        "risk_or_opportunity": "입력 근거 기반 추가 판단 필요",
-        "confidence": _safe_float(row.get("confidence"), default=0.0),
-        "analysis_basis_source": "integrated_issues",
-    }
-
-
-def _implication_from_integrated_issue(
-    *,
-    integrated_issue: dict[str, Any],
-    analysis: dict[str, Any],
-) -> dict[str, Any]:
-    market_signal = _first_text(analysis.get("market_signal"), integrated_issue.get("main_issue"))
-    why = _first_text(
-        analysis.get("impact_reason"),
-        integrated_issue.get("one_line_summary"),
-        "통합 이슈에서 확인된 사실을 SK AX 사업 판단 기준으로 전환해야 합니다.",
-    )
-    action = _clip_text(
-        (
-            "SK AX는 입력에서 확인된 고객군과 업무 범위를 기준으로 "
-            "오퍼링 우선순위, 책임 조직, 리스크 승인 기준을 명확히 정한다."
-        ),
-        max_chars=260,
-    )
-    return {
-        "is_valid_implication": bool(integrated_issue.get("is_valid_summary", True)),
-        "implication_scope": "peer_and_skax",
-        "peer_implication": {
-            "peer_meaning": market_signal,
-            "capability_change": market_signal,
-        },
-        "skax_implication": {
-            "why_important": why,
-            "potential_impact": market_signal,
-            "recommended_actions": [action],
-        },
-        "recommended_actions": [action],
-        "confidence": _safe_float(integrated_issue.get("confidence"), default=0.0),
-        "analysis_basis_source": "integrated_issues",
-    }
-
-
-def _fact_summary_from_issue_brief(value: Any, content_digest: dict[str, Any]) -> list[str]:
-    issue_brief = _json_dict(value)
-    return _dedupe_keep_order(
-        [
-            _first_text(issue_brief.get("headline"), issue_brief.get("one_line_summary")),
-            _first_text(content_digest.get("summary"), content_digest.get("detailed_explanation")),
-        ]
-    )
-
-
-def _fact_basis_from_period_evidence(value: Any) -> list[dict[str, Any]]:
-    refs = []
-    for item in _json_list(value):
-        if not isinstance(item, dict):
-            continue
-        text_value = _first_text(item.get("evidence_text"), item.get("text"), item.get("fact"))
-        if not text_value:
-            continue
-        refs.append(
-            {
-                "evidence_ref_id": _first_text(item.get("evidence_ref_id")),
-                "text": text_value,
-                "source_ids": _int_list(item.get("source_ids")),
-            }
-        )
-    return refs
-
-
-def _consolidated_facts_from_period_evidence(value: Any) -> list[str]:
-    return [
-        str(item.get("text") or item.get("evidence_text") or "").strip()
-        for item in _json_list(value)
-        if isinstance(item, dict)
-        and str(item.get("text") or item.get("evidence_text") or "").strip()
-    ][:8]
-
-
-def _is_missing_integrated_issue_storage(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return (
-        "integrated_issues" in message
-        or "integrated_issue_source_articles" in message
-        or "integrated_issue_evidence_references" in message
-        or "integrated_issue_content_sections" in message
-    ) and ("undefined" in message or "does not exist" in message)
-
-
-def _fetch_period_cards(
-    *,
-    period: dict[str, Any],
-    card_ids: list[str] | None,
-    integrated_issue_ids: list[str] | None,
-    peer_ids: list[str] | None,
-    sectors: list[str] | None,
-    limit: int,
-) -> list[dict[str, Any]]:
-    fetch_limit = max(1, min(int(limit or _DEFAULT_LIMIT), _DEFAULT_LIMIT))
-    if sectors:
-        fetch_limit *= _SECTOR_FILTER_FETCH_MULTIPLIER
-    params: dict[str, Any] = {
-        "start_at": period["start_at"],
-        "end_at": period["end_exclusive_at"],
-        "limit": fetch_limit,
-    }
-    where = [
-        "cn.status = 'ACTIVE'",
-        "COALESCE(ra.published_at, cn.created_at) >= :start_at",
-        "COALESCE(ra.published_at, cn.created_at) < :end_at",
-    ]
-    _append_in_filter(where, params, "cn.id", "card_id", card_ids)
-    _append_in_filter(
-        where,
-        params,
-        "cn.integrated_issue_id::text",
-        "integrated_issue_id",
-        integrated_issue_ids,
-    )
-    _append_in_filter(
-        where,
-        params,
-        "COALESCE(cn.peer_company_id, cn.company)",
-        "peer_id",
-        peer_ids,
-    )
-
-    sql = f"""
-        SELECT
-            cn.id,
-            cn.title,
-            cn.summary_lines,
-            cn.event_type,
-            cn.importance,
-            cn.importance_score,
-            cn.company,
-            COALESCE(cn.peer_company_id, cn.company) AS peer_id,
-            cn.integrated_issue_id,
-            cn.primary_keyword_category,
-            cn.implication,
-            cn.sources,
-            cn.source_articles,
-            cn.source_raw_article_ids,
-            cn.primary_raw_article_id,
-            cn.evidence_payload,
-            cn.validation_pass,
-            cn.validation_sc_score,
-            cn.created_at,
-            COALESCE(ra.published_at, cn.created_at) AS basis_at
-        FROM card_news cn
-        LEFT JOIN raw_articles ra ON ra.id = cn.primary_raw_article_id
-        WHERE {" AND ".join(where)}
-        ORDER BY
-            cn.importance_score DESC NULLS LAST,
-            COALESCE(ra.published_at, cn.created_at) DESC,
-            cn.created_at DESC
-        LIMIT :limit
-    """
-
-    try:
-        with SessionLocal() as db:
-            rows = db.execute(text(sql), params).mappings().all()
-    except Exception as exc:  # noqa: BLE001
-        log.exception("BriefingGenerationAgent card_news 기간 조회 실패 | error=%s", exc)
-        return []
-
-    cards = [_normalize_card_row(dict(row)) for row in rows]
-    final_limit = max(1, min(int(limit or _DEFAULT_LIMIT), _DEFAULT_LIMIT))
-    return _filter_by_sectors(cards, sectors)[:final_limit]
-
-
-def _load_mock_items(
-    *,
-    mock_path: str | Path | None,
-    mock_items: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
-    if mock_items is not None:
-        return mock_items
-    if mock_path is None:
-        mock_path = _DEFAULT_MOCK_PATH
-    path = Path(mock_path)
-    if not path.exists():
-        log.warning("BriefingGenerationAgent mock path 없음 | path=%s", path)
-        return []
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(payload, dict):
-        items = payload.get("selected_items") or payload.get("mixer_analysis_packages") or []
-        return [item for item in items if isinstance(item, dict)]
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    return []
-
-
-def _fetch_mock_period_cards(
-    *,
-    period: dict[str, Any],
-    items: list[dict[str, Any]],
-    card_ids: list[str] | None,
-    integrated_issue_ids: list[str] | None,
-    peer_ids: list[str] | None,
-    sectors: list[str] | None,
-    limit: int,
-) -> list[dict[str, Any]]:
-    requested = set(card_ids or [])
-    requested_issue_ids = set(integrated_issue_ids or [])
-    wanted_peers = {str(peer_id).strip() for peer_id in peer_ids or [] if str(peer_id).strip()}
-    cards = [_normalize_mock_item(item) for item in items]
-    filtered: list[dict[str, Any]] = []
-    for card in cards:
-        if requested and card["id"] not in requested:
-            continue
-        if requested_issue_ids and card.get("integrated_issue_id") not in requested_issue_ids:
-            continue
-        if wanted_peers and card.get("peer_id") not in wanted_peers:
-            continue
-        basis_at = _parse_datetime(card.get("basis_at") or card.get("created_at"))
-        if basis_at is None:
-            continue
-        basis_utc = basis_at.astimezone(UTC)
-        if not (period["start_at"] <= basis_utc < period["end_exclusive_at"]):
-            continue
-        filtered.append(card)
-
-    filtered = _filter_by_sectors(filtered, sectors)
-    filtered.sort(
-        key=lambda card: (
-            float(card.get("importance_score") or 0.0),
-            card.get("basis_at") or "",
-        ),
-        reverse=True,
-    )
-    return filtered[: max(1, min(int(limit or _DEFAULT_LIMIT), _DEFAULT_LIMIT))]
-
-
-def _normalize_mock_item(item: dict[str, Any]) -> dict[str, Any]:
-    card_id = str(item.get("card_id") or item.get("id") or "").strip()
-    evidence_payload = _json_dict(item.get("evidence_payload"))
-    top_package = _json_dict(item.get("analysis_package"))
-    payload_package = _json_dict(evidence_payload.get("analysis_package"))
-    package_warning = None
-    if top_package and payload_package:
-        top_bundle = top_package.get("bundle_id")
-        payload_bundle = payload_package.get("bundle_id")
-        if top_bundle and payload_bundle and top_bundle != payload_bundle:
-            package_warning = "analysis_package_bundle_mismatch"
-    analysis_package = payload_package or top_package
-    if analysis_package:
-        evidence_payload["analysis_package"] = analysis_package
-    integrated_issue_id = _first_text(
-        item.get("integrated_issue_id"),
-        evidence_payload.get("integrated_issue_id"),
-        analysis_package.get("integrated_issue_id"),
-        _nested_get(analysis_package, "integrated_issue", "integrated_issue_id"),
-    )
-
-    sources = _json_list(item.get("sources"))
-    basis_at = _first_source_published_at(sources) or item.get("basis_at") or item.get("created_at")
-    implication = _json_dict(item.get("implication"))
-    sectors = _json_list(implication.get("sectors")) or _json_list(
-        _nested_get(analysis_package, "classification", "sectors")
-    )
-    sector = _first_text(
-        item.get("primary_keyword_category"),
-        implication.get("sector"),
-        _nested_get(analysis_package, "classification", "sector"),
-        item.get("event_type"),
-        "other",
-    )
-    return {
-        "id": card_id,
-        "card_id": card_id,
-        "integrated_issue_id": integrated_issue_id or None,
-        "title": str(item.get("title") or ""),
-        "summary_lines": _json_list(item.get("summary_lines")),
-        "event_type": str(item.get("event_type") or ""),
-        "importance": str(item.get("importance") or "medium"),
-        "importance_score": float(item.get("importance_score") or 0.0),
-        "company": str(item.get("company") or ""),
-        "peer_id": str(item.get("peer_id") or item.get("company") or ""),
-        "sector": sector,
-        "sectors": [str(value) for value in sectors if str(value).strip()] or [sector],
-        "sources": sources,
-        "source_raw_article_ids": _int_list(item.get("source_raw_article_ids")),
-        "primary_raw_article_id": _first_int(item.get("source_raw_article_ids")),
-        "evidence_payload": evidence_payload,
-        "analysis_package": analysis_package,
-        "has_analysis_package": bool(analysis_package),
-        "evidence_card_ids": [card_id] if card_id else [],
-        "validation_pass": _nested_get(analysis_package, "validation", "pass"),
-        "validation_sc_score": _nested_get(analysis_package, "validation", "sc_score"),
-        "created_at": _iso_or_none(item.get("created_at")),
-        "basis_at": _iso_or_none(_parse_datetime(basis_at)),
-        "mock_warning": package_warning,
-    }
-
-
-def _append_in_filter(
-    where: list[str],
-    params: dict[str, Any],
-    column_sql: str,
-    prefix: str,
-    values: list[str] | None,
-) -> None:
-    cleaned = [str(value).strip() for value in values or [] if str(value).strip()]
-    if not cleaned:
-        return
-    placeholders = []
-    for index, value in enumerate(cleaned):
-        key = f"{prefix}_{index}"
-        placeholders.append(f":{key}")
-        params[key] = value
-    where.append(f"{column_sql} IN ({', '.join(placeholders)})")
-
-
-def _normalize_card_row(row: dict[str, Any]) -> dict[str, Any]:
-    implication = _json_dict(row.get("implication"))
-    evidence_payload = _json_dict(row.get("evidence_payload"))
-    analysis_package = _analysis_package_from_sources(row, evidence_payload)
-    integrated_issue_id = _first_text(
-        row.get("integrated_issue_id"),
-        evidence_payload.get("integrated_issue_id"),
-        analysis_package.get("integrated_issue_id"),
-        _nested_get(analysis_package, "integrated_issue", "integrated_issue_id"),
-    )
-    summary_lines = row.get("summary_lines")
-    if isinstance(summary_lines, str):
-        summary_lines = [summary_lines]
-    elif not isinstance(summary_lines, list):
-        summary_lines = list(summary_lines or [])
-    source_raw_article_ids = _int_list(row.get("source_raw_article_ids"))
-    primary_raw_article_id = _optional_int(row.get("primary_raw_article_id"))
-    if primary_raw_article_id is not None and primary_raw_article_id not in source_raw_article_ids:
-        source_raw_article_ids = [primary_raw_article_id, *source_raw_article_ids]
-    sectors = implication.get("sectors")
-    if not isinstance(sectors, list):
-        sectors = _json_list(_nested_get(analysis_package, "classification", "sectors"))
-    sector = (
-        row.get("primary_keyword_category")
-        or implication.get("sector")
-        or _nested_get(analysis_package, "classification", "sector")
-        or row.get("event_type")
-        or "other"
-    )
-    card_id = str(row.get("id"))
-    return {
-        "id": card_id,
-        "card_id": card_id,
-        "integrated_issue_id": integrated_issue_id or None,
-        "title": str(row.get("title") or ""),
-        "summary_lines": [str(item) for item in summary_lines if str(item).strip()],
-        "event_type": str(row.get("event_type") or ""),
-        "importance": str(row.get("importance") or "medium"),
-        "importance_score": float(row.get("importance_score") or 0.0),
-        "company": str(row.get("company") or ""),
-        "peer_id": str(row.get("peer_id") or row.get("company") or ""),
-        "sector": str(sector),
-        "sectors": [str(item) for item in sectors if str(item).strip()] or [str(sector)],
-        "sources": _json_list(row.get("sources")) or _json_list(row.get("source_articles")),
-        "source_raw_article_ids": source_raw_article_ids,
-        "primary_raw_article_id": primary_raw_article_id,
-        "evidence_payload": evidence_payload,
-        "analysis_package": analysis_package,
-        "has_analysis_package": bool(analysis_package),
-        "evidence_card_ids": [card_id],
-        "validation_pass": row.get("validation_pass"),
-        "validation_sc_score": row.get("validation_sc_score"),
-        "created_at": _iso_or_none(row.get("created_at")),
-        "basis_at": _iso_or_none(row.get("basis_at")),
-    }
-
-
-def _filter_by_sectors(
-    cards: list[dict[str, Any]],
-    sectors: list[str] | None,
-) -> list[dict[str, Any]]:
-    wanted = {str(item).strip().lower() for item in sectors or [] if str(item).strip()}
-    if not wanted:
-        return cards
-    filtered = []
-    for card in cards:
-        card_sectors = {str(card.get("sector", "")).lower()}
-        card_sectors.update(str(item).lower() for item in card.get("sectors", []))
-        if card_sectors & wanted:
-            filtered.append(card)
-    return filtered
-
-
 def _provenance_base(
     *,
     requested_card_ids: list[str],
@@ -1222,846 +489,6 @@ def _provenance_base(
     if excluded_card_ids or excluded_integrated_issue_ids:
         provenance["exclusion_reason"] = "out_of_period"
     return provenance
-
-
-def _briefing_basis_from_analysis_packages(
-    *,
-    selected_cards: list[dict[str, Any]],
-    period: dict[str, Any],
-    user_context: str | None,
-) -> dict[str, Any]:
-    card_ids = [card["id"] for card in selected_cards]
-    units = analysis_units_from_cards(selected_cards)
-    integrated_issue_ids = source_integrated_issue_ids(units)
-    quality_flags = quality_flags_for_units(units)
-    entries = _analysis_package_entries(selected_cards)
-    analysis_summaries = [entry["analysis_summary"] for entry in entries]
-    market_signals = [entry["market_signal"] for entry in entries]
-    strategic_meanings = [
-        text
-        for entry in entries
-        for text in _json_list(entry.get("strategic_meaning"))
-        if str(text).strip()
-    ]
-    peer_moves = [entry["peer_meaning"] for entry in entries]
-    sk_reasons = [entry["sk_why"] for entry in entries]
-    sk_impacts = [entry["sk_impact"] for entry in entries]
-    action_details = _action_details_from_analysis_packages(entries)
-    recommended_actions = [
-        str(item.get("action") or "").strip()
-        for item in action_details
-        if str(item.get("action") or "").strip()
-    ]
-    confidence_values = [
-        value
-        for entry in entries
-        for value in (
-            entry.get("analysis_confidence"),
-            entry.get("implication_confidence"),
-            entry.get("validation_score"),
-        )
-        if isinstance(value, (int, float))
-    ]
-    confidence = (
-        round(sum(confidence_values) / len(confidence_values), 2) if confidence_values else 0.0
-    )
-    if quality_flags:
-        confidence = round(
-            max(0.0, confidence - confidence_penalty_for_flags(quality_flags)),
-            2,
-        )
-    fallback = f"{period['label']} 기간에 확인된 카드뉴스 기반 브리핑입니다."
-    lead_finding = _combine_blocks(
-        market_signals or analysis_summaries,
-        fallback,
-        max_items=2,
-        max_chars=220,
-    )
-    common_finding = _combine_blocks(
-        market_signals or analysis_summaries,
-        fallback,
-        max_items=2,
-        max_chars=180,
-    )
-    common_rationale = _combine_blocks(analysis_summaries, common_finding, max_items=2)
-    comparison_finding = _comparison_finding(entries)
-    comparison_rationale = _combine_blocks(peer_moves or analysis_summaries, comparison_finding)
-    hidden_finding = _combine_blocks(
-        strategic_meanings or market_signals,
-        common_finding,
-        max_items=2,
-        max_chars=180,
-    )
-    hidden_rationale = _combine_blocks(strategic_meanings or analysis_summaries, hidden_finding)
-    strategy_values: list[object] = [
-        item for item in (recommended_actions or sk_impacts or sk_reasons)
-    ]
-    strategy_finding = _combine_blocks(
-        strategy_values,
-        _display_sk_ax_title(selected_cards),
-        max_items=2,
-        max_chars=220,
-    )
-    strategy_rationale = _combine_blocks(sk_reasons or sk_impacts, strategy_finding)
-    if user_context and user_context.strip():
-        strategy_rationale = _first_text(strategy_rationale, user_context.strip())
-    return {
-        "basis_id": f"BR-BASIS-{period['date_from']:%Y%m%d}",
-        "briefing_insight": lead_finding,
-        "lead": {
-            "finding": lead_finding,
-            "evidence_card_ids": card_ids,
-        },
-        "core_change": {
-            "finding": comparison_finding,
-            "rationale": comparison_rationale,
-            "evidence": _basis_evidence(entries),
-            "evidence_card_ids": card_ids,
-        },
-        "common_pattern": _analysis_basis_block(common_finding, common_rationale, entries),
-        "comparison_point": _analysis_basis_block(
-            comparison_finding,
-            comparison_rationale,
-            entries,
-        ),
-        "hidden_conclusion": _analysis_basis_block(hidden_finding, hidden_rationale, entries),
-        "strategy_implication": {
-            "finding": strategy_finding,
-            "rationale": strategy_rationale,
-            "evidence": _basis_evidence(entries),
-            "evidence_card_ids": card_ids,
-        },
-        "recommended_action_basis": _dedupe_keep_order(
-            [str(item).strip() for item in sk_reasons + sk_impacts if str(item).strip()]
-        ),
-        "action_details": action_details,
-        "recommended_actions": recommended_actions,
-        "confidence": confidence,
-        "sources_used": card_ids,
-        "source_integrated_issue_ids": integrated_issue_ids,
-        "quality_flags": quality_flags,
-        "provenance": {
-            "prompt_version": _PROMPT_VERSION,
-            "source_card_ids": card_ids,
-            "source_integrated_issue_ids": integrated_issue_ids,
-            "quality_flags": quality_flags,
-            "analysis_basis": (
-                "integrated_issues.id -> card_news.evidence_payload.analysis_package "
-                "integrated_issue+analysis+implication+classification+validation"
-            ),
-        },
-    }
-
-
-def _analysis_package_entries(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
-    for card in cards:
-        package = _analysis_package(card)
-        analysis = _json_dict(package.get("analysis"))
-        implication = _json_dict(package.get("implication"))
-        peer = _json_dict(implication.get("peer_implication"))
-        skax = _json_dict(implication.get("skax_implication"))
-        validation = _json_dict(package.get("validation"))
-        integrated = _json_dict(package.get("integrated_issue"))
-        entries.append(
-            {
-                "card_id": card.get("id"),
-                "integrated_issue_id": card.get("integrated_issue_id")
-                or package.get("integrated_issue_id")
-                or integrated.get("integrated_issue_id"),
-                "company_label": _company_label(card),
-                "main_issue": _first_text(integrated.get("main_issue"), card.get("title")),
-                "analysis_summary": _first_text(
-                    analysis.get("analysis_summary"),
-                    integrated.get("integrated_text"),
-                    card.get("title"),
-                ),
-                "market_signal": _first_text(analysis.get("market_signal")),
-                "strategic_meaning": _json_list(analysis.get("strategic_meaning")),
-                "peer_meaning": _first_text(
-                    peer.get("peer_meaning"),
-                    peer.get("capability_change"),
-                ),
-                "sk_why": _first_text(skax.get("why_important")),
-                "sk_impact": _first_text(skax.get("potential_impact")),
-                "recommended_actions": _json_list(skax.get("recommended_actions")),
-                "analysis_confidence": _safe_float(
-                    analysis.get("confidence"),
-                    default=-1.0,
-                ),
-                "implication_confidence": _safe_float(
-                    implication.get("confidence"),
-                    default=-1.0,
-                ),
-                "validation_score": _safe_float(validation.get("sc_score"), default=-1.0),
-            }
-        )
-    return entries
-
-
-def _analysis_basis_block(
-    finding: str,
-    rationale: str,
-    entries: list[dict[str, Any]],
-) -> dict[str, Any]:
-    return {
-        "finding": finding,
-        "rationale": rationale,
-        "evidence": _basis_evidence(entries),
-        "evidence_card_ids": [
-            str(entry.get("card_id")) for entry in entries if entry.get("card_id")
-        ],
-    }
-
-
-def _basis_evidence(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    evidence = []
-    for entry in entries:
-        text_value = _first_text(entry.get("market_signal"), entry.get("analysis_summary"))
-        if entry.get("card_id") and text_value:
-            evidence.append(
-                {
-                    "card_id": entry["card_id"],
-                    "integrated_issue_id": entry.get("integrated_issue_id"),
-                    "text": text_value,
-                }
-            )
-    return evidence
-
-
-def _comparison_finding(entries: list[dict[str, Any]]) -> str:
-    phrases = []
-    for entry in entries[:3]:
-        company = str(entry.get("company_label") or "").strip()
-        signal = _brief_sentence(
-            _first_text(entry.get("peer_meaning"), entry.get("analysis_summary")),
-            max_chars=80,
-        )
-        if company and signal:
-            phrases.append(f"{company}: {signal}")
-    if phrases:
-        return " / ".join(phrases)
-    return _combine_blocks(
-        [entry.get("analysis_summary") for entry in entries],
-        "기간 내 카드뉴스에서 경쟁사별 움직임이 확인되었습니다.",
-        max_items=2,
-        max_chars=180,
-    )
-
-
-def _action_details_from_analysis_packages(
-    entries: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    if not entries:
-        return []
-    return _executive_action_details_from_entries(entries)
-
-
-def _executive_action_details_from_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    evidence = _basis_evidence(entries)
-    evidence_card_ids = _front_evidence_card_ids(entries)
-    focus = _briefing_decision_focus(entries)
-    focus_clause = _briefing_clause(focus)
-    customer_scope = _briefing_customer_scope(entries)
-    comparison = _briefing_clause(
-        _comparison_finding(entries)
-        or _combine_blocks(
-            [entry.get("peer_meaning") for entry in entries],
-            "고객군별 의사결정 기준 차이",
-            max_items=2,
-            max_chars=120,
-        )
-    )
-    return [
-        {
-            "action": _clip_text(
-                (
-                    f"SK AX는 {customer_scope} 고객군을 우선 공략 범위로 두고, "
-                    f"{focus_clause}를 기준으로 오퍼링 책임 조직과 "
-                    "리스크 승인 권한을 지정한다."
-                ),
-                max_chars=300,
-            ),
-            "why": _briefing_action_reason(entries, fallback=focus),
-            "use_case": "사업 우선순위",
-            "evidence": evidence,
-            "evidence_card_ids": evidence_card_ids,
-        },
-        {
-            "action": _clip_text(
-                (
-                    "SK AX는 사업 라인별 오퍼링을 하나의 AX 상품으로 묶지 말고 "
-                    f"{comparison}에 맞춰 분리 상품화한다. 고객군별 영업 우선순위, "
-                    "가격/계약 조건, 보안·데이터 거버넌스 기준을 다르게 둔다."
-                ),
-                max_chars=300,
-            ),
-            "why": _briefing_action_reason(
-                entries,
-                fallback="카드별 고객군과 경쟁 신호가 서로 다른 의사결정 기준을 보여준다.",
-            ),
-            "use_case": "오퍼링/상품화",
-            "evidence": evidence,
-            "evidence_card_ids": evidence_card_ids,
-        },
-        {
-            "action": _clip_text(
-                (
-                    "SK AX는 브리핑 안건을 정보 공유가 아니라 자원 배분 의사결정으로 다룬다. "
-                    f"{focus_clause}와 연결된 수주 전환, 규제 일정, 운영 KPI가 확인되면 "
-                    "전담 인력, 파트너십 후보, 레퍼런스 확보 예산을 재배분한다."
-                ),
-                max_chars=300,
-            ),
-            "why": _combine_blocks(
-                [entry.get("market_signal") for entry in entries],
-                "기간 내 반복 신호를 사업 자원 배분 기준으로 반영할 필요가 있다.",
-                max_items=2,
-                max_chars=240,
-            ),
-            "use_case": "자원 배분/시장 대응",
-            "evidence": evidence,
-            "evidence_card_ids": evidence_card_ids,
-        },
-    ]
-
-
-def _briefing_decision_focus(entries: list[dict[str, Any]]) -> str:
-    return _combine_blocks(
-        [
-            *[entry.get("sk_why") for entry in entries],
-            *[entry.get("sk_impact") for entry in entries],
-            *[entry.get("market_signal") for entry in entries],
-            *[text for entry in entries for text in _json_list(entry.get("strategic_meaning"))],
-        ],
-        "입력에서 확인된 고객 평가 기준 변화",
-        max_items=2,
-        max_chars=140,
-    )
-
-
-def _briefing_action_reason(entries: list[dict[str, Any]], *, fallback: str) -> str:
-    return _combine_blocks(
-        [
-            *[entry.get("sk_why") for entry in entries],
-            *[entry.get("sk_impact") for entry in entries],
-            *[entry.get("analysis_summary") for entry in entries],
-        ],
-        fallback,
-        max_items=2,
-        max_chars=240,
-    )
-
-
-def _briefing_customer_scope(entries: list[dict[str, Any]]) -> str:
-    text_value = " ".join(
-        str(value or "")
-        for entry in entries
-        for value in (
-            entry.get("main_issue"),
-            entry.get("analysis_summary"),
-            entry.get("market_signal"),
-            entry.get("sk_why"),
-            entry.get("sk_impact"),
-            " ".join(str(item) for item in _json_list(entry.get("strategic_meaning"))),
-        )
-    )
-    scopes: list[str] = []
-    if any(token in text_value for token in ("금융", "토큰증권", "디지털자산", "결제", "정산")):
-        scopes.append("금융")
-    if any(token in text_value for token in ("공공", "행정", "부처", "교육", "학교", "기관")):
-        scopes.append("공공/교육")
-    if any(token in text_value for token in ("제조", "공장", "설비", "물류", "로봇")):
-        scopes.append("제조/운영")
-    if any(token in text_value for token in ("보안", "데이터 통제", "프라이빗", "거버넌스")):
-        scopes.append("보안·데이터 통제")
-    scope = _join_korean(_dedupe_keep_order(scopes[:3]))
-    return scope or "입력에서 확인된"
-
-
-def _briefing_clause(value: object) -> str:
-    text_value = re.sub(r"\s+", " ", str(value or "")).strip()
-    return text_value.rstrip(".。!！?？")
-
-
-def _refine_briefing_basis_with_llm(
-    *,
-    briefing_basis: dict[str, Any],
-    selected_cards: list[dict[str, Any]],
-    period: dict[str, Any],
-    user_context: str | None,
-    llm: Any | None,
-) -> dict[str, Any]:
-    """Use LLM only to synthesize briefing-level judgment from integrated issues.
-
-    The deterministic basis remains the source of truth for ids, provenance, and
-    fallback content. The model may rewrite judgment structure, but cannot add
-    new evidence ids or facts outside the supplied analysis units.
-    """
-
-    if llm is None and not os.getenv("OPENAI_API_KEY"):
-        log.info("Briefing basis synthesis skipped: OPENAI_API_KEY is not set")
-        return briefing_basis
-
-    context = _briefing_synthesis_context(
-        briefing_basis=briefing_basis,
-        selected_cards=selected_cards,
-        period=period,
-        user_context=user_context,
-    )
-    messages = [
-        ("system", _briefing_synthesis_system_prompt()),
-        ("human", _briefing_synthesis_user_prompt(context)),
-    ]
-    try:
-        response = (llm or _get_llm()).invoke(messages)
-    except Exception as exc:  # pragma: no cover - external API safety net
-        log.warning("Briefing basis synthesis failed | error=%s", exc)
-        return briefing_basis
-
-    parsed = _parse_json_object(getattr(response, "content", response))
-    if not parsed:
-        return briefing_basis
-    issues = _briefing_synthesis_quality_issues(parsed, selected_cards)
-    if issues:
-        revision_messages = [
-            ("system", _briefing_synthesis_system_prompt()),
-            ("human", _briefing_synthesis_revision_prompt(context, parsed, issues)),
-        ]
-        try:
-            revision_response = (llm or _get_llm()).invoke(revision_messages)
-        except Exception as exc:  # pragma: no cover - external API safety net
-            log.warning("Briefing basis synthesis revision failed | error=%s", exc)
-        else:
-            revised = _parse_json_object(getattr(revision_response, "content", revision_response))
-            if revised:
-                parsed = revised
-        remaining_issues = _briefing_synthesis_quality_issues(parsed, selected_cards)
-        if remaining_issues:
-            log.info(
-                "Briefing basis synthesis rejected | issues=%s",
-                remaining_issues,
-            )
-            return briefing_basis
-    return _merge_briefing_basis_synthesis(briefing_basis, parsed, selected_cards)
-
-
-def _briefing_synthesis_context(
-    *,
-    briefing_basis: dict[str, Any],
-    selected_cards: list[dict[str, Any]],
-    period: dict[str, Any],
-    user_context: str | None,
-) -> dict[str, Any]:
-    return {
-        "period": {
-            "date_from": period["date_from"].isoformat(),
-            "date_to": period["date_to"].isoformat(),
-            "period_label": period["label"],
-        },
-        "user_context": str(user_context or "").strip() or None,
-        "source_card_ids": [card.get("id") for card in selected_cards if card.get("id")],
-        "source_integrated_issue_ids": briefing_basis.get("source_integrated_issue_ids") or [],
-        "current_deterministic_basis": _briefing_basis_synthesis_view(briefing_basis),
-        "frontend_contract_target": _briefing_contract_schema_hint(),
-        "analysis_units": [_compact_analysis_unit_for_display(card) for card in selected_cards],
-    }
-
-
-def _briefing_basis_synthesis_view(briefing_basis: dict[str, Any]) -> dict[str, Any]:
-    keys = (
-        "briefing_insight",
-        "lead",
-        "core_change",
-        "common_pattern",
-        "comparison_point",
-        "hidden_conclusion",
-        "strategy_implication",
-        "recommended_action_basis",
-        "action_details",
-        "confidence",
-    )
-    return {key: copy.deepcopy(briefing_basis.get(key)) for key in keys if key in briefing_basis}
-
-
-def _briefing_contract_schema_hint() -> dict[str, Any]:
-    return {
-        "executive_summary": "string",
-        "briefing_insight": "string",
-        "lead": {
-            "finding": "string",
-            "rationale": "string",
-            "evidence_card_ids": ["CN-..."],
-        },
-        "common_pattern": {
-            "finding": "string",
-            "rationale": "string",
-            "evidence_card_ids": ["CN-..."],
-        },
-        "comparison_point": {
-            "finding": "string",
-            "rationale": "string",
-            "evidence_card_ids": ["CN-..."],
-        },
-        "hidden_conclusion": {
-            "finding": "string",
-            "rationale": "string",
-            "evidence_card_ids": ["CN-..."],
-        },
-        "strategy_implication": {
-            "finding": "string",
-            "rationale": "string",
-            "evidence_card_ids": ["CN-..."],
-        },
-        "immediate_trends": [
-            {
-                "title": "string",
-                "peer_id": "string",
-                "reason": "string",
-                "source_name": "string",
-                "published_at": "ISO-8601 datetime string",
-                "related_card_id": "CN-...",
-            }
-        ],
-        "watch_trends": [
-            {
-                "title": "string",
-                "peer_id": "string",
-                "reason": "string",
-                "source_name": "string",
-                "published_at": "ISO-8601 datetime string",
-                "related_card_id": "CN-...",
-            }
-        ],
-        "sections": [
-            {
-                "title": "핵심 인사이트 요약",
-                "summary": "string",
-                "bullets": ["string"],
-                "related_card_ids": ["CN-..."],
-            }
-        ],
-        "evidence_summary": ["string"],
-        "recommended_action_basis": ["string"],
-        "action_details": [
-            {
-                "action": "string",
-                "why": "string",
-                "use_case": "사업 우선순위",
-                "evidence_card_ids": ["CN-..."],
-            }
-        ],
-        "confidence": 0.0,
-    }
-
-
-def _briefing_synthesis_system_prompt() -> str:
-    return "\n".join(
-        [
-            "# Persona",
-            "당신은 SK AX Peer Intelligence 브리핑을 만드는 전략 분석 에디터입니다.",
-            "",
-            "# Source Boundary",
-            "- integrated_issues가 사실 근거의 1차 저장소입니다.",
-            "- card_news는 화면 이동과 저장 매핑을 위한 card id anchor로만 사용합니다.",
-            "- card_news.summary_lines를 사실 판단 근거로 쓰지 않습니다.",
-            "- legacy analysis_package는 analysis/implication 보조 근거로만 사용합니다.",
-            "",
-            "# Non-Negotiables",
-            "- 입력 analysis_units 밖의 회사, 사건, 수치, 인과관계를 만들지 않습니다.",
-            "- 원문 기사를 새로 요약하지 않습니다.",
-            "- related_card_id와 evidence_card_ids는 입력 source_card_ids 안의 값만 사용합니다.",
-            "- frontend 목업의 섹션 역할에 맞게 immediate/watch를 분리합니다.",
-            "- 출력은 JSON 객체 하나만 반환합니다.",
-            "- 내부 추론, self-check, markdown은 출력하지 않습니다.",
-        ]
-    )
-
-
-def _briefing_synthesis_user_prompt(context: dict[str, Any]) -> str:
-    return "\n".join(
-        [
-            "# Task",
-            (
-                "아래 integrated issue 기반 analysis_units를 브리핑 계약 payload의 "
-                "근거로 재구성하세요."
-            ),
-            (
-                "목표는 화면 문장뿐 아니라 immediate_trends/watch_trends/sections에 "
-                "들어갈 분석 판단을 만드는 것입니다."
-            ),
-            "",
-            "# Output Schema",
-            json.dumps(_briefing_contract_schema_hint(), ensure_ascii=False, indent=2),
-            "",
-            "# Contract Mapping",
-            (
-                "- executive_summary는 프론트 dailySnapshot.summary와 API "
-                "executive_summary의 근거가 됩니다."
-            ),
-            (
-                "- immediate_trends는 '오늘 바로 검토할 동향' 또는 "
-                "'이번 주 핵심 변화'에 들어갈 항목입니다."
-            ),
-            "- watch_trends는 '지속 관찰할 동향' 또는 '연속 관찰 포인트'에 들어갈 항목입니다.",
-            "- sections는 API BriefingSection 구조입니다.",
-            "- evidence_summary는 어떤 출처/근거 체인이 사용됐는지 짧게 설명합니다.",
-            "",
-            "# Selection Rules",
-            "- immediate_trends에는 영향도, 긴급성, 경쟁 구도 변화가 큰 항목을 둡니다.",
-            "- watch_trends에는 후속 기사, 수주, 고객 확산, 규제/보안 검증이 필요한 항목을 둡니다.",
-            "- 각 trend.reason은 단순 요약이 아니라 왜 immediate 또는 watch인지 설명합니다.",
-            "- selected card가 여러 개면 한 카드만 대표 결론으로 과대 반영하지 않습니다.",
-            "- action_details는 제안서 작성/화면 표시가 아니라 임원 의사결정 행동으로 씁니다.",
-            "",
-            "# Input",
-            json.dumps(context, ensure_ascii=False, indent=2, default=str),
-        ]
-    )
-
-
-def _briefing_synthesis_revision_prompt(
-    context: dict[str, Any],
-    draft: dict[str, Any],
-    issues: list[str],
-) -> str:
-    return "\n".join(
-        [
-            "# Task",
-            "아래 draft_basis에서 감지된 품질 이슈만 고쳐 다시 JSON 객체로 반환하세요.",
-            "",
-            "# Detected Issues",
-            json.dumps(issues, ensure_ascii=False, indent=2),
-            "",
-            "# Rules",
-            "- Output Schema는 최초 요청과 동일합니다.",
-            "- 입력 source_card_ids 밖의 id를 쓰지 않습니다.",
-            "- integrated_issues/analysis/implication 근거 밖의 내용을 만들지 않습니다.",
-            "- immediate/watch 분류 이유가 드러나게 reason을 고칩니다.",
-            "",
-            "# Source Analysis Units",
-            json.dumps(context.get("analysis_units") or [], ensure_ascii=False, indent=2),
-            "",
-            "# Draft Basis",
-            json.dumps(draft, ensure_ascii=False, indent=2),
-        ]
-    )
-
-
-def _briefing_synthesis_quality_issues(
-    draft: dict[str, Any],
-    selected_cards: list[dict[str, Any]],
-) -> list[str]:
-    allowed_ids = {str(card.get("id")) for card in selected_cards if card.get("id")}
-    issues: list[str] = []
-    if not _first_text(draft.get("executive_summary"), draft.get("briefing_insight")):
-        issues.append("executive_summary 또는 briefing_insight가 비어 있습니다.")
-    invalid_ids = _invalid_synthesis_card_ids(draft, allowed_ids)
-    if invalid_ids:
-        issues.append(f"입력 source_card_ids 밖의 id가 사용되었습니다: {invalid_ids}")
-    if not _json_list(draft.get("immediate_trends")) and not _json_list(draft.get("watch_trends")):
-        issues.append("immediate_trends 또는 watch_trends 중 최소 하나가 필요합니다.")
-    return issues
-
-
-def _invalid_synthesis_card_ids(value: object, allowed_ids: set[str]) -> list[str]:
-    invalid: list[str] = []
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if key in {"evidence_card_ids", "related_card_ids"}:
-                ids = [str(card_id) for card_id in _json_list(item) if str(card_id).strip()]
-                invalid.extend(card_id for card_id in ids if card_id not in allowed_ids)
-            elif key == "related_card_id":
-                card_id = str(item or "").strip()
-                if card_id and card_id not in allowed_ids:
-                    invalid.append(card_id)
-            else:
-                invalid.extend(_invalid_synthesis_card_ids(item, allowed_ids))
-    elif isinstance(value, list):
-        for item in value:
-            invalid.extend(_invalid_synthesis_card_ids(item, allowed_ids))
-    return _dedupe_keep_order(invalid)
-
-
-def _merge_briefing_basis_synthesis(
-    base: dict[str, Any],
-    synthesis: dict[str, Any],
-    selected_cards: list[dict[str, Any]],
-) -> dict[str, Any]:
-    updated = copy.deepcopy(base)
-    allowed_ids = {str(card.get("id")) for card in selected_cards if card.get("id")}
-    summary = _first_text(synthesis.get("executive_summary"), synthesis.get("briefing_insight"))
-    if summary:
-        updated["briefing_insight"] = _brief_sentences(
-            summary,
-            max_sentences=2,
-            max_chars=240,
-        )
-    for key in (
-        "lead",
-        "core_change",
-        "common_pattern",
-        "comparison_point",
-        "hidden_conclusion",
-        "strategy_implication",
-    ):
-        block = _normalize_synthesis_block(
-            synthesis.get(key),
-            fallback=updated.get(key),
-            allowed_ids=allowed_ids,
-        )
-        if block:
-            updated[key] = block
-    for key in (
-        "recommended_action_basis",
-        "recommended_actions",
-        "immediate_trends",
-        "watch_trends",
-        "sections",
-        "evidence_summary",
-    ):
-        values = _json_list(synthesis.get(key))
-        if values:
-            updated[key] = _sanitize_synthesis_list(values, allowed_ids=allowed_ids)
-    action_details = _normalize_synthesis_action_details(
-        synthesis.get("action_details"),
-        allowed_ids=allowed_ids,
-    )
-    if action_details:
-        updated["action_details"] = action_details
-        updated["recommended_actions"] = [
-            str(item.get("action") or "").strip()
-            for item in action_details
-            if str(item.get("action") or "").strip()
-        ]
-    confidence = _safe_float(synthesis.get("confidence"), default=-1.0)
-    if 0 <= confidence <= 1:
-        updated["confidence"] = round(confidence, 2)
-    provenance = _json_dict(updated.get("provenance"))
-    provenance["briefing_synthesis_prompt_version"] = _BRIEFING_SYNTHESIS_PROMPT_VERSION
-    provenance["briefing_synthesis_model"] = _LLM_MODEL
-    updated["provenance"] = provenance
-    return updated
-
-
-def _normalize_synthesis_block(
-    value: object,
-    *,
-    fallback: object,
-    allowed_ids: set[str],
-) -> dict[str, Any]:
-    source = _json_dict(value)
-    fallback_block = _json_dict(fallback)
-    finding = _brief_sentences(
-        _first_text(source.get("finding"), source.get("title"), source.get("summary")),
-        max_sentences=2,
-        max_chars=240,
-    )
-    if not finding:
-        return fallback_block
-    evidence_ids = _valid_card_ids(
-        source.get("evidence_card_ids") or source.get("related_card_ids"),
-        allowed_ids=allowed_ids,
-        fallback=fallback_block.get("evidence_card_ids"),
-    )
-    return {
-        **fallback_block,
-        "finding": finding,
-        "rationale": _brief_sentences(
-            _first_text(source.get("rationale"), source.get("reason"), source.get("description")),
-            max_sentences=3,
-            max_chars=320,
-        )
-        or fallback_block.get("rationale")
-        or finding,
-        "evidence_card_ids": evidence_ids,
-    }
-
-
-def _sanitize_synthesis_list(values: list[Any], *, allowed_ids: set[str]) -> list[Any]:
-    sanitized: list[Any] = []
-    for value in values:
-        if isinstance(value, dict):
-            current = copy.deepcopy(value)
-            if "evidence_card_ids" in current:
-                current["evidence_card_ids"] = _valid_card_ids(
-                    current.get("evidence_card_ids"),
-                    allowed_ids=allowed_ids,
-                )
-            if "related_card_ids" in current:
-                current["related_card_ids"] = _valid_card_ids(
-                    current.get("related_card_ids"),
-                    allowed_ids=allowed_ids,
-                )
-            if "related_card_id" in current:
-                card_id = str(current.get("related_card_id") or "").strip()
-                if card_id not in allowed_ids:
-                    current.pop("related_card_id", None)
-            sanitized.append(current)
-            continue
-        text_value = str(value or "").strip()
-        if text_value:
-            sanitized.append(text_value)
-    return sanitized
-
-
-def _normalize_synthesis_action_details(
-    value: object,
-    *,
-    allowed_ids: set[str],
-) -> list[dict[str, Any]]:
-    actions: list[dict[str, Any]] = []
-    for item in _json_list(value):
-        if not isinstance(item, dict):
-            continue
-        action = _brief_sentences(item.get("action"), max_sentences=2, max_chars=280)
-        if not action:
-            continue
-        actions.append(
-            {
-                "action": action,
-                "why": _brief_sentences(
-                    item.get("why") or item.get("reason"),
-                    max_sentences=2,
-                    max_chars=260,
-                ),
-                "use_case": _first_text(item.get("use_case"), "사업 우선순위"),
-                "evidence_card_ids": _valid_card_ids(
-                    item.get("evidence_card_ids"),
-                    allowed_ids=allowed_ids,
-                ),
-            }
-        )
-    return actions[:3]
-
-
-def _valid_card_ids(
-    value: object,
-    *,
-    allowed_ids: set[str],
-    fallback: object = None,
-) -> list[str]:
-    ids = [
-        card_id
-        for card_id in (str(item).strip() for item in _json_list(value))
-        if card_id and card_id in allowed_ids
-    ]
-    if not ids and fallback is not None:
-        ids = [
-            card_id
-            for card_id in (str(item).strip() for item in _json_list(fallback))
-            if card_id and card_id in allowed_ids
-        ]
-    return _dedupe_keep_order(ids)
-
-
-def _safe_float(value: object, *, default: float) -> float:
-    if not isinstance(value, (str, int, float)):
-        return default
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _refine_display_copy_with_llm(
@@ -2118,617 +545,6 @@ def _refine_display_copy_with_llm(
     return _merge_display_copy(report, parsed, selected_cards=selected_cards)
 
 
-def _display_copy_system_prompt() -> str:
-    return "\n".join(
-        [
-            "# Persona Handoff",
-            ("당신은 SK AX 임원 브리핑 화면의 수석 에디터이자 근거 검수자입니다."),
-            (
-                "당신의 책임은 analysis_units에 있는 "
-                "통합/분석/시사점/분류/검증 결과만 사용해 화면용 문장을 정제하는 것입니다."
-            ),
-            "",
-            "# Non-Negotiables",
-            "- card_news.summary_lines는 판단 근거로 쓰지 않습니다.",
-            "- 원문 기사 재요약을 하지 않습니다.",
-            "- 근거에 없는 회사 주장, 수치, 사건, 인과관계를 만들지 않습니다.",
-            "- 수치는 key_numbers.value와 context 의미가 함께 맞을 때만 사용합니다.",
-            "- evidence_card_ids는 입력 source_card_ids 안의 실제 card_id만 사용합니다.",
-            "- 출력은 JSON 객체 하나만 반환합니다.",
-            "- 내부 추론이나 self-check 내용은 출력하지 않습니다.",
-        ]
-    )
-
-
-def _display_copy_user_prompt(context: dict[str, Any]) -> str:
-    return "\n".join(
-        [
-            "# Task",
-            "아래 analysis_units를 근거로 브리핑 화면용 표시문을 작성하세요.",
-            (
-                "current_display_structure는 필드 구조만 보여주는 레퍼런스입니다. "
-                "문장 내용은 analysis_units에서 판단해 새로 작성하세요."
-            ),
-            "",
-            "# Output Schema",
-            json.dumps(_display_copy_schema_hint(), ensure_ascii=False, indent=2),
-            "",
-            "# Prompt Pattern Stack",
-            "- Persona Handoff: 수석 브리핑 에디터로서 근거와 화면 문장을 동시에 검수합니다.",
-            "- Input Flip: analysis_units의 원문 분석 결과를 화면 문장으로 변환합니다.",
-            "- Constraint Box: 아래 Must/Cannot 제약을 지킵니다.",
-            "- Few-Shot: 좋은/나쁜 문장 예시를 스타일 기준으로 삼습니다.",
-            "- Self Evaluation: 반환 전 내부적으로만 중복, 근거성, 섹션 적합성을 점검합니다.",
-            "",
-            "# Input Reference Rules",
-            (
-                "- analysis_units에 있는 integrated_issue, analysis, implication을 "
-                "Input Flip 레퍼런스로 사용해 화면 문장으로 변환합니다."
-            ),
-            (
-                "- card_signal_index는 카드별 핵심 신호 체크리스트입니다. "
-                "여러 카드가 들어오면 key_change_cards와 interpretation_flow가 "
-                "한 카드에 쏠리지 않도록 이 목록을 먼저 확인합니다."
-            ),
-            (
-                "- classification과 validation은 신뢰도와 분류 참고용이며 "
-                "화면 문장에 그대로 노출하지 않습니다."
-            ),
-            "- key_numbers는 값과 context가 모두 맞을 때만 사용합니다.",
-            "- current_display_structure의 string 값을 문장 초안으로 간주하지 않습니다.",
-            "",
-            "# Constraint Box: Must",
-            "- briefing_lead는 최대 2문장입니다.",
-            (
-                "- key_change_cards는 market_signal, competitor_move 두 슬롯만 유지하고 "
-                "seq/display_label/insight_type/title/description/why_important만 씁니다."
-            ),
-            (
-                "- selected card가 2개 이상이면 key_change_cards 두 슬롯 모두 "
-                "최소 2개 card의 근거를 함께 반영합니다."
-            ),
-            (
-                "- selected card가 2개 이상이면 key_change_cards.description에는 "
-                "최소 2개 대표 회사/카드 신호가 실제로 드러나야 합니다."
-            ),
-            (
-                "- competitor_move.title은 특정 기술명 하나가 아니라 경쟁사들이 "
-                "무엇을 어떤 경쟁 방식으로 묶는지 보여줘야 합니다."
-            ),
-            (
-                "- interpretation_flow는 관찰된 변화, 평가축의 이동, 경쟁 구도 영향, "
-                "전략 시사 4단계 순서를 유지합니다."
-            ),
-            ("- 각 interpretation_flow step은 seq/label/items만 포함합니다."),
-            ("- step 자체에는 title/description을 쓰지 않습니다. 실제 문장은 items 안에만 씁니다."),
-            ("- 각 step.items는 최소 1개, 최대 3개만 작성합니다."),
-            (
-                "- items는 근거가 충분한 것만 선택합니다. 3개를 채우기 위해 "
-                "약한 항목을 만들지 않습니다."
-            ),
-            ("- title은 해당 섹션에서 사용자가 먼저 볼 핵심 결론 한 줄입니다."),
-            "- title도 자연스러운 문장으로 쓰고, 가능한 한 '~합니다' 또는 '~있습니다'로 끝냅니다.",
-            (
-                "- description은 반드시 '근거 -> 그 근거가 title을 지지하는 이유 -> "
-                "읽어야 할 의미' 순서가 드러나야 합니다."
-            ),
-            (
-                "- description은 title을 다시 말하지 말고, title이 왜 그렇게 "
-                "도출됐는지 실제 근거와 판단 연결고리를 설명합니다."
-            ),
-            (
-                "- why_important는 '중요합니다'로 끝나는 평가가 아니라 고객 평가, "
-                "오퍼링, 책임 조직, 자원 배분, 리스크 게이트 중 무엇을 바꿔야 하는지까지 말합니다."
-            ),
-            ("- 카드가 2개 이상이면 한 회사나 한 카드의 설명으로 전체 결론을 대체하지 않습니다."),
-            (
-                "- '경쟁사들', '수요 변화', '운영 성과', '리스크 감소' 같은 넓은 표현을 "
-                "쓰면 같은 항목의 description에서 실제 회사/이슈 근거를 설명합니다."
-            ),
-            (
-                "- 동일한 회사명+신호 표현은 처음 등장할 때만 온전하게 씁니다. "
-                "이후에는 '이 운영 기반', '이 데이터 통제 신호', '앞선 수요 신호'처럼 "
-                "문맥형 표현으로 바꿔 반복을 줄입니다."
-            ),
-            (
-                "- 같은 회사명+신호 표현은 전체 출력에서 2회를 넘겨 반복하지 않습니다. "
-                "반복이 필요하면 두 번째부터는 기능, 고객 평가 기준, 경쟁 방식, "
-                "전략 실행 관점으로 바꿔 씁니다."
-            ),
-            (
-                "- 같은 description 도입부를 반복하지 않습니다. 각 description은 "
-                "확인된 사실, 고객 평가 변화, 경쟁 방식 변화, SK AX 실행 방향 중 "
-                "서로 다른 역할로 시작합니다."
-            ),
-            (
-                "- 단, 문맥형 표현 때문에 근거가 불명확해지면 회사명과 이슈를 다시 "
-                "명확히 씁니다. 정확성이 반복 회피보다 우선입니다."
-            ),
-            ("- 모든 기본 노출 문장은 '~합니다' 또는 '~있습니다' 문체로 끝냅니다."),
-            "",
-            "# Internal Selection-Inference Procedure",
-            "- 내부적으로만 아래 절차를 수행하고, 절차 내용은 JSON에 쓰지 마세요.",
-            "1. 각 card_id에서 확인된 핵심 신호를 하나씩 뽑습니다.",
-            "2. 여러 카드가 공유하는 상위 변화와 카드별로 다른 움직임을 분리합니다.",
-            "3. market_signal에는 공유되는 시장 변화만 씁니다.",
-            (
-                "4. competitor_move에는 각 경쟁사의 움직임이 하나의 경쟁 흐름으로 "
-                "묶이는 이유를 씁니다."
-            ),
-            (
-                "5. key_change_cards를 작성한 뒤, 각 카드가 최소 한 번 이상 "
-                "핵심 변화 판단에 기여했는지 확인합니다."
-            ),
-            "6. interpretation_flow 4단계는 각각 다른 질문에 답합니다.",
-            "- 관찰된 변화: 실제로 무엇이 확인됐나?",
-            "- 평가축의 이동: 고객/시장 판단 기준은 무엇으로 이동하나?",
-            "- 경쟁 구도 영향: 경쟁사 메시지와 경쟁 방식은 어떻게 달라지나?",
-            "- 전략 시사: SK AX는 고객군, 오퍼링, 책임 조직, 자원 배분을 어떻게 바꿔야 하나?",
-            "",
-            "# Constraint Box: Cannot",
-            "- market_reading 키를 생성하지 않습니다.",
-            "- sk_ax_view 키를 생성하지 않습니다.",
-            "- core_change.title 또는 core_change.summary를 생성하지 않습니다.",
-            "- summary 또는 so_what 필드를 생성하지 않습니다.",
-            "- 내부 taxonomy 값(ax, infra, analyst_report 등)을 화면 문장에 그대로 쓰지 않습니다.",
-            "- 매출 전망 수치를 프라이빗 AI 수요 금액처럼 바꿔 쓰지 않습니다.",
-            "- 단계 title과 같은 문장을 items.title로 반복하지 않습니다.",
-            "- 같은 description을 여러 item에서 반복하지 않습니다.",
-            "- 모든 description을 같은 도입부로 시작하지 않습니다.",
-            (
-                "- description을 '움직임은', '사례들은', '이러한 변화는'처럼 "
-                "모호한 주어로 시작하지 않습니다."
-            ),
-            (
-                "- '중요성이 커지고 있습니다', '중요한 역할을 합니다', "
-                "'중요성을 부각시키고 있습니다', '강조하고 있습니다', "
-                "'핵심 요소로 자리잡고 있습니다'처럼 이유 없는 중요도 표현을 "
-                "결론으로 쓰지 않습니다."
-            ),
-            (
-                "- '경쟁력을 강화하고 있습니다', '입지를 다지고 있습니다', "
-                "'성장을 도모하고 있습니다'처럼 성과를 단정하는 표현은 "
-                "근거에 같은 의미가 있을 때만 씁니다."
-            ),
-            "- 근거가 1개뿐인 항목을 전체 시장 결론처럼 과장하지 않습니다.",
-            "- competitor_move의 title을 특정 회사 하나의 움직임으로 쓰지 않습니다.",
-            "- why_important를 특정 회사의 이익이나 성장 전망만으로 좁히지 않습니다.",
-            (
-                "- '두각', '시장 입지 강화', '경쟁 우위 확보'처럼 강한 평가 표현은 "
-                "analysis_units에 같은 의미의 근거가 있을 때만 씁니다."
-            ),
-            (
-                "- 산업 범위는 근거에 나온 범위를 넘기지 않습니다. 예를 들어 "
-                "제조/AX 근거를 임의로 더 넓은 산업 전체로 확대하지 않습니다."
-            ),
-            "",
-            "# Section Logic",
-            (
-                "- 관찰된 변화: integrated_issue, business_signals, key_numbers, "
-                "analysis.impact_reason에서 실제로 확인된 신호를 씁니다."
-            ),
-            ("- 평가축의 이동: 확인된 신호 때문에 고객 평가 기준이 어떻게 바뀌는지 씁니다."),
-            (
-                "- 경쟁 구도 영향: peer_implication, analysis_summary, market_signal을 "
-                "사용해 경쟁 메시지나 경쟁 방식 변화를 씁니다."
-            ),
-            (
-                "- 전략 시사: skax_implication.why_important, potential_impact, "
-                "recommended_actions를 참고하되, 최종 문장은 임원이 실행할 회사 차원의 "
-                "고객군/오퍼링/자원 배분 결정으로 씁니다."
-            ),
-            "",
-            "# Lens Selection",
-            (
-                "각 interpretation_flow step은 아래 후보 렌즈 중 근거가 가장 강한 "
-                "관점을 선택해 title/description에 반영하세요."
-            ),
-            "- 관찰된 변화 후보: 반복 신호, 새 수요, 숫자/규모 신호, 사업 역할 변화",
-            "- 평가축의 이동 후보: 보안/통제, 운영 가능성, 성과 검증, 비용/리스크",
-            "- 경쟁 구도 영향 후보: 메시지 재구성, 패키지화, 레퍼런스 경쟁, 성장 논리",
-            "- 전략 시사 후보: 고객군 우선순위, 오퍼링 상품화, 책임 조직, 자원 배분, 리스크 게이트",
-            (
-                "- 전략 시사에는 제안서 작성, PoC 운영, 다음 모니터링 항목, 화면 표시 같은 "
-                "프로그램 산출물 중심 행동을 쓰지 않습니다."
-            ),
-            (
-                "후보에 맞지 않는 더 중요한 근거가 있으면 후보 밖 렌즈를 선택해도 됩니다. "
-                "단, title과 description은 선택한 렌즈에 정확히 맞아야 합니다."
-            ),
-            "",
-            "# Few-Shot Style Guide",
-            "Bad title: 경쟁사들은 수요 변화에 맞춰 움직이고 있습니다.",
-            ("Good title: 경쟁사들은 기술 신호를 운영 패키지와 성장 논리로 묶고 있습니다."),
-            "Bad description: LG CNS 관련 프라이빗 모델 구축 수요가 확인됩니다.",
-            (
-                "Good description: 프라이빗 모델 구축 수요는 고객이 AI 기능 자체보다 "
-                "데이터 위치, 접근 권한, 운영 책임, 거버넌스를 함께 평가하게 만든다는 "
-                "점에서 평가축 이동의 근거가 됩니다."
-            ),
-            "Bad description: 움직임은 제조 및 자동화 산업에서 데이터 관리가 중요함을 보여줍니다.",
-            (
-                "Good description: 프라이빗 모델 구축 수요와 로봇 운영 기반 신호가 함께 "
-                "나오면서 고객 평가 기준은 기능 보유 여부보다 데이터 통제와 운영 가능성으로 "
-                "이동합니다."
-            ),
-            "Bad why_important: 데이터 관리와 운영 SW 인프라가 핵심 요소로 자리잡고 있습니다.",
-            (
-                "Good why_important: 고객이 기술 보유 여부보다 도입 후 운영 책임과 "
-                "성과 검증 근거를 보게 되므로, 제안에서는 실행 범위와 검증 기준을 "
-                "먼저 제시해야 합니다."
-            ),
-            "Bad description: 현대오토에버의 로봇 운영 소프트웨어 인프라가 확인됩니다.",
-            (
-                "Good description: 이 운영 기반 신호는 로봇 도입 자체보다 현장 데이터 관리, "
-                "제조 SW 연동, 운영 안정화 역량이 제조 AX 판단 기준으로 올라오고 있음을 "
-                "보여줍니다."
-            ),
-            "Bad repeated description: 현대오토에버의 로봇 운영 소프트웨어 인프라가 확인됩니다.",
-            (
-                "Good rewritten description: 이 신호는 로봇 도입 자체보다 현장 데이터 관리와 "
-                "운영 SW 연동 역량이 제조 AX 판단 기준으로 올라오고 있음을 보여줍니다."
-            ),
-            ("Bad step pattern: 모든 단계 description을 'A와 B가 확인됩니다'로 시작합니다."),
-            (
-                "Good step pattern: 관찰 단계는 확인된 신호, 평가축 단계는 고객 기준 변화, "
-                "경쟁 구도 단계는 메시지 재구성, 전략 시사 단계는 SK AX 실행 방향으로 "
-                "각각 다르게 씁니다."
-            ),
-            (
-                "Bad key_change split: market_signal은 A회사만, competitor_move는 B회사만 "
-                "설명합니다."
-            ),
-            (
-                "Good key_change split: market_signal은 여러 카드에서 공통으로 감지된 "
-                "시장 변화, competitor_move는 각 경쟁사 움직임이 하나의 경쟁 방식 변화로 "
-                "묶이는 이유를 설명합니다."
-            ),
-            (
-                "Bad key_change description: 한 회사의 역할만 설명하고 전체 시장 신호처럼 "
-                "확대합니다."
-            ),
-            (
-                "Good key_change description: 입력된 대표 카드들의 서로 다른 신호를 먼저 "
-                "짚고, 그 신호들이 왜 하나의 시장 변화나 경쟁 방식 변화로 묶이는지 "
-                "설명합니다."
-            ),
-            "",
-            "# Internal Self Evaluation",
-            "- 반환 전에 내부적으로만 확인하세요.",
-            "- 각 title은 해당 섹션 역할의 결론인가?",
-            "- 각 description은 title의 이유와 근거를 설명하는가?",
-            "- 같은 근거를 같은 문장으로 반복하지 않았는가?",
-            "- key_change_cards와 interpretation_flow가 같은 내용을 같은 표현으로 반복하지 않는가?",
-            "- competitor_move와 전략 시사가 한 회사에만 쏠리지 않는가?",
-            "- key_change_cards.description이 입력 카드 중 최소 2개 이상의 대표 신호를 반영하는가?",
-            "- 모든 수치와 회사 표현은 analysis_units에 근거가 있는가?",
-            "- 이 self evaluation 결과는 JSON에 포함하지 마세요.",
-            "",
-            "# Input",
-            json.dumps(context, ensure_ascii=False, indent=2),
-        ]
-    )
-
-
-def _display_copy_revision_prompt(
-    context: dict[str, Any],
-    draft: dict[str, Any],
-    issues: list[str],
-) -> str:
-    return "\n".join(
-        [
-            "# Task",
-            "아래 draft_display_copy를 다시 정제하세요.",
-            "목표는 새 내용을 만드는 것이 아니라, 감지된 품질 이슈만 고치는 것입니다.",
-            "",
-            "# Detected Issues",
-            json.dumps(issues, ensure_ascii=False, indent=2),
-            "",
-            "# Revision Rules",
-            "- Output Schema는 1차 프롬프트와 동일하게 유지합니다.",
-            "- market_reading, sk_ax_view, core_change, summary, so_what은 만들지 않습니다.",
-            "- 회사명은 근거를 명확히 해야 할 때만 씁니다.",
-            ("- 이미 한 번 설명한 회사+신호 조합은 다음 항목에서 문맥형 표현으로 바꿉니다."),
-            (
-                "- key_change_cards는 회사별 카드가 아닙니다. market_signal은 "
-                "여러 카드의 공통 시장 변화, competitor_move는 경쟁 방식 변화를 씁니다."
-            ),
-            (
-                "- selected card가 2개 이상이면 key_change_cards.description에는 "
-                "최소 2개 대표 회사/카드 신호가 실제로 드러나야 합니다."
-            ),
-            (
-                "- interpretation_flow의 4단계는 서로 다른 질문에 답해야 합니다: "
-                "확인된 변화, 평가 기준 변화, 경쟁 방식 변화, SK AX 실행 방향."
-            ),
-            "- interpretation_flow.steps 안에는 반드시 items를 생성합니다.",
-            "- 각 step.items는 최소 1개, 최대 3개만 작성합니다.",
-            "- interpretation_flow.steps[*]에 title 또는 description을 생성하지 않습니다.",
-            (
-                "- description은 title의 반복이 아니라 근거와 논리입니다. "
-                "왜 그 title이 나왔는지 읽고 납득되어야 합니다."
-            ),
-            (
-                "- '두각', '시장 입지 강화', '경쟁 우위 확보'처럼 강한 평가 표현은 "
-                "근거에 같은 의미가 있을 때만 씁니다."
-            ),
-            (
-                "- '중요성이 커지고 있습니다', '강조하고 있습니다', "
-                "'경쟁력을 강화하고 있습니다' 같은 표현으로 끝내지 말고 "
-                "근거가 고객 평가/제안/경쟁 방식에 어떤 변화를 만드는지 쓰세요."
-            ),
-            "- 근거 범위를 넘어 산업 범위를 넓히지 않습니다.",
-            "- 근거에 없는 수치, 사건, 인과관계는 추가하지 않습니다.",
-            "- JSON 객체 하나만 반환합니다.",
-            "",
-            "# Reference Analysis Units",
-            json.dumps(context.get("analysis_units") or [], ensure_ascii=False, indent=2),
-            "",
-            "# Card Signal Index",
-            json.dumps(context.get("card_signal_index") or [], ensure_ascii=False, indent=2),
-            "",
-            "# Draft Display Copy",
-            json.dumps(draft, ensure_ascii=False, indent=2),
-        ]
-    )
-
-
-def _display_copy_quality_issues(
-    draft: dict[str, Any],
-    selected_cards: list[dict[str, Any]],
-) -> list[str]:
-    issues: list[str] = []
-    unit_quality_flags = _dedupe_keep_order(
-        [
-            str(flag)
-            for card in selected_cards
-            for flag in _json_list(card.get("quality_flags"))
-            if str(flag).strip()
-        ]
-    )
-    if QUALITY_SUMMARY_ONLY_FALLBACK in unit_quality_flags:
-        issues.append(
-            "summary_only_fallback 품질 플래그가 있는 분석 단위가 포함되어 있습니다. "
-            "카드 표시 요약이 아니라 integrated_issue, analysis, implication 근거로 "
-            "다시 작성하세요."
-        )
-    steps = _json_list(_nested_get(draft, "interpretation_flow", "steps"))
-    typed_steps = [step for step in steps if isinstance(step, dict)]
-    if len(typed_steps) < 4:
-        issues.append("interpretation_flow는 반드시 4단계가 모두 있어야 합니다.")
-    steps_without_items = [step for step in typed_steps if not _json_list(step.get("items"))]
-    if steps_without_items:
-        issues.append(
-            "interpretation_flow의 각 step은 title/description 대신 items를 가져야 합니다. "
-            "items는 단계별로 최소 1개, 최대 3개까지 작성하세요."
-        )
-
-    texts = _display_copy_visible_texts(draft)
-    strong_terms = ("두각", "입지", "경쟁 우위", "주도하고", "선도하고")
-    if any(term in text for text in texts for term in strong_terms):
-        issues.append(
-            "근거보다 강한 평가 표현이 포함되어 있습니다. '두각', '시장 입지', "
-            "'경쟁 우위', '주도', '선도' 같은 표현은 analysis_units에 같은 "
-            "의미의 근거가 없으면 '확인됩니다', '부각되고 있습니다', "
-            "'중요성이 커지고 있습니다'처럼 낮춰 쓰세요."
-        )
-    weak_patterns = (
-        "중요성이 커지고",
-        "중요성을 부각",
-        "중요한 역할",
-        "핵심 요소로 자리",
-        "강조하고 있습니다",
-        "경쟁력을 강화",
-        "성장을 도모",
-        "전략적 포지셔닝",
-    )
-    weak_hits = [text for text in texts if any(pattern in text for pattern in weak_patterns)]
-    if weak_hits:
-        issues.append(
-            "화면 문장에 이유 없는 중요도/성과 표현이 포함되어 있습니다. "
-            "'중요성이 커지고 있습니다', '강조하고 있습니다', '경쟁력을 강화하고 있습니다' "
-            "같은 표현은 실제 근거와 고객 평가 변화, 오퍼링 변화, 경쟁 방식 변화로 "
-            "구체화하세요."
-        )
-    for item in _display_copy_visible_items(draft):
-        if not isinstance(item, dict):
-            continue
-        title = str(item.get("title") or "")
-        description = str(item.get("description") or "")
-        why = str(item.get("why_important") or "")
-        if description and title and _is_too_similar(description, [title], threshold=0.64):
-            issues.append(
-                "description이 title을 반복합니다. description은 실제 근거와 "
-                "그 근거가 title을 지지하는 이유를 설명해야 합니다."
-            )
-            break
-        if why and (
-            _is_too_similar(why, [title, description], threshold=0.62)
-            or any(pattern in why for pattern in weak_patterns)
-        ):
-            issues.append(
-                "why_important가 title/description을 반복하거나 추상적으로 끝납니다. "
-                "고객 평가, 오퍼링 우선순위, 책임 조직, 자원 배분 중 무엇이 바뀌는지 "
-                "구체적으로 쓰세요."
-            )
-            break
-    for name in _dedupe_keep_order([_company_label(card) for card in selected_cards]):
-        if not name:
-            continue
-        count = sum(text.count(name) for text in texts)
-        if count > 8:
-            issues.append(
-                f"{name} 회사명이 {count}회 반복됩니다. 정확성이 필요한 곳만 남기고 "
-                "나머지는 문맥형 표현으로 바꾸세요."
-            )
-
-    competitor = _find_key_change_by_type(draft, "competitor_move")
-    if isinstance(competitor, dict):
-        title = str(competitor.get("title") or "")
-        if any(_company_label(card) and _company_label(card) in title for card in selected_cards):
-            issues.append(
-                "competitor_move.title이 특정 회사 하나의 움직임처럼 보입니다. "
-                "경쟁사 움직임을 묶은 경쟁 방식 변화로 다시 쓰세요."
-            )
-    coverage_issues = _key_change_card_coverage_issues(draft, selected_cards)
-    issues.extend(coverage_issues)
-    return issues
-
-
-def _key_change_card_coverage_issues(
-    draft: dict[str, Any],
-    selected_cards: list[dict[str, Any]],
-) -> list[str]:
-    company_names = _dedupe_keep_order(
-        [name for name in (_company_label(card) for card in selected_cards) if name]
-    )
-    if len(company_names) < 2:
-        return []
-    required_count = min(2, len(company_names))
-    issues: list[str] = []
-    for insight_type, label in (
-        ("market_signal", "시장 신호"),
-        ("competitor_move", "경쟁사 움직임"),
-    ):
-        item = _find_key_change_by_type(draft, insight_type)
-        if not isinstance(item, dict):
-            continue
-        text = " ".join(
-            str(item.get(key) or "") for key in ("title", "description", "why_important")
-        )
-        mentioned = [name for name in company_names if name in text]
-        if len(mentioned) < required_count:
-            issues.append(
-                f"{label} 카드가 입력 카드 전체를 충분히 반영하지 못했습니다. "
-                f"description에 최소 {required_count}개 대표 회사/카드 신호를 "
-                "근거로 포함하고, 그 신호들이 왜 하나의 브리핑 판단으로 묶이는지 "
-                "설명하세요."
-            )
-    return issues
-
-
-def _display_copy_visible_texts(value: object) -> list[str]:
-    texts: list[str] = []
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if key in {"evidence_card_ids", "evidence_refs", "provenance"}:
-                continue
-            texts.extend(_display_copy_visible_texts(item))
-    elif isinstance(value, list):
-        for item in value:
-            texts.extend(_display_copy_visible_texts(item))
-    elif isinstance(value, str):
-        stripped = value.strip()
-        if stripped:
-            texts.append(stripped)
-    return texts
-
-
-def _display_copy_visible_items(draft: dict[str, Any]) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    for item in _json_list(draft.get("key_change_cards")):
-        if isinstance(item, dict):
-            items.append(item)
-    for step in _json_list(_nested_get(draft, "interpretation_flow", "steps")):
-        if not isinstance(step, dict):
-            continue
-        items.append(step)
-        for item in _json_list(step.get("items")):
-            if isinstance(item, dict):
-                items.append(item)
-    return items
-
-
-def _find_key_change_by_type(draft: dict[str, Any], insight_type: str) -> dict[str, Any] | None:
-    for item in _json_list(draft.get("key_change_cards")):
-        if isinstance(item, dict) and item.get("insight_type") == insight_type:
-            return item
-    return None
-
-
-def _display_copy_schema_hint() -> dict[str, Any]:
-    return {
-        "key_summary": "string",
-        "briefing_lead": "string",
-        "key_change_cards": [
-            {
-                "seq": 1,
-                "display_label": "시장 신호",
-                "insight_type": "market_signal",
-                "title": "string",
-                "description": "string",
-                "why_important": "string",
-                "evidence_card_ids": ["CN-..."],
-            },
-            {
-                "seq": 2,
-                "display_label": "경쟁사 움직임",
-                "insight_type": "competitor_move",
-                "title": "string",
-                "description": "string",
-                "why_important": "string",
-                "evidence_card_ids": ["CN-..."],
-            },
-        ],
-        "interpretation_flow": {
-            "steps": [
-                {
-                    "seq": 1,
-                    "label": "관찰된 변화",
-                    "items": [
-                        {
-                            "seq": 1,
-                            "title": "관찰된 변화 포인트 한 줄",
-                            "description": "해당 포인트의 근거와 의미 1~3문장",
-                            "evidence_card_ids": ["CN-..."],
-                        }
-                    ],
-                    "evidence_card_ids": ["CN-..."],
-                },
-                {
-                    "seq": 2,
-                    "label": "평가축의 이동",
-                    "items": [
-                        {
-                            "seq": 1,
-                            "title": "평가축 이동 포인트 한 줄",
-                            "description": "해당 포인트의 근거와 의미 1~3문장",
-                            "evidence_card_ids": ["CN-..."],
-                        }
-                    ],
-                    "evidence_card_ids": ["CN-..."],
-                },
-                {
-                    "seq": 3,
-                    "label": "경쟁 구도 영향",
-                    "items": [
-                        {
-                            "seq": 1,
-                            "title": "경쟁 구도 영향 포인트 한 줄",
-                            "description": "해당 포인트의 근거와 의미 1~3문장",
-                            "evidence_card_ids": ["CN-..."],
-                        }
-                    ],
-                    "evidence_card_ids": ["CN-..."],
-                },
-                {
-                    "seq": 4,
-                    "label": "전략 시사",
-                    "items": [
-                        {
-                            "seq": 1,
-                            "title": "전략 시사 실행 포인트 한 줄",
-                            "description": "해당 포인트의 근거와 의미 1~3문장",
-                            "evidence_card_ids": ["CN-..."],
-                        }
-                    ],
-                    "evidence_card_ids": ["CN-..."],
-                },
-            ]
-        },
-    }
-
-
 def _display_copy_context(
     report: dict[str, Any],
     selected_cards: list[dict[str, Any]],
@@ -2747,111 +563,6 @@ def _display_copy_context(
         "card_signal_index": _display_card_signal_index(selected_cards),
         "analysis_units": [_compact_analysis_unit_for_display(card) for card in selected_cards],
     }
-
-
-def _compact_analysis_unit_for_display(card: dict[str, Any]) -> dict[str, Any]:
-    package = _analysis_package(card)
-    evidence_payload = _json_dict(card.get("evidence_payload"))
-    return {
-        "integrated_issue_id": card.get("integrated_issue_id")
-        or evidence_payload.get("integrated_issue_id")
-        or package.get("integrated_issue_id"),
-        "card_id": card.get("card_id") or card.get("id"),
-        "company": card.get("company"),
-        "peer_id": card.get("peer_id"),
-        "company_label": _company_label(card),
-        "title": card.get("title"),
-        "source_raw_article_ids": card.get("source_raw_article_ids") or [],
-        "evidence_refs": _json_list(evidence_payload.get("evidence_refs"))[:8],
-        "quality_flags": _json_list(card.get("quality_flags")),
-        "analysis_package": _compact_analysis_package(package),
-    }
-
-
-def _display_card_signal_index(selected_cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    index: list[dict[str, Any]] = []
-    for card in selected_cards:
-        package = _analysis_package(card)
-        integrated = _json_dict(package.get("integrated_issue"))
-        analysis = _json_dict(package.get("analysis"))
-        implication = _json_dict(package.get("implication"))
-        peer = _json_dict(implication.get("peer_implication"))
-        skax = _json_dict(implication.get("skax_implication"))
-        business_signals = [
-            _compact_visible_item(item, ("signal", "description"))
-            for item in _json_list(integrated.get("business_signals"))
-            if isinstance(item, dict)
-        ]
-        key_numbers = [
-            _compact_visible_item(item, ("value", "context"))
-            for item in _json_list(integrated.get("key_numbers"))
-            if isinstance(item, dict)
-        ]
-        index.append(
-            {
-                "card_id": card.get("id"),
-                "company_label": _company_label(card),
-                "main_issue": _first_text(integrated.get("main_issue"), card.get("title")),
-                "business_signals": business_signals[:3],
-                "key_numbers": key_numbers[:3],
-                "market_signal": _first_text(analysis.get("market_signal")),
-                "analysis_summary": _first_text(analysis.get("analysis_summary")),
-                "peer_meaning": _first_text(peer.get("peer_meaning")),
-                "skax_why": _first_text(skax.get("why_important")),
-                "recommended_actions": [
-                    str(action).strip()
-                    for action in _json_list(skax.get("recommended_actions"))[:3]
-                    if str(action).strip()
-                ],
-            }
-        )
-    return index
-
-
-def _display_payload_structure(value: object) -> object:
-    if isinstance(value, dict):
-        return {key: _display_payload_structure(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_display_payload_structure(value[0])] if value else []
-    if isinstance(value, str):
-        return "string"
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, (int, float)):
-        return "number"
-    if value is None:
-        return None
-    return type(value).__name__
-
-
-def _compact_analysis_package(package: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "bundle_id": package.get("bundle_id"),
-        "classification": _json_dict(package.get("classification")),
-        "integrated_issue": _json_dict(package.get("integrated_issue")),
-        "analysis": _json_dict(package.get("analysis")),
-        "implication": _json_dict(package.get("implication")),
-        "validation": _json_dict(package.get("validation")),
-    }
-
-
-def _parse_json_object(value: object) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    text_value = str(value or "").strip()
-    if not text_value:
-        return {}
-    try:
-        parsed = json.loads(text_value)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text_value, flags=re.DOTALL)
-        if not match:
-            return {}
-        try:
-            parsed = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return {}
-    return parsed if isinstance(parsed, dict) else {}
 
 
 def _merge_display_copy(
@@ -2904,498 +615,6 @@ def _refresh_contract_payload(
     updated = copy.deepcopy(report)
     updated.update(contract_payload)
     return updated
-
-
-def _period_from_report(report: dict[str, Any]) -> dict[str, Any]:
-    try:
-        start = date.fromisoformat(str(report.get("date_from")))
-        end = date.fromisoformat(str(report.get("date_to")))
-    except ValueError:
-        return {}
-    return {
-        "date_from": start,
-        "date_to": end,
-        "label": str(report.get("period_label") or ""),
-    }
-
-
-def _update_text_field(target: dict[str, Any], source: dict[str, Any], key: str) -> None:
-    value = str(source.get(key) or "").strip()
-    if value:
-        target[key] = value
-
-
-def _merge_key_change_cards(updated: dict[str, Any], display_copy: dict[str, Any]) -> None:
-    source_items = [
-        item for item in _json_list(display_copy.get("key_change_cards")) if isinstance(item, dict)
-    ]
-    if not source_items:
-        source_items = [
-            item
-            for item in _json_list(_nested_get(display_copy, "core_change", "items"))
-            if isinstance(item, dict)
-        ]
-    current_items = [
-        item for item in _json_list(updated.get("key_change_cards")) if isinstance(item, dict)
-    ]
-    if not current_items:
-        current_items = [
-            item
-            for item in _json_list(_nested_get(updated, "core_change", "items"))
-            if isinstance(item, dict)
-        ]
-    if not source_items:
-        return
-    by_type = {
-        str(item.get("insight_type")): item
-        for item in source_items
-        if str(item.get("insight_type") or "").strip()
-    }
-    for index, item in enumerate(current_items):
-        source = by_type.get(str(item.get("insight_type")))
-        if source is None and index < len(source_items):
-            source = source_items[index]
-        if not isinstance(source, dict):
-            continue
-        for key in ("title", "description", "why_important"):
-            _update_text_field(item, source, key)
-        if str(item.get("insight_type")) == "competitor_move":
-            title = str(item.get("title") or "")
-            if _mentions_any_source_company(title, updated):
-                item["title"] = "경쟁사들은 기술 신호를 운영 패키지와 성장 논리로 묶고 있습니다."
-        if not item.get("description"):
-            _update_text_field(item, source, "summary")
-            if item.get("summary"):
-                item["description"] = item.pop("summary")
-        item.pop("summary", None)
-        item.pop("so_what", None)
-    updated["key_change_cards"] = current_items
-    updated["core_change"] = {"items": copy.deepcopy(current_items)}
-
-
-def _merge_flow(updated: dict[str, Any], display_copy: dict[str, Any]) -> None:
-    source_steps = _json_list(_nested_get(display_copy, "interpretation_flow", "steps"))
-    current = _json_dict(updated.get("interpretation_flow"))
-    current_steps = [step for step in _json_list(current.get("steps")) if isinstance(step, dict)]
-    for index, step in enumerate(current_steps):
-        source = _find_display_item_source(source_steps, step, index)
-        if isinstance(source, dict):
-            source_items = _json_list(source.get("items"))
-            if not source_items and (source.get("title") or source.get("description")):
-                source_items = [
-                    {
-                        "seq": 1,
-                        "title": source.get("title"),
-                        "description": source.get("description"),
-                        "evidence_card_ids": source.get("evidence_card_ids"),
-                    }
-                ]
-            if source_items:
-                merged_items = _merged_display_list(
-                    source_items=source_items,
-                    current_items=[
-                        item for item in _json_list(step.get("items")) if isinstance(item, dict)
-                    ],
-                    fields=("title", "description"),
-                    max_items=3,
-                    fill_remaining=False,
-                )
-                if merged_items:
-                    step["items"] = _sanitize_flow_step_items({**step, "items": merged_items[:3]})
-                else:
-                    step.pop("items", None)
-            else:
-                step.pop("items", None)
-        else:
-            if step.get("items"):
-                step["items"] = _sanitize_flow_step_items(step)
-        step.pop("title", None)
-        step.pop("description", None)
-        step.pop("one_liner", None)
-    if current_steps:
-        current["steps"] = current_steps
-        updated["interpretation_flow"] = current
-
-
-def _sanitize_flow_step_items(step: dict[str, Any]) -> list[dict[str, Any]]:
-    parent_title = str(step.get("title") or "")
-    parent_description = str(step.get("description") or "")
-    items: list[dict[str, Any]] = []
-    seen_titles: list[str] = []
-    seen_descriptions: list[str] = []
-    for item in _json_list(step.get("items")):
-        if not isinstance(item, dict):
-            continue
-        title = str(item.get("title") or "").strip()
-        description = str(item.get("description") or "").strip()
-        if not title or not description:
-            continue
-        if _is_too_similar(title, [parent_title], threshold=0.9):
-            continue
-        if _is_too_similar(description, [parent_description], threshold=0.9):
-            continue
-        if _is_too_similar(title, seen_titles, threshold=0.82):
-            continue
-        if _is_too_similar(description, seen_descriptions, threshold=0.78):
-            continue
-        clean_item = _compact_visible_item(
-            item,
-            ("title", "description", "evidence_card_ids"),
-        )
-        clean_item["seq"] = len(items) + 1
-        items.append(clean_item)
-        seen_titles.append(title)
-        seen_descriptions.append(description)
-        if len(items) >= 3:
-            break
-    return items
-
-
-def _merge_market_reading(updated: dict[str, Any], display_copy: dict[str, Any]) -> None:
-    source_items = _json_list(display_copy.get("market_reading"))
-    current_items = [
-        item for item in _json_list(updated.get("market_reading")) if isinstance(item, dict)
-    ]
-    merged_items = _merged_display_list(
-        source_items=source_items,
-        current_items=current_items,
-        fields=("title", "description"),
-        max_items=_MAX_MARKET_ITEMS,
-    )
-    if merged_items:
-        updated["market_reading"] = merged_items
-
-
-def _merge_sk_ax_view(updated: dict[str, Any], display_copy: dict[str, Any]) -> None:
-    source_items = _json_list(display_copy.get("sk_ax_view"))
-    current_items = [
-        item for item in _json_list(updated.get("sk_ax_view")) if isinstance(item, dict)
-    ]
-    merged_items = _merged_display_list(
-        source_items=source_items,
-        current_items=current_items,
-        fields=("title", "description"),
-        max_items=_MAX_SKAX_ITEMS,
-    )
-    if merged_items:
-        updated["sk_ax_view"] = _repair_sk_ax_view_descriptions(merged_items, updated)
-
-
-def _merged_display_list(
-    *,
-    source_items: list[Any],
-    current_items: list[dict[str, Any]],
-    fields: tuple[str, ...],
-    max_items: int,
-    fill_remaining: bool = True,
-) -> list[dict[str, Any]]:
-    typed_sources = [item for item in source_items if isinstance(item, dict)]
-    if not typed_sources:
-        return current_items[:max_items]
-    merged_items: list[dict[str, Any]] = []
-    for index, source in enumerate(typed_sources[:max_items]):
-        current = current_items[index] if index < len(current_items) else {}
-        merged: dict[str, Any] = {
-            "seq": source.get("seq") or current.get("seq") or index + 1,
-        }
-        for key in fields:
-            value = str(source.get(key) or "").strip()
-            if value:
-                merged[key] = value
-            elif current.get(key):
-                merged[key] = current[key]
-        evidence = source.get("evidence_card_ids") or current.get("evidence_card_ids")
-        if evidence:
-            merged["evidence_card_ids"] = evidence
-        merged_items.append(merged)
-    if fill_remaining:
-        for index in range(len(merged_items), min(len(current_items), max_items)):
-            current = copy.deepcopy(current_items[index])
-            current["seq"] = current.get("seq") or index + 1
-            merged_items.append(current)
-    return merged_items
-
-
-def _mentions_any_source_company(text: str, result: dict[str, Any]) -> bool:
-    value = str(text or "")
-    if not value:
-        return False
-    for name in _source_company_names(result):
-        if name and name in value:
-            return True
-    return False
-
-
-def _source_company_names(result: dict[str, Any]) -> list[str]:
-    names: list[str] = []
-    for detail in _json_list(result.get("hidden_details")):
-        if not isinstance(detail, dict):
-            continue
-        package = _json_dict(detail.get("analysis_package"))
-        peer = _json_dict(_nested_get(package, "implication", "peer_implication"))
-        company = _first_text(
-            peer.get("company_name_ko"),
-            detail.get("company_label"),
-            _nested_get(package, "integrated_issue", "main_company"),
-        )
-        if company:
-            names.append(company)
-    return _dedupe_keep_order(names)
-
-
-def _repair_sk_ax_view_descriptions(
-    items: list[dict[str, Any]],
-    result: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    repaired: list[dict[str, Any]] = []
-    seen_descriptions: list[str] = []
-    for item in items:
-        current = copy.deepcopy(item)
-        title = str(current.get("title") or "").strip()
-        description = str(current.get("description") or "").strip()
-        grounded = _grounded_sk_ax_description(title, result)
-        if grounded:
-            current["description"] = grounded
-        elif (
-            not description
-            or _is_too_similar(description, [title], threshold=0.7)
-            or _is_too_similar(description, seen_descriptions, threshold=0.72)
-            or _is_vague_display_text(description)
-            or _description_needs_detail(description)
-        ):
-            current["description"] = grounded or _sk_ax_description_from_title(title)
-        seen_descriptions.append(str(current.get("description") or ""))
-        repaired.append(current)
-    return repaired
-
-
-def _sk_ax_description_from_title(title: str) -> str:
-    normalized = str(title or "")
-    if any(token in normalized for token in ("성과", "KPI", "수치", "지표")):
-        return (
-            "고객은 기능 도입 자체보다 도입 후 장애, 통제, 생산성 문제가 "
-            "얼마나 줄어드는지를 먼저 확인하려 합니다. 따라서 임원 의사결정에서는 "
-            "적용 현장, 측정 지표, 안정화 기준을 사업 우선순위와 책임 조직 기준으로 "
-            "함께 묶어야 합니다."
-        )
-    if any(token in normalized for token in ("레퍼런스", "사례")):
-        return (
-            "같은 구축 이력도 적용 현장, 운영 전환 과정, 확산 결과를 함께 보여줄 때 "
-            "기술 공급 사례가 아니라 신뢰 가능한 운영 실적으로 읽힙니다."
-        )
-    if any(token in normalized for token in ("보안", "데이터 통제", "프라이빗")):
-        return (
-            "고객이 외부 모델 활용보다 데이터 통제와 책임 범위를 먼저 확인할 수 있으므로, "
-            "구축 방식과 운영 거버넌스를 오퍼링 필수 조건과 리스크 승인 기준으로 "
-            "함께 정해야 합니다."
-        )
-    if any(token in normalized for token in ("운영 시나리오", "운영 패키지", "통합")):
-        return (
-            "개별 기능보다 도입 후 운영 흐름을 먼저 보여주면 고객이 적용 범위, "
-            "리스크 감소 방식, 성과 확인 지점을 더 빠르게 판단할 수 있습니다."
-        )
-    return (
-        "이 시사점은 기술 설명을 회사 행동으로 바꾸는 부분이므로, 고객군, "
-        "적용 범위, 책임 조직, 기대 효과를 한 번에 판단할 수 있게 결정 기준을 정해야 합니다."
-    )
-
-
-def _grounded_sk_ax_description(
-    title: str,
-    result: dict[str, Any] | None,
-) -> str:
-    if not result:
-        return ""
-    basis = _detailed_basis_sentence_from_result(
-        result,
-        focus_text=title,
-    ) or _basis_signal_sentence_from_result(result)
-    actions = _recommended_action_sentences_from_result(result)
-    if not basis:
-        return ""
-    normalized = str(title or "")
-    if any(token in normalized for token in ("운영 성과", "리스크", "실행 근거")):
-        return (
-            f"{basis} 이 근거는 고객의 관심이 기능 보유 여부보다 도입 후 "
-            "운영 불확실성을 얼마나 낮출 수 있는지로 옮겨가고 있음을 보여줍니다. "
-            "그래서 임원 의사결정에서는 기능 목록보다 줄일 운영 문제, 책임 범위, "
-            "성과 측정 기준을 오퍼링 조건으로 먼저 확정해야 합니다."
-        )
-    if any(token in normalized for token in ("운영 시나리오", "운영 설계", "제안서 메시지")):
-        return (
-            f"{basis} 이 신호는 고객이 단일 기능보다 도입 후 운영 흐름과 "
-            "책임 범위를 함께 판단한다는 뜻입니다. 따라서 SK AX는 기술 항목을 "
-            "나열하기보다 데이터 수집, 이상 감지, 현장 적용, 성과 확인 책임을 "
-            "오퍼링과 책임 조직에 함께 배정해야 합니다."
-        )
-    if any(token in normalized for token in ("프라이빗", "보안", "데이터 통제")):
-        return (
-            f"{basis} 따라서 데이터 통제 방식, 책임 범위, 운영 거버넌스를 "
-            "리스크 승인 게이트로 정해야 고객이 도입 리스크를 판단할 수 있습니다."
-        )
-    if any(token in normalized for token in ("성과 수치", "KPI", "지표", "적용 현장")):
-        return (
-            f"{basis} 이 신호는 고객이 구축 여부보다 적용 현장에서 어떤 문제가 "
-            "줄고 어떤 지표로 개선을 확인할 수 있는지를 보려 한다는 뜻입니다. "
-            "따라서 메시지는 플랫폼 기능보다 운영 장면, 측정 지표, 안착 기준을 "
-            "앞세워야 합니다."
-        )
-    if any(token in normalized for token in ("레퍼런스", "사례")):
-        return (
-            f"{basis} 이미 가진 사례도 구축 사실보다 적용 현장, 운영 전환 과정, "
-            "확산 결과 순서로 보여줄 때 신뢰 가능한 운영 실적으로 읽힙니다."
-        )
-    if actions:
-        return (
-            f"{basis} 이 근거를 회사 행동으로 옮길 때는 기능명보다 고객의 "
-            "운영 판단에 필요한 적용 범위, 책임 구조, 성과 확인 방식을 먼저 정해야 합니다."
-        )
-    return basis
-
-
-def _detailed_basis_sentence_from_result(
-    result: dict[str, Any],
-    *,
-    focus_text: str = "",
-) -> str:
-    phrases = _company_detail_phrases_from_result(result, focus_text=focus_text)
-    if not phrases:
-        return ""
-    joined = _join_korean(phrases[:2])
-    return f"구체적으로는 {joined}{_subject_particle(joined)} 확인됩니다."
-
-
-def _company_detail_phrases_from_result(
-    result: dict[str, Any],
-    *,
-    focus_text: str = "",
-) -> list[str]:
-    phrases: list[str] = []
-    for detail in _json_list(result.get("hidden_details")):
-        if not isinstance(detail, dict):
-            continue
-        package = _json_dict(detail.get("analysis_package"))
-        company = _first_text(
-            _nested_get(package, "implication", "peer_implication", "company_name_ko"),
-            detail.get("company_label"),
-        )
-        signal = _business_signal_phrase(package)
-        number_context = _key_number_context_phrase(package, signal)
-        if company and signal and number_context:
-            phrases.append(f"{company}의 {number_context}와 연결된 {signal}")
-        elif company and signal:
-            phrases.append(f"{company}의 {signal}")
-    phrases = _dedupe_keep_order(phrases)
-    focused = _filter_focus_phrases(phrases, focus_text)
-    return focused or phrases
-
-
-def _business_signal_phrase(package: dict[str, Any]) -> str:
-    integrated = _json_dict(package.get("integrated_issue"))
-    signals = [
-        item for item in _json_list(integrated.get("business_signals")) if isinstance(item, dict)
-    ]
-    first_signal = signals[0] if signals else {}
-    return _brief_noun_phrase(
-        _first_text(
-            first_signal.get("signal"),
-            first_signal.get("description"),
-            _nested_get(package, "analysis", "market_signal"),
-        ),
-        max_chars=58,
-    )
-
-
-def _key_number_context_phrase(package: dict[str, Any], signal: str = "") -> str:
-    integrated = _json_dict(package.get("integrated_issue"))
-    key_numbers = [
-        item for item in _json_list(integrated.get("key_numbers")) if isinstance(item, dict)
-    ]
-    preferred = [
-        item for item in key_numbers if _shares_keyword(signal, _first_text(item.get("context")))
-    ]
-    values: list[str] = []
-    for item in preferred[:3]:
-        if not isinstance(item, dict):
-            continue
-        value = _first_text(item.get("value"))
-        context = _first_text(item.get("context"))
-        if value and _looks_like_key_number(value):
-            values.append(_format_key_number_context(value, context))
-    return "·".join(_dedupe_keep_order(values))
-
-
-def _format_key_number_context(value: str, context: str) -> str:
-    if context:
-        return f"{context} {value}"
-    return value
-
-
-def _looks_like_key_number(value: str) -> bool:
-    text = str(value or "").strip()
-    if len(text) > 24:
-        return False
-    return bool(re.search(r"\d", text))
-
-
-def _filter_focus_phrases(phrases: list[str], focus_text: str) -> list[str]:
-    focus = str(focus_text or "")
-    if not focus:
-        return []
-    keyword_groups = [
-        ("프라이빗", "보안", "데이터 통제", "AI", "클라우드"),
-        ("로봇", "자동화", "제조", "스마트팩토리", "SW", "운영"),
-        ("성과", "KPI", "수치", "지표", "리스크"),
-    ]
-    active = [group for group in keyword_groups if any(token in focus for token in group)]
-    if not active:
-        return []
-    tokens = {token for group in active for token in group}
-    return [phrase for phrase in phrases if any(token in phrase for token in tokens)]
-
-
-def _shares_keyword(left: str, right: str) -> bool:
-    left_text = str(left or "")
-    right_text = str(right or "")
-    if not left_text or not right_text:
-        return False
-    tokens = ("로봇", "AI", "클라우드", "스마트", "매출", "생산", "투입", "프라이빗")
-    return any(token in left_text and token in right_text for token in tokens)
-
-
-def _basis_signal_sentence_from_result(result: dict[str, Any]) -> str:
-    signals = _basis_signal_phrases_from_result(result)
-    if not signals:
-        return ""
-    joined = _join_korean(signals[:2])
-    return f"{joined}{_subject_particle(joined)} 근거로 확인되고 있습니다."
-
-
-def _basis_signal_phrases_from_result(result: dict[str, Any]) -> list[str]:
-    phrases: list[str] = []
-    for package in _analysis_packages_from_result(result):
-        integrated = _json_dict(package.get("integrated_issue"))
-        analysis = _json_dict(package.get("analysis"))
-        package_phrases: list[str] = []
-        for signal in _json_list(integrated.get("business_signals")):
-            if isinstance(signal, dict):
-                package_phrases.append(_brief_noun_phrase(signal.get("signal"), max_chars=44))
-        package_phrases.append(_brief_noun_phrase(analysis.get("market_signal"), max_chars=58))
-        package_phrases.append(_brief_noun_phrase(analysis.get("impact_reason"), max_chars=58))
-        phrases.extend([phrase for phrase in package_phrases if phrase][:1])
-    return _dedupe_keep_order([phrase for phrase in phrases if phrase])
-
-
-def _recommended_action_sentences_from_result(result: dict[str, Any]) -> list[str]:
-    actions: list[str] = []
-    for package in _analysis_packages_from_result(result):
-        skax = _json_dict(_nested_get(package, "implication", "skax_implication"))
-        actions.extend(
-            str(action).strip() for action in _json_list(skax.get("recommended_actions"))
-        )
-    return _dedupe_keep_order(
-        [_brief_sentence(action, max_chars=100) for action in actions if action]
-    )
 
 
 def _company_issue_sentence_from_result(result: dict[str, Any]) -> str:
@@ -3466,49 +685,6 @@ def _company_issue_phrases_from_result(result: dict[str, Any]) -> list[str]:
     return _dedupe_keep_order(phrases)
 
 
-def _analysis_packages_from_result(result: dict[str, Any]) -> list[dict[str, Any]]:
-    packages: list[dict[str, Any]] = []
-    for detail in _json_list(result.get("hidden_details")):
-        if isinstance(detail, dict):
-            package = _json_dict(detail.get("analysis_package"))
-            if package:
-                packages.append(package)
-    return packages
-
-
-def _brief_noun_phrase(value: object, *, max_chars: int) -> str:
-    phrase = _brief_sentence(value, max_chars=max_chars)
-    return _strip_terminal_punctuation(phrase)
-
-
-def _subject_particle(value: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "이"
-    code = ord(text[-1])
-    if 0xAC00 <= code <= 0xD7A3 and (code - 0xAC00) % 28 == 0:
-        return "가"
-    return "이"
-
-
-def _is_vague_display_text(value: str) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return True
-    vague_markers = (
-        "기능 설명보다",
-        "실행 근거",
-        "수요 변화",
-        "사업 방향",
-        "고객 설득 메시지",
-        "중시하고 있습니다",
-        "포지셔닝",
-        "제안 초반에는 기능 목록보다",
-        "어떤 운영 문제가 줄고",
-    )
-    return any(marker in text for marker in vague_markers) and len(text) < 90
-
-
 def _needs_more_grounding(value: str, result: dict[str, Any] | None) -> bool:
     if not result:
         return False
@@ -3520,33 +696,6 @@ def _needs_more_grounding(value: str, result: dict[str, Any] | None) -> bool:
         *signals,
     ]
     return not any(term and term in text for term in grounding_terms)
-
-
-def _find_display_item_source(
-    source_items: list[Any],
-    current_item: dict[str, Any],
-    fallback_index: int,
-) -> dict[str, Any] | None:
-    current_seq = current_item.get("seq")
-    current_label = str(
-        current_item.get("label")
-        or current_item.get("insight_type")
-        or current_item.get("use_case")
-        or ""
-    )
-    for source in source_items:
-        if not isinstance(source, dict):
-            continue
-        if current_seq is not None and source.get("seq") == current_seq:
-            return source
-        source_label = str(
-            source.get("label") or source.get("insight_type") or source.get("use_case") or ""
-        )
-        if current_label and source_label == current_label:
-            return source
-    if fallback_index < len(source_items) and isinstance(source_items[fallback_index], dict):
-        return source_items[fallback_index]
-    return None
 
 
 def _average_confidence(selected_cards: list[dict[str, Any]]) -> float:
@@ -3595,43 +744,9 @@ def _aggregate_text(
     return _clip_text(joined, max_chars=max_chars)
 
 
-def _combine_blocks(
-    values: list[object],
-    fallback: str,
-    *,
-    max_items: int = 2,
-    max_chars: int = 240,
-) -> str:
-    seen: set[str] = set()
-    blocks: list[str] = []
-    for value in values:
-        text_value = str(value or "").strip()
-        key = re.sub(r"\s+", " ", text_value)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        blocks.append(key)
-        if len(blocks) >= max_items:
-            break
-    if not blocks:
-        return _brief_sentence(fallback, max_chars=max_chars)
-    return _clip_text(" ".join(blocks), max_chars=max_chars)
-
-
 def _first_distinct_text(values: list[object]) -> str:
     texts = _unique_texts(values)
     return texts[0] if texts else ""
-
-
-def _dedupe_keep_order(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for value in values:
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        result.append(value)
-    return result
 
 
 def _unique_texts(values: list[object]) -> list[str]:
@@ -4535,30 +1650,6 @@ def _empty_report(
     }
 
 
-def _recommended_action_pairs(selected_cards: list[dict[str, Any]]) -> list[tuple[str, str]]:
-    pairs: list[tuple[str, str]] = []
-    for card in selected_cards:
-        package = _analysis_package(card)
-        skax = _json_dict(_nested_get(package, "implication", "skax_implication"))
-        why = _first_text(skax.get("why_important"), skax.get("potential_impact"))
-        for action in _json_list(skax.get("recommended_actions")):
-            action_text = str(action or "").strip()
-            if action_text:
-                pairs.append((action_text, why))
-    return _dedupe_action_pairs(pairs)
-
-
-def _dedupe_action_pairs(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    seen: set[str] = set()
-    result: list[tuple[str, str]] = []
-    for action, why in pairs:
-        key = re.sub(r"\s+", " ", action).strip()
-        if key and key not in seen:
-            seen.add(key)
-            result.append((action, why))
-    return result
-
-
 def _action_use_case(_action: str) -> str:
     return "SK AX 관점"
 
@@ -4673,14 +1764,6 @@ def _display_sk_ax_view(
     ][:_MAX_SKAX_ITEMS]
 
 
-def _display_sk_ax_title(selected_cards: list[dict[str, Any]]) -> str:
-    for action, _why in _recommended_action_pairs(selected_cards):
-        title = _brief_sentence(action)
-        if title:
-            return title
-    return ""
-
-
 def _display_evidence_ids(
     selected_cards: list[dict[str, Any]],
     default_evidence: list[Any],
@@ -4689,27 +1772,6 @@ def _display_evidence_ids(
     if evidence_ids:
         return evidence_ids
     return [str(card["id"]) for card in selected_cards if card.get("id")]
-
-
-def _join_korean(values: list[str]) -> str:
-    cleaned = [value for value in values if value]
-    if not cleaned:
-        return ""
-    if len(cleaned) == 1:
-        return cleaned[0]
-    if len(cleaned) == 2:
-        return f"{cleaned[0]}{_and_particle(cleaned[0])} {cleaned[1]}"
-    return f"{', '.join(cleaned[:-1])}, {cleaned[-1]}"
-
-
-def _and_particle(value: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "와"
-    code = ord(text[-1])
-    if 0xAC00 <= code <= 0xD7A3 and (code - 0xAC00) % 28 == 0:
-        return "와"
-    return "과"
 
 
 def _key_change_cards_payload(
@@ -4991,10 +2053,6 @@ def _competitor_importance_sentence(entries: list[dict[str, Any]]) -> str:
     return "이 움직임은 같은 방향의 경쟁 신호가 반복될 때 고객군 우선순위를 바꿀 수 있습니다."
 
 
-def _strip_terminal_punctuation(value: str) -> str:
-    return str(value or "").rstrip(" .。!?！？")
-
-
 def _combine_company_signals(entries: list[dict[str, Any]], key: str) -> str:
     phrases = []
     for entry in entries[:3]:
@@ -5020,25 +2078,6 @@ def _select_distinct_sentence(
     if not _is_too_similar(fallback_sentence, avoid):
         return fallback_sentence
     return _generic_distinct_sentence(avoid, max_chars=max_chars)
-
-
-def _is_too_similar(value: str, others: list[str], *, threshold: float = 0.82) -> bool:
-    normalized = _normalize_similarity_text(value)
-    if not normalized:
-        return False
-    for other in others:
-        other_normalized = _normalize_similarity_text(other)
-        if not other_normalized:
-            continue
-        if normalized == other_normalized:
-            return True
-        if SequenceMatcher(None, normalized, other_normalized).ratio() >= threshold:
-            return True
-    return False
-
-
-def _normalize_similarity_text(value: str) -> str:
-    return re.sub(r"\s+", " ", str(value or "").strip().lower())
 
 
 def _generic_distinct_sentence(avoid: list[str], *, max_chars: int) -> str:
@@ -5197,17 +2236,6 @@ def _card_display_title(card: dict[str, Any]) -> str:
     )
 
 
-def _company_label(card: dict[str, Any]) -> str:
-    value = str(card.get("peer_id") or card.get("company") or "").strip()
-    labels = {
-        "hyundai_autoever": "현대오토에버",
-        "lg_cns": "LG CNS",
-        "samsung_sds": "삼성SDS",
-        "posco_dx": "포스코DX",
-    }
-    return labels.get(value, value)
-
-
 def _briefing_lead(
     period: dict[str, Any],
     key_summary: str,
@@ -5345,163 +2373,6 @@ def _evidence_texts(package: dict[str, Any]) -> list[str]:
         if isinstance(item, dict) and str(item.get("evidence_text") or "").strip():
             texts.append(str(item["evidence_text"]).strip())
     return texts[:5]
-
-
-def _brief_sentence(value: object, max_chars: int = 120) -> str:
-    text_value = _limit_sentences(str(value or "").strip(), max_sentences=1)
-    return _clip_text(text_value, max_chars=max_chars)
-
-
-def _brief_sentences(value: object, *, max_sentences: int, max_chars: int) -> str:
-    text_value = _limit_sentences(str(value or "").strip(), max_sentences=max_sentences)
-    return _clip_text(text_value, max_chars=max_chars)
-
-
-def _limit_sentences(value: str, max_sentences: int) -> str:
-    text_value = " ".join(str(value or "").split())
-    if not text_value:
-        return ""
-    sentences = re.split(r"(?<=[.!?。！？])\s+", text_value)
-    selected = [sentence.strip() for sentence in sentences if sentence.strip()][:max_sentences]
-    return " ".join(selected) if selected else text_value
-
-
-def _clip_text(value: str, max_chars: int) -> str:
-    text_value = str(value or "").strip()
-    if len(text_value) <= max_chars:
-        return text_value
-    return text_value[: max_chars - 1].rstrip() + "…"
-
-
-def _analysis_package(card: dict[str, Any]) -> dict[str, Any]:
-    return _analysis_package_from_sources(card, _json_dict(card.get("evidence_payload")))
-
-
-def _analysis_package_from_sources(*sources: object) -> dict[str, Any]:
-    for source in sources:
-        if not isinstance(source, dict):
-            continue
-        package = source.get("analysis_package")
-        if isinstance(package, dict):
-            return package
-    return {}
-
-
-def _nested_get(value: object, *keys: str) -> object:
-    current = value
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
-
-
-def _json_dict(value: object) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
-
-
-def _json_list(value: object) -> list[Any]:
-    if isinstance(value, list):
-        return value
-    if isinstance(value, tuple):
-        return list(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return [value]
-        return parsed if isinstance(parsed, list) else [parsed]
-    return []
-
-
-def _str_values(value: object) -> list[str]:
-    values = _json_list(value)
-    out: list[str] = []
-    for item in values:
-        text_value = str(item or "").strip()
-        if text_value and text_value not in out:
-            out.append(text_value)
-    return out
-
-
-def _int_list(value: object) -> list[int]:
-    out: list[int] = []
-    for item in _json_list(value):
-        parsed = _optional_int(item)
-        if parsed is not None and parsed not in out:
-            out.append(parsed)
-    return out
-
-
-def _first_int(value: object) -> int | None:
-    values = _int_list(value)
-    return values[0] if values else None
-
-
-def _optional_int(value: object) -> int | None:
-    if value is None or str(value).strip() == "":
-        return None
-    if not isinstance(value, (str, int, float)):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _first_source_published_at(sources: list[Any]) -> object:
-    for source in sources:
-        if isinstance(source, dict) and source.get("published_at"):
-            return source.get("published_at")
-    return None
-
-
-def _first_from_list(value: object) -> str:
-    values = _json_list(value)
-    return str(values[0]) if values else ""
-
-
-def _first_text(*values: object) -> str:
-    for value in values:
-        text_value = str(value or "").strip()
-        if text_value:
-            return text_value
-    return ""
-
-
-def _parse_datetime(value: object) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=UTC)
-    if isinstance(value, date):
-        return datetime.combine(value, time.min, tzinfo=UTC)
-    text_value = str(value).strip()
-    if not text_value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-
-
-def _iso_or_none(value: object) -> str | None:
-    if isinstance(value, datetime):
-        return value.astimezone(KST).isoformat()
-    if isinstance(value, date):
-        return value.isoformat()
-    if value is None:
-        return None
-    return str(value)
 
 
 def _frontend_display_payload(result: dict[str, Any]) -> dict[str, Any]:
@@ -6184,12 +3055,6 @@ def _front_key_numbers(integrated: dict[str, Any]) -> list[dict[str, str]]:
         if value and _looks_like_key_number(value):
             numbers.append({"value": value, "context": context})
     return numbers
-
-
-def _front_evidence_card_ids(entries: list[dict[str, Any]]) -> list[str]:
-    return _dedupe_keep_order(
-        [str(entry.get("card_id")) for entry in entries if entry.get("card_id")]
-    )
 
 
 def _entry_evidence_card_ids(entry: dict[str, Any]) -> list[str]:
@@ -7219,17 +4084,6 @@ def _grounded_why_important(value: str, result: dict[str, Any]) -> str:
     if not basis:
         return value
     return f"{basis} 따라서 {str(value).removeprefix('따라서 ').strip()}"
-
-
-def _description_needs_detail(value: str) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return True
-    return len(text) < 95 or len(re.split(r"(?<=[.!?。！？])\s+", text)) <= 1
-
-
-def _compact_visible_item(item: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
-    return {key: item[key] for key in keys if item.get(key) not in (None, "", [])}
 
 
 def _strip_default_hidden_fields(value: object) -> object:
