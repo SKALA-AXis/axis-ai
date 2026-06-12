@@ -56,6 +56,14 @@ log = logging.getLogger(__name__)
 
 ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
 _FAST_PASS_COMPANY_IDS = set(COMPANY_IDS)
+_POSCO_DX_GROUP_AX_RE = re.compile(
+    r"포스코.{0,80}(AX|AI\s*에이전트|피지컬\s*AI|스마트\s*팩토리|"
+    r"자동화|디지털\s*전환|업무\s*혁신|제조\s*AI|수주|영업|품질)"
+    r"|"
+    r"(AX|AI\s*에이전트|피지컬\s*AI|스마트\s*팩토리|자동화|"
+    r"디지털\s*전환|업무\s*혁신|제조\s*AI).{0,80}포스코",
+    re.IGNORECASE,
+)
 
 _llm: ChatOpenAI | None = None
 _PROMPT_VERSION = "relevance-v1.0"
@@ -419,6 +427,10 @@ class RelevanceEvaluator:
 
         text_body = _join_text(title, subtitle, content)
         matched_company_candidates = _match_companies(text_body, company)
+        if "posco_dx" in company and _matches_posco_dx_group_ax_signal(text_body):
+            matched_company_candidates = _dedupe_keep_order(
+                [*matched_company_candidates, "posco_dx"]
+            )
         matched_sector_candidates = match_sectors(text_body)
 
         noise_result = _noise_reject_result(
@@ -1262,6 +1274,20 @@ def _fast_pass_result(
     if not any(company_id in _FAST_PASS_COMPANY_IDS for company_id in matched_companies):
         return None
 
+    if "posco_dx" in matched_companies and _matches_posco_dx_group_ax_signal(
+        _join_text(title, content)
+    ):
+        return _result(
+            label="relevant",
+            score=0.78,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason=(
+                "fast-pass: 포스코그룹 AX/AI 업무혁신 신호가 포스코DX 관찰 축과 "
+                "직접 연결되어 관련 기사로 판단"
+            ),
+        )
+
     title_compact = _compact(title)
     text_compact = _compact(f"{title} {content}")
 
@@ -1988,6 +2014,17 @@ def _match_companies(text_body: str, company: list[str]) -> list[str]:
             matched.append(company_id)
 
     return _dedupe_keep_order(matched)
+
+
+def _matches_posco_dx_group_ax_signal(text_body: str) -> bool:
+    if not text_body:
+        return False
+    if not _POSCO_DX_GROUP_AX_RE.search(text_body):
+        return False
+    text = _join_text(text_body)
+    if _MARKET_PRICE_RE.search(text) and _MARKET_METRIC_RE.search(text):
+        return False
+    return True
 
 
 def _normalize_company(value: Any) -> list[str]:

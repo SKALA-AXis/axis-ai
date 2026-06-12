@@ -753,6 +753,7 @@ def _sync_card_news_with_current_clusters(db: Any) -> dict[str, int]:
                     ra.publisher,
                     ra.published_at,
                     ra.collected_at,
+                    COALESCE(ra.metadata, '{}'::jsonb) AS metadata,
                     ROW_NUMBER() OVER (
                         PARTITION BY ra.cluster_id
                         ORDER BY
@@ -780,7 +781,13 @@ def _sync_card_news_with_current_clusters(db: Any) -> dict[str, int]:
                             'source_name', COALESCE(source_name, publisher, ''),
                             'url', COALESCE(url, ''),
                             'published_at', published_at,
-                            'collected_at', collected_at
+                            'collected_at', collected_at,
+                            'image_urls',
+                                CASE
+                                    WHEN jsonb_typeof(metadata -> 'image_urls') = 'array'
+                                    THEN metadata -> 'image_urls'
+                                    ELSE '[]'::jsonb
+                                END
                         )
                         ORDER BY published_at DESC NULLS LAST, collected_at DESC NULLS LAST, id DESC
                     ) AS sources,
@@ -792,7 +799,13 @@ def _sync_card_news_with_current_clusters(db: Any) -> dict[str, int]:
                             'source_name', COALESCE(source_name, ''),
                             'publisher', COALESCE(publisher, ''),
                             'published_at', published_at,
-                            'collected_at', collected_at
+                            'collected_at', collected_at,
+                            'image_urls',
+                                CASE
+                                    WHEN jsonb_typeof(metadata -> 'image_urls') = 'array'
+                                    THEN metadata -> 'image_urls'
+                                    ELSE '[]'::jsonb
+                                END
                         )
                         ORDER BY published_at DESC NULLS LAST, collected_at DESC NULLS LAST, id DESC
                     ) AS source_articles

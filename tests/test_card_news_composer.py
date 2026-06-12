@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from src.composers.card_news_composer import CardNewsComposer, _plain_summary_lines
+from src.composers.card_news_composer import (
+    CardNewsComposer,
+    _card_from_summary,
+    _plain_summary_lines,
+)
 
 
 def test_card_summary_preserves_integration_fact_summary_verbatim():
@@ -402,3 +406,44 @@ def test_card_cover_uses_best_cluster_image_not_first_placeholder():
     )
 
     assert card["display"]["background_asset_url"].endswith("datacenter-mou.jpg")
+
+
+def test_summary_fallback_uses_article_title_and_image_for_sentence_headline():
+    card = _card_from_summary(
+        summary={
+            "is_valid_summary": True,
+            "headline": (
+                "포스코는 세일즈포스가 개최한 에이전트포스 월드투어 코리아 2026에서 "
+                "AX 전략을 공개했다."
+            ),
+            "fact_summary": ["포스코DX가 3개월간 AI 에이전트 25개를 업무에 실험했다."],
+        },
+        articles=[
+            {
+                "id": 48508,
+                "title": "포스코DX, AI 에이전트 기반 AX 전략 공개",
+                "content": "포스코DX는 품질 점검과 영업 지원 업무에 AI 에이전트를 적용했다.",
+                "published_at": "2026-06-12T09:00:00+09:00",
+                "source_name": "news",
+                "url": "https://example.com/posco-ax",
+                "metadata": {"image_urls": ["https://cdn.example.com/news/posco-agent.jpg"]},
+            }
+        ],
+        company="posco_dx",
+        cluster_id=48508,
+        representative_id=48508,
+        classification={"event_type": "tech_release", "sector": "ax"},
+    )
+
+    assert card is not None
+    assert card["title"] == "포스코DX, AI 에이전트 기반 AX 전략 공개"
+    assert card["summary_lines"] == [
+        "포스코DX가 3개월간 AI 에이전트 25개를 업무에 실험했다",
+        "포스코DX, AI 에이전트 기반 AX 전략 공개",
+        "포스코DX는 품질 점검과 영업 지원 업무에 AI 에이전트를 적용했다",
+    ]
+    assert card["image_assets"][0]["url"] == "https://cdn.example.com/news/posco-agent.jpg"
+    assert (
+        card["db_record"]["image_assets"][0]["url"]
+        == "https://cdn.example.com/news/posco-agent.jpg"
+    )

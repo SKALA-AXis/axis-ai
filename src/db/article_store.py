@@ -762,7 +762,7 @@ def list_card_news_cluster_candidates(
               SELECT 1
               FROM raw_articles recent
               WHERE recent.cluster_id = r.cluster_id
-                AND recent.source_type = 'news'
+                AND recent.source_type IN ('news', 'official')
                 AND recent.published_at >= NOW() - INTERVAL '24 hours'
           )
         """
@@ -797,9 +797,9 @@ def list_card_news_cluster_candidates(
         FROM raw_articles r
         LEFT JOIN raw_articles a
             ON a.cluster_id = r.cluster_id
-           AND a.source_type = 'news'
+           AND a.source_type IN ('news', 'official')
            AND a.company = r.company
-        WHERE r.source_type = 'news'
+        WHERE r.source_type IN ('news', 'official')
           AND r.is_representative = true
           AND r.cluster_id IS NOT NULL
           AND r.processing_status IN ('PROCESSED', 'CLASSIFIED')
@@ -1847,17 +1847,30 @@ def _source_articles_payload(card: dict[str, Any], source_ids: list[int]) -> lis
             )
             if not raw_id:
                 continue
-            payload.append(
-                {
-                    "id": raw_id[0],
-                    "title": source.get("title") or "",
-                    "url": source.get("url") or "",
-                    "source_name": source.get("source_name") or source.get("publisher") or "",
-                    "publisher": source.get("publisher") or "",
-                    "published_at": source.get("published_at"),
-                    "collected_at": source.get("collected_at"),
-                }
-            )
+            item = {
+                "id": raw_id[0],
+                "title": source.get("title") or "",
+                "url": source.get("url") or "",
+                "source_name": source.get("source_name") or source.get("publisher") or "",
+                "publisher": source.get("publisher") or "",
+                "published_at": source.get("published_at"),
+                "collected_at": source.get("collected_at"),
+            }
+            for image_key in (
+                "image_url",
+                "thumbnail_url",
+                "thumbnail",
+                "og_image",
+                "main_image",
+                "image",
+                "image_urls",
+                "images",
+                "media_assets",
+                "visual_images",
+            ):
+                if source.get(image_key):
+                    item[image_key] = source[image_key]
+            payload.append(item)
     if payload:
         return payload
     return [{"id": raw_id} for raw_id in source_ids]
@@ -1934,13 +1947,25 @@ def _merge_implication_payload(card: dict[str, Any]) -> dict[str, Any]:
     v2 schema 가 우선. legacy v3_payload (sector / exposure / signals) 는 보조 key 로
     함께 보존하여 frontend / sidecar 가 둘 다 읽을 수 있게 한다.
     """
-    raw_implication = card.get("implication")
-    if isinstance(raw_implication, dict) and (
-        "skax_implication" in raw_implication or "peer_implication" in raw_implication
-    ):
-        payload: dict[str, Any] = dict(raw_implication)
-    else:
-        payload = {}
+    payload: dict[str, Any] = {}
+    for candidate in _implication_payload_candidates(card):
+        if _has_structured_implication(candidate):
+            payload = dict(candidate)
+            break
+    frontend = card.get("frontend_implication")
+    if isinstance(frontend, dict) and frontend:
+        payload["frontend"] = dict(frontend)
+        if frontend.get("suggested_actions"):
+            payload.setdefault("recommended_actions", frontend.get("suggested_actions"))
+            skax = payload.get("skax_implication")
+            if isinstance(skax, dict):
+                skax.setdefault("recommended_actions", frontend.get("suggested_actions"))
+    if not payload.get("frontend"):
+        display_frontend = _frontend_implication_from_display_sections(card.get("display_sections"))
+        if display_frontend:
+            payload["frontend"] = display_frontend
+            if display_frontend.get("suggested_actions"):
+                payload.setdefault("recommended_actions", display_frontend["suggested_actions"])
     # 보조 메타데이터 (sector / exposure / signals / evidence_chain) 는 별도 namespace.
     payload.setdefault(
         "sector_meta",
@@ -1953,6 +1978,72 @@ def _merge_implication_payload(card: dict[str, Any]) -> dict[str, Any]:
             "evidence_chain": card.get("evidence_chain", {}),
         },
     )
+    return payload
+
+
+def _implication_payload_candidates(card: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for value in (card.get("implication"), card.get("implication_result")):
+        if isinstance(value, dict):
+            candidates.append(value)
+    analysis_package = card.get("analysis_package")
+    if isinstance(analysis_package, dict):
+        for value in (
+            analysis_package.get("implication"),
+            (analysis_package.get("evidence_payload") or {}).get("implication")
+            if isinstance(analysis_package.get("evidence_payload"), dict)
+            else None,
+        ):
+            if isinstance(value, dict):
+                candidates.append(value)
+    evidence_payload = card.get("evidence_payload")
+    if isinstance(evidence_payload, dict):
+        package = evidence_payload.get("analysis_package")
+        if isinstance(package, dict) and isinstance(package.get("implication"), dict):
+            candidates.append(package["implication"])
+    return candidates
+
+
+def _has_structured_implication(value: dict[str, Any]) -> bool:
+    return any(
+        key in value
+        for key in (
+            "skax_implication",
+            "peer_implication",
+            "frontend",
+            "recommended_actions",
+            "watch_points",
+            "follow_up_questions",
+        )
+    )
+
+
+def _frontend_implication_from_display_sections(value: Any) -> dict[str, Any]:
+    if not isinstance(value, list):
+        return {}
+    sections: dict[str, list[str]] = {}
+    for section in value:
+        if not isinstance(section, dict):
+            continue
+        section_type = str(section.get("type") or "").strip()
+        items = [
+            str(item).strip() for item in (section.get("items") or []) if str(item or "").strip()
+        ]
+        if section_type and items:
+            sections[section_type] = items
+    insight_items = sections.get("insight") or []
+    action_items = sections.get("action") or []
+    if not insight_items and not action_items:
+        return {}
+    payload: dict[str, Any] = {
+        "key_implications": insight_items,
+        "peer_implications": insight_items,
+        "suggested_actions": action_items,
+        "response_directions": action_items,
+        "follow_up_questions": [],
+    }
+    if insight_items:
+        payload["potential_impact"] = insight_items[0]
     return payload
 
 

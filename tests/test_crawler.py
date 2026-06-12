@@ -73,6 +73,61 @@ def test_raw_article_fields():
     assert article.company == ["samsung_sds"]
 
 
+def test_posco_dx_search_aliases_include_group_ax_signals():
+    crawler = NaverNewsCrawler(
+        peer_id="posco_dx",
+        aliases=["포스코DX", "POSCO DX"],
+        fetch_body=False,
+    )
+
+    aliases = crawler._search_aliases()
+
+    assert "포스코DX" in aliases
+    assert "포스코 AX" in aliases
+    assert "포스코 AI 에이전트" in aliases
+
+
+def test_posco_group_ax_article_matches_posco_dx_context():
+    article = RawArticle(
+        url="https://example.com/news/posco-ax",
+        title="포스코, AI 에이전트 기반 AX 본격화…영업·수주·품질 혁신",
+        content=(
+            "포스코가 영업과 수주, 품질 등 고객 접점 업무에 AI 에이전트를 "
+            "확대 적용하며 AX에 속도를 낸다."
+        ),
+        source_name="naver_news",
+        company=["posco_dx"],
+    )
+
+    result = classify_peer_relevance(
+        article,
+        target_peer_id="posco_dx",
+        tracked_peer_ids=["posco_dx"],
+    )
+
+    assert result["peer_relevance"] == "pass"
+    assert result["peer_relevance_reason"] == "posco_group_ax_signal"
+    assert result["_company_peer_ids"] == ["posco_dx"]
+
+
+def test_posco_group_stock_article_does_not_match_posco_dx_context():
+    article = RawArticle(
+        url="https://example.com/news/posco-stock",
+        title="포스코홀딩스 주가 5% 상승…철강 업황 개선 기대",
+        content="POSCO홀딩스 주가가 5% 상승했다.",
+        source_name="naver_news",
+        company=["posco_dx"],
+    )
+
+    result = classify_peer_relevance(
+        article,
+        target_peer_id="posco_dx",
+        tracked_peer_ids=["posco_dx"],
+    )
+
+    assert result["peer_relevance"] == "reject"
+
+
 def test_realtime_source_window_expands_by_source_policy():
     base_window = CrawlWindow(
         start=datetime(2026, 5, 19, tzinfo=timezone.utc),
