@@ -172,12 +172,26 @@ class WeeklyDigestAgent:
                         """
                         SELECT id, title, summary_lines, event_type,
                                primary_keyword_category AS sector,
-                               importance, importance_score, created_at
-                          FROM card_news
-                         WHERE peer_company_id = ANY(:aliases)
-                           AND (created_at AT TIME ZONE 'Asia/Seoul')::date
+                               importance, importance_score, created_at,
+                               COALESCE(src.latest_published_at, created_at) AS basis_at
+                          FROM card_news cn
+                          LEFT JOIN LATERAL (
+                              SELECT MAX(ra.published_at) AS latest_published_at
+                                FROM raw_articles ra
+                               WHERE ra.id = cn.primary_raw_article_id
+                                  OR ra.id = ANY(
+                                      COALESCE(cn.source_raw_article_ids, '{}'::bigint[])
+                                  )
+                          ) src ON TRUE
+                         WHERE cn.peer_company_id = ANY(:aliases)
+                           AND (
+                               COALESCE(src.latest_published_at, cn.created_at)
+                               AT TIME ZONE 'Asia/Seoul'
+                           )::date
                                BETWEEN :since_date AND :until_date
-                         ORDER BY importance_score DESC NULLS LAST, created_at DESC
+                         ORDER BY cn.importance_score DESC NULLS LAST,
+                                  COALESCE(src.latest_published_at, cn.created_at) DESC,
+                                  cn.created_at DESC
                          LIMIT :limit
                         """
                     ),
@@ -207,6 +221,7 @@ class WeeklyDigestAgent:
                     "importance": mapping.get("importance"),
                     "importance_score": mapping.get("importance_score"),
                     "created_at": str(mapping.get("created_at") or ""),
+                    "basis_at": str(mapping.get("basis_at") or ""),
                 }
             )
         return out

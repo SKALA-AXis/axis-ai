@@ -665,8 +665,8 @@ def _fetch_period_cards(
     }
     where = [
         "cn.status = 'ACTIVE'",
-        "COALESCE(ra.published_at, cn.created_at) >= :start_at",
-        "COALESCE(ra.published_at, cn.created_at) < :end_at",
+        "COALESCE(src.latest_published_at, cn.created_at) >= :start_at",
+        "COALESCE(src.latest_published_at, cn.created_at) < :end_at",
     ]
     _append_in_filter(where, params, "cn.id", "card_id", card_ids)
     _append_in_filter(
@@ -705,13 +705,18 @@ def _fetch_period_cards(
             cn.validation_pass,
             cn.validation_sc_score,
             cn.created_at,
-            COALESCE(ra.published_at, cn.created_at) AS basis_at
+            COALESCE(src.latest_published_at, cn.created_at) AS basis_at
         FROM card_news cn
-        LEFT JOIN raw_articles ra ON ra.id = cn.primary_raw_article_id
+        LEFT JOIN LATERAL (
+            SELECT MAX(ra.published_at) AS latest_published_at
+            FROM raw_articles ra
+            WHERE ra.id = cn.primary_raw_article_id
+               OR ra.id = ANY(COALESCE(cn.source_raw_article_ids, '{{}}'::bigint[]))
+        ) src ON TRUE
         WHERE {" AND ".join(where)}
         ORDER BY
             cn.importance_score DESC NULLS LAST,
-            COALESCE(ra.published_at, cn.created_at) DESC,
+            COALESCE(src.latest_published_at, cn.created_at) DESC,
             cn.created_at DESC
         LIMIT :limit
     """

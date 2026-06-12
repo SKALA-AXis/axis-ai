@@ -1,11 +1,13 @@
 """Track A/B/C/D 크롤 오케스트레이터 — 원천 수집 + URL 중복 제거 + 저장."""
 
+import asyncio
 import json
 import logging
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from typing import Any, Protocol
+from uuid import UUID
 
 from src.config.companies import COMPANY_ALIASES, CORP_CODES
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES, GLOBAL_COMPANY_IDS
@@ -194,6 +196,13 @@ class BatchProcessor:
             peer_id: kws for peer_id, kws in keywords.items() if peer_id not in GLOBAL_COMPANY_IDS
         }
         global_company_ids = [peer_id for peer_id in keywords if peer_id in GLOBAL_COMPANY_IDS]
+
+        if _should_run_keyword_sector_runner(requested, persist, run_context):
+            return await self._run_keyword_sector_runner(
+                source_names=source_names,
+                run_context=run_context,
+                effective_window=effective_window,
+            )
 
         if "naver_news" in requested:
             naver_errors: list[str] = []
@@ -398,7 +407,7 @@ class BatchProcessor:
             except Exception as e:
                 log.error("source 크롤 오류 | source=%s error=%s", name, e)
 
-        run_id = None
+        run_id: UUID | None = None
         effective_run_context = run_context
         if persist and run_context and not run_context.crawl_run_id:
             run_source_name = run_context.source_name or ",".join(source_names)
@@ -456,11 +465,78 @@ class BatchProcessor:
         )
         return new_articles
 
+    async def _run_keyword_sector_runner(
+        self,
+        *,
+        source_names: list[str] | tuple[str, ...],
+        run_context: CrawlRunContext | None,
+        effective_window: CrawlWindow | None,
+    ) -> list[RawArticle]:
+        from src.crawler.sources.keyword_sector_runner import run_scheduled
+
+        run_id = None
+        run_source_name = (
+            run_context.source_name
+            if run_context and run_context.source_name
+            else ",".join(source_names)
+        )
+        window_start = _window_date(effective_window, "start") or datetime.now().date()
+        window_end = _window_date(effective_window, "end") or window_start
+        run_type = run_context.collection_mode if run_context else "realtime"
+        track = run_context.track if run_context else ""
+
+        try:
+            if run_context and run_context.crawl_run_id:
+                run_id = UUID(run_context.crawl_run_id)
+            else:
+                run_id = create_crawl_run(
+                    run_source_name,
+                    window_start,
+                    window_end,
+                    run_type=run_type,
+                )
+                self.last_crawl_run_ids.append(str(run_id))
+                self.last_crawl_run_records.append(
+                    {
+                        "crawl_run_id": str(run_id),
+                        "source_name": run_source_name,
+                        "track": track or "",
+                    }
+                )
+
+            inserted = await asyncio.to_thread(run_scheduled, crawl_run_id=str(run_id))
+            self.last_inserted_count = inserted
+            mark_crawl_run_success(run_id, inserted_count=inserted, skipped_count=0)
+        except Exception as e:
+            self.last_inserted_count = 0
+            if run_id:
+                mark_crawl_run_failed(run_id, f"{type(e).__name__}: {e}")
+            raise
+
+        log.info(
+            "source 크롤 완료 | sources=%s mode=keyword_sector_runner db_inserted=%d",
+            ",".join(source_names),
+            inserted,
+        )
+        return []
+
 
 def _hours_cutoff(hours: int) -> datetime | None:
     if hours <= 0:
         return None
     return datetime.now().astimezone() - timedelta(hours=hours)
+
+
+def _should_run_keyword_sector_runner(
+    requested: set[str],
+    persist: bool,
+    run_context: CrawlRunContext | None,
+) -> bool:
+    if requested != {"naver_datalab"}:
+        return False
+    if not persist:
+        return False
+    return run_context is None or run_context.collection_mode == "realtime"
 
 
 def _filter_window(

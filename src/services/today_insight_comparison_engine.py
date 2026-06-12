@@ -72,7 +72,12 @@ _SECTOR_TO_KEYWORD_GROUPS: dict[str, tuple[str, ...]] = {
 _KEYWORD_TREND_HISTORY_DAYS = 7
 
 _EVENT_TYPE_LABELS: dict[str, str] = {
+    "low_visibility_definite_event": "노출은 낮지만 내용이 확인된 이벤트",
+    "high_salience_visible": "보도 확산이 큰 이벤트",
+    "general_update": "일반 업데이트",
+    "major_contract": "계약·협약 이벤트",
     "partnership": "제휴",
+    "product_launch": "제품·서비스 출시",
     "ma": "M&A",
     "personnel": "인사",
     "tech_release": "기술 출시",
@@ -82,6 +87,7 @@ _EVENT_TYPE_LABELS: dict[str, str] = {
     "expansion": "사업 확장",
     "company": "사업",
     "investment": "투자·계약",
+    "security": "보안 관련 이벤트",
 }
 
 
@@ -1021,7 +1027,7 @@ def format_evidence_change_lines(comparison_facts: dict[str, Any] | None) -> lis
         metric = str(item.get("metric") or "")
         if metric == "peer_activity_delta":
             peer_label = str(item.get("peer_label") or item.get("key") or "")
-            if peer_label.strip().lower() in {"meta", "other", "unknown", "-"}:
+            if peer_label.strip().lower() in {"meta", "other", "unknown", "-", "google"}:
                 continue
             peer_delta = item.get("delta_vs_daily_avg")
             today_count = item.get("today_count")
@@ -1041,9 +1047,10 @@ def format_evidence_change_lines(comparison_facts: dict[str, Any] | None) -> lis
         elif metric == "event_type_mix_shift":
             top = item.get("top_shift")
             if isinstance(top, dict) and top.get("event_type"):
+                event_label = _event_type_label(str(top.get("event_type") or ""))
                 lines.append(
-                    f"{top['event_type']} 비중 {top.get('today_pct')}% "
-                    f"(baseline {top.get('baseline_pct')}%, "
+                    f"{event_label} 비중 {top.get('today_pct')}% "
+                    f"(최근 평균 {top.get('baseline_pct')}%, "
                     f"{top.get('delta_pp'):+}pp)"
                 )
 
@@ -1391,11 +1398,14 @@ def polish_executive_output(
         polished: list[dict[str, Any]] = []
         replacements = [
             (build_primary_signal_value(comparison) or str(signals[0].get("value") or "")),
-            build_context_signal_value(comparison),
+            build_context_signal_value(comparison) or str(signals[1].get("value") or ""),
             build_next_judgment_signal_value(comparison, lead=lead),
         ]
-        for idx, signal in enumerate(signals[:3]):
+        for idx, signal in enumerate(signals):
             item = dict(signal)
+            if idx >= len(replacements):
+                polished.append(item)
+                continue
             current = str(item.get("value") or "")
             replacement = str(replacements[idx] or "")
             if replacement and (

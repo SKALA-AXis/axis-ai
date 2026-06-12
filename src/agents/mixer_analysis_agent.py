@@ -35,9 +35,9 @@ from src.agents.implication_agent import ImplicationAgent
 from src.middleware.analysis_ledger import with_ledger_writeback
 from src.observability.langfuse_client import tracing_config
 from src.services.agent_output_validation import (
-    clip_final_one_liner,
-    clip_implication,
-    clip_string,
+    clip_string as _base_clip_string,
+)
+from src.services.agent_output_validation import (
     confidence_in_range,
 )
 from src.services.analysis_units import (
@@ -64,7 +64,8 @@ _LLM_MODEL = _QUICK_LLM_MODEL  # legacy fallback for older callers/tests.
 _PROMPT_VERSION = "mixer-v3.1-linked-results-insight"
 _MAX_CARDS = int(os.getenv("MIXER_MAX_CARDS", "20"))
 _MIN_CARDS = 2
-
+_MIXER_FINAL_ONE_LINER_MAX = int(os.getenv("MIXER_FINAL_ONE_LINER_MAX", "260"))
+_MIXER_IMPLICATION_MAX = int(os.getenv("MIXER_SK_AX_IMPLICATION_MAX", "1200"))
 # 믹서 실행 단계 — SSE progress 용. 에이전트가 실제로 넘는 단계 경계만 emit 한다
 # (prepare: 카드/이슈 로드, analyze: 메인 LLM, synthesize: 대응방향 LLM, finalize: 추론 정리).
 ProgressFn = Callable[[str, str, int, int], None]
@@ -76,6 +77,19 @@ _PROGRESS_STAGES: dict[str, str] = {
 }
 _PROGRESS_ORDER: list[str] = ["prepare", "analyze", "synthesize", "finalize"]
 _PROGRESS_TOTAL = len(_PROGRESS_ORDER)
+
+
+def clip_string(value: Any, max_length: int, *, suffix: str = "") -> str:
+    """Mixer output should not persist visual ellipses; UI can decide display length."""
+    return _base_clip_string(value, max_length, suffix=suffix).rstrip()
+
+
+def clip_final_one_liner(value: Any, *, max_length: int = _MIXER_FINAL_ONE_LINER_MAX) -> str:
+    return clip_string(value, max_length)
+
+
+def clip_implication(value: Any, *, max_length: int = _MIXER_IMPLICATION_MAX) -> str:
+    return clip_string(value, max_length)
 
 
 def _emit_progress(progress: "ProgressFn | None", stage: str) -> None:
@@ -325,8 +339,8 @@ common_pattern:
   여러 성과 축이 카드마다 다르면 “A와 B를 모두 제시한다”가 아니라
   “A 또는 B 같은 사업 성과의 근거로 제시한다”처럼 표현하세요.
 - 금지 형태: “두 이슈 모두 운영 기반을 강화하고 사업 성장을 도모한다.”
-- 권장 형태: “각 이슈는 기술을 운영 효율 또는 매출 성장 같은 사업 성과를
-  설명하는 근거로 사용한다.”
+- 권장 형태: “기술이 단순 도입 대상이 아니라 운영 효율 또는 매출 성장 같은
+  사업 성과를 설명하는 근거로 사용된다.”
 - 문법 주의: “기술을 통해 … 근거로 사용한다”처럼 어색하게 쓰지 말고,
   “기술과 인프라를 … 근거로 사용한다”처럼 목적어와 서술어가 맞게 쓰세요.
 - “운영 기반을 강화한다”, “경쟁력을 높인다”처럼 넓은 결과만 쓰면 부족합니다.
@@ -354,8 +368,8 @@ hidden_conclusion:
 - 단일 카드의 문장을 다시 말하지 말고, 공통 패턴과 비교 포인트를 합쳤을 때 생기는 해석만 쓰세요.
 - mix_insight와 같은 말을 반복하지 마세요. mix_insight가 방향이라면 hidden_conclusion은
   그 방향이 의미하는 판단 기준의 변화여야 합니다.
-- “핵심 신호는 …라는 점이다”처럼 여러 뉴스를 같이 봐야만 말할 수 있는 판단으로 쓰세요.
-- 반드시 “핵심 신호는 …라는 점이다” 또는 이에 준하는 판단 문장으로 쓰세요.
+- 여러 뉴스를 같이 봐야만 말할 수 있는 판단으로 쓰세요.
+- “핵심 신호는” 같은 고정 도입부를 반복하지 말고, 바로 판단 내용을 쓰세요.
 - 기술이 중요하다는 결론이 아니라, 기술/제품/수치/적용 사례가 어떤 설득 근거로
   사용되고 있는지를 말하세요.
 - 앞 문장들이 특정 기술을 말하고 있다면 갑자기 “서비스”, “솔루션”, “플랫폼”처럼
@@ -411,6 +425,7 @@ radar_axis_interpretations:
 - 전망/계획/추정은 확정 사실처럼 쓰지 마세요.
 - follow-up 질문은 만들지 마세요.
 - 같은 문장을 말만 바꿔 반복하지 마세요.
+- 줄임표("…", "...")로 문장을 생략하지 마세요. 각 문장은 끝까지 완결하세요.
 - 사용자에게 보여주는 문장에는 “이 결론에 도달한다”, “이 비교 축이 성립한다”,
   “공통패턴과 비교포인트에서 드러나듯이” 같은 내부 판단 과정 표현을 쓰지 마세요.
 - rationale은 내부 추론 로그가 아니라, 사용자가 읽을 수 있는 근거 설명이어야 합니다.
@@ -536,7 +551,8 @@ _MIXER_REPAIR_PROMPT = """\
 - 기술 보유, 기능 소개, 투자 발표, 고객 확대, 운영 성과, 수익성, 리스크 중
   어떤 기준이 더 중요해졌는지 입력 근거 안에서만 판단하세요.
 - 숨은 결론은 “여러 이슈를 함께 보니 무엇이 근거로 쓰이고 있는가”를 말해야 합니다.
-- hidden_conclusion은 반드시 “핵심 신호는 …라는 점이다” 또는 그에 준하는 판단 문장이어야 합니다.
+- hidden_conclusion은 고정 도입부 없이 여러 이슈를 함께 볼 때만 드러나는
+  판단 문장이어야 합니다.
 - 기술 자체가 중요하다는 문장으로 끝내지 말고,
   기술/제품/수치/적용 사례가 어떤 설득 근거로 쓰이는지 말하세요.
 - 가능하면 “더 이상 단순 소개가 아니라, 무엇을 설명하는 근거로 쓰인다” 구조로 쓰세요.
@@ -555,6 +571,7 @@ _MIXER_REPAIR_PROMPT = """\
 - action은 “어떤 사업 판단을 어떻게 바꾼다/정한다/재배분한다/상품화한다”가 보여야 합니다.
 - 제안서 작성, 대시보드 표시, 다음 모니터링 항목 같은 프로그램 산출물 중심 action은 제거하세요.
 - 근거와 연결되지 않는 일반 과제는 제거하세요.
+- 줄임표("…", "...")로 문장을 생략하지 말고, 문장을 끝까지 완결하세요.
 
 ## 다시 쓰기 기준
 
