@@ -356,6 +356,7 @@ class ITTrendAgent:
         )
         forecasts = synthesis.get("forecasts", [])
         final_one_liner: str = synthesis.get("final_one_liner", "") or ""
+        overall_summary: str = synthesis.get("overall_summary", "") or ""
         sk_ax_implication: str = synthesis.get("sk_ax_implication", "") or ""
         per_keyword_title: dict[str, str] = synthesis.get("per_keyword_title", {}) or {}
         per_keyword_summary: dict[str, str] = synthesis.get("per_keyword_summary", {}) or {}
@@ -387,6 +388,7 @@ class ITTrendAgent:
             llm_batch_confidence=llm_batch_confidence,
             sk_ax_implication=sk_ax_implication,
             final_one_liner=final_one_liner,
+            overall_summary=overall_summary,
         )
         persisted = 0
         try:
@@ -429,6 +431,7 @@ class ITTrendAgent:
             "impact_matrix": impact_matrix,
             "forecasts": forecasts,
             "final_one_liner": final_one_liner,
+            "overall_summary": overall_summary,
             "sk_ax_implication": sk_ax_implication,
             "reasoning_steps": reasoning_steps,
             "rows": rows,
@@ -874,21 +877,25 @@ def _phase5_forecast_synthesis(
         ]
     prompt = (
         "당신은 SK AX 의 글로벌 IT 트렌드 편집자이자 시나리오 분석가입니다.\n"
-        "다음 입력으로 다음 세 가지를 산출하세요:\n"
+        "다음 입력으로 다음 항목을 산출하세요:\n"
         "1. forecasts — 각 horizon (1Q, 6M, 1Y) 별 baseline narrative + "
         "sk_ax_impact + drivers + risk_level + recommended_response\n"
         "2. final_one_liner — 개별 keyword 요약이 아니라 글로벌 6사 뉴스룸 전체를 "
         "관통하는 최신 IT 흐름 "
         "한 줄. 45~90자 한국어, 1문장, '뉴스룸', '공통적으로', '모델 성능' 같은 모호한 표현 금지. "
         "제품 경험, 업무 실행, AI 인프라 운영, 산업 적용 중 실제 입력에서 강한 축을 묶어 쓰세요.\n"
-        "3. sk_ax_implication — SK AX 가 가져야 할 자세 / 행동 권고 (3 문장 이하)\n"
-        "4. per_keyword — 각 trend 별 title (한 줄) + summary (1문장) + implication (한 줄). "
+        "3. overall_summary — final_one_liner 를 보완하는 전체 흐름 설명. "
+        "1~2문장 한국어 줄글, 120~220자. 상위 키워드를 단순 나열하지 말고, "
+        "무엇이 반복되고 강조되는지와 관심사가 어디로 이동하는지 설명하세요. "
+        "'신호가 함께 나타나며' 같은 템플릿 문장 금지.\n"
+        "4. sk_ax_implication — SK AX 가 가져야 할 자세 / 행동 권고 (3 문장 이하)\n"
+        "5. per_keyword — 각 trend 별 title (한 줄) + summary (1문장) + implication (한 줄). "
         "summary는 변화 신호 카드에 들어가므로 final_one_liner와 같은 문장을 반복하지 마세요.\n"
-        "5. confidence — 전반적 자신감 (0.0~1.0)\n\n"
+        "6. confidence — 전반적 자신감 (0.0~1.0)\n\n"
         "응답 JSON object:\n"
         '{"forecasts": [{"horizon":"1Q","scenario":"baseline","narrative":"...",'
         '"sk_ax_impact":"...","drivers":["..."],"risk_level":"medium","recommended_response":"..."}],'
-        '"final_one_liner":"...","sk_ax_implication":"...","confidence":0.7,'
+        '"final_one_liner":"...","overall_summary":"...","sk_ax_implication":"...","confidence":0.7,'
         '"per_keyword":[{"theme":"...","title":"...","summary":"...","implication":"..."}]}\n\n'
         "입력 trends:\n"
         + json.dumps(detections, ensure_ascii=False, indent=2)
@@ -956,6 +963,7 @@ def _phase5_forecast_synthesis(
             _clean_global_headline(str(data.get("final_one_liner") or ""))
             or _fallback_global_headline(detections)
         )[:300],
+        "overall_summary": str(data.get("overall_summary") or "")[:500],
         "sk_ax_implication": str(data.get("sk_ax_implication") or "")[:600],
         "confidence": _confidence_in_range(data.get("confidence", 0.6)),
         "per_keyword_title": per_keyword_title,
@@ -985,6 +993,7 @@ def _build_persistence_rows(
     llm_batch_confidence: float,
     sk_ax_implication: str,
     final_one_liner: str,
+    overall_summary: str,
 ) -> list[dict[str, Any]]:
     trend_date = generated_at.date()
     rows: list[dict[str, Any]] = []
@@ -1029,6 +1038,7 @@ def _build_persistence_rows(
                     "impact_matrix": [c for c in impact_matrix if c["trend_theme"] == keyword],
                     "forecasts": forecasts,
                     "final_one_liner": final_one_liner,
+                    "overall_summary": overall_summary,
                     "leading_companies": det.get("leading_companies", []),
                     "evidence_source_links": evidence_source_links,
                     "intensity": det.get("intensity"),
