@@ -183,6 +183,9 @@ _ARTICLE_FACT_EXTRACTION_PROMPT = """\
    main_event|product_definition|service_function|application_case|numeric_effect|market_reaction|risk_detail|uncertainty_detail
 9. 날짜가 포함되어 있어도 수치 자체가 핵심이 아니면 numeric_fact로 분류하지 마세요.
 10. 출시/공개/선보임, 제품 정의, 적용 사례, 수치 효과, 시장 반응, 리스크, 불확실성을 서로 구분하세요.
+11. 제3자 회사·서비스·고객 사례는 피어사와 직접 계약/협약/도입/수주/공급/공동개발 관계로
+    연결된 경우에만 핵심 사실로 추출하세요. 기사 배경이나 시장 예시로만 언급된 제3자 사례는
+    application_fact/main_event 후보에서 제외하세요.
 
 기사 클러스터:
 {articles_text}
@@ -257,6 +260,9 @@ _FACT_ID_SUMMARY_PROMPT = """\
 14. 계약/협력 기사가 기술·플랫폼·AI 서비스 도입을 다루면, "계약했다"와 "적용 가능하다"만 반복하지 마세요.
     내부 업무에서 무엇을 하게 되는지, 파트너 기술이 어떤 기능을 제공하는지,
     향후 외부 고객/사업 확장과 어떻게 연결되는지를 서로 다른 문장으로 나누어 쓰세요.
+15. 제3자 회사·서비스·고객 사례는 피어사와 직접 계약/협약/도입/수주/공급/공동개발 관계로 연결된
+    fact_id가 있을 때만 summary_lines에 넣으세요. 본문 배경이나 시장 사례로만 나온 제3자 서비스는
+    핵심 변화 3줄 요약에 넣지 말고, 피어사의 발표·제품·계약·고객 업무 범위로 문장을 구성하세요.
 
 문장별 역할:
 - 1문장: 핵심 사건·상태·평가
@@ -1597,10 +1603,15 @@ def _build_extracted_facts(
             article=article_by_id.get(article_id) or {},
         ):
             return
+        activity = activity_type or cluster_event_type
+        if _is_market_data_fact(f"{text} {evidence}") and _normalize_event_type(activity) not in {
+            "stock_market",
+            "analyst_report",
+        }:
+            return
         if _is_duplicate_extracted_fact(facts, article_id, text, evidence):
             return
         counters[article_id] = counters.get(article_id, 0) + 1
-        activity = activity_type or cluster_event_type
         inferred_type = _normalize_fact_type(
             fact_type=fact_type,
             text=f"{text} {evidence}",
@@ -1999,6 +2010,32 @@ def _is_financial_only_fact(text: str) -> bool:
         return False
     return bool(
         re.search(r"매출|영업이익|순이익|주가|시가총액|증가|감소|흑자|적자|억원|조원|%", value)
+    )
+
+
+def _is_market_data_fact(text: str) -> bool:
+    value = str(text or "")
+    if not value:
+        return False
+    strong_terms = (
+        "주가",
+        "현재가",
+        "전일대비",
+        "등락률",
+        "거래량",
+        "시가총액",
+        "목표주가",
+        "투자의견",
+    )
+    if any(term in value for term in strong_terms):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:KOSPI|KOSDAQ)\b|전\s*거래일|장\s*(초반|마감)|"
+            r"(?:상승|하락|급등|급락)\s*(?:마감|출발|전환)",
+            value,
+            re.I,
+        )
     )
 
 

@@ -37,6 +37,7 @@ _DISPLAY_ITEM_PREFERRED = 3
 _DISPLAY_ITEM_MAX = 5
 
 _FRONTEND_PEER_IDS = {
+    "sk_ax",
     "samsung_sds",
     "lg_cns",
     "hyundai_autoever",
@@ -178,7 +179,9 @@ class CardNewsComposer:
         articles = articles if articles is not None else _load_source_articles(summary)
 
         cluster_id = _optional_int(summary.get("cluster_id"))
-        peer_id = _normalize_peer_id(summary.get("main_company"))
+        peer_id = _normalize_peer_id(summary.get("main_company")) or _normalize_peer_id(
+            classification.get("company")
+        )
         trust_score = _trust_score(articles)
         source_article_ids = _source_article_ids(summary, articles)
         created_at = _now_iso()
@@ -188,9 +191,13 @@ class CardNewsComposer:
             summary.get("headline"),
             summary.get("one_line_summary"),
             analysis.get("analysis_summary"),
+            classification.get("title"),
+            (articles[0] or {}).get("title") if articles else "",
             "피어사 주요 뉴스",
         )
         summary_lines = _plain_summary_lines(summary, use_llm=True)
+        if not summary_lines:
+            summary_lines = _article_title_summary_lines(articles)
         card_text = _card_text(title, summary_lines, summary, articles)
         event_type = _infer_event_type(summary, classification, card_text)
         title = _business_context_title(title, summary=summary, event_type=event_type)
@@ -1805,6 +1812,25 @@ def _literal_summary_lines(
         if len(out) >= _SUMMARY_LINE_MAX:
             break
     return out
+
+
+def _article_title_summary_lines(articles: list[dict[str, Any]]) -> list[str]:
+    """Fallback factual summary when IntegrationAgent marks a cluster invalid."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for article in articles:
+        title = str(article.get("title") or "").strip()
+        if not title:
+            continue
+        title = re.sub(r"\s+", " ", title)
+        key = title.casefold()
+        if key in seen:
+            continue
+        out.append(title)
+        seen.add(key)
+        if len(out) >= _SUMMARY_LINE_MAX:
+            break
+    return out[:_SUMMARY_LINE_MAX]
 
 
 def _first_list_item(value: Any) -> str:

@@ -159,6 +159,7 @@ _EVENT_BUCKET_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 #   - 이 토글은 production 의 cycle 단위 cluster 형성률을 회복하기 위한 것.
 #   - default true (singleton 유지). 과거 동작 복원이 필요하면 env 로 false.
 _KEEP_AMBIGUOUS_SINGLETONS = os.getenv("DEDUP_KEEP_AMBIGUOUS_SINGLETONS", "true").lower() == "true"
+_SINGLETON_FAST_PATH = os.getenv("DEDUP_SINGLETON_FAST_PATH", "true").lower() == "true"
 
 _CANONICAL_ISSUE_TERMS: Mapping[str, tuple[str, ...]] = {}
 
@@ -189,6 +190,17 @@ class ArticleDeduplicator:
             return {}, []
 
         _reset_cluster_llm_run_state()
+
+        if _SINGLETON_FAST_PATH and len(articles) == 1:
+            article_id = int(articles[0]["id"])
+            cluster_map = {article_id: [article_id]}
+            representative_ids = [article_id]
+            _persist(cluster_map, representative_ids)
+            log.info(
+                "Gate 3 singleton fast-path 완료 | article_id=%s clusters=1 reps=1",
+                article_id,
+            )
+            return cluster_map, representative_ids
 
         cluster_map = _cluster_rule_first(
             articles=articles,

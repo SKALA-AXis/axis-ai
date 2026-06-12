@@ -256,6 +256,52 @@ def test_extracted_facts_drop_article_body_noise_without_title_overlap() -> None
     assert all("젠슨 황" not in text for text in texts)
 
 
+def test_contract_summary_drops_embedded_stock_market_fact() -> None:
+    facts = summarizer._build_extracted_facts(
+        cluster_id=36453,
+        article_fact_notes=[
+            {
+                "article_id": 36453,
+                "core_facts": [
+                    {
+                        "fact": (
+                            "삼성SDS가 오픈AI와 챗GPT 엔터프라이즈 리셀러 파트너 계약을 체결했다."
+                        ),
+                        "evidence_text": (
+                            "삼성SDS가 오픈AI와 챗GPT 엔터프라이즈 리셀러 파트너 계약을 체결했다."
+                        ),
+                        "activity_type": "contract",
+                        "summary_role": "main_event",
+                    },
+                    {
+                        "fact": "삼성SDS의 주가는 164,500원으로 전일 대비 6,500원 하락했다.",
+                        "evidence_text": (
+                            "삼성SDS KOSPI 현재가 164,500 전일대비 6,500 "
+                            "등락률 -3.80% 거래량 258,315."
+                        ),
+                        "activity_type": "contract",
+                        "summary_role": "numeric_effect",
+                    },
+                ],
+            }
+        ],
+        articles=[
+            {
+                "id": 36453,
+                "title": "삼성SDS, 오픈AI와 챗GPT 엔터프라이즈 리셀러 파트너 계약",
+                "matched_companies": ["samsung_sds"],
+            }
+        ],
+        cluster_event_type="contract",
+    )
+
+    texts = [fact["normalized_fact"] for fact in facts]
+
+    assert any("리셀러 파트너 계약" in text for text in texts)
+    assert all("주가" not in text for text in texts)
+    assert all("등락률" not in text for text in texts)
+
+
 def test_large_cluster_selects_diverse_articles_from_majority_event(monkeypatch) -> None:
     monkeypatch.setattr(summarizer, "_MIN_ANALYZED_ARTICLES", 8)
     monkeypatch.setattr(summarizer, "_MAX_ANALYZED_ARTICLES", 20)
