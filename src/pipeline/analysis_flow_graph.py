@@ -55,6 +55,7 @@ from src.composers.card_news_composer import CardNewsComposer
 from src.db.article_store import save_card_news, save_pipeline_log
 from src.db.integrated_issues import save_integrated_issue
 from src.evaluators.evaluator import Evaluator
+from src.rag.precedent_search import QdrantPrecedentSearch
 from src.services.agent_output_validation import confidence_in_range
 from src.services.analysis_context_builder import AnalysisContextBuilder
 from src.services.profile_context_loader import ProfileContextLoader
@@ -190,7 +191,9 @@ class SupervisorDeps:
             )
         )
         self.evaluator = evaluator or Evaluator()
-        self.context_builder = context_builder or AnalysisContextBuilder()
+        self.context_builder = context_builder or AnalysisContextBuilder(
+            qdrant_search=QdrantPrecedentSearch()
+        )
         self.profile_context_loader = profile_context_loader or ProfileContextLoader()
         self.card_news_composer = card_news_composer or CardNewsComposer()
 
