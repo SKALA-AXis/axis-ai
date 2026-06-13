@@ -98,17 +98,29 @@ _LLM_MODEL = os.getenv("BRIEFING_LLM_MODEL") or os.getenv("OPENAI_CHAT_MODEL") o
 _llm: ChatOpenAI | None = None
 
 
+def _llm_max_completion_tokens() -> int:
+    # gpt-5 계열은 reasoning 토큰이 max_completion_tokens 안에서 소비되므로 캡 상향.
+    # mixer(9000)/today_insight(12000) 패턴과 동일. 브리핑 본문 출력은 ~2.4K 라
+    # 8000 이면 reasoning headroom + 출력 모두 충분.
+    default = "8000" if str(_LLM_MODEL).startswith("gpt-5") else "2400"
+    return int(os.getenv("BRIEFING_MAX_COMPLETION_TOKENS", default))
+
+
 def _get_llm() -> ChatOpenAI:
     from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
 
     global _llm
     if _llm is None:
-        _llm = ChatOpenAI(
-            model=_LLM_MODEL,
-            temperature=0.1,
-            max_completion_tokens=2400,
-            model_kwargs={"response_format": {"type": "json_object"}},
-        )
+        llm_kwargs: dict[str, Any] = {
+            "model": _LLM_MODEL,
+            "temperature": 0.1,
+            "max_completion_tokens": _llm_max_completion_tokens(),
+            "model_kwargs": {"response_format": {"type": "json_object"}},
+        }
+        # gpt-5 계열은 reasoning_effort 지정 (mixer/today_insight 와 동일 패턴).
+        if str(_LLM_MODEL).startswith("gpt-5"):
+            llm_kwargs["reasoning_effort"] = os.getenv("BRIEFING_REASONING_EFFORT", "low")
+        _llm = ChatOpenAI(**llm_kwargs)
     return _llm
 
 
