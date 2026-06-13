@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from src.analysis.models import AnalysisInputBundle
 from src.config.company_tiers import SELF_COMPANY_IDS
+from src.rag.precedent_search import QdrantPrecedentSearch
 from src.services.context_pack_assembler import ContextPackAssembler
 
 BriefingType = Literal["daily", "weekly", "monthly"]
@@ -82,7 +83,7 @@ def assemble_briefing_historical_context(
         metadata={"briefing_type": briefing_type},
     )
     main_company = peers[0] if peers else None
-    pack = ContextPackAssembler().assemble(
+    pack = ContextPackAssembler(qdrant_search=QdrantPrecedentSearch()).assemble(
         input_bundle=bundle,
         integrated_issue={"main_company": main_company} if main_company else None,
         include_executive_memory=True,
