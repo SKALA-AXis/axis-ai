@@ -9,7 +9,6 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
 
 COLLECTION_MAIN = "axis_main"
-COLLECTION_HISTORY = "axis_history"
 COLLECTION_DOCUMENTS = "axis_documents"
 DENSE_DIM = 1024  # BGE-M3 dense dimension
 
@@ -38,10 +37,10 @@ def get_qdrant_client() -> QdrantClient:
 
 
 def ensure_collections(client: QdrantClient) -> None:
-    """axis_main, axis_history, axis_documents 컬렉션이 없으면 생성"""
+    """axis_main, axis_documents 컬렉션이 없으면 생성"""
     existing = {c.name for c in client.get_collections().collections}
 
-    for name in [COLLECTION_MAIN, COLLECTION_HISTORY, COLLECTION_DOCUMENTS]:
+    for name in [COLLECTION_MAIN, COLLECTION_DOCUMENTS]:
         if name not in existing:
             client.create_collection(
                 collection_name=name,

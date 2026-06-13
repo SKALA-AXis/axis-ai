@@ -160,19 +160,19 @@ class IngestionState(TypedDict):
 
 ```
 1. 자연어 쿼리 수신
-2. BGE-M3 원샷 → Dense 벡터(768차원) + Sparse 벡터 동시 생성
-3. Qdrant 병렬 실행
+2. BGE-M3 원샷 → Dense 벡터(1024차원) + Sparse 벡터 동시 생성
+3. Qdrant Prefetch 2종 (rag/hybrid_search.py)
    - Dense Prefetch: 코사인 유사도 상위 50건
    - Sparse Prefetch: 내적 점수 상위 50건
+   - 메타데이터 필터: company, event_type (Prefetch 단계에 적용 — 날짜/importance 필터 없음)
 4. RRF Fusion: score(d) = 1/(k+rank_dense) + 1/(k+rank_sparse), k=60
-5. 중복 제거 후 Top-20
-6. 메타데이터 필터 (peer_id, event_type, importance, 날짜)
-7. BGE-reranker-v2-m3 재랭킹 → Top-10
-8. 반환
+5. /chat 경로(chat_orchestrator): prefetch 24건 → BGE-reranker-v2-m3 재랭킹 → 최종 5건
+   (CHAT_RAG_PREFETCH_K / CHAT_RAG_RERANK_K / CHAT_RAG_FINAL_K env로 조정)
 
 폴백:
-- 임베딩 서버 타임아웃(3초) → BM25 폴백
-- 결과 0건 → 기간 범위 2배 확장 후 재시도
+- 임베딩 실패 → 빈 결과 반환 (raise_on_failure=True면 예외 전파. BM25 폴백은 미구현)
+- 서버 1.9.x가 query_points 미지원 → REST 검색 폴백 (rag/qdrant_compat.py, RRF 수동 병합)
+- Qdrant 장애 → 빈 결과 반환 (파이프라인은 계속 진행)
 ```
 
 ---
@@ -180,31 +180,35 @@ class IngestionState(TypedDict):
 ## Qdrant 컬렉션 구조
 
 ```python
-# main 컬렉션 (최근 3개월, RAG 검색용)
+# main 컬렉션 (카드뉴스 대표 기사, RAG 검색용)
 collection_name = "axis_main"
-vectors: Dense(768, COSINE) + Sparse
-TTL: 90일
+vectors: Dense(1024, COSINE) + Sparse   # BGE-M3 dense 차원 = 1024
 
-# history 컬렉션 (1년치, 시그널 히스토리 전용)
-collection_name = "axis_history"
-vectors: Dense(768, COSINE) + Sparse
-TTL: 365일
+# documents 컬렉션 (DART 공시 청크 + 어시스턴트 지식 — rag/document_index.py, rag/assistant_knowledge_index.py)
+collection_name = "axis_documents"
+vectors: Dense(1024, COSINE) + Sparse
 
-# 페이로드 구조 (메타데이터만, 원문 텍스트 저장 금지)
+# ⚠️ axis_history(1년치 히스토리)는 v3 설계안 — 미구현으로 확정, 코드에서 제거됨 (2026-06-12)
+# ⚠️ TTL(90일/365일)은 미구현 — Qdrant는 네이티브 TTL이 없어 별도 정리 잡 필요 (현재 무기한 보관)
+
+# axis_main 페이로드 구조 (메타데이터만, 원문 텍스트 저장 금지 — rag/vector_index.py)
 payload = {
     "rdb_id": int,              # PostgreSQL FK (원문 조회용)
-    "peer_id": str,             # samsung_sds | lg_cns | hyundai_autoever | posco_dx
+    "card_news_id": str,        # 카드뉴스 ID
+    "company": str,             # peer id 값: samsung_sds | lg_cns | hyundai_autoever | posco_dx
+                                # (필터 키도 "company" — peer_id 라는 키는 axis_main에 없음)
     "event_type": str,          # 6개 taxonomy
     "sector": str,              # 트렌드 섹터(코드 정본): ax | security | infra | deal | other
     "exposure_score": float,    # v3 결정적 산식 (0~1)
     "exposure_band": str,       # v3 노출도 밴드: high | medium | low
-    "credibility_score": float,
     "published_at": int,        # Unix timestamp
     "cluster_id": int,
     "source_name": str,
-    "title": str,               # 제목만 (본문 X)
-    "summary": str,             # 3줄 요약만
+    "title": str,               # 제목만, 500자 컷 (본문 X)
+    "summary": str,             # 3줄 요약만, 1000자 컷
 }
+# 인덱싱 성공 시 raw_articles.qdrant_vector_id에 point id(uuid5 결정적) 기록
+# axis_documents 페이로드는 DART 청크 텍스트(≤3500자/청크)를 포함 — 예외 경로 (document_index.py)
 ```
 
 ---
