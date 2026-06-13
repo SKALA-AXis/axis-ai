@@ -58,7 +58,7 @@ _TREND_SOURCE_NAMES = {"spri", "bcg"}
 _GLOBAL_NEWSROOM_SOURCE_TYPES = {"global_newsroom", "company_newsroom"}
 
 _LLM_MODEL = "gpt-4o"
-_PROMPT_VERSION = "global-trends-v1.0"
+_PROMPT_VERSION = "global-trends-v1.1-evidence-grounded-ko"
 
 _DEFAULT_SK_AX_BUSINESS_LINES: tuple[str, ...] = (
     "cloud_ax",
@@ -674,6 +674,13 @@ def _phase3_peer_alignment(
                     "global_mention_count": global_mention_count,
                     "recency_gap_days": recency_gap_days,
                     "evidence_card_ids": [str(c.get("id")) for c in cards[:5] if c.get("id")],
+                    # strategic_note LLM 입력용 근거 — peer 가 실제로 뭘 했는지 제목으로 전달.
+                    # API 응답에 나가기 전, 아래에서 strip (전송 페이로드엔 남기지 않음).
+                    "_evidence_titles": [
+                        str(c.get("title")).strip()
+                        for c in cards[:3]
+                        if str(c.get("title") or "").strip()
+                    ],
                     "strategic_note": "",
                 }
             )
@@ -685,6 +692,11 @@ def _phase3_peer_alignment(
             result = _llm_fill_strategic_notes(result, detections)
         except Exception:
             log.exception("ITTrendAgent | strategic_note LLM 실패 — 빈 문자열 유지")
+
+    # 근거 제목은 LLM 입력 전용 — API 페이로드에서 제거.
+    for plist in result.values():
+        for p in plist:
+            p.pop("_evidence_titles", None)
     return result
 
 
@@ -732,6 +744,8 @@ def _llm_fill_strategic_notes(
                         "alignment_type": p["alignment_type"],
                         "peer_mention_count": p["peer_mention_count"],
                         "global_mention_count": p["global_mention_count"],
+                        # 실제 수집된 peer 동향 제목 — note 의 근거. 빈 리스트면 근거 없음.
+                        "evidence_titles": p.get("_evidence_titles", []),
                     }
                     for p in peers
                 ],
@@ -741,12 +755,26 @@ def _llm_fill_strategic_notes(
         return result
 
     prompt = (
-        "당신은 SK AX 의 글로벌 IT 트렌드 전략가입니다. "
-        "각 (theme, peer) 조합에 대해 한 줄짜리 strategic_note 를 작성하세요.\n"
-        "- aligned: 어디서 따라가고 있는지\n"
-        "- lagging: 무엇이 부족한지\n"
-        "- missing: 왜 안 하는지 / 시급한가\n"
-        "- diverging: 다른 방향이 맞는지\n\n"
+        "당신은 SK AX 사업전략팀의 글로벌 IT 트렌드 분석가입니다.\n"
+        "각 (theme, peer) 조합에 대해 한 줄짜리 strategic_note 를 작성하세요.\n\n"
+        "## 필수 규칙\n"
+        "1. **반드시 한국어로** 작성합니다. 회사명·고유명사 외 영어 문장 금지.\n"
+        "2. **evidence_titles 에 담긴 실제 수집 동향만 근거로** 사용합니다. "
+        "제목에 없는 사업·파트너십·수치를 지어내지 마세요.\n"
+        "3. evidence_titles 가 비어 있으면 추측하지 말고 정확히 "
+        '"관련 공개 동향 미확인" 이라고만 적습니다.\n'
+        "4. 'Amazon·Microsoft 같은 선도 기업과 정렬돼 있다' 류의 막연한 일반 서술 금지. "
+        "어떤 동향(제목 근거)에서 어떻게 정렬/지연/누락인지 구체적으로 씁니다.\n"
+        "5. alignment_type 별 관점:\n"
+        "   - aligned: 어떤 동향에서 글로벌 흐름을 따라가는지\n"
+        "   - lagging: 무엇이 부족한지\n"
+        "   - missing: 공개 동향이 없어 시급한지\n"
+        "   - diverging: 다른 방향이 맞는지\n\n"
+        "## 예시\n"
+        "- 좋음: \"삼성SDS는 '생성형 AI 운영 플랫폼 출시' 동향으로 에이전트형 AI "
+        '흐름을 따라가고 있음"\n'
+        '- 나쁨: "SK AX is aligned with leading cloud companies like Amazon and '
+        'Microsoft" (영어·근거 없음·막연함 — 금지)\n\n'
         "응답은 반드시 다음 JSON object:\n"
         '{"notes": [{"theme":"...", "peer_id":"...", "strategic_note":"..."}, ...]}\n\n'
         "입력:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
