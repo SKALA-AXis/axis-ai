@@ -124,6 +124,7 @@ from src.agents.strategic_insight.utils import (  # noqa: F401  — 분리 모�
 )
 from src.analysis.models import AnalysisContext, AnalysisInputBundle, ProfileContext
 from src.db.postgres import SessionLocal
+from src.rag.precedent_search import QdrantPrecedentSearch
 from src.services.analysis_context_builder import AnalysisContextBuilder
 from src.services.peer_id_aliases import expand_peer_aliases
 from src.services.profile_context_loader import ProfileContextLoader
@@ -1944,7 +1945,7 @@ def _build_analysis_context_for_issue(
 ) -> dict[str, Any]:
     try:
         return (
-            AnalysisContextBuilder()
+            AnalysisContextBuilder(qdrant_search=QdrantPrecedentSearch())
             .build(
                 input_bundle=input_bundle,
                 profile_context=profile_context,

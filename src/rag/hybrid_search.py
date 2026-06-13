@@ -25,6 +25,8 @@ def hybrid_search(
     event_type: Optional[str] = None,
     peer_id: Optional[str] = None,
     raise_on_failure: bool = False,
+    peer_ids: Optional[list[str]] = None,
+    published_before_ts: Optional[int] = None,
 ) -> list[dict]:
     """BGE-M3 Dense+Sparse RRF 하이브리드 검색.
 
@@ -35,6 +37,8 @@ def hybrid_search(
         event_type: 이벤트 타입 필터.
 
         raise_on_failure: True면 embedding/Qdrant 장애를 빈 결과로 숨기지 않고 예외로 전달.
+        peer_ids: 복수 회사 필터 — 지정 시 company/peer_id 단일 필터보다 우선.
+        published_before_ts: published_at <= 이 Unix timestamp 인 포인트만 매칭 (선례 시간차).
 
     Returns:
         검색 결과 목록 (rdb_id, title, summary 등 포함).
@@ -54,14 +58,20 @@ def hybrid_search(
     filter_conditions = None
     company_filter = company or peer_id
 
-    if company_filter or event_type:
-        from qdrant_client.models import FieldCondition, Filter, MatchValue
+    if company_filter or event_type or peer_ids or published_before_ts is not None:
+        from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue, Range
 
         conditions = []
-        if company_filter:
+        if peer_ids:
+            conditions.append(FieldCondition(key="company", match=MatchAny(any=list(peer_ids))))
+        elif company_filter:
             conditions.append(FieldCondition(key="company", match=MatchValue(value=company_filter)))
         if event_type:
             conditions.append(FieldCondition(key="event_type", match=MatchValue(value=event_type)))
+        if published_before_ts is not None:
+            conditions.append(
+                FieldCondition(key="published_at", range=Range(lte=float(published_before_ts)))
+            )
         filter_conditions = Filter(must=conditions)  # type: ignore[arg-type]
 
     try:
