@@ -1366,8 +1366,7 @@ def _score_profile_entry_against_issue(
     if entry.get("source_refs") and (
         structured_score > 0
         or any(
-            _term_signal_weight(term, "issue_fact", issue_context) >= 0.5
-            for term in matched_terms
+            _term_signal_weight(term, "issue_fact", issue_context) >= 0.5 for term in matched_terms
         )
     ):
         score += 0.5

@@ -3796,9 +3796,7 @@ def _merged_industry_frontend_item(
         criteria.extend(_string_list(item.get("decision_criteria"), max_items=8))
         evidence_lines.extend(_string_list(item.get("evidence_lines"), max_items=3))
     merged_axis = {
-        "strategic_axis": "+".join(
-            value for value in _dedupe_keep_order(axis_keys) if value
-        )
+        "strategic_axis": "+".join(value for value in _dedupe_keep_order(axis_keys) if value)
         or "industry_signal",
         "event_anchor_terms": _dedupe_keep_order(anchors)[:6],
         "decision_criteria": _dedupe_keep_order(criteria)[:4],
@@ -4055,11 +4053,7 @@ def _industry_evidence_sentence(
     primary = _anchor_phrase(anchors, max_items=2)
     line = str(
         next(
-            (
-                item
-                for item in evidence_lines
-                if _is_substantive_industry_evidence_line(item)
-            ),
+            (item for item in evidence_lines if _is_substantive_industry_evidence_line(item)),
             next((item for item in evidence_lines if str(item).strip()), ""),
         )
     ).strip()
@@ -4097,10 +4091,9 @@ def _industry_action_sentence(
     decision_criteria: Sequence[str],
 ) -> str:
     anchor_phrase = _anchor_phrase(anchors, max_items=3)
-    action_reading = (
-        _industry_dynamic_action_reading_from_anchors(anchors)
-        or _industry_action_reading_phrase(decision_criteria)
-    )
+    action_reading = _industry_dynamic_action_reading_from_anchors(
+        anchors
+    ) or _industry_action_reading_phrase(decision_criteria)
     if action_reading:
         action_object = _with_korean_object_particle(action_reading)
         return (
@@ -5385,8 +5378,7 @@ def _frontend_ready_required_violations(
         )
         if evidence_anchor_violation:
             violations.append(
-                f"frontend_ready.{section_key}.evidence_sentence: "
-                f"{evidence_anchor_violation}"
+                f"frontend_ready.{section_key}.evidence_sentence: {evidence_anchor_violation}"
             )
         if section_key == "key_implication":
             direction_violation = _frontend_ready_key_sentence_direction_violation(
@@ -5394,9 +5386,7 @@ def _frontend_ready_required_violations(
                 integrated_issue=integrated_issue,
             )
             if direction_violation:
-                violations.append(
-                    f"frontend_ready.key_implication.sentence: {direction_violation}"
-                )
+                violations.append(f"frontend_ready.key_implication.sentence: {direction_violation}")
             business_depth_violation = _frontend_ready_key_business_depth_violation(
                 block.get("sentence"),
                 integrated_issue=integrated_issue,
@@ -5903,9 +5893,7 @@ def _frontend_ready_action_depth_violation(
         )
     if re.search(depth_pattern, text, flags=re.IGNORECASE):
         return ""
-    shallow_action_pattern = (
-        r"(점검|검토|정리|확인|모니터링)(해야|할\s*필요|할\s*수|합니다|한다)"
-    )
+    shallow_action_pattern = r"(점검|검토|정리|확인|모니터링)(해야|할\s*필요|할\s*수|합니다|한다)"
     if re.search(shallow_action_pattern, sentence):
         return (
             "대응방향이 단순 점검/정리에서 멈췄습니다. SK AX가 무엇을 "
@@ -5981,9 +5969,7 @@ def _frontend_ready_action_auxiliary_scale_overreach_violation(block: dict[str, 
         )
     if not re.search(scale_basis_pattern, text):
         return ""
-    direct_basis_pattern = (
-        r"(?:기준|판단|점검|검토|비교|구분|분리|나눠|내부\s*판단|대응\s*기준)"
-    )
+    direct_basis_pattern = r"(?:기준|판단|점검|검토|비교|구분|분리|나눠|내부\s*판단|대응\s*기준)"
     for match in re.finditer(scale_basis_pattern, text):
         start = max(match.start() - 18, 0)
         end = min(match.end() + 28, len(text))
@@ -6049,8 +6035,7 @@ def _has_direct_skax_execution_action(text: str) -> bool:
         r"|기존\s*사업\s*안에서"
     )
     return bool(
-        re.search(direct_execution_pattern, value)
-        or re.search(strong_packaging_pattern, value)
+        re.search(direct_execution_pattern, value) or re.search(strong_packaging_pattern, value)
     )
 
 
