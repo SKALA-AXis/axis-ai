@@ -131,8 +131,8 @@ FRONTEND_READY_REPAIR_USER_PROMPT_TEMPLATE = """\
    "입력 근거", "anchor", "항목", "기사 안에서 확인됩니다", "이 기준이 있어야",
    "자사 관여 가능 영역", "추가 검증 조건" 같은 내부 검증 용어를 쓰지 않습니다.
    실제 사건 사실과 그 사실이 왜 결론을 뒷받침하는지만 자연어로 설명합니다.
-   evidence_sentence는 일반 판단 문장으로 끝내지 말고 fact_summary,
-   consolidated_facts, fact_basis, cluster_fact_intelligence에 있는 제품명,
+   evidence_sentence는 일반 판단 문장으로 끝내지 말고 integrated_text,
+   fact_summary, consolidated_facts, fact_basis, cluster_fact_intelligence에 있는 제품명,
    수치, 적용처, 고객/계약 관계, 기능, 운영 범위 같은 구체 기사 표현을
    1개 이상 다시 연결합니다.
 5. 현재 사건에서 가장 중요한 신호 하나를 선택하되, 통합 이슈에 나온
@@ -159,6 +159,45 @@ FRONTEND_READY_REPAIR_USER_PROMPT_TEMPLATE = """\
    독자에게 행동을 지시하는 표현을 넣지 말고,
    기사 사실이 왜 key_implication.sentence를 뒷받침하는지만 설명합니다.
 8. suggested_action은 SK AX가 내부적으로 점검할 대상과 기준만 씁니다.
+   frontend_ready 생성 가능성은 fact 충분성으로 판단합니다.
+   이미 IntegratedIssue/analysis_package가 만들어졌다면 앞단에서 카드 후보로 유효하다고
+   판단된 상태입니다. 따라서 고객명·계약·구축 범위가 없다는 이유만으로 닫지 말고,
+   integrated_text, fact_summary, consolidated_facts, fact_basis, cluster_fact_intelligence에서
+   이 이슈가 통합된 이유가 되는 anchor를 먼저 찾습니다.
+   그 anchor로 변화/차이를 설명할 수 있고 SK AX가 나눠 볼 판단 축을 만들 수 있으면,
+   claim strength를 cautious 또는 moderate로 낮춰 frontend_ready를 작성합니다.
+   정말 변화 anchor나 판단 축을 만들 수 없을 때만 needs_review/watch_only로 둡니다.
+   계약·협약·수주·구축·고객 적용·PoC·운영 책임·공급/도입 범위·특정 현장 적용이 있으면
+   strong actionable signal입니다.
+   고객명·계약·구축 범위가 부족해도 매출액/매출 비중/사업 비중/성장률 같은 사업 구조 fact와
+   특정 서비스·플랫폼·솔루션·시스템의 변화 또는 고도화 fact, 기능·적용 방식·운영 방식·자동화·
+   데이터 활용 같은 실행 fact가 함께 있으면 moderate actionable signal입니다.
+   moderate에서는 직접 구축/확보/운영을 단정하지 말고 고객 수요, 적용 범위, 운영 책임,
+   매출 기여도, 서비스형 제안 가능성, 기존 시스템 접점, 자체 수행 범위,
+   외부 협력 필요성 같은 낮은 강도의 판단 축으로 씁니다.
+   frontend_ready 위반에 "SK AX 내부 판단 축이 부족", "실행 결과 관점이 부족",
+   "선택지가 부족"이 있으면 suggested_action을 버리고 현재 사건 fact에서 다시 씁니다.
+   frontend_ready 위반에 "프로필/대응 anchor가 연결되지 않았습니다" 또는
+   "프로필 연결이 약한데 profile_based"가 있으면 profile_based를 고집하지 말고
+   suggested_action.evidence_mode를 event_based 또는 generic_monitoring으로 낮춥니다.
+   이때 skax_anchor_terms는 비워도 되지만, sentence에는 반드시 "SK AX는" 주어와
+   현재 사건에서 나온 대상/시스템/서비스/수치/기능 중 하나를 포함합니다.
+   위반이 profile_based 과강도에서 나온 경우에는 기존 suggested_action을 보존하지 말고
+   integrated_text/fact 근거에서 다시 작성합니다. source는 frontend_repair_direct,
+   claim_strength는 cautious, claim_type은 internal_strategy_check로 낮추고,
+   SK AX 프로필 근거가 직접 보이지 않으면 skax_anchor_terms를 비워도 됩니다.
+   대신 sentence에는 현재 사건의 구체 대상과 SK AX가 나눠 볼 판단 기준이 함께 있어야 하고,
+   evidence_sentence에는 integrated_text/fact 근거의 구체 표현을 1개 이상 넣어야 합니다.
+   먼저 서비스/플랫폼/시스템/업무 영역/보안 기능/공급망 기능/운영 단계 중 실제로
+   기사에 나온 대상을 찾고, 그 대상이 SK AX 내부에서 어떤 기준으로 구분되어야 하는지
+   낮은 강도로 작성합니다. 고객명·계약·구축 범위가 부족하면 직접 수행이나 사업 확대가 아니라
+   적용 범위, 운영 책임 구간, 고객 제안 범위, 자체 수행 범위, 외부 협력 필요성,
+   내부 대응 우선순위 같은 판단 축으로 낮춥니다.
+   "역량 강화", "사업 점검", "AI 활용 검토", "협력 전략 강화"처럼 넓은 표현만 남기지 않습니다.
+   claim이 과강도라는 위반이 있으면 성과/효과/경쟁력 단정을 제거하고
+   매출 비중, 서비스 고도화, 탐지·보완·대응, 운영 방식처럼 관찰 가능한 사실 중심으로 낮춥니다.
+   서비스 변화·수치·계약·출시·구축·적용 범위가 부족한 단순 행사/홍보/웨비나/경진대회는
+   weak signal로 보고 억지 frontend_ready를 만들지 않습니다.
    generic_monitoring이면 SK AX의 구체 사업명/역량명을 새로 붙이지 말고,
    현재 사건의 대상·고객군·도입 흐름을 기준으로 점검 문장을 씁니다.
    현재 사건 anchor와 직접 연결되지 않는 SK AX 사업명은 문장에 넣지 않습니다.
@@ -466,6 +505,30 @@ USER_PROMPT_TEMPLATE = """\
 - 시사점은 피어사의 이번 움직임이 기존 사업/역량과 어떻게 연결되는지 분석합니다.
 - 대응방향은 현재 사건 신호를 보고 SK AX가 내부적으로 무엇을 비교·점검해야 하는지 씁니다.
 - 둘 다 고정 순서 문장으로 쓰지 말고, 현재 사건의 고유 명사·수치·제품/서비스·고객군을 근거로 씁니다.
+- frontend_ready 생성 가능성은 고객명/계약/구축 범위의 유무만으로 닫지 말고
+  fact 충분성으로 판단합니다.
+  IntegratedIssue가 유효하게 생성된 경우 기본적으로 시사점/대응방안 생성을 시도합니다.
+  먼저 이 이슈가 왜 통합됐는지, 어떤 fact anchor가 유의미한지 찾습니다.
+  그 anchor가 보여주는 변화/차이와 SK AX의 내부 판단 축을 만들 수 있으면
+  낮은 강도라도 frontend_ready를 작성합니다.
+  닫는 이유는 "고객/계약/구축 범위가 없음"이 아니라
+  "통합 이슈 fact로도 판단 축을 만들 수 없음"이어야 합니다.
+  실행 fact가 명확하면 strong actionable signal로 보고, 고객명·계약·구축 범위가 부족해도
+  매출액/비중/성장 같은 사업 구조 fact와 서비스·플랫폼·솔루션·시스템의 변화/고도화,
+  기능·적용 방식·운영 방식·자동화·데이터 활용 같은 실행 fact가 함께 있으면
+  moderate actionable signal로 보고 낮은 강도의 카드뉴스 문장을 씁니다.
+  moderate에서는 구축·확보·운영·선점·성과 입증을 단정하지 말고 고객 수요, 적용 범위,
+  운영 책임, 매출 기여도, 서비스형 제안 가능성, 기존 시스템 접점, 자체 수행 범위,
+  외부 협력 필요성 같은 내부 판단 축으로 낮춥니다.
+  action이 "역량 강화/사업 점검/AI 활용 검토/협력 전략 강화"처럼 넓게 남으면
+  frontend_ready로 쓰지 않습니다. 현재 사건의 서비스·플랫폼·시스템·업무 영역·보안 기능·
+  공급망 기능·운영 단계에서 실제 anchor를 골라, SK AX가 구분해야 할 적용 범위,
+  운영 책임 구간, 고객 제안 범위, 자체 수행 범위, 외부 협력 필요성, 내부 대응 우선순위 중
+  입력 사건에 맞는 판단 축을 새로 작성합니다.
+  claim이 과강도라면 사업 확대/성과 입증/경쟁력 강화 표현을 낮추고,
+  매출 비중, 서비스 고도화, 탐지·보완·대응, 운영 방식처럼 관찰 가능한 사실로 뒷받침합니다.
+  단순 웨비나/행사/경진대회/홍보성 발표처럼 서비스 변화·수치·계약·출시·구축·적용 범위가
+  부족하면 weak signal로 보고 frontend_ready를 억지 생성하지 않습니다.
 - Machine linkage hints의 business_novelty_status가 not_new_business_counterparty_role이면
   신규 사업/사업 확장/입지 강화로 쓰지 않습니다.
 - Machine linkage hints의 business_novelty_status가 new_or_untracked_business_signal이면

@@ -551,8 +551,8 @@ def test_card_news_shows_frontend_repair_direct_frontend_ready_source() -> None:
         "근거/설명: 기사에는 물류 자동화 협약 체결 사실이 제시됐습니다."
     ]
     assert sections["action"]["items"] == [
-        "핵심 대응: SK AX는 물류 자동화 관련 내부 대응 범위를 점검해야 합니다.\n"
-        "근거/설명: 이 점검은 유사 물류 자동화 흐름과 연결됩니다."
+        "핵심 대응: SK AX는 물류 자동화 관련 내부 대응 범위를 점검해야 한다.\n"
+        "근거/설명: 이 점검은 유사 물류 자동화 흐름과 연결된다."
     ]
     assert card["needs_review"] is False
 
@@ -592,8 +592,8 @@ def test_card_news_display_sync_does_not_overwrite_original_recommended_actions(
         "기존 implication 대응 문장"
     ]
     assert card["implication"]["frontend"]["suggested_actions"] == [
-        "핵심 대응: SK AX는 물류 자동화 관련 내부 대응 범위를 점검해야 합니다.\n"
-        "근거/설명: 이 점검은 유사 물류 자동화 흐름과 연결됩니다."
+        "핵심 대응: SK AX는 물류 자동화 관련 내부 대응 범위를 점검해야 한다.\n"
+        "근거/설명: 이 점검은 유사 물류 자동화 흐름과 연결된다."
     ]
 
 

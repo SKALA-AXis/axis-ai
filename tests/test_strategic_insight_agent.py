@@ -852,8 +852,13 @@ def test_industry_frontend_ready_keeps_only_distinct_strategic_axes():
         for item in items
         if isinstance(item.get("key_implication"), dict)
     ]
+    evidence_sentences = [
+        item["key_implication"]["evidence_sentence"]
+        for item in items
+        if isinstance(item.get("key_implication"), dict)
+    ]
     assert len(sentences) == len(set(sentences))
-    assert "AI 팩토리" in sentences[0] or "AI 인프라" in sentences[0]
+    assert "AI 팩토리" in evidence_sentences[0] or "AI 인프라" in evidence_sentences[0]
 
 
 def test_industry_frontend_ready_uses_dynamic_decision_criteria_without_peer_reason():
@@ -2103,6 +2108,198 @@ def test_product_launch_signal_uses_product_function_and_target_system():
         ),
         key_event_terms=["워크플로우Z", "ERP"],
         action_event_terms=["워크플로우Z", "ERP"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    ) + strategic_insight_module._frontend_ready_specific_anchor_violations(
+        result,
+        integrated_issue=integrated_issue,
+    )
+
+    assert violations == []
+
+
+def test_moderate_actionable_signal_with_business_structure_and_service_change_can_display():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 물류 서비스 고도화로 사업 구조 변화",
+        fact_summary=[
+            "대상기업의 지난해 물류 매출은 7조3864억원으로 전체 매출의 53%를 차지했다.",
+            (
+                "디지털 물류 서비스 '첼로 스퀘어'에 '에이전틱 AI 공급망'을 도입해 "
+                "서비스 고도화에 나서고 있다."
+            ),
+        ],
+        event_type="business_update",
+    )
+    result = _frontend_ready_result(
+        key_sentence=(
+            "물류 매출 비중과 디지털 물류 서비스 고도화는 물류 사업 평가가 "
+            "매출 규모와 운영형 서비스 변화로 나뉠 수 있음을 보여줍니다."
+        ),
+        key_evidence=(
+            "지난해 물류 매출 7조3864억원과 전체 매출 53%, 첼로 스퀘어의 "
+            "에이전틱 AI 공급망 도입이 함께 제시돼 매출 구조와 서비스 고도화가 "
+            "동시에 드러납니다."
+        ),
+        action_sentence=(
+            "SK AX는 물류 관련 기회를 볼 때 매출 기여도와 서비스 적용 범위를 "
+            "나눠 내부 우선순위를 검토해야 합니다."
+        ),
+        action_evidence=(
+            "첼로 스퀘어에 에이전틱 AI 공급망을 도입한 사실은 단순 구축보다 "
+            "운영형 서비스 변화가 매출 구조와 맞물릴 수 있어 고객 제안 범위와 "
+            "운영 책임을 구분할 근거가 됩니다."
+        ),
+        key_event_terms=["물류 매출", "첼로 스퀘어"],
+        action_event_terms=["물류", "첼로 스퀘어"],
+    )
+
+    assert (
+        strategic_insight_module._frontend_ready_actionable_signal_level(integrated_issue)
+        == "moderate"
+    )
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    ) + strategic_insight_module._frontend_ready_specific_anchor_violations(
+        result,
+        integrated_issue=integrated_issue,
+    )
+
+    assert violations == []
+
+
+def test_weak_event_without_service_or_structure_fact_remains_weak_signal():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, AI 웨비나 개최",
+        fact_summary=[
+            "대상기업은 AI 트렌드 웨비나를 개최했다.",
+            "행사에서는 업계 동향과 관심 주제가 소개됐다.",
+        ],
+        event_type="event",
+    )
+
+    assert strategic_insight_module._frontend_ready_actionable_signal_level(integrated_issue) == (
+        "weak"
+    )
+
+
+def test_webinar_with_cloud_service_topic_remains_weak_without_execution_fact():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, Cloud Talk 웨비나 시리즈 론칭",
+        fact_summary=[
+            "대상기업은 클라우드 서비스의 최신 기술과 활용 사례를 조명하는 웨비나를 론칭했다.",
+            "1회 차 웨비나는 글로벌 네트워크 운영에 최적화된 클라우드 플랫폼을 주제로 진행된다.",
+        ],
+        event_type="event",
+    )
+
+    assert strategic_insight_module._is_weak_surface_integrated_issue(integrated_issue)
+    assert strategic_insight_module._frontend_ready_actionable_signal_level(integrated_issue) == (
+        "weak"
+    )
+    result = _frontend_ready_result(
+        key_sentence="클라우드 서비스 경쟁은 활용 사례 설명 방식으로 넓어질 수 있다.",
+        key_evidence="웨비나는 클라우드 서비스 최신 기술과 활용 사례를 조명한다고 소개됐다.",
+        action_sentence="SK AX는 클라우드 운영 주제별 설명 범위를 점검해야 한다.",
+        action_evidence="웨비나 주제가 글로벌 네트워크 운영과 Cloud WAN으로 제시됐다.",
+        key_event_terms=["클라우드 서비스", "웨비나"],
+        action_event_terms=["Cloud WAN", "웨비나"],
+    )
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("단순 행사/웨비나/홍보성" in violation for violation in violations)
+
+
+def test_valid_integrated_issue_with_dynamic_anchors_defaults_to_moderate_signal():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 넥서스 리포트 운영 기준 개편",
+        fact_summary=[
+            "대상기업은 넥서스 리포트와 오로라 태그를 연결해 현장 데이터 분류 기준을 바꿨다.",
+            "새 기준은 부서별 요청 흐름과 결과 공유 방식을 나누는 데 쓰인다.",
+        ],
+        event_type="business_update",
+    )
+
+    assert strategic_insight_module._has_integrated_issue_candidate_anchor_signal(
+        integrated_issue
+    )
+    assert strategic_insight_module._frontend_ready_actionable_signal_level(integrated_issue) == (
+        "moderate"
+    )
+
+
+def test_invalid_summary_can_still_use_rich_integrated_text_as_candidate_signal():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 업무별 모델 평가 체계 공개",
+        fact_summary=["대상기업, 업무별 모델 평가 체계 공개"],
+        event_type="service_update",
+    )
+    integrated_issue["is_valid_summary"] = False
+    integrated_issue["integrated_text"] = (
+        "대상기업은 서비스에 적합한 모델을 고르기 위해 29가지 평가지표를 개발했다. "
+        "약 1,200개 데이터셋으로 지식 추론 능력과 업무 이해력을 평가한다. "
+        "업무별 서비스에 적합한 모델 선정 기준을 제공한다."
+    )
+
+    assert strategic_insight_module._is_valid_integrated_issue(integrated_issue)
+    assert strategic_insight_module._has_integrated_issue_candidate_anchor_signal(
+        integrated_issue
+    )
+    assert strategic_insight_module._frontend_ready_actionable_signal_level(
+        integrated_issue
+    ) in {"strong", "moderate"}
+
+
+def test_security_execution_flow_action_axis_can_display_without_customer_contract():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, AI 및 클라우드 보안 운영 협력",
+        fact_summary=[
+            "대상기업은 AI 기반 취약점 탐지 역량을 확대한다.",
+            "고객사 자산의 취약점을 찾아내고 보완 조치까지 지원한다.",
+            "관리형 보안 운영 서비스 사업자로서 보안사고 대응 서비스를 제공할 계획이다.",
+        ],
+        event_type="security_update",
+    )
+    result = _frontend_ready_result(
+        key_sentence=(
+            "AI·클라우드 보안 경쟁은 취약점 탐지에서 보완 조치와 사고 대응까지 "
+            "이어지는 운영 흐름으로 넓어질 수 있다."
+        ),
+        key_evidence=(
+            "AI 기반 취약점 탐지, 고객사 자산 보완 조치 지원, 관리형 보안 운영 "
+            "서비스의 보안사고 대응 계획이 함께 제시됐다."
+        ),
+        action_sentence=(
+            "SK AX는 클라우드 보안 과제에서 탐지, 보완 조치, 보안사고 대응의 책임 구간과 "
+            "외부 협력 필요성을 나눠 확인해야 한다."
+        ),
+        action_evidence=(
+            "취약점 탐지와 보완 조치, 보안사고 대응이 한 흐름으로 제시되면 "
+            "고객 제안 범위와 운영 책임을 기능별로 구분할 근거가 된다."
+        ),
+        key_event_terms=["취약점 탐지", "보안사고 대응"],
+        action_event_terms=["탐지", "보완 조치", "보안사고 대응"],
     )
 
     violations = strategic_insight_module._frontend_ready_required_violations(
