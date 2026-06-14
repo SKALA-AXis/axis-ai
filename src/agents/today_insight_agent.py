@@ -47,7 +47,7 @@ log = logging.getLogger(__name__)
 
 KST = ZoneInfo("Asia/Seoul")
 _LLM_MODEL = os.getenv("TODAY_INSIGHT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5.5"
-_PROMPT_VERSION = "today-insight-v1.3-signals-focus"
+_PROMPT_VERSION = "today-insight-v1.4-qualitative-signals"
 _LLM_CONTEXT_MAX_CHARS = 48_000
 _LLM_CONTEXT_DROP_ORDER = (
     "analysis_ledger_context",
@@ -167,6 +167,9 @@ reasoning step label: "관찰", "비교", "의미", "판단" 만 사용.
 4. evidence.changes에는 comparison_facts 에 확인 가능한 항목만 씁니다.
 5. 사용자에게 보이는 문장에는 DB 테이블명, 컬럼명, 내부 id, source id, raw id,
    IC-/CN-/raw- 같은 식별자를 쓰지 않습니다. sources 배열의 id 필드에만 식별자를 둡니다.
+6. 사용자에게 보이는 문장에는 salience_score, exposure_score, visibility_gap,
+   importance_score 같은 내부 점수명이나 0.x 원점수를 쓰지 않습니다.
+   "내용 영향은 큰 편", "보도 확산은 아직 낮은 편", "확산 전 신호"처럼 경향으로 표현합니다.
 
 입력 JSON:
 {context_json}
@@ -297,12 +300,8 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
     )
     issues = [row for row in issues if not _is_self_company_issue(row)]
     current_issues = [
-        row
-        for row in issues
-        if row.get("has_anchor_source") is True
-        or row.get("latest_source_date_kst") == anchor_date.isoformat()
-        or row.get("created_date_kst") == anchor_date.isoformat()
-    ]
+        row for row in issues if _is_anchor_current_issue(row, anchor_date=anchor_date)
+    ][: req.max_issues]
     history_issues = [
         row for row in issues if row.get("id") not in {item.get("id") for item in current_issues}
     ][: max(req.max_issues * 2, 6)]
@@ -385,8 +384,8 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
     return {
         "report_date": anchor_date.isoformat(),
         "window_days": req.window_days,
-        "current_issues": [_issue_for_prompt(row) for row in current_issues[: req.max_issues]],
-        "history_issues": [_issue_for_prompt(row) for row in history_issues[: req.max_issues * 2]],
+        "current_issues": [_issue_for_prompt(row) for row in current_issues],
+        "history_issues": [_issue_for_prompt(row) for row in history_issues],
         "recent_cards": [_card_for_prompt(card) for card in cards[: req.max_cards]],
         "change_stats": stats,
         "comparison_facts": comparison_facts,
@@ -397,6 +396,17 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
         "sources": sources,
         "request_context": req.context or {},
     }
+
+
+def _is_anchor_current_issue(issue: Mapping[str, Any], *, anchor_date: date) -> bool:
+    """Treat backfilled issue rows as current only when their source date is current."""
+    anchor_iso = anchor_date.isoformat()
+    if issue.get("has_anchor_source") is True:
+        return True
+    latest_source_date = str(issue.get("latest_source_date_kst") or "").strip()
+    if latest_source_date:
+        return latest_source_date[:10] == anchor_iso
+    return str(issue.get("created_date_kst") or "").strip()[:10] == anchor_iso
 
 
 def _fetch_integrated_issues(
@@ -802,9 +812,8 @@ def _load_latest_report(anchor_date: date) -> dict[str, Any] | None:
 def _load_latest_report_record(anchor_date: date) -> dict[str, Any] | None:
     """Return the newest active report on or before ``anchor_date``.
 
-    Home dashboard requests are cache-only. If today's scheduled report has not
-    been saved yet, the UI should still show the latest real report instead of a
-    status placeholder.
+    Home can show the latest saved report, but marks it as a fallback when it is
+    older than the selected anchor date.
     """
     try:
         with SessionLocal() as db:
@@ -861,6 +870,8 @@ def _preload_llm_client() -> None:
 
 def _scheduled_cache_pending_result(anchor_date: date) -> dict[str, Any]:
     now_iso = datetime.now(UTC).isoformat()
+    prior_reports = _fetch_prior_today_reports(anchor_date=anchor_date, limit=1)
+    latest_prior = prior_reports[0] if prior_reports else {}
     return TodayInsightGenerateResponse.model_validate(
         {
             "report_date": anchor_date.isoformat(),
@@ -974,6 +985,8 @@ def _scheduled_cache_pending_result(anchor_date: date) -> dict[str, Any]:
                 "is_fixture": False,
                 "update_policy": "daily_0810_kst",
                 "prompt_version": _PROMPT_VERSION,
+                "latest_available_report_date": latest_prior.get("report_date"),
+                "latest_available_headline": latest_prior.get("headline"),
             },
             "warning": "Today's Insight 생성 결과가 아직 없어 스케줄 대기 상태를 표시합니다.",
         }
@@ -1789,6 +1802,7 @@ def _fallback_result(
     context: dict[str, Any],
     warning: str | None = None,
 ) -> dict[str, Any]:
+    no_current_signals = warning == "today insight source data unavailable"
     return _normalize_result(
         {
             "headline": _fallback_headline(context),
@@ -1801,7 +1815,8 @@ def _fallback_result(
             "confidence": 0.45 if warning else 0.62,
             "provenance": {
                 "mode": "deterministic_fallback",
-                "result_kind": "generated_fallback",
+                "result_kind": "no_current_signals" if no_current_signals else "generated_fallback",
+                "is_status_placeholder": no_current_signals,
                 "is_fixture": False,
                 "warning": warning or "",
             },
@@ -2918,6 +2933,7 @@ def _sanitize_public_text(value: Any) -> str:
         return ""
     for source, replacement in _PUBLIC_TEXT_REPLACEMENTS:
         text_value = text_value.replace(source, replacement)
+    text_value = _qualify_internal_score_text(text_value)
     text_value = re.sub(r"\b(?:IC|CN|raw)-[A-Za-z0-9_.:-]+\b", "근거", text_value)
     text_value = re.sub(
         r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
@@ -2926,6 +2942,37 @@ def _sanitize_public_text(value: Any) -> str:
     )
     text_value = re.sub(r"\b[a-z]+_[a-z0-9_]+\b", "", text_value)
     text_value = re.sub(r"\s{2,}", " ", text_value).strip()
+    return text_value
+
+
+def _qualify_internal_score_text(text_value: str) -> str:
+    """Keep internal scores available in JSON, but avoid exposing raw scoring math in copy."""
+    replacements: tuple[tuple[str, str], ...] = (
+        (
+            r"(?:영향도|영향|중요도|salience|impact|importance)(?:\s*(?:score|점수|스코어))?"
+            r"\s*(?:는|은|:|=)?\s*0?\.\d+\s*(?:로|으로|이고|이며|,)?",
+            "내용 영향은 큰 편이고",
+        ),
+        (
+            r"(?:노출도|노출|exposure)(?:\s*(?:score|점수|스코어))?"
+            r"\s*(?:는|은|:|=)?\s*0?\.\d+\s*(?:로|으로|이고|이며|,)?",
+            "보도 확산은 아직 낮은 편이고",
+        ),
+        (
+            r"(?:visibility\s*gap|가시성\s*격차|노출\s*격차)"
+            r"\s*(?:는|은|:|=)?\s*0?\.\d+\s*(?:로|으로|이고|이며|,)?",
+            "내용 영향과 보도 확산 사이의 차이가 있어",
+        ),
+    )
+    for pattern, replacement in replacements:
+        text_value = re.sub(pattern, replacement, text_value, flags=re.IGNORECASE)
+    text_value = re.sub(
+        r"(?:내부\s*)?(?:점수|스코어)\s*(?:기준|상)?\s*0?\.\d+\s*(?:로|으로)?",
+        "내부 판단 기준상",
+        text_value,
+    )
+    text_value = re.sub(r"\s*,\s*", ", ", text_value)
+    text_value = re.sub(r"\s{2,}", " ", text_value).strip(" ,")
     return text_value
 
 
