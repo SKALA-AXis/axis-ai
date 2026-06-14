@@ -2009,15 +2009,13 @@ def _shrink_profile(
         if compacted not in ({}, [], "", None):
             out[key] = compacted
 
-    has_profile_linkage = isinstance(profile_linkage, dict) and bool(profile_linkage)
+    linkage = profile_linkage if isinstance(profile_linkage, dict) and profile_linkage else None
     profile_linkage_level = (
-        str(profile_linkage.get("linkage_level") or "").strip()
-        if isinstance(profile_linkage, dict)
-        else ""
+        str(linkage.get("linkage_level") or "").strip() if linkage is not None else ""
     )
     include_linked_profile_body = profile_linkage_level in {"high", "medium"}
 
-    if has_profile_linkage:
+    if linkage is not None:
         linkage_keys = [
             "linkage_level",
             "business_novelty_status",
@@ -2026,20 +2024,20 @@ def _shrink_profile(
         if include_linked_profile_body:
             linkage_keys.extend(["matched_terms", "connection"])
         linkage_meta = {
-            key: profile_linkage.get(key)
+            key: linkage.get(key)
             for key in linkage_keys
-            if profile_linkage.get(key) not in ({}, [], "", None)
+            if linkage.get(key) not in ({}, [], "", None)
         }
         if linkage_meta:
             out["machine_profile_linkage_hint"] = _compact_value(linkage_meta)
-        matched_areas = _jsonish_list(profile_linkage.get("matched_business_areas"))
+        matched_areas = _jsonish_list(linkage.get("matched_business_areas"))
         if include_linked_profile_body and matched_areas:
             out["machine_matched_business_areas"] = [
                 _compact_profile_item(item, include_evidence=False)
                 for item in matched_areas[:3]
                 if isinstance(item, dict)
             ]
-        matched_caps = _string_list(profile_linkage.get("matched_capabilities"), max_items=5)
+        matched_caps = _string_list(linkage.get("matched_capabilities"), max_items=5)
         if include_linked_profile_body and matched_caps:
             out["machine_matched_capabilities"] = matched_caps
         return out
