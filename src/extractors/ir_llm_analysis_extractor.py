@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from langchain_openai import ChatOpenAI
 
 from src.config.openai_policy import openai_calls_enabled, openai_disabled_reason
+from src.llm import LLMSpec, build_chat_llm
 
 log = logging.getLogger(__name__)
 
@@ -180,15 +181,17 @@ def analyze_ir_with_llm(
 
 
 def _get_llm() -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
     global _llm
     if _llm is None:
-        _llm = ChatOpenAI(
-            model=_LLM_MODEL,
-            temperature=0,
-            max_completion_tokens=3500,
-            model_kwargs={"response_format": {"type": "json_object"}},
+        # env 로 모델 지정 가능 → gpt-5 라도 reasoning_effort 미전달(기존 동작) 위해 None.
+        _llm = build_chat_llm(
+            LLMSpec(
+                model=_LLM_MODEL,
+                temperature=0,
+                max_tokens=3500,
+                json_object=True,
+                reasoning_effort=None,
+            )
         )
     return _llm
 
