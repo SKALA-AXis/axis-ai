@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from src.shared.json_helpers import json_dict, json_dumps
 
-
 # ---------------------------------------------------------------- json_dict
 
 
