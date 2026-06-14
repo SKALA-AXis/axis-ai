@@ -74,6 +74,7 @@ from src.agents.briefing.support import (  # noqa: F401  — 분리 모듈 re-ex
     _safe_float,
     _str_values,
 )
+from src.llm import LLMSpec, build_chat_llm
 from src.services.analysis_units import (  # noqa: E402
     analysis_units_from_cards,
     confidence_penalty_for_flags,
@@ -107,20 +108,18 @@ def _llm_max_completion_tokens() -> int:
 
 
 def _get_llm() -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
     global _llm
     if _llm is None:
-        llm_kwargs: dict[str, Any] = {
-            "model": _LLM_MODEL,
-            "temperature": 0.1,
-            "max_completion_tokens": _llm_max_completion_tokens(),
-            "model_kwargs": {"response_format": {"type": "json_object"}},
-        }
-        # gpt-5 계열은 reasoning_effort 지정 (mixer/today_insight 와 동일 패턴).
-        if str(_LLM_MODEL).startswith("gpt-5"):
-            llm_kwargs["reasoning_effort"] = os.getenv("BRIEFING_REASONING_EFFORT", "low")
-        _llm = ChatOpenAI(**llm_kwargs)
+        # gpt-5 reasoning_effort 분기·json_object 래핑은 공용 팩토리가 처리.
+        _llm = build_chat_llm(
+            LLMSpec(
+                model=_LLM_MODEL,
+                temperature=0.1,
+                max_tokens=_llm_max_completion_tokens(),
+                json_object=True,
+                reasoning_effort=os.getenv("BRIEFING_REASONING_EFFORT", "low"),
+            )
+        )
     return _llm
 
 
