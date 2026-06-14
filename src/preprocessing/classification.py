@@ -23,6 +23,7 @@ from src.config.global_companies import global_company_aliases
 from src.config.openai_policy import openai_calls_enabled
 from src.config.sectors import SECTOR_IDS, match_sectors, primary_sector
 from src.db.article_store import get_articles_by_ids, update_classification
+from src.llm import LLMSpec, build_chat_llm
 
 log = logging.getLogger(__name__)
 
@@ -353,11 +354,9 @@ class ClusterClassifier:
 
 
 def _get_llm() -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
     global _llm
     if _llm is None:
-        _llm = ChatOpenAI(model="gpt-4o", temperature=0.1, max_completion_tokens=400)
+        _llm = build_chat_llm(LLMSpec(model="gpt-4o", temperature=0.1, max_tokens=400))
     return _llm
 
 

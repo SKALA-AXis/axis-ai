@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from langchain_openai import ChatOpenAI
 
+from src.llm import LLMSpec, build_chat_llm
+
 log = logging.getLogger(__name__)
 
 _LLM_MODEL = "gpt-4o"
@@ -22,16 +24,10 @@ _llm: ChatOpenAI | None = None
 
 
 def _get_llm() -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
     global _llm
 
     if _llm is None:
-        _llm = ChatOpenAI(
-            model=_LLM_MODEL,
-            temperature=0.15,
-            max_completion_tokens=900,
-        )
+        _llm = build_chat_llm(LLMSpec(model=_LLM_MODEL, temperature=0.15, max_tokens=900))
 
     return _llm
 
