@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any, Optional
 
@@ -2668,24 +2669,56 @@ def fetch_global_trend_inputs(window_days: int = 30) -> list[dict[str, Any]]:
     return items
 
 
+def _ilike_any_clause(
+    col_exprs: Sequence[str],
+    terms: Sequence[str],
+    prefix: str,
+) -> tuple[str, dict[str, str]]:
+    """terms 중 하나라도 col_exprs 중 한 곳에 ILIKE 매칭되면 참이 되는 SQL 절을 만든다.
+
+    각 ``col_exprs`` 항목은 ``{k}`` placeholder 를 포함한다 (예: ``"title ILIKE :{k}"``).
+    term 1개당 모든 컬럼을 OR 로 묶고, term 들 사이도 OR — 즉 "아무 변형이든 어디서든 걸리면 매칭".
+    terms 가 비면 ``("", {})`` 을 돌려 호출부에서 절을 생략하게 한다.
+
+    Args:
+        col_exprs: ``{k}`` 를 가진 컬럼 매칭 표현식들.
+        terms: ILIKE 로 감쌀 검색어들 (한·영 변형 포함).
+        prefix: 바인드 파라미터 이름 접두사 (호출부 간 충돌 방지).
+
+    Returns:
+        ``(sql_clause, params)``. ``sql_clause`` 는 바깥을 괄호로 감싼 OR 절.
+    """
+    if not terms:
+        return "", {}
+    params: dict[str, str] = {}
+    groups: list[str] = []
+    for idx, term in enumerate(terms):
+        key = f"{prefix}{idx}"
+        params[key] = f"%{term}%"
+        cols = " OR ".join(expr.format(k=key) for expr in col_exprs)
+        groups.append(f"({cols})")
+    return "(" + " OR ".join(groups) + ")", params
+
+
 def fetch_sk_ax_raw_for_alignment(
     *,
     window_days: int,
-    keyword: str | None = None,
+    match_terms: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """SK AX 자사 raw 를 peer alignment 용으로 fetch.
 
     ``card_news.peer_company_id='sk_ax'`` 가 0 건이라 card 가 아닌 raw_articles 에서
-    직접 가져온다 (design §6 Phase 3 분기).
+    직접 가져온다 (design §6 Phase 3 분기). ``match_terms`` 는 키워드의 한·영 변형 목록.
     """
-    keyword_clause = ""
     params: dict[str, Any] = {
         "names": list(SK_AX_RAW_SOURCE_NAMES),
         "days": window_days,
     }
-    if keyword:
-        keyword_clause = "AND (title ILIKE :kw OR content ILIKE :kw)"
-        params["kw"] = f"%{keyword}%"
+    match_sql, match_params = _ilike_any_clause(
+        ["title ILIKE :{k}", "content ILIKE :{k}"], match_terms or [], "kw"
+    )
+    keyword_clause = f"AND {match_sql}" if match_sql else ""
+    params.update(match_params)
 
     with SessionLocal() as db:
         rows = (
@@ -2714,37 +2747,42 @@ def fetch_peer_cards_for_alignment(
     *,
     peer_id: str,
     window_days: int,
-    keyword: str | None = None,
-    keyword_category: str | None = None,
+    match_terms: Sequence[str] | None = None,
     importance_threshold: float = 0.5,
 ) -> list[dict[str, Any]]:
     """Peer 4사 (samsung_sds / lg_cns / posco_dx / hyundai_autoever) 의 card_news fetch.
 
     SK AX 는 card_news 0 건이므로 ``fetch_sk_ax_raw_for_alignment`` 사용.
     importance_threshold 미만 카드는 naver_news noise 제거 (design §13).
+
+    ``match_terms`` 는 트렌드 키워드의 한·영 변형 목록 — 트렌드 키워드(theme)는 영문
+    정규형이고 국내 피어 card_news 는 한글이라, 변형을 OR ILIKE 로 함께 건다.
+    과거의 ``primary_keyword_category`` 동일성 필터는 제거됨: card_news 의 sector
+    분류(ax/security/infra/deal)와 트렌드 토픽 카테고리(ai_tech/ai_infra/cloud…)가
+    서로 다른 분류 체계라, AND 비교가 AI 계열 트렌드를 항상 0건으로 만들었음.
     """
     if peer_id == "sk_ax":
-        return fetch_sk_ax_raw_for_alignment(window_days=window_days, keyword=keyword)
+        return fetch_sk_ax_raw_for_alignment(window_days=window_days, match_terms=match_terms)
 
-    clauses: list[str] = []
     params: dict[str, Any] = {
         "peer": peer_id,
         "days": window_days,
         "importance": importance_threshold,
     }
-    if keyword:
-        # global_search_text 는 gin_trgm_ops 인덱스 — ILIKE 빠름.
-        # title + global_search_text + keywords[] (text[]) 3 곳에서 매칭.
-        clauses.append(
-            "(title ILIKE :kw OR global_search_text ILIKE :kw"
-            " OR EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE :kw))"
-        )
-        params["kw"] = f"%{keyword}%"
-    if keyword_category:
-        clauses.append("primary_keyword_category = :category")
-        params["category"] = keyword_category
+    # global_search_text 는 gin_trgm_ops 인덱스 — ILIKE 빠름.
+    # title + global_search_text + keywords[] (text[]) 3 곳에서 매칭.
+    match_sql, match_params = _ilike_any_clause(
+        [
+            "title ILIKE :{k}",
+            "global_search_text ILIKE :{k}",
+            "EXISTS (SELECT 1 FROM unnest(keywords) kw WHERE kw ILIKE :{k})",
+        ],
+        match_terms or [],
+        "kw",
+    )
+    params.update(match_params)
 
-    filter_sql = (" AND " + " AND ".join(clauses)) if clauses else ""
+    filter_sql = f" AND {match_sql}" if match_sql else ""
 
     with SessionLocal() as db:
         rows = (
