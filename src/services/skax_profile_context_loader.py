@@ -25,6 +25,7 @@ from sqlalchemy import text
 
 from src.config.sectors import SECTOR_IDS, SECTOR_KEYWORDS, sector_name_ko
 from src.db.postgres import SessionLocal
+from src.llm import LLMSpec, build_chat_llm
 
 log = logging.getLogger(__name__)
 
@@ -461,31 +462,28 @@ skax_contexts:
 
 
 def _get_llm() -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
     global _llm
 
     if _llm is None:
-        _llm = ChatOpenAI(
-            model=_LLM_MODEL,
-            temperature=0.15,
-            max_completion_tokens=1000,
+        _llm = build_chat_llm(
+            LLMSpec(model=_LLM_MODEL, temperature=0.15, max_tokens=1000, reasoning_effort=None)
         )
 
     return _llm
 
 
 def _get_viewpoint_llm() -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
     global _viewpoint_llm
 
     if _viewpoint_llm is None:
-        _viewpoint_llm = ChatOpenAI(
-            model=_LLM_MODEL,
-            temperature=0.1,
-            max_completion_tokens=4000,
-            model_kwargs={"response_format": {"type": "json_object"}},
+        _viewpoint_llm = build_chat_llm(
+            LLMSpec(
+                model=_LLM_MODEL,
+                temperature=0.1,
+                max_tokens=4000,
+                json_object=True,
+                reasoning_effort=None,
+            )
         )
 
     return _viewpoint_llm

@@ -24,6 +24,7 @@ from sqlalchemy import text
 
 from src.contracts.chat_schemas import ChatTurnRequest
 from src.db.postgres import SessionLocal
+from src.llm import LLMSpec, build_chat_llm
 from src.observability.langfuse_client import (
     get_current_trace_id,
     tracing_config,
@@ -183,13 +184,15 @@ def _get_llm() -> Any:
     global _llm
     if _llm is None:
         ensure_llm_env_loaded()
-        from langchain_openai import ChatOpenAI
-
-        _llm = ChatOpenAI(
-            model=_chat_llm_model(),
-            temperature=0.12,
-            max_completion_tokens=1100,
-            model_kwargs={"response_format": {"type": "json_object"}},
+        # env 로 모델 지정 가능 → gpt-5 라도 reasoning_effort 미전달(기존 동작) 위해 None.
+        _llm = build_chat_llm(
+            LLMSpec(
+                model=_chat_llm_model(),
+                temperature=0.12,
+                max_tokens=1100,
+                json_object=True,
+                reasoning_effort=None,
+            )
         )
     return _llm
 

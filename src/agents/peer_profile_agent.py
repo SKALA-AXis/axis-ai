@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import text
 
 from src.db.postgres import SessionLocal
+from src.llm import LLMSpec, build_chat_llm
 from src.services.profile_evidence_selector import ProfileEvidenceSelector
 from src.services.profile_input_builder import ProfileInputBuilder
 from src.services.profile_snapshot_summarizer import (
@@ -83,12 +84,14 @@ class PeerProfileAgent:
 
     def _get_llm(self) -> Any:
         if self._llm is None:
-            from langchain_openai import ChatOpenAI
-
-            self._llm = ChatOpenAI(
-                model=_PROFILE_LLM_MODEL,
-                temperature=_PROFILE_LLM_TEMPERATURE,
-                max_completion_tokens=_PROFILE_LLM_MAX_COMPLETION_TOKENS,
+            # env 로 모델 지정 가능 → gpt-5 라도 reasoning_effort 미전달(기존 동작) 위해 None.
+            self._llm = build_chat_llm(
+                LLMSpec(
+                    model=_PROFILE_LLM_MODEL,
+                    temperature=_PROFILE_LLM_TEMPERATURE,
+                    max_tokens=_PROFILE_LLM_MAX_COMPLETION_TOKENS,
+                    reasoning_effort=None,
+                )
             )
         return self._llm
 
