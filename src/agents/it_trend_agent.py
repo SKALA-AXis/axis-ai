@@ -94,6 +94,46 @@ _TREND_KEYWORD_CANDIDATES: tuple[tuple[str, str, str], ...] = (
     ("robotics", "ai_tech", r"\brobot(ic|ics)?\b|로봇"),
 )
 
+# 피어 정합 매칭용 한·영 별칭. 트렌드 키워드(theme)는 영문 정규형이지만 국내 피어
+# card_news 는 한글이라, SQL ILIKE substring 매칭에 쓸 변형들을 함께 건다.
+# (detection 은 _TREND_KEYWORD_CANDIDATES 정규식을 쓰지만 ILIKE 는 정규식을 못 써 별도 정의)
+_ALIGNMENT_KEYWORD_ALIASES: dict[str, tuple[str, ...]] = {
+    "agentic ai": ("agentic ai", "에이전틱 ai", "ai 에이전트", "ai agent"),
+    "generative ai": ("generative ai", "genai", "생성형 ai", "생성형"),
+    "multimodal": ("multimodal", "multi-modal", "멀티모달", "멀티 모달"),
+    "rag": ("rag", "retrieval augmented", "검색 증강"),
+    "llm": ("llm", "large language model", "대규모 언어 모델", "거대 언어 모델", "언어 모델"),
+    "gpu": ("gpu", "그래픽 처리", "그래픽처리장치"),
+    "inference": ("inference", "추론"),
+    "foundation model": ("foundation model", "기반 모델", "파운데이션 모델"),
+    "ai infrastructure": ("ai infra", "ai 인프라"),
+    "cloud": ("cloud", "클라우드"),
+    "data center": ("data center", "데이터 센터", "데이터센터"),
+    "ai agent": ("ai agent", "ai 에이전트"),
+    "copilot": ("copilot", "코파일럿"),
+    "security": ("security", "보안", "사이버보안"),
+    "partnership": ("partnership", "파트너십", "제휴", "협력"),
+    "acquisition": ("acquisition", "인수", "합병", "m&a"),
+    "open source": ("open source", "오픈소스", "오픈 소스"),
+    "edge ai": ("edge ai", "온디바이스", "on-device", "엣지 ai"),
+    "quantum": ("quantum", "양자"),
+    "robotics": ("robotics", "robot", "로봇", "로보틱스"),
+}
+
+
+def alignment_match_terms(keyword: str) -> list[str]:
+    """피어 정합 ILIKE 매칭에 쓸 키워드 + 한·영 별칭 목록 (소문자, 중복 제거).
+
+    별칭 표가 없는 키워드는 키워드 자신만 돌려준다.
+    """
+    base = (keyword or "").strip().lower()
+    terms: list[str] = []
+    for term in (base, *_ALIGNMENT_KEYWORD_ALIASES.get(base, ())):
+        norm = term.strip().lower()
+        if norm and norm not in terms:
+            terms.append(norm)
+    return terms
+
 
 @dataclass
 class ITTrendInput:
@@ -636,8 +676,8 @@ def _phase3_peer_alignment(
 
     for det in detections:
         keyword = det["theme"]
-        category = det.get("keyword_category")
         global_mention_count = det["mention_count"]
+        match_terms = alignment_match_terms(keyword)
         # 글로벌 평균 활동 시점 (가장 최근 등장일).
         latest_global = _latest_global_date_for_keyword(snapshots, keyword)
         global_recency = (today - latest_global).days if latest_global else 999
@@ -648,8 +688,7 @@ def _phase3_peer_alignment(
                 cards = fetch_peer_cards_for_alignment(
                     peer_id=peer_id,
                     window_days=window_days,
-                    keyword=keyword,
-                    keyword_category=category,
+                    match_terms=match_terms,
                 )
             except Exception:
                 log.exception("ITTrendAgent | peer alignment fetch 실패 | peer=%s", peer_id)

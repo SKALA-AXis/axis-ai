@@ -26,6 +26,7 @@ from src.agents.it_trend_agent import (
     _resolve_previous_trend_context,
     _slugify,
     _trend_confidence_for_keyword,
+    alignment_match_terms,
 )
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -467,3 +468,34 @@ def test_strategic_note_payload_marks_missing_evidence(monkeypatch):
     # 근거 없을 때 추측 금지 규칙이 프롬프트에 명시돼 있는가
     assert "관련 공개 동향 미확인" in captured["prompt"]
     assert '"evidence_titles": []' in captured["prompt"]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# alignment_match_terms  (피어 정합 한·영 별칭 — 영문 theme ↔ 한글 card_news 매칭)
+# ──────────────────────────────────────────────────────────────────────────
+def test_alignment_match_terms_expands_korean_aliases_for_llm() -> None:
+    terms = alignment_match_terms("llm")
+    assert "llm" in terms
+    assert "대규모 언어 모델" in terms
+    # 영문 theme 만으로는 한글 card_news 와 안 맞으므로 한글 변형이 반드시 포함돼야 한다.
+    assert any(_is_korean(t) for t in terms)
+
+
+def test_alignment_match_terms_unknown_keyword_returns_self_only() -> None:
+    assert alignment_match_terms("blockchain") == ["blockchain"]
+
+
+def test_alignment_match_terms_normalizes_and_dedupes() -> None:
+    terms = alignment_match_terms("  GPU  ")
+    assert terms[0] == "gpu"
+    assert len(terms) == len(set(terms))
+    assert all(t == t.strip().lower() for t in terms)
+
+
+def test_alignment_match_terms_empty_keyword_returns_empty() -> None:
+    assert alignment_match_terms("") == []
+    assert alignment_match_terms("   ") == []
+
+
+def _is_korean(text: str) -> bool:
+    return any("가" <= ch <= "힣" for ch in text)
