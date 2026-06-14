@@ -33,6 +33,48 @@ def test_card_summary_preserves_integration_fact_summary_verbatim():
     assert lines == summary["fact_summary"]
 
 
+def test_card_summary_cleans_truncated_display_fragments_without_rewriting_source():
+    truncated = '젠슨 황 "韓, AI인프라 확장 필수"…AI팩토리 구축 협력[젠슨황 방한 4대...'
+    summary = {
+        "is_valid_summary": True,
+        "cluster_event_type": "general_update",
+        "main_company": "lg_cns",
+        "headline": truncated,
+        "fact_summary": [
+            truncated,
+            "황 CEO는 국내 주요 그룹 총수들과 회동하며 AI 인프라 구축 필요성을 강조했다.",
+            "AI 팩토리와 데이터센터 구축 논의가 함께 언급됐다.",
+        ],
+    }
+    articles = [
+        {
+            "id": 1,
+            "title": truncated,
+            "source_name": "news",
+            "url": "https://example.com/news",
+            "published_at": "2026-06-14T09:00:00+09:00",
+        }
+    ]
+
+    card = _card_from_summary(
+        summary=summary,
+        articles=articles,
+        company="lg_cns",
+        cluster_id=48797,
+        representative_id=1,
+        classification={},
+    )
+
+    assert summary["headline"] == truncated
+    assert card is not None
+    visible_text = " ".join([card["title"], *card["summary_lines"]])
+    assert "..." not in visible_text
+    assert "…" not in visible_text
+    assert "[젠슨황 방한" not in visible_text
+    assert "..." not in str((card.get("db_record") or {}).get("title"))
+    assert "…" not in str((card.get("db_record") or {}).get("title"))
+
+
 def test_card_summary_does_not_dedupe_or_backfill_integration_copy():
     summary = {
         "cluster_event_type": "contract",

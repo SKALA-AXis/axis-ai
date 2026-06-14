@@ -35,6 +35,7 @@ _CARD_DETAIL_MAX = 3
 _DISPLAY_ITEM_MIN = 1
 _DISPLAY_ITEM_PREFERRED = 3
 _DISPLAY_ITEM_MAX = 5
+_DISPLAY_TRUNCATED_MARKER_PATTERN = re.compile(r"\.\.\.|…")
 
 _FRONTEND_SECTOR_IDS = {
     "security",
@@ -181,7 +182,9 @@ class CardNewsComposer:
         published_date = _published_date(articles, created_at)
 
         title = _first_non_empty(
+            summary.get("display_headline"),
             summary.get("headline"),
+            summary.get("display_one_line_summary"),
             summary.get("one_line_summary"),
             analysis.get("analysis_summary"),
             classification.get("title"),
@@ -561,7 +564,9 @@ def _card_from_summary(
         summary_lines = _merge_summary_lines(summary_lines, _article_title_summary_lines(articles))
 
     title = _first_non_empty(
+        summary.get("display_headline"),
         summary.get("headline"),
+        summary.get("display_one_line_summary"),
         summary.get("one_line_summary"),
         classification.get("title"),
         articles[0].get("title"),
@@ -1117,7 +1122,7 @@ def _is_market_reaction_summary_line(text: str) -> bool:
 
 
 def _summary_line_for_display(line: str, key_numbers: dict[str, str]) -> str:
-    text = re.sub(r"\s+", " ", str(line or "")).strip()
+    text = _clean_display_truncated_fragment(line)
     if not text:
         return ""
     if text in key_numbers:
@@ -1868,7 +1873,11 @@ def _literal_summary_lines(
     fallback: list[str] | None = None,
 ) -> list[str]:
     """Return IntegratedIssue summary copy without display rewriting."""
-    lines = _list_string(summary.get("fact_summary"))
+    lines = _list_string(summary.get("display_fact_summary"))
+    if not lines:
+        lines = _list_string(summary.get("display_summary_lines"))
+    if not lines:
+        lines = _list_string(summary.get("fact_summary"))
     if not lines:
         lines = _list_string(summary.get("summary_lines"))
     if not lines:
@@ -1887,7 +1896,7 @@ def _literal_summary_lines(
     out: list[str] = []
     seen: set[str] = set()
     for line in lines:
-        text = str(line or "").strip()
+        text = _clean_display_truncated_fragment(line)
         key = re.sub(r"\s+", " ", text).casefold()
         if not text or key in seen:
             continue
@@ -2427,12 +2436,26 @@ def _ensure_card_sentence(text: str) -> str:
 
 
 def _clean_card_editorial_text(text: str) -> str:
-    out = re.sub(r"\s+", " ", str(text or "")).strip()
+    out = _clean_display_truncated_fragment(text)
     out = _normalize_company_surface_names(out)
     out = re.sub(r"[!！]+$", "", out).strip()
     out = re.sub(r"^함께\s+", "", out)
     out = re.sub(r"\s+함께\s+(?=\d+[조억만천]|\d+장|[A-Z0-9]+ 서비스)", " ", out)
     return out.strip()
+
+
+def _clean_display_truncated_fragment(text: Any) -> str:
+    """Clean display-only truncation without changing analysis source facts."""
+
+    out = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not out:
+        return ""
+    out = re.sub(r"\[[^\]]*(?:\.\.\.|…)[^\]]*$", "", out)
+    out = re.sub(r"\([^)]*(?:\.\.\.|…)[^)]*$", "", out)
+    out = _DISPLAY_TRUNCATED_MARKER_PATTERN.sub(" ", out)
+    out = re.sub(r"\s+", " ", out).strip()
+    out = re.sub(r"[\s\[\(「『\"'·,;:/\\|-]+$", "", out).strip()
+    return out
 
 
 def _clean_frontend_ready_text(text: Any) -> str:

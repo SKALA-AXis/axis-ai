@@ -10,6 +10,7 @@ AnalysisInputBundle 또는 NormalizedDataBundle을 받아 통합 이슈를 만�
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -24,6 +25,7 @@ from src.db.article_store import fetch_latest_trend_context, get_articles_by_ids
 
 _SUMMARY_LINE_MIN = 3
 _SUMMARY_LINE_MAX = 5
+_DISPLAY_TRUNCATED_MARKER_PATTERN = re.compile(r"\.\.\.|…")
 
 
 class IntegrationAgent:
@@ -353,11 +355,21 @@ def _tag_integrated_issue(
         fact_summary[0] if fact_summary else "",
         main_issue,
     )
+    display_headline = _clean_display_truncated_fragment(headline)
+    display_one_line_summary = _clean_display_truncated_fragment(one_line_summary)
+    display_fact_summary = [
+        display_line
+        for line in fact_summary
+        if (display_line := _clean_display_truncated_fragment(line))
+    ]
     integrated_article = _integrated_article_from_issue(
         integrated_issue,
         title=headline,
         lead=one_line_summary,
         body_summary_lines=fact_summary,
+        display_title=display_headline,
+        display_lead=display_one_line_summary,
+        display_body_summary_lines=display_fact_summary,
         consolidated_facts=consolidated_facts,
         fact_basis=fact_basis,
         source_article_ids=source_article_ids,
@@ -378,6 +390,9 @@ def _tag_integrated_issue(
         "main_issue": str(main_issue),
         "headline": headline,
         "one_line_summary": one_line_summary,
+        "display_headline": display_headline,
+        "display_one_line_summary": display_one_line_summary,
+        "display_fact_summary": display_fact_summary,
         "integrated_article": integrated_article,
         "integrated_text": str(integrated_text),
         "fact_summary": fact_summary,
@@ -425,6 +440,9 @@ def _integrated_article_from_issue(
     title: str,
     lead: str,
     body_summary_lines: list[str],
+    display_title: str,
+    display_lead: str,
+    display_body_summary_lines: list[str],
     consolidated_facts: list[dict[str, Any]],
     fact_basis: list[dict[str, Any]],
     source_article_ids: list[int],
@@ -443,6 +461,12 @@ def _integrated_article_from_issue(
         "lead": _first_non_empty(existing.get("lead"), lead),
         "body_summary_lines": _normalize_summary_lines(existing.get("body_summary_lines"))
         or body_summary_lines[:5],
+        "display_title": _first_non_empty(existing.get("display_title"), display_title),
+        "display_lead": _first_non_empty(existing.get("display_lead"), display_lead),
+        "display_body_summary_lines": _normalize_summary_lines(
+            existing.get("display_body_summary_lines")
+        )
+        or display_body_summary_lines[:5],
         "key_facts": key_facts,
         "fact_basis": fact_basis,
         "source_article_ids": source_article_ids,
@@ -564,6 +588,19 @@ def _fact_summary_from_issue(
     if not lines and integrated_text:
         lines = [integrated_text]
     return _dedupe_strings(lines)[:_SUMMARY_LINE_MAX]
+
+
+def _clean_display_truncated_fragment(text: Any) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    value = re.sub(r"\s+", " ", value).strip()
+    value = re.sub(r"\[[^\]]*(?:\.\.\.|…)[^\]]*$", "", value)
+    value = re.sub(r"\([^)]*(?:\.\.\.|…)[^)]*$", "", value)
+    value = _DISPLAY_TRUNCATED_MARKER_PATTERN.sub(" ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    value = re.sub(r"[\s\[\(「『\"'·,;:/\\|-]+$", "", value).strip()
+    return value
 
 
 def _normalize_summary_lines(value: Any) -> list[str]:

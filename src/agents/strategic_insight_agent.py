@@ -428,6 +428,11 @@ class StrategicInsightAgent:
                 integrated_issue=integrated_issue,
                 action_artifact_plan=action_artifact_plan,
             )
+            result = _polish_frontend_ready_screen_copy(
+                result,
+                integrated_issue=integrated_issue,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+            )
             if not self.enable_self_review:
                 return self._finalize_quality_gate(
                     result,
@@ -1672,6 +1677,11 @@ class StrategicInsightAgent:
                     frontend_ready=frontend_ready,
                     source="frontend_repair_direct",
                     integrated_issue=integrated_issue,
+                )
+                repaired = _polish_frontend_ready_screen_copy(
+                    repaired,
+                    integrated_issue=integrated_issue,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
                 )
                 normalized_frontend = _normalize_frontend_ready(
                     frontend_ready,
@@ -3020,7 +3030,7 @@ def _strip_frontend_ready_label(value: Any) -> str:
     text = str(value or "").strip()
     text = re.sub(r"^핵심\s*(?:시사점|대응)\s*:\s*", "", text).strip()
     text = re.sub(r"^근거\s*/?\s*설명\s*:\s*", "", text).strip()
-    return text
+    return _strip_article_style_lead(text)
 
 
 def _empty_strategic_insight(
@@ -3704,6 +3714,7 @@ def _industry_frontend_item(
         axis_key=str(axis.get("strategic_axis") or ""),
         anchors=anchors,
         decision_criteria=decision_criteria,
+        evidence_lines=evidence_lines,
     )
     return {
         "strategic_axis": axis.get("strategic_axis"),
@@ -4111,6 +4122,7 @@ def _industry_action_evidence_sentence(
     axis_key: str,
     anchors: Sequence[str],
     decision_criteria: Sequence[str],
+    evidence_lines: Sequence[str] = (),
 ) -> str:
     del axis_key
     anchor_phrase = _anchor_phrase(anchors, max_items=2)
@@ -4118,9 +4130,16 @@ def _industry_action_evidence_sentence(
     evidence_reading = _industry_action_evidence_reading_phrase(decision_criteria)
     dynamic_reading = _industry_dynamic_action_reading_from_anchors(anchors)
     if dynamic_reading:
+        fact_line = _industry_primary_action_evidence_line(evidence_lines)
+        role_reading = _industry_action_role_reading_phrase(
+            anchors,
+            decision_criteria=decision_criteria,
+        )
+        if fact_line and role_reading:
+            return f"{_short_fact_clause(fact_line, max_chars=118)} {role_reading}"
         return (
-            f"{anchor_phrase} 흐름에서 {dynamic_reading}이 부각되므로, SK AX도 "
-            "고객 적용 가능성과 운영 지원이 맞닿는 지점을 먼저 가려볼 수 있습니다."
+            f"{anchor_phrase} 흐름에서 {dynamic_reading}이 부각되므로, "
+            f"{role_reading or '참여 주체와 적용 단계의 역할 구분이 중요해질 수 있습니다.'}"
         )
     if evidence_reading and result_phrase:
         result_object = _with_korean_object_particle(result_phrase)
@@ -4132,6 +4151,75 @@ def _industry_action_evidence_sentence(
         f"{anchor_phrase}가 제시된 만큼, SK AX는 직접 사업화를 단정하기보다 "
         "참여 주체와 적용 조건을 기준으로 후속 판단 범위를 좁혀야 합니다."
     )
+
+
+def _industry_primary_action_evidence_line(evidence_lines: Sequence[str]) -> str:
+    return str(
+        next(
+            (item for item in evidence_lines if _is_substantive_industry_evidence_line(item)),
+            next((item for item in evidence_lines if str(item).strip()), ""),
+        )
+    ).strip()
+
+
+def _industry_action_role_reading_phrase(
+    anchors: Sequence[str],
+    *,
+    decision_criteria: Sequence[str],
+) -> str:
+    value = " ".join(str(anchor or "") for anchor in anchors)
+    normalized = {_anchor_norm(item) for item in decision_criteria}
+    has_actor_or_partner = bool(
+        {
+            _anchor_norm("참여 주체"),
+            _anchor_norm("파트너십 필요성"),
+        }
+        & normalized
+    ) or bool(re.search(r"협력|제휴|파트너|컨소시엄|그룹|기업|정부|기관|참여", value, flags=re.I))
+    has_infra_or_supply = bool(
+        {
+            _anchor_norm("기술 공급 구조"),
+            _anchor_norm("데이터/인프라 준비 수준"),
+        }
+        & normalized
+    ) or bool(
+        re.search(r"데이터\s*센터|데이터센터|GPU|AI\s*팩토리|컴퓨팅|인프라", value, flags=re.I)
+    )
+    has_operation_or_system = bool(
+        {
+            _anchor_norm("운영 책임"),
+            _anchor_norm("기존 시스템 접점"),
+            _anchor_norm("고객 적용 가능성"),
+            _anchor_norm("고객 제안 단위"),
+        }
+        & normalized
+    ) or bool(re.search(r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I))
+    if has_actor_or_partner and has_infra_or_supply:
+        return (
+            "기술을 제공하는 주체와 이를 적용하는 기업, 이후 운영을 맡는 주체의 "
+            "역할 구분이 중요해질 수 있습니다."
+        )
+    if has_actor_or_partner and has_operation_or_system:
+        return (
+            "서비스 제공자와 적용 조직, 운영 책임을 맡는 주체가 나뉠 수 있어 "
+            "검토 기준도 실행 단계별로 달라질 수 있습니다."
+        )
+    if has_infra_or_supply:
+        return (
+            "기술·인프라 확보 여부만이 아니라 실제 적용 이후의 운영 조건까지 "
+            "함께 비교해야 하는 흐름으로 이어질 수 있습니다."
+        )
+    if has_actor_or_partner:
+        return (
+            "참여 주체가 여럿이면 협력 자체보다 각 주체가 맡는 역할과 후속 실행 "
+            "책임을 구분하는 것이 중요해질 수 있습니다."
+        )
+    if has_operation_or_system:
+        return (
+            "고객 업무에 닿는 적용 범위와 운영 책임이 함께 제시될수록 검토 기준도 "
+            "시스템 접점과 실행 단계로 나뉠 수 있습니다."
+        )
+    return ""
 
 
 def _industry_criteria_phrase(criteria: Sequence[str], *, max_items: int = 3) -> str:
@@ -4226,7 +4314,8 @@ def _natural_join(values: Sequence[str]) -> str:
 
 
 def _short_fact_clause(value: Any, *, max_chars: int = 92) -> str:
-    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = _strip_article_style_lead(str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return ""
     text = re.sub(r"(?:다|요)\.\s*$", "", text)
@@ -4234,6 +4323,143 @@ def _short_fact_clause(value: Any, *, max_chars: int = 92) -> str:
         return text + "는 점에서,"
     shortened = text[:max_chars].rstrip(" ,.;:·ㆍ")
     return shortened + " 등이 제시되며,"
+
+
+def _strip_article_style_lead(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    text = re.sub(
+        r"^(?:\d{1,2}일\s*)?(?:업계|회사|관계자|외신|언론|공시|발표|보도)에\s*따르면\s*,?\s*",
+        "",
+        text,
+    )
+    text = re.sub(
+        r"^(?:[가-힣A-Za-z0-9&._ -]+은|[가-힣A-Za-z0-9&._ -]+는)\s*"
+        r"(?:\d{1,2}일\s*)?(?:밝혔다|전했다|설명했다|발표했다)[,.]?\s*",
+        "",
+        text,
+    )
+    return text.strip()
+
+
+def _polish_frontend_ready_screen_copy(
+    result: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    implication = result.get("implication")
+    if not isinstance(implication, dict):
+        return result
+    frontend_ready = implication.get("frontend_ready")
+    if isinstance(frontend_ready, dict):
+        for block_key in ("key_implication", "suggested_action"):
+            block = frontend_ready.get(block_key)
+            if not isinstance(block, dict):
+                continue
+            sentence = _strip_article_style_lead(block.get("sentence"))
+            evidence_sentence = _strip_article_style_lead(block.get("evidence_sentence"))
+            if block_key == "suggested_action":
+                sentence = _generalize_peer_structure_in_action_sentence(
+                    sentence,
+                    integrated_issue=integrated_issue,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                )
+            block["sentence"] = sentence
+            block["evidence_sentence"] = evidence_sentence
+    industry_ready = implication.get("industry_frontend_ready")
+    if isinstance(industry_ready, dict):
+        for item in industry_ready.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            for block_key in ("key_implication", "suggested_action"):
+                block = item.get(block_key)
+                if not isinstance(block, dict):
+                    continue
+                sentence = _strip_article_style_lead(block.get("sentence"))
+                evidence_sentence = _strip_article_style_lead(block.get("evidence_sentence"))
+                if block_key == "suggested_action":
+                    sentence = _generalize_peer_structure_in_action_sentence(
+                        sentence,
+                        integrated_issue=integrated_issue,
+                        profile_linkage_evaluation=profile_linkage_evaluation,
+                    )
+                block["sentence"] = sentence
+                block["evidence_sentence"] = evidence_sentence
+    return result
+
+
+def _generalize_peer_structure_in_action_sentence(
+    sentence: str,
+    *,
+    integrated_issue: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any] | None = None,
+) -> str:
+    text = _strip_article_style_lead(sentence)
+    if not text:
+        return ""
+    replacement = _action_structure_axis_phrase(integrated_issue)
+    peer_terms = _peer_only_issue_product_terms(
+        integrated_issue,
+        profile_linkage_evaluation=profile_linkage_evaluation,
+    )
+    for term in peer_terms:
+        if not term or not _text_has_anchor_term(text, [term]):
+            continue
+        text = re.sub(
+            rf"{re.escape(str(term))}(?:\s*(?:처럼|같이|기반(?:의)?|중심(?:의)?|구조|라인업|제안))?",
+            replacement,
+            text,
+            flags=re.IGNORECASE,
+        )
+    if re.search(r"기준|비교|구분|분리|나눠|검토|점검|판단", text):
+        text = re.sub(
+            r"\d+\s*개\s*(?:모듈|라인업|서비스|제품|솔루션)(?:형|의| 기반| 중심| 라인업| 제안)?",
+            replacement,
+            text,
+        )
+        text = re.sub(
+            r"(?:모듈|라인업|제품\s*구조|서비스\s*라인업)\s*(?:기반|형|구조|제안)",
+            replacement,
+            text,
+        )
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(
+        rf"(?:{re.escape(replacement)})(?:\s*(?:와|과)\s*){re.escape(replacement)}",
+        replacement,
+        text,
+    )
+    return text
+
+
+def _action_structure_axis_phrase(integrated_issue: dict[str, Any]) -> str:
+    grounding = _integrated_grounding_text(integrated_issue)
+    signals = _extract_issue_structured_signals(
+        integrated_issue=integrated_issue,
+        classification={},
+    )
+    target_text = " ".join(
+        [
+            grounding,
+            " ".join(_string_list(signals.get("target_systems"), max_items=8)),
+            " ".join(_string_list(signals.get("activity_types"), max_items=8)),
+        ]
+    )
+    axes: list[str] = []
+    if re.search(r"ERP|메일|문서|데이터베이스|업무\s*시스템|사용자\s*PC|자연어", target_text):
+        axes.extend(["기존 업무 시스템 접점", "실제 업무 처리 범위"])
+    if re.search(r"로봇|물류|관제|학습|센터|현장", target_text):
+        axes.extend(["적용 업무", "운영 역할"])
+    if re.search(r"보안|취약점|탐지|사고|모니터링|대응", target_text):
+        axes.extend(["보안 책임 구간", "외부 협력 필요성"])
+    if re.search(r"GPU|데이터센터|인프라|AI\s*팩토리|컴퓨팅", target_text, flags=re.IGNORECASE):
+        axes.extend(["고객 적용 단계", "운영 지원 범위"])
+    if re.search(r"계약|수주|공급|운영|DevOps|장애", target_text, flags=re.IGNORECASE):
+        axes.extend(["운영 책임 구간", "후속 지원 범위"])
+    if not axes:
+        axes.extend(["적용 업무", "대상 시스템", "운영 역할"])
+    return "·".join(_dedupe_keep_order(axes)[:2])
 
 
 def _is_substantive_industry_evidence_line(value: Any) -> bool:
@@ -6117,6 +6343,20 @@ def _frontend_ready_peer_product_as_skax_basis_violation(
             "피어사 고유 제품명을 SK AX 내부 판단 근거처럼 사용했습니다. "
             "대응방향 근거에서는 피어 제품명보다 현재 사건의 기능·업무 범위와 "
             "SK AX 연결 강도를 기준으로 설명해야 합니다."
+        )
+    peer_structure_pattern = (
+        r"\d+\s*개\s*(?:모듈|라인업|서비스|제품|솔루션)|"
+        r"(?:모듈|라인업|제품\s*구조|서비스\s*라인업)\s*(?:기반|형|구조|제안)"
+    )
+    if re.search(peer_structure_pattern, sentence) and re.search(
+        action_basis_pattern + r"|기준|비교|구분|나눠",
+        sentence,
+    ):
+        return (
+            "피어사의 제품 구조, 모듈 수, 고유 라인업을 SK AX 대응방향의 직접 "
+            "비교 기준처럼 사용했습니다. 대응방향 sentence에서는 제품 구조를 "
+            "그대로 옮기지 말고 적용 업무, 대상 시스템, 처리 범위, 운영 역할, "
+            "기존 시스템 접점 같은 일반 판단 축으로 낮춰야 합니다."
         )
     return ""
 
