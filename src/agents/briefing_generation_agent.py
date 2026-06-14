@@ -476,10 +476,7 @@ def _strip_visual_ellipsis_from_payload(value: Any) -> Any:
     if isinstance(value, list):
         return [_strip_visual_ellipsis_from_payload(item) for item in value]
     if isinstance(value, dict):
-        return {
-            key: _strip_visual_ellipsis_from_payload(item)
-            for key, item in value.items()
-        }
+        return {key: _strip_visual_ellipsis_from_payload(item) for key, item in value.items()}
     return value
 
 
@@ -490,8 +487,7 @@ def _sanitize_internal_display_terms_from_payload(value: Any) -> Any:
         return [_sanitize_internal_display_terms_from_payload(item) for item in value]
     if isinstance(value, dict):
         return {
-            key: _sanitize_internal_display_terms_from_payload(item)
-            for key, item in value.items()
+            key: _sanitize_internal_display_terms_from_payload(item) for key, item in value.items()
         }
     return value
 
@@ -706,7 +702,9 @@ def _ensure_sentence_list(container: dict[str, Any], key: str) -> None:
     values = container.get(key)
     if isinstance(values, list):
         container[key] = [
-            _ensure_terminal_period(_sanitize_visible_copy_text(item)) if isinstance(item, str) else item
+            _ensure_terminal_period(_sanitize_visible_copy_text(item))
+            if isinstance(item, str)
+            else item
             for item in values
         ]
 
@@ -1998,7 +1996,9 @@ def _display_market_reading(
             (
                 label,
                 finding,
-                _brief_sentences(block.get("rationale"), max_sentences=2, max_chars=_DISPLAY_REASON_MAX),
+                _brief_sentences(
+                    block.get("rationale"), max_sentences=2, max_chars=_DISPLAY_REASON_MAX
+                ),
             )
         )
     return [
@@ -2118,10 +2118,14 @@ def _core_change_insight_items(
             ),
             max_chars=_DISPLAY_BODY_MAX,
         )
-    if len(_entry_company_labels(entries)) >= 2 and _visible_company_count(
-        competitor_summary,
-        entries,
-    ) < 2:
+    if (
+        len(_entry_company_labels(entries)) >= 2
+        and _visible_company_count(
+            competitor_summary,
+            entries,
+        )
+        < 2
+    ):
         competitor_summary = _brief_sentences(
             _competitor_move_flow_summary(entries),
             max_sentences=3,
@@ -2311,9 +2315,7 @@ def _market_signal_reason_summary(entries: list[dict[str, Any]]) -> str:
     if reasons:
         return f"이 변화는 단발 이슈보다 {reasons[0]} 흐름과 연결됩니다."
     if len(entries) >= 2:
-        return (
-            "수요 변화와 평가 기준 변화가 같은 방향으로 확인되고 있습니다."
-        )
+        return "수요 변화와 평가 기준 변화가 같은 방향으로 확인되고 있습니다."
     return "이 신호는 이후 수요 변화와 평가 기준을 확인할 시장 변화로 해석됩니다."
 
 
@@ -2326,7 +2328,9 @@ def _competitor_move_flow_summary(entries: list[dict[str, Any]]) -> str:
                 f"{joined} 이 흐름은 같은 시장 신호라도 경쟁사마다 고객 적용 범위와 "
                 "구축 방식을 다르게 제시하고 있음을 보여줍니다."
             )
-        return "경쟁사별 발표가 고객 적용 범위, 구축 방식, 성과 근거를 비교할 신호로 나뉘고 있습니다."
+        return (
+            "경쟁사별 발표가 고객 적용 범위, 구축 방식, 성과 근거를 비교할 신호로 나뉘고 있습니다."
+        )
     signal = _first_text(
         _first_from_list([entry.get("peer_meaning") for entry in entries]),
         _first_from_list([entry.get("analysis_summary") for entry in entries]),
@@ -3738,7 +3742,7 @@ def _strip_leading_company_prefix(value: str, company: str) -> str:
     text = str(value or "").strip()
     company_text = str(company or "").strip()
     if company_text and text.startswith(company_text):
-        text = text[len(company_text):]
+        text = text[len(company_text) :]
     text = re.sub(r"^[\s,，·ㆍ:;/'\"-]+", "", text)
     text = re.sub(r"^(은|는|이|가|의|와|과)\s*", "", text)
     text = re.sub(r"^[\s,，·ㆍ:;/'\"-]+", "", text)
