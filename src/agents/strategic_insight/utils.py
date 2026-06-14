@@ -6,17 +6,7 @@
 import json
 from typing import Any
 
-
-def _json_dict(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
+from src.shared.json_helpers import json_dict as _json_dict  # noqa: F401  — 재export 유지(R2)
 
 
 def _jsonish_list(value: Any) -> list[Any]:
