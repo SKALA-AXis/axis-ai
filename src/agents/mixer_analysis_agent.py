@@ -56,6 +56,7 @@ from src.services.llm_env import (
     is_missing_llm_credentials_error,
     missing_llm_credentials_message,
 )
+from src.shared.json_helpers import json_dict as _json_dict
 
 log = logging.getLogger(__name__)
 
@@ -1278,18 +1279,6 @@ def _format_analysis_units(cards: list[dict]) -> str:
 def _format_cards(cards: list[dict]) -> str:
     """Backward-compatible alias for older tests/imports."""
     return _format_analysis_units(cards)
-
-
-def _json_dict(value: object) -> dict:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
 
 
 def _json_list(value: object) -> list:

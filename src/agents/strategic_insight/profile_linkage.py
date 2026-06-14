@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -20,6 +19,7 @@ from src.agents.strategic_insight.utils import (  # noqa: F401  — 분리 모�
     _with_particle,
 )
 from src.services.peer_id_aliases import expand_peer_aliases
+from src.shared.json_helpers import json_dumps as _json_dumps
 
 _SUPPLY_CONTRACT_PATTERN = re.compile(r"공급\s*계약|공급계약|납품|구매|조달|계약\s*체결|계약")
 
@@ -2256,10 +2256,3 @@ def _compact_value(value: Any) -> Any:
                 break
         return out
     return value
-
-
-def _json_dumps(value: Any) -> str:
-    try:
-        return json.dumps(value, ensure_ascii=False, indent=2, default=str)
-    except (TypeError, ValueError):
-        return json.dumps(str(value), ensure_ascii=False)

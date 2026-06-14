@@ -8,6 +8,8 @@ from datetime import UTC, date, datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.shared.json_helpers import json_dict as _json_dict
+
 KST = ZoneInfo("Asia/Seoul")
 
 
@@ -82,18 +84,6 @@ def _nested_get(value: object, *keys: str) -> object:
             return None
         current = current.get(key)
     return current
-
-
-def _json_dict(value: object) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
 
 
 def _json_list(value: object) -> list[Any]:
