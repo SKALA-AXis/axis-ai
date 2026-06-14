@@ -24,6 +24,7 @@ from src.analysis.prompts.weekly_digest_v1 import (
     USER_PROMPT_TEMPLATE,
 )
 from src.db.postgres import SessionLocal
+from src.llm import LLMSpec, build_chat_llm
 from src.services.peer_id_aliases import expand_peer_aliases
 
 log = logging.getLogger(__name__)
@@ -251,13 +252,13 @@ class WeeklyDigestAgent:
         return latest if isinstance(latest, dict) else None
 
     def _get_llm(self) -> ChatOpenAI:
-        from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
         if self._llm is None:
-            self._llm = ChatOpenAI(
-                model=_LLM_MODEL,
-                temperature=_LLM_TEMPERATURE,
-                max_completion_tokens=_LLM_MAX_COMPLETION_TOKENS,
+            self._llm = build_chat_llm(
+                LLMSpec(
+                    model=_LLM_MODEL,
+                    temperature=_LLM_TEMPERATURE,
+                    max_tokens=_LLM_MAX_COMPLETION_TOKENS,
+                )
             )
         return self._llm
 

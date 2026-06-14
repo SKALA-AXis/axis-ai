@@ -45,6 +45,7 @@ from src.analysis.prompts.implication_v5 import (
     SYSTEM_PROMPT_V5,
     USER_PROMPT_TEMPLATE_V5,
 )
+from src.llm import LLMSpec, build_chat_llm
 
 log = logging.getLogger(__name__)
 
@@ -187,13 +188,13 @@ class ImplicationAgent:
     # Internals
     # ──────────────────────────────────────────────────────────────────────
     def _get_llm(self) -> ChatOpenAI:
-        from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
         if self._llm is None:
-            self._llm = ChatOpenAI(
-                model=_LLM_MODEL,
-                temperature=_LLM_TEMPERATURE,
-                max_completion_tokens=_LLM_MAX_COMPLETION_TOKENS,
+            self._llm = build_chat_llm(
+                LLMSpec(
+                    model=_LLM_MODEL,
+                    temperature=_LLM_TEMPERATURE,
+                    max_tokens=_LLM_MAX_COMPLETION_TOKENS,
+                )
             )
         return self._llm
 
