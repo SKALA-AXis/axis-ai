@@ -6,8 +6,13 @@ from src.agents.briefing import data_layer as briefing_data_layer
 from src.agents.briefing_generation_agent import (
     BriefingGenerationAgent,
     _display_copy_context,
+    _front_peer_move_sentence,
+    _front_briefing_meaning,
+    _front_step_item,
     _normalize_mock_item,
+    _resolve_period,
 )
+from src.agents.briefing.data_layer import _clip_text
 from src.api.briefing_schemas import BriefingGenerateRequest, BriefingGenerateResponse
 
 
@@ -61,6 +66,42 @@ def _mock_item(
             },
         },
     }
+
+
+def _flatten_strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [text for item in value for text in _flatten_strings(item)]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _flatten_strings(item)]
+    return []
+
+
+def test_weekly_period_accumulates_only_through_anchor_date():
+    monday = _resolve_period("weekly", "2026-06-08")
+    tuesday = _resolve_period("weekly", "2026-06-09")
+    friday = _resolve_period("weekly", "2026-06-12")
+
+    assert monday["date_from"].isoformat() == "2026-06-08"
+    assert monday["date_to"].isoformat() == "2026-06-08"
+    assert tuesday["date_from"].isoformat() == "2026-06-08"
+    assert tuesday["date_to"].isoformat() == "2026-06-09"
+    assert friday["date_from"].isoformat() == "2026-06-08"
+    assert friday["date_to"].isoformat() == "2026-06-12"
+
+
+def test_monthly_period_accumulates_only_through_anchor_date():
+    first_day = _resolve_period("monthly", "2026-06-01")
+    second_day = _resolve_period("monthly", "2026-06-02")
+    mid_month = _resolve_period("monthly", "2026-06-12")
+
+    assert first_day["date_from"].isoformat() == "2026-06-01"
+    assert first_day["date_to"].isoformat() == "2026-06-01"
+    assert second_day["date_from"].isoformat() == "2026-06-01"
+    assert second_day["date_to"].isoformat() == "2026-06-02"
+    assert mid_month["date_from"].isoformat() == "2026-06-01"
+    assert mid_month["date_to"].isoformat() == "2026-06-12"
 
 
 def test_briefing_filters_integrated_issue_ids_with_period():
@@ -204,6 +245,111 @@ def test_briefing_display_copy_context_uses_analysis_units():
     assert "analysis_packages" not in context
     assert context["analysis_units"][0]["integrated_issue_id"] == issue_id
     assert context["source_integrated_issue_ids"] == [issue_id]
+
+
+def test_briefing_result_does_not_persist_visual_ellipsis_or_basis_prefix():
+    issue_id = "11111111-1111-1111-1111-111111111111"
+    other_issue_id = "22222222-2222-2222-2222-222222222222"
+    items = [
+        _mock_item(
+            "CN-1",
+            issue_id,
+            created_at="2026-06-04T09:00:00+09:00",
+            recommended_actions=[
+                "SK AX는 고객군별 보안 승인 기준을 정하고...",
+                "SK AX는 오퍼링 책임 조직을 지정한다…",
+                "피어 프로필 기반으로 선택된 카드들을 정리한다.",
+            ],
+        ),
+        _mock_item(
+            "CN-2",
+            other_issue_id,
+            created_at="2026-06-04T10:00:00+09:00",
+        ),
+    ]
+
+    result = asyncio.run(
+        BriefingGenerationAgent().generate(
+            briefing_type="daily",
+            anchor_date="2026-06-04",
+            use_mock=True,
+            mock_items=items,
+            refine_display_copy=False,
+            reuse_saved=False,
+        )
+    )
+
+    generated_text = " ".join(_flatten_strings(result))
+    assert "..." not in generated_text
+    assert "…" not in generated_text
+    assert "⋯" not in generated_text
+    assert "구체 근거" not in generated_text
+    assert "선택된 카드" not in generated_text
+    assert "피어 프로필" not in generated_text
+    assert "프로필" not in generated_text
+    assert "감지된 수요 변화에 맞춰 사업 방향과 실행 메시지" not in generated_text
+    assert "감지된 수요 변화에 맞춰 기술·사업 역량" not in generated_text
+
+    key_change_cards = result["key_change_cards"]
+    assert key_change_cards[0]["description"] != key_change_cards[1]["description"]
+    for card in key_change_cards:
+        assert card["title"].endswith(".")
+        assert card["description"].endswith(".")
+        assert card["why_important"].endswith(".")
+    briefing_report = result["briefingReport"]
+    assert briefing_report["headline"].endswith(".")
+    assert briefing_report["briefingLead"].endswith(".")
+    assert briefing_report["briefingSummaryLine"].endswith(".")
+    for card in briefing_report["signalCards"]:
+        assert card["title"].endswith(".")
+        assert card["summary"].endswith(".")
+        assert card["reason"].endswith(".")
+
+
+def test_briefing_front_visible_copy_keeps_long_body_text():
+    long_summary = (
+        "금융과 공공 고객군에서 보안 승인 기준, 운영 책임 조직, 적용 업무 범위가 "
+        "동시에 확인되며, 이는 단순 기술 소개가 아니라 고객이 실제 도입 전에 "
+        "검토하는 리스크 게이트와 책임 구조가 사업 우선순위 판단으로 올라왔다는 "
+        "의미입니다."
+    )
+    meaning = _front_briefing_meaning(
+        {
+            "briefing_basis": {
+                "comparison_point": {
+                    "finding": "실행 조건 변화가 확인됩니다.",
+                    "rationale": long_summary,
+                },
+            },
+        },
+        [],
+    )
+    combined_visible_text = " ".join(_flatten_strings(meaning))
+    assert "리스크 게이트와 책임 구조" in combined_visible_text
+    assert "사업 우선순위 판단으로 올라왔다는 의미입니다." in combined_visible_text
+
+    step = _front_step_item(
+        title="실행 조건 변화가 확인됩니다.",
+        description=long_summary,
+        evidence_card_ids=["CN-1", "CN-2"],
+    )
+    assert step["description"].endswith("사업 우선순위 판단으로 올라왔다는 의미입니다.")
+
+
+def test_briefing_copy_keeps_decimal_percent_and_strips_company_comma():
+    value = "LG CNS, 내부거래 비중 47.1%로 최저 기록."
+
+    assert _clip_text(value, max_chars=28) != "LG CNS, 내부거래 비중 47."
+    assert "47.1%" in _clip_text(value, max_chars=40)
+
+    sentence = _front_peer_move_sentence(
+        {
+            "company": "LG CNS",
+            "peer_meaning": value,
+        }
+    )
+    assert sentence.startswith("LG CNS는 내부거래 비중 47.1%로 최저 기록")
+    assert "LG CNS는 ," not in sentence
 
 
 def test_briefing_schema_accepts_integrated_issue_ids():

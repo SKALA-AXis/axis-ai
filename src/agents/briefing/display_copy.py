@@ -144,6 +144,13 @@ def _display_copy_quality_issues(
         )
 
     texts = _display_copy_visible_texts(draft)
+    internal_terms = ("선택된 카드", "피어 프로필", "프로필", "analysis_units", "card_signal_index")
+    if any(term in text for text in texts for term in internal_terms):
+        issues.append(
+            "화면 문장에 내부 시스템 용어가 포함되어 있습니다. "
+            "'선택된 카드', '피어 프로필', '프로필', 'analysis_units', "
+            "'card_signal_index'를 사용자 언어로 풀어 쓰세요."
+        )
     strong_terms = ("두각", "입지", "경쟁 우위", "주도하고", "선도하고")
     if any(term in text for text in texts for term in strong_terms):
         issues.append(

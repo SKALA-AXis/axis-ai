@@ -17,8 +17,9 @@ class BriefingGenerateRequest(BaseModel):
 
     Args:
         briefing_type: 기준 기간 타입. custom 은 사용하지 않는다.
-        anchor_date: 기간 계산 기준 날짜. daily 는 해당 일, weekly 는 포함 주,
-            monthly 는 포함 월로 계산한다. ``YYYY-MM`` 문자열도 월간 anchor 로 허용한다.
+        anchor_date: 기간 계산 기준 날짜. daily 는 해당 일, weekly 는 주 시작일부터
+            기준일까지, monthly 는 월초부터 기준일까지 계산한다. ``YYYY-MM`` 문자열도
+            월간 anchor 로 허용하며 해당 월 1일로 해석된다.
         card_ids: 직접 선택한 카드 id. 들어와도 기간 밖 카드는 제외된다.
         integrated_issue_ids: 직접 선택한 integrated issue id. 들어와도 기간 밖 항목은 제외된다.
         peer_ids: 경쟁사 필터.
