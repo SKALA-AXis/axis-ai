@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 from sqlalchemy import text
 
 from src.db.postgres import SessionLocal
+from src.llm import LLMSpec, build_chat_llm
 from src.middleware.analysis_ledger import with_ledger_writeback
 from src.observability.langfuse_client import tracing_config
 from src.services.agent_output_validation import (
@@ -52,15 +53,10 @@ _llm: ChatOpenAI | None = None
 
 
 def _get_llm() -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
     global _llm
     if _llm is None:
-        _llm = ChatOpenAI(
-            model=_LLM_MODEL,
-            temperature=0.3,
-            max_completion_tokens=3000,
-            model_kwargs={"response_format": {"type": "json_object"}},
+        _llm = build_chat_llm(
+            LLMSpec(model=_LLM_MODEL, temperature=0.3, max_tokens=3000, json_object=True)
         )
     return _llm
 

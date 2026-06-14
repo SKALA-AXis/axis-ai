@@ -144,6 +144,10 @@ def _get_llm() -> ChatOpenAI:
     global _llm
 
     if _llm is None:
+        # 공용 build_chat_llm 미적용(의도적 예외): 여기는 model+temperature 만 가진
+        # base LLM 이고, max_completion_tokens·response_format 은 호출마다 .bind() 로
+        # 동적 주입한다(L1126·L2340). 팩토리는 생성 시 캡을 강제하므로 base 구성이
+        # 달라진다. 통합할 boilerplate(gpt-5 분기·json_object·고정 캡)도 없어 제외.
         _llm = ChatOpenAI(
             model=_LLM_MODEL,
             temperature=0.1,

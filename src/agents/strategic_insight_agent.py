@@ -127,6 +127,7 @@ from src.agents.strategic_insight.utils import (  # noqa: F401  — 분리 모�
 from src.analysis.models import AnalysisContext, AnalysisInputBundle, ProfileContext
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES
 from src.db.postgres import SessionLocal
+from src.llm import LLMSpec, build_chat_llm
 from src.rag.precedent_search import QdrantPrecedentSearch
 from src.services.analysis_context_builder import AnalysisContextBuilder
 from src.services.peer_id_aliases import expand_peer_aliases
@@ -715,18 +716,21 @@ class StrategicInsightAgent:
         return result
 
     def _get_llm(self, *, model: str | None = None) -> ChatOpenAI:
-        from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
         if self._llm is not None:
             return self._llm
         model_name = str(model or _LLM_MODEL or _DEFAULT_LLM_MODEL).strip() or _DEFAULT_LLM_MODEL
         if model_name not in self._llm_cache:
-            self._llm_cache[model_name] = ChatOpenAI(
-                model=model_name,
-                temperature=_LLM_TEMPERATURE,
-                max_completion_tokens=_LLM_MAX_COMPLETION_TOKENS,
-                timeout=_LLM_REQUEST_TIMEOUT_SECONDS,
-                max_retries=1,
+            # 기존 동작 보존: json_object 미사용, gpt-5 라도 reasoning_effort
+            # 미전달(reasoning_effort=None), timeout·max_retries 유지.
+            self._llm_cache[model_name] = build_chat_llm(
+                LLMSpec(
+                    model=model_name,
+                    temperature=_LLM_TEMPERATURE,
+                    max_tokens=_LLM_MAX_COMPLETION_TOKENS,
+                    reasoning_effort=None,
+                    timeout=_LLM_REQUEST_TIMEOUT_SECONDS,
+                    max_retries=1,
+                )
             )
         return self._llm_cache[model_name]
 

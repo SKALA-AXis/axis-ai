@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import text
 
 from src.db.postgres import SessionLocal
+from src.shared.json_helpers import json_dict as _json_dict
 
 log = logging.getLogger(__name__)
 
@@ -597,18 +598,6 @@ def _is_missing_v40_storage(exc: Exception) -> bool:
     return (
         "undefinedcolumn" in message or "undefinedtable" in message or "does not exist" in message
     )
-
-
-def _json_dict(value: object) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
 
 
 def _json_list(value: object) -> list[Any]:

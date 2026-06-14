@@ -27,6 +27,7 @@ from src.api.today_insight_schemas import (
     TodayInsightGenerateRequest,
     TodayInsightGenerateResponse,
 )
+from src.llm import LLMSpec, build_chat_llm
 from src.schemas import (
     BriefingContent,
     BriefingRequest,
@@ -746,8 +747,6 @@ def _try_gen_search_llm_answer(query: str, hits: list[dict[str, object]]) -> str
     if not llm_credentials_ready():
         return ""
     try:
-        from langchain_openai import ChatOpenAI
-
         payload = {
             "query": query,
             "sources": [
@@ -779,11 +778,15 @@ AXIS Generative Search 답변을 작성합니다.
 {{"answer":"근거 기반 답변"}}
 """
         model = os.getenv("GEN_SEARCH_LLM_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o-mini"
-        llm = ChatOpenAI(
-            model=model,
-            temperature=0.1,
-            max_completion_tokens=800,
-            model_kwargs={"response_format": {"type": "json_object"}},
+        # env 로 모델 지정 가능 → gpt-5 라도 reasoning_effort 미전달(기존 동작) 위해 None.
+        llm = build_chat_llm(
+            LLMSpec(
+                model=model,
+                temperature=0.1,
+                max_tokens=800,
+                json_object=True,
+                reasoning_effort=None,
+            )
         )
         result = llm.invoke(prompt)
         parsed = json.loads(str(getattr(result, "content", result) or "{}"))

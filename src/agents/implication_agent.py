@@ -45,6 +45,8 @@ from src.analysis.prompts.implication_v5 import (
     SYSTEM_PROMPT_V5,
     USER_PROMPT_TEMPLATE_V5,
 )
+from src.llm import LLMSpec, build_chat_llm
+from src.shared.json_helpers import json_dumps as _json_dumps
 
 log = logging.getLogger(__name__)
 
@@ -187,13 +189,13 @@ class ImplicationAgent:
     # Internals
     # ──────────────────────────────────────────────────────────────────────
     def _get_llm(self) -> ChatOpenAI:
-        from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
         if self._llm is None:
-            self._llm = ChatOpenAI(
-                model=_LLM_MODEL,
-                temperature=_LLM_TEMPERATURE,
-                max_completion_tokens=_LLM_MAX_COMPLETION_TOKENS,
+            self._llm = build_chat_llm(
+                LLMSpec(
+                    model=_LLM_MODEL,
+                    temperature=_LLM_TEMPERATURE,
+                    max_tokens=_LLM_MAX_COMPLETION_TOKENS,
+                )
             )
         return self._llm
 
@@ -458,13 +460,6 @@ def _compact_profile_value(value: Any) -> Any:
     if isinstance(value, str):
         return value[:700]
     return value
-
-
-def _json_dumps(value: Any) -> str:
-    try:
-        return json.dumps(value, ensure_ascii=False, indent=2, default=str)
-    except (TypeError, ValueError):
-        return json.dumps(str(value), ensure_ascii=False)
 
 
 def _parse_and_normalize(

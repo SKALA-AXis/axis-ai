@@ -121,3 +121,9 @@ name = "llm is a leaf layer (no axis-internal upward imports)"
 type = "forbidden"
 source_modules = ["src.llm"]
 forbidden_modules = ["src.api", "src.agents", "src.services", "src.pipeline", "src.db", "src.preprocessing", "src.analysis", "src.composers", "src.extractors", "src.crawler", "src.rag"]
+
+[[tool.importlinter.contracts]]
+name = "shared is a leaf layer (no axis-internal upward imports)"
+type = "forbidden"
+source_modules = ["src.shared"]
+forbidden_modules = ["src.api", "src.agents", "src.services", "src.pipeline", "src.db", "src.preprocessing", "src.analysis", "src.composers", "src.extractors", "src.crawler", "src.rag", "src.llm"]

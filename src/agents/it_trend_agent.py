@@ -50,6 +50,7 @@ from src.db.article_store import (
     invalidate_trend_context_cache,
     upsert_global_industry_trends,
 )
+from src.llm import LLMSpec, build_chat_llm
 from src.observability.langfuse_client import tracing_config
 
 log = logging.getLogger(__name__)
@@ -156,15 +157,10 @@ _llm: ChatOpenAI | None = None
 
 
 def _get_llm() -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
     global _llm
     if _llm is None:
-        _llm = ChatOpenAI(
-            model=_LLM_MODEL,
-            temperature=0.15,
-            max_completion_tokens=3000,
-            model_kwargs={"response_format": {"type": "json_object"}},
+        _llm = build_chat_llm(
+            LLMSpec(model=_LLM_MODEL, temperature=0.15, max_tokens=3000, json_object=True)
         )
     return _llm
 

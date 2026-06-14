@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from langchain_openai import ChatOpenAI
 
 from src.agents.implication_agent import ImplicationAgent
+from src.llm import LLMSpec, build_chat_llm
 from src.middleware.analysis_ledger import with_ledger_writeback
 from src.observability.langfuse_client import tracing_config
 from src.services.agent_output_validation import (
@@ -55,6 +56,7 @@ from src.services.llm_env import (
     is_missing_llm_credentials_error,
     missing_llm_credentials_message,
 )
+from src.shared.json_helpers import json_dict as _json_dict
 
 log = logging.getLogger(__name__)
 
@@ -158,20 +160,20 @@ def _llm_max_completion_tokens(model: str) -> int:
 
 
 def _get_llm(analysis_mode: object = "quick") -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
     model = _model_for_mode(analysis_mode)
     if model not in _llms:
         ensure_llm_env_loaded()
-        llm_kwargs: dict[str, Any] = {
-            "model": model,
-            "temperature": 0.15,
-            "max_completion_tokens": _llm_max_completion_tokens(model),
-            "model_kwargs": {"response_format": {"type": "json_object"}},
-        }
-        if str(model).startswith("gpt-5"):
-            llm_kwargs["reasoning_effort"] = os.getenv("MIXER_DEEP_REASONING_EFFORT", "medium")
-        _llms[model] = ChatOpenAI(**llm_kwargs)
+        # gpt-5 reasoning_effort 분기·json_object 래핑은 공용 팩토리가 처리.
+        # 모델별 _llms 캐시는 그대로 유지(quick/deep 분리).
+        _llms[model] = build_chat_llm(
+            LLMSpec(
+                model=model,
+                temperature=0.15,
+                max_tokens=_llm_max_completion_tokens(model),
+                json_object=True,
+                reasoning_effort=os.getenv("MIXER_DEEP_REASONING_EFFORT", "medium"),
+            )
+        )
     return _llms[model]
 
 
@@ -1277,18 +1279,6 @@ def _format_analysis_units(cards: list[dict]) -> str:
 def _format_cards(cards: list[dict]) -> str:
     """Backward-compatible alias for older tests/imports."""
     return _format_analysis_units(cards)
-
-
-def _json_dict(value: object) -> dict:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
 
 
 def _json_list(value: object) -> list:

@@ -35,7 +35,11 @@ class LLMSpec:
             (추론 토큰 headroom 때문에 보통 더 크게 잡는다.)
         json_object: True 면 response_format=json_object 강제.
         reasoning_effort: gpt-5 계열에만 적용 ("low"|"medium"|"high").
-            비추론 모델에는 전달하지 않는다.
+            None 이면 gpt-5 라도 전달하지 않는다(API 기본값 사용 —
+            strategic_insight 처럼 기존에 미적용하던 호출처 동작 보존).
+            비추론 모델에는 어차피 전달하지 않는다.
+        timeout: 요청 타임아웃(초). None 이면 ChatOpenAI 기본값.
+        max_retries: 재시도 횟수. None 이면 ChatOpenAI 기본값.
     """
 
     model: str
@@ -43,7 +47,9 @@ class LLMSpec:
     max_tokens: int = 2000
     max_tokens_reasoning: int | None = None
     json_object: bool = False
-    reasoning_effort: str = "low"
+    reasoning_effort: str | None = "low"
+    timeout: float | None = None
+    max_retries: int | None = None
 
     def resolved_max_tokens(self) -> int:
         if is_reasoning_model(self.model) and self.max_tokens_reasoning is not None:
@@ -54,7 +60,8 @@ class LLMSpec:
 def build_chat_llm(spec: LLMSpec) -> ChatOpenAI:
     """LLMSpec 으로 ChatOpenAI 를 생성한다 (캐싱 없음 — 호출처가 캐싱 담당).
 
-    gpt-5 계열이면 reasoning_effort 를 자동 적용하고, 그 외에는 전달하지 않는다.
+    gpt-5 계열이고 reasoning_effort 가 None 이 아니면 reasoning_effort 를
+    적용한다. timeout·max_retries 는 지정된 경우에만 전달한다.
     """
     from langchain_openai import ChatOpenAI  # lazy: transformers 풀체인 임포트 회피
 
@@ -65,6 +72,10 @@ def build_chat_llm(spec: LLMSpec) -> ChatOpenAI:
     }
     if spec.json_object:
         kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
-    if is_reasoning_model(spec.model):
+    if is_reasoning_model(spec.model) and spec.reasoning_effort is not None:
         kwargs["reasoning_effort"] = spec.reasoning_effort
+    if spec.timeout is not None:
+        kwargs["timeout"] = spec.timeout
+    if spec.max_retries is not None:
+        kwargs["max_retries"] = spec.max_retries
     return ChatOpenAI(**kwargs)
