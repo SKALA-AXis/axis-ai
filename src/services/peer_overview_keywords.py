@@ -35,6 +35,7 @@ from sqlalchemy import text
 from src.config.env_loader import load_profile
 from src.config.openai_policy import openai_calls_enabled, openai_disabled_reason
 from src.db.postgres import SessionLocal, reconfigure_from_env
+from src.llm import LLMSpec, build_chat_llm
 
 log = logging.getLogger("generate_peer_overview_keywords")
 
@@ -941,12 +942,14 @@ class PeerOverviewKeywordAgent:
 
     def _get_llm(self) -> Any:
         if self._llm is None:
-            from langchain_openai import ChatOpenAI
-
-            self._llm = ChatOpenAI(
-                model=self.model,
-                temperature=0.1,
-                max_completion_tokens=2400,
+            # env 로 모델 지정 가능 → gpt-5 라도 reasoning_effort 미전달(기존 동작) 위해 None.
+            self._llm = build_chat_llm(
+                LLMSpec(
+                    model=self.model,
+                    temperature=0.1,
+                    max_tokens=2400,
+                    reasoning_effort=None,
+                )
             )
         return self._llm
 
