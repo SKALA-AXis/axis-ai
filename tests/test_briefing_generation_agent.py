@@ -3,16 +3,16 @@ from __future__ import annotations
 import asyncio
 
 from src.agents.briefing import data_layer as briefing_data_layer
+from src.agents.briefing.data_layer import _clip_text
 from src.agents.briefing_generation_agent import (
     BriefingGenerationAgent,
     _display_copy_context,
-    _front_peer_move_sentence,
     _front_briefing_meaning,
+    _front_peer_move_sentence,
     _front_step_item,
     _normalize_mock_item,
     _resolve_period,
 )
-from src.agents.briefing.data_layer import _clip_text
 from src.api.briefing_schemas import BriefingGenerateRequest, BriefingGenerateResponse
 
 
