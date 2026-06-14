@@ -36,9 +36,6 @@ from src.llm import LLMSpec, build_chat_llm
 from src.middleware.analysis_ledger import with_ledger_writeback
 from src.observability.langfuse_client import tracing_config
 from src.services.agent_output_validation import (
-    clip_string as _base_clip_string,
-)
-from src.services.agent_output_validation import (
     confidence_in_range,
 )
 from src.services.analysis_units import (
@@ -68,6 +65,52 @@ _MAX_CARDS = int(os.getenv("MIXER_MAX_CARDS", "20"))
 _MIN_CARDS = 2
 _MIXER_FINAL_ONE_LINER_MAX = int(os.getenv("MIXER_FINAL_ONE_LINER_MAX", "260"))
 _MIXER_IMPLICATION_MAX = int(os.getenv("MIXER_SK_AX_IMPLICATION_MAX", "1200"))
+_INCOMPLETE_KOREAN_ENDINGS = (
+    "가",
+    "이",
+    "은",
+    "는",
+    "을",
+    "를",
+    "와",
+    "과",
+    "로",
+    "으로",
+    "에",
+    "에서",
+    "에게",
+    "까지",
+    "보다",
+    "처럼",
+    "같은",
+    "위한",
+    "통해",
+    "대해",
+    "하며",
+    "하고",
+    "하거나",
+    "또는",
+    "및",
+)
+_POLITE_ENDING_REPLACEMENTS = (
+    ("해야 한다", "해야 합니다"),
+    ("필요하다", "필요합니다"),
+    ("가능하다", "가능합니다"),
+    ("어렵다", "어렵습니다"),
+    ("확인된다", "확인됩니다"),
+    ("드러난다", "드러납니다"),
+    ("나타난다", "나타납니다"),
+    ("보인다", "보입니다"),
+    ("이어진다", "이어집니다"),
+    ("달라진다", "달라집니다"),
+    ("바뀐다", "바뀝니다"),
+    ("된다", "됩니다"),
+    ("한다", "합니다"),
+    ("하다", "합니다"),
+    ("있다", "있습니다"),
+    ("없다", "없습니다"),
+    ("이다", "입니다"),
+)
 # 믹서 실행 단계 — SSE progress 용. 에이전트가 실제로 넘는 단계 경계만 emit 한다
 # (prepare: 카드/이슈 로드, analyze: 메인 LLM, synthesize: 대응방향 LLM, finalize: 추론 정리).
 ProgressFn = Callable[[str, str, int, int], None]
@@ -82,8 +125,14 @@ _PROGRESS_TOTAL = len(_PROGRESS_ORDER)
 
 
 def clip_string(value: Any, max_length: int, *, suffix: str = "") -> str:
-    """Mixer output should not persist visual ellipses; UI can decide display length."""
-    return _base_clip_string(value, max_length, suffix=suffix).rstrip()
+    """Keep mixer text within display bounds without cutting a sentence mid-way."""
+    del suffix
+    if not isinstance(value, str):
+        return ""
+    text = _clean_mixer_sentence_text(value)
+    if len(text) <= max_length:
+        return text
+    return _clip_to_complete_sentence(text, max_length)
 
 
 def clip_final_one_liner(value: Any, *, max_length: int = _MIXER_FINAL_ONE_LINER_MAX) -> str:
@@ -92,6 +141,83 @@ def clip_final_one_liner(value: Any, *, max_length: int = _MIXER_FINAL_ONE_LINER
 
 def clip_implication(value: Any, *, max_length: int = _MIXER_IMPLICATION_MAX) -> str:
     return clip_string(value, max_length)
+
+
+def _clean_mixer_sentence_text(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.replace("…", "").replace("...", "").replace("..", ".").replace(" .", ".").strip()
+
+
+def _sentence_base(value: str) -> str:
+    return value.strip().rstrip(".!?。").strip()
+
+
+def _looks_incomplete_display_sentence(value: str) -> bool:
+    base = _sentence_base(value)
+    if not base:
+        return True
+    return any(base.endswith(ending) for ending in _INCOMPLETE_KOREAN_ENDINGS)
+
+
+def _to_polite_display_sentence(value: str) -> str:
+    base = _sentence_base(value)
+    if not base:
+        return ""
+    if _looks_incomplete_display_sentence(base):
+        return ""
+    for informal, polite in _POLITE_ENDING_REPLACEMENTS:
+        if base.endswith(informal):
+            base = f"{base[: -len(informal)]}{polite}"
+            break
+    if not re.search(r"(습니다|합니다|됩니다|입니다|니다|요)$", base):
+        return ""
+    return f"{base}."
+
+
+def _is_complete_display_sentence(value: str) -> bool:
+    normalized = _to_polite_display_sentence(value)
+    if not normalized:
+        return False
+    base = _sentence_base(normalized)
+    return bool(re.search(r"(습니다|합니다|됩니다|입니다|니다|요|다)$", base))
+
+
+def _complete_sentence_parts(value: str) -> list[str]:
+    text = _clean_mixer_sentence_text(value)
+    if not text:
+        return []
+    matches = re.findall(r"[^.!?。]+[.!?。]", text)
+    if not matches and _is_complete_display_sentence(text):
+        matches = [text]
+    return [normalized for part in matches if (normalized := _to_polite_display_sentence(part))]
+
+
+def _clip_to_complete_sentence(value: str, max_length: int) -> str:
+    parts = _complete_sentence_parts(value)
+    if not parts:
+        return _clean_mixer_sentence_text(value).strip()
+    kept: list[str] = []
+    for part in parts:
+        candidate = " ".join([*kept, part]).strip()
+        if len(candidate) > max_length:
+            break
+        kept.append(part)
+    if kept:
+        return " ".join(kept).strip()
+    return parts[0]
+
+
+def _normalize_mixer_display_sentence(value: object, max_length: int) -> str:
+    text = _clean_mixer_sentence_text(value)
+    if not text:
+        return ""
+    parts = _complete_sentence_parts(text)
+    if parts:
+        text = " ".join(parts)
+    if len(text) > max_length:
+        text = _clip_to_complete_sentence(text, max_length)
+    return _to_polite_display_sentence(text)
 
 
 def _emit_progress(progress: "ProgressFn | None", stage: str) -> None:
@@ -428,6 +554,10 @@ radar_axis_interpretations:
 - follow-up 질문은 만들지 마세요.
 - 같은 문장을 말만 바꿔 반복하지 마세요.
 - 줄임표("…", "...")로 문장을 생략하지 마세요. 각 문장은 끝까지 완결하세요.
+- 글자수가 길어질 때는 문장을 자르지 말고 더 짧은 완결문으로 다시 쓰세요.
+- 사용자에게 보이는 모든 문장은 "-합니다", "-입니다", "-됩니다", "-확인됩니다" 같은
+  존댓말 종결어미와 마침표로 끝내세요. "-한다", "-된다", 명사형, 조사("가/이/을/를/로")로
+  끝나는 문장은 금지입니다.
 - 사용자에게 보여주는 문장에는 “이 결론에 도달한다”, “이 비교 축이 성립한다”,
   “공통패턴과 비교포인트에서 드러나듯이” 같은 내부 판단 과정 표현을 쓰지 마세요.
 - rationale은 내부 추론 로그가 아니라, 사용자가 읽을 수 있는 근거 설명이어야 합니다.
@@ -574,6 +704,10 @@ _MIXER_REPAIR_PROMPT = """\
 - 제안서 작성, 대시보드 표시, 다음 모니터링 항목 같은 프로그램 산출물 중심 action은 제거하세요.
 - 근거와 연결되지 않는 일반 과제는 제거하세요.
 - 줄임표("…", "...")로 문장을 생략하지 말고, 문장을 끝까지 완결하세요.
+- 글자수가 길어질 때는 문장을 자르지 말고 더 짧은 완결문으로 다시 쓰세요.
+- 사용자에게 보이는 모든 문장은 "-합니다", "-입니다", "-됩니다", "-확인됩니다" 같은
+  존댓말 종결어미와 마침표로 끝내세요. "-한다", "-된다", 명사형, 조사("가/이/을/를/로")로
+  끝나는 문장은 금지입니다.
 
 ## 다시 쓰기 기준
 
@@ -773,7 +907,13 @@ class MixerAnalysisAgent:
             )
 
         result = _parse_and_validate(content, cards, requested_card_ids)
-        if normalized_mode == "deep":
+        sentence_quality_issues = _mixer_sentence_quality_issues(result)
+        if normalized_mode == "deep" or sentence_quality_issues:
+            if sentence_quality_issues:
+                log.info(
+                    "Mixer sentence quality repair requested | issues=%s",
+                    sentence_quality_issues,
+                )
             result = _repair_mixer_result_quality(
                 result=result,
                 cards=cards,
@@ -815,6 +955,7 @@ class MixerAnalysisAgent:
             if actions:
                 result["recommended_actions"] = actions[:3]
                 result["sk_ax_implication"] = clip_implication(" ".join(actions[:3]))
+        result = _normalize_mixer_result_display_sentences(result)
         result["radar_axes"] = _merge_radar_axis_interpretations(
             radar, result.get("radar_axis_interpretations")
         )
@@ -1396,10 +1537,11 @@ def _valid_cross_card_findings(value: object, allowed_card_ids: set[str]) -> lis
             continue
         finding = dict(item)
         finding["evidence_card_ids"] = refs
-        finding["finding"] = clip_string(finding.get("finding", ""), 120)
+        finding["finding"] = _normalize_mixer_display_sentence(finding.get("finding", ""), 180)
         if finding.get("pattern_type") not in allowed_pattern_types:
             finding["pattern_type"] = "convergent_strategy"
-        findings.append(finding)
+        if finding["finding"]:
+            findings.append(finding)
     return findings[:5]
 
 
@@ -1413,8 +1555,8 @@ def _normalize_mix_block(value: object, allowed_card_ids: set[str]) -> dict:
         if card_id and card_id not in refs:
             refs.append(card_id)
     return {
-        "finding": clip_string(value.get("finding", ""), 180),
-        "rationale": clip_string(value.get("rationale", ""), 240),
+        "finding": _normalize_mixer_display_sentence(value.get("finding", ""), 260),
+        "rationale": _normalize_mixer_display_sentence(value.get("rationale", ""), 320),
         "evidence": evidence[:4],
         "evidence_card_ids": refs[:6],
     }
@@ -1431,13 +1573,19 @@ def _normalize_action_details(value: object, allowed_card_ids: set[str]) -> list
             card_id = evidence_item.get("card_id")
             if card_id and card_id not in refs:
                 refs.append(card_id)
-        action = clip_implication(item.get("action") or item.get("text") or "")
+        action = _normalize_mixer_display_sentence(
+            item.get("action") or item.get("text") or "",
+            420,
+        )
         if not action:
             continue
         details.append(
             {
                 "action": action,
-                "why": clip_string(item.get("why") or item.get("rationale") or "", 260),
+                "why": _normalize_mixer_display_sentence(
+                    item.get("why") or item.get("rationale") or "",
+                    360,
+                ),
                 "use_case": clip_string(item.get("use_case") or "", 80),
                 "evidence": evidence[:3],
                 "evidence_card_ids": refs[:6],
@@ -1844,14 +1992,19 @@ def _parse_and_validate(
 
     allowed_card_ids = {str(card["id"]) for card in cards}
 
-    data["mix_insight"] = clip_string(data.get("mix_insight") or data.get("insight", ""), 220)
+    data["mix_insight"] = _normalize_mixer_display_sentence(
+        data.get("mix_insight") or data.get("insight", ""),
+        _MIXER_FINAL_ONE_LINER_MAX,
+    )
     data["common_pattern"] = _normalize_mix_block(data.get("common_pattern"), allowed_card_ids)
     data["comparison_point"] = _normalize_mix_block(data.get("comparison_point"), allowed_card_ids)
     data["hidden_conclusion"] = _normalize_mix_block(
         data.get("hidden_conclusion"), allowed_card_ids
     )
     data["recommended_actions"] = [
-        clip_implication(item) for item in _json_list(data.get("recommended_actions")) if item
+        action
+        for item in _json_list(data.get("recommended_actions"))
+        if (action := _normalize_mixer_display_sentence(item, 420))
     ][:3]
     data["action_details"] = _normalize_action_details(data.get("action_details"), allowed_card_ids)
     fallback_actions_applied = False
@@ -1875,10 +2028,14 @@ def _parse_and_validate(
 
     # Backward-compatible fields for the existing API/UI.
     data["insight"] = data["mix_insight"]
-    data["final_one_liner"] = clip_final_one_liner(
-        data["hidden_conclusion"].get("finding") or data["mix_insight"]
+    data["final_one_liner"] = _normalize_mixer_display_sentence(
+        data["hidden_conclusion"].get("finding") or data["mix_insight"],
+        _MIXER_FINAL_ONE_LINER_MAX,
     )
-    data["sk_ax_implication"] = clip_implication(" ".join(data["recommended_actions"]))
+    data["sk_ax_implication"] = _normalize_mixer_display_sentence(
+        " ".join(data["recommended_actions"]),
+        _MIXER_IMPLICATION_MAX,
+    )
     data["bullet_signals"] = [
         finding
         for finding in (
@@ -1916,9 +2073,90 @@ def _parse_and_validate(
             peer_set.append(pid)
     data["peer_ids"] = peer_set
 
+    data = _normalize_mixer_result_display_sentences(data)
     data["langfuse_trace_id"] = _get_langfuse_trace_id()
     data["warning"] = _warning_for(data)
     return data
+
+
+def _normalize_mixer_result_display_sentences(result: dict) -> dict:
+    result["mix_insight"] = _normalize_mixer_display_sentence(
+        result.get("mix_insight") or result.get("insight", ""),
+        _MIXER_FINAL_ONE_LINER_MAX,
+    )
+    result["insight"] = result["mix_insight"]
+    for block_key in ("common_pattern", "comparison_point", "hidden_conclusion"):
+        block = result.get(block_key)
+        if not isinstance(block, dict):
+            continue
+        block["finding"] = _normalize_mixer_display_sentence(block.get("finding", ""), 260)
+        block["rationale"] = _normalize_mixer_display_sentence(
+            block.get("rationale", ""),
+            320,
+        )
+    actions = [
+        action
+        for item in _json_list(result.get("recommended_actions"))
+        if (action := _normalize_mixer_display_sentence(item, 420))
+    ]
+    result["recommended_actions"] = _dedupe_keep_order(actions)
+    for detail in _json_list(result.get("action_details")):
+        if not isinstance(detail, dict):
+            continue
+        detail["action"] = _normalize_mixer_display_sentence(detail.get("action", ""), 420)
+        detail["why"] = _normalize_mixer_display_sentence(detail.get("why", ""), 360)
+    hidden = _dict_or_empty(result.get("hidden_conclusion"))
+    result["final_one_liner"] = _normalize_mixer_display_sentence(
+        result.get("final_one_liner") or hidden.get("finding") or result["mix_insight"],
+        _MIXER_FINAL_ONE_LINER_MAX,
+    )
+    result["sk_ax_implication"] = _normalize_mixer_display_sentence(
+        result.get("sk_ax_implication") or " ".join(result["recommended_actions"]),
+        _MIXER_IMPLICATION_MAX,
+    )
+    result["bullet_signals"] = [
+        finding
+        for finding in (
+            _dict_or_empty(result.get("common_pattern")).get("finding"),
+            _dict_or_empty(result.get("comparison_point")).get("finding"),
+            _dict_or_empty(result.get("hidden_conclusion")).get("finding"),
+        )
+        if finding
+    ]
+    return result
+
+
+def _mixer_sentence_quality_issues(result: dict) -> list[str]:
+    checks: list[tuple[str, object]] = [
+        ("mix_insight", result.get("mix_insight")),
+        ("final_one_liner", result.get("final_one_liner")),
+        ("sk_ax_implication", result.get("sk_ax_implication")),
+    ]
+    for block_key in ("common_pattern", "comparison_point", "hidden_conclusion"):
+        block = result.get(block_key)
+        if not isinstance(block, dict):
+            checks.append((block_key, ""))
+            continue
+        checks.append((f"{block_key}.finding", block.get("finding")))
+        checks.append((f"{block_key}.rationale", block.get("rationale")))
+    for index, detail in enumerate(_json_list(result.get("action_details"))):
+        if not isinstance(detail, dict):
+            continue
+        checks.append((f"action_details.{index}.action", detail.get("action")))
+        checks.append((f"action_details.{index}.why", detail.get("why")))
+
+    issues: list[str] = []
+    for label, raw_text in checks:
+        text = str(raw_text or "").strip()
+        if not text:
+            issues.append(f"{label}:empty")
+            continue
+        if "…" in text or "..." in text:
+            issues.append(f"{label}:ellipsis")
+            continue
+        if not _is_complete_display_sentence(text):
+            issues.append(f"{label}:incomplete")
+    return issues[:12]
 
 
 def _card_one_liner(card: dict) -> str:
