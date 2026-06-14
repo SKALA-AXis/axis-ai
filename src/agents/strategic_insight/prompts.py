@@ -524,8 +524,11 @@ USER_PROMPT_TEMPLATE = """\
 - frontend_ready.suggested_action.sentence는 key_implication.sentence의 핵심 명사 조합을
   그대로 반복하지 않습니다. key_implication은 피어/시장 의미,
   suggested_action은 SK AX의 대응 범위와 판단 기준으로 역할을 분리합니다.
-  피어사 고유 제품명을 SK AX 내부 기준처럼 직접 쓰지 말고,
-  동일한 실행 구조를 설명하는 일반 판단 축으로 바꿉니다.
+   피어사 고유 제품명을 SK AX 내부 기준처럼 직접 쓰지 말고,
+   동일한 실행 구조를 설명하는 일반 판단 축으로 바꿉니다.
+  피어사의 모듈 수, 고유 라인업, 제품 구조, 기사 제목식 표현도
+  suggested_action.sentence의 직접 기준으로 쓰지 말고 evidence_sentence에서
+  사실 근거로만 사용합니다.
   frontend_ready 위반에 피어사 고유 제품명 사용이 있으면 suggested_action에서는
   그 제품명을 빼고, 적용 업무·학습 데이터·통합 관제 책임·플랫폼 자체 확보와
   외부 연계·현장 시스템 연계 같은 구조 표현으로 다시 씁니다.
