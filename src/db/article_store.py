@@ -2025,6 +2025,7 @@ def _frontend_implication_from_display_sections(value: Any) -> dict[str, Any]:
     if not isinstance(value, list):
         return {}
     sections: dict[str, list[str]] = {}
+    structured_sections: dict[str, list[dict[str, str]]] = {}
     for section in value:
         if not isinstance(section, dict):
             continue
@@ -2034,20 +2035,62 @@ def _frontend_implication_from_display_sections(value: Any) -> dict[str, Any]:
         ]
         if section_type and items:
             sections[section_type] = items
+        structured_items = _main_detail_blocks(section.get("structured_items"))
+        if section_type and structured_items:
+            structured_sections[section_type] = structured_items
     insight_items = sections.get("insight") or []
     action_items = sections.get("action") or []
     if not insight_items and not action_items:
         return {}
+    insight_blocks = structured_sections.get("insight") or _main_detail_blocks_from_labeled_lines(
+        insight_items
+    )
+    action_blocks = structured_sections.get("action") or _main_detail_blocks_from_labeled_lines(
+        action_items
+    )
     payload: dict[str, Any] = {
         "key_implications": insight_items,
         "peer_implications": insight_items,
         "suggested_actions": action_items,
         "response_directions": action_items,
+        "key_implication_blocks": insight_blocks,
+        "key_implication_items": insight_blocks,
+        "response_direction_blocks": action_blocks,
+        "suggested_action_items": action_blocks,
         "follow_up_questions": [],
     }
     if insight_items:
         payload["potential_impact"] = insight_items[0]
     return payload
+
+
+def _main_detail_blocks(value: Any) -> list[dict[str, str]]:
+    blocks: list[dict[str, str]] = []
+    if not isinstance(value, list):
+        return blocks
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        main = str(item.get("main") or "").strip()
+        detail = str(item.get("detail") or "").strip()
+        if main:
+            blocks.append({"main": main, "detail": detail})
+    return blocks
+
+
+def _main_detail_blocks_from_labeled_lines(lines: list[str]) -> list[dict[str, str]]:
+    blocks: list[dict[str, str]] = []
+    for line in lines:
+        text = re.sub(r"\s+", " ", str(line or "").strip())
+        if not text:
+            continue
+        text = re.sub(r"^핵심\s*(?:시사점|대응)\s*:\s*", "", text).strip()
+        parts = re.split(r"\s*근거\s*/?\s*설명\s*:\s*", text, maxsplit=1)
+        main = parts[0].strip() if parts else ""
+        detail = parts[1].strip() if len(parts) == 2 else ""
+        if main:
+            blocks.append({"main": main, "detail": detail})
+    return blocks
 
 
 def merge_card_news_sources_for_cluster(

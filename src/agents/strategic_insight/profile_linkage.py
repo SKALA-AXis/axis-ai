@@ -38,8 +38,33 @@ UNCERTAIN_ACTIVITY_MARKERS = (
 GENERIC_BUSINESS_CATEGORIES: dict[str, tuple[str, ...]] = {
     "generic_entity": ("기업", "회사", "고객"),
     "generic_event": ("이번", "해당", "관련"),
-    "generic_object": ("사업", "프로젝트", "분야"),
-    "generic_relation": ("기반", "통해", "중심"),
+    "generic_object": (
+        "사업",
+        "프로젝트",
+        "분야",
+        "서비스",
+        "시스템",
+        "플랫폼",
+        "솔루션",
+        "업무",
+        "자동화",
+        "기술",
+        "시장",
+        "service",
+        "services",
+        "system",
+        "systems",
+        "platform",
+        "platforms",
+        "solution",
+        "solutions",
+        "business",
+        "project",
+        "summary",
+        "case",
+        "use",
+    ),
+    "generic_relation": ("기반", "통해", "중심", "제공", "구축", "운영"),
 }
 
 
@@ -337,13 +362,21 @@ def _profile_linkage_issue_context(
 
 
 def _source_noise_terms_from_issue(integrated_issue: dict[str, Any]) -> set[str]:
-    """Collect publisher/domain tokens that should not drive profile relevance."""
+    """Collect source/company tokens that should not drive profile relevance.
+
+    이 값은 출력 문장을 만들기 위한 금지어가 아니라, 프로필 관련성 계산에서
+    기사 출처명·회사명·ID 같은 배경 토큰이 사업/역량 근거처럼 점수를 얻는 것을
+    막기 위한 노이즈 집합이다.
+    """
     noise_terms: set[str] = set()
 
-    def add_from_text(value: Any) -> None:
+    def add_from_text(value: Any, *, include_short_ascii: bool = False) -> None:
         for term in _raw_normalized_terms(str(value or "")):
-            if len(term) > 2:
-                noise_terms.add(term.casefold())
+            normalized = term.casefold() if term.isascii() else term
+            if not normalized:
+                continue
+            if len(normalized) > 2 or (include_short_ascii and normalized.isascii()):
+                noise_terms.add(normalized)
 
     def add_from_url(value: Any) -> None:
         url = str(value or "").strip()
@@ -368,6 +401,12 @@ def _source_noise_terms_from_issue(integrated_issue: dict[str, Any]) -> set[str]
             add_from_url(source_ref.get("url"))
         else:
             add_from_text(source_ref)
+    for company_id in _companies_from_integrated_issue(integrated_issue):
+        add_from_text(company_id, include_short_ascii=True)
+        for alias in expand_peer_aliases(company_id):
+            add_from_text(alias, include_short_ascii=True)
+    for key in ("main_company_name", "company_name", "main_actor"):
+        add_from_text(integrated_issue.get(key), include_short_ascii=True)
     return {term for term in noise_terms if term}
 
 
@@ -434,6 +473,8 @@ def _term_signal_weight(
     if not normalized or len(normalized) <= 1:
         return 0.0
     if _looks_like_source_noise(normalized, issue_context):
+        return 0.0
+    if normalized.isascii() and len(normalized) <= 2:
         return 0.0
     if re.fullmatch(r"\d+(?:[.,]\d+)*", normalized):
         return 0.0
@@ -859,6 +900,7 @@ def _evaluate_single_profile_linkage(
         matched_terms_all.extend(matched_terms)
 
     linkage_level = _linkage_level_from_profile_score(scored_entries)
+    top_score = scored_entries[0][0] if scored_entries else 0.0
     novelty_status = _business_novelty_status(
         linkage_level=linkage_level,
         role_mode=role_mode,
@@ -866,6 +908,12 @@ def _evaluate_single_profile_linkage(
         scope=scope,
     )
     implication_mode = _implication_mode_from_linkage(
+        linkage_level=linkage_level,
+        novelty_status=novelty_status,
+        role_mode=role_mode,
+        scope=scope,
+    )
+    reason_code = _profile_linkage_reason_code(
         linkage_level=linkage_level,
         novelty_status=novelty_status,
         role_mode=role_mode,
@@ -879,17 +927,21 @@ def _evaluate_single_profile_linkage(
         "matched_source_refs": _compact_value(matched_source_refs[:5]),
         "matched_terms": sorted(set(matched_terms_all))[:12],
         "linkage_level": linkage_level,
+        "confidence": min(1.0, round(top_score / 10, 3)),
         "business_novelty_status": novelty_status,
         "implication_mode": implication_mode,
-        "reason": _profile_linkage_reason(
-            company_id=company_id,
-            linkage_level=linkage_level,
-            novelty_status=novelty_status,
-            matched_business_areas=matched_business_areas,
-            matched_capabilities=matched_capabilities,
-            role_mode=role_mode,
-            scope=scope,
-        ),
+        "connection_reason": reason_code,
+        "reason": reason_code,
+        "connection": {
+            "matched_issue_terms": sorted(set(matched_terms_all))[:12],
+            "matched_profile_terms": _profile_terms_from_matched_areas(
+                matched_business_areas,
+                matched_capabilities,
+            ),
+            "specificity_level": _best_profile_specificity_level(matched_business_areas),
+            "confidence": min(1.0, round(top_score / 10, 3)),
+            "reason_code": reason_code,
+        },
     }
 
 
@@ -920,6 +972,28 @@ def _matched_profile_item_from_entry(
         "matched_products_or_services": products_or_services,
         "matched_terms": sorted(matched_terms),
         "matched_issue_terms": sorted(matched_terms),
+        "connection_reason": _profile_item_connection_reason(
+            entry=entry,
+            matched_terms=matched_terms,
+            capabilities=capabilities,
+            products_or_services=products_or_services,
+        ),
+        "connection": {
+            "matched_issue_terms": sorted(matched_terms),
+            "matched_profile_terms": _profile_item_terms(
+                entry=entry,
+                capabilities=capabilities,
+                products_or_services=products_or_services,
+            ),
+            "specificity_level": _profile_entry_specificity_level(entry),
+            "confidence": min(1.0, round(score / 10, 3)),
+            "reason_code": _profile_item_connection_reason(
+                entry=entry,
+                matched_terms=matched_terms,
+                capabilities=capabilities,
+                products_or_services=products_or_services,
+            ),
+        },
         "evidence_text": evidence_texts[0] if evidence_texts else "",
         "evidence_texts": evidence_texts,
         "source_refs": source_refs,
@@ -927,6 +1001,83 @@ def _matched_profile_item_from_entry(
         "specificity_level": _profile_entry_specificity_level(entry),
         "confidence": min(1.0, round(score / 10, 3)),
     }
+
+
+def _profile_item_connection_reason(
+    *,
+    entry: dict[str, Any],
+    matched_terms: set[str],
+    capabilities: list[str],
+    products_or_services: list[str],
+) -> str:
+    terms = [term for term in sorted(matched_terms) if term][:5]
+    anchors = _profile_item_terms(
+        entry=entry,
+        capabilities=capabilities,
+        products_or_services=products_or_services,
+    )
+    if anchors and terms:
+        return "issue_terms_overlap_profile_terms"
+    if anchors:
+        return "profile_terms_available_without_issue_overlap"
+    if terms:
+        return "issue_terms_overlap_profile_entry"
+    return "no_structured_profile_connection"
+
+
+def _profile_item_terms(
+    *,
+    entry: dict[str, Any],
+    capabilities: list[str],
+    products_or_services: list[str],
+) -> list[str]:
+    terms = [
+        item
+        for item in [
+            *products_or_services[:3],
+            *capabilities[:3],
+            str(entry.get("name") or "").strip(),
+            str(entry.get("business_area") or "").strip(),
+        ]
+        if item
+    ]
+    return list(dict.fromkeys(terms))[:8]
+
+
+def _profile_terms_from_matched_areas(
+    matched_business_areas: list[dict[str, Any]],
+    matched_capabilities: list[str],
+) -> list[str]:
+    terms: list[str] = []
+    for item in matched_business_areas[:5]:
+        if not isinstance(item, dict):
+            continue
+        for key in ("matched_products_or_services", "matched_capabilities"):
+            terms.extend(_string_list(item.get(key), max_items=5))
+        for key in ("name", "business_area", "business_line"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                terms.append(value)
+    terms.extend(matched_capabilities[:5])
+    return list(dict.fromkeys([term for term in terms if term]))[:12]
+
+
+def _best_profile_specificity_level(matched_business_areas: list[dict[str, Any]]) -> str:
+    rank = {
+        "profile_context": 0,
+        "business_line": 1,
+        "business_area": 2,
+        "core_capability": 3,
+        "product_or_service": 4,
+    }
+    best = "profile_context"
+    for item in matched_business_areas:
+        if not isinstance(item, dict):
+            continue
+        level = str(item.get("specificity_level") or "profile_context")
+        if rank.get(level, 0) > rank.get(best, 0):
+            best = level
+    return best
 
 
 def _profile_entry_specificity_level(entry: dict[str, Any]) -> str:
@@ -1212,7 +1363,13 @@ def _score_profile_entry_against_issue(
         score += 2
     if entry.get("entry_type") == "capability" and structured_score >= 2:
         score += 1
-    if entry.get("source_refs"):
+    if entry.get("source_refs") and (
+        structured_score > 0
+        or any(
+            _term_signal_weight(term, "issue_fact", issue_context) >= 0.5
+            for term in matched_terms
+        )
+    ):
         score += 0.5
     return score, matched_terms
 
@@ -1225,7 +1382,7 @@ def _structured_field_overlap_score(
     entry_terms = {
         term["normalized"]
         for term in _extract_ranked_terms(entry_text, "profile_business_area", issue_context)
-        if float(term.get("weight") or 0.0) >= 0.2
+        if float(term.get("weight") or 0.0) >= 0.5
     }
     structured_groups = (
         ("products_or_services", 4.0),
@@ -1274,7 +1431,7 @@ def _weighted_term_overlap_score(
             "issue_fact",
             issue_context,
         )
-        if float(term.get("weight") or 0.0) > 0.0
+        if float(term.get("weight") or 0.0) >= 0.5
     ]
     score = 0.0
     matches: set[str] = set()
@@ -1340,44 +1497,24 @@ def _linkage_level_from_profile_score(
     return "none"
 
 
-def _profile_linkage_reason(
+def _profile_linkage_reason_code(
     *,
-    company_id: str,
     linkage_level: str,
     novelty_status: str,
-    matched_business_areas: list[dict[str, Any]],
-    matched_capabilities: list[str],
     role_mode: str,
     scope: str,
 ) -> str:
     if linkage_level in {"high", "medium"}:
-        names = [
-            str(item.get("name") or "").strip()
-            for item in matched_business_areas[:2]
-            if isinstance(item, dict) and item.get("name")
-        ]
-        caps = matched_capabilities[:3]
-        joined = ", ".join([*names, *caps]) or "관련 프로필 항목"
-        return (
-            f"{company_id}의 프로필 중 {joined} 항목이 현재 사건의 핵심 대상/산업/기술 "
-            "토큰과 겹칩니다. 이는 기존 사업영역과의 해석 접점일 뿐, "
-            "성과·확장·우위의 근거는 아닙니다."
-        )
+        return "structured_issue_terms_match_profile_terms"
     if scope == "peer" and novelty_status == "not_new_business_counterparty_role":
-        return "현재 피어는 계약 상대방/고객 슬롯으로 보이므로 사업 확장으로 단정하지 않습니다."
+        return "counterparty_role_not_business_expansion"
     if scope == "peer" and novelty_status == "new_or_untracked_business_signal":
-        return (
-            "현재 사건에서는 직접 사업/운영 정황이 있으나 "
-            "프로필에서 강한 기존 사업 연결은 약합니다."
-        )
+        return "event_signal_not_strong_profile_linkage"
     if scope == "peer" and novelty_status == "profile_insufficient_cannot_judge_novelty":
-        return (
-            "프로필 본문이 부족해 신규 사업 여부를 판단할 수 없습니다. 신규 사업 확정이 "
-            "아니라 후속 프로필 보강이 필요한 관찰 신호로 다뤄야 합니다."
-        )
+        return "profile_insufficient_for_business_novelty"
     if role_mode == "unclear":
-        return "현재 사건의 피어 역할이 불명확하므로 보수적 관찰 신호로 해석해야 합니다."
-    return "현재 사건과 프로필의 직접 접점이 약하므로 사건 기반 해석을 우선합니다."
+        return "unclear_peer_role"
+    return "weak_profile_linkage_event_based_preferred"
 
 
 def _profile_linkage_guidance(
@@ -1715,7 +1852,7 @@ def _content_tokens(text: str) -> set[str]:
 
 def _normalize_content_token(token: str) -> str:
     token = token.strip()
-    if len(token) <= 3:
+    if len(token) <= 2:
         return token
     return re.sub(r"(으로|에서|에게|과|와|은|는|이|가|을|를|의)$", "", token)
 
@@ -1769,16 +1906,10 @@ def _issue_relevance_tokens(
 
 
 def _expand_profile_relevance_tokens(tokens: set[str]) -> set[str]:
-    expanded = set(tokens)
-    joined = " ".join(tokens)
-    if re.search(r"코어\s*뱅킹|뱅킹|은행|증권|보험|결제|카드|토큰증권|스테이블코인", joined):
-        expanded.add("금융")
-    if re.search(r"물류|창고|배송|로봇|rx", joined, flags=re.IGNORECASE):
-        expanded.add("물류")
-        expanded.add("로봇")
-    if re.search(r"보안|권한|접근|프라이버시|개인정보", joined):
-        expanded.add("보안")
-    return expanded
+    # 프로필 관련성은 IntegratedIssue/ProfileLinkage의 실제 토큰으로 판단한다.
+    # 도메인 alias를 코드에서 확장하면 다양한 기사에서 같은 사업명으로 수렴해
+    # 카드 문장이 템플릿처럼 보일 수 있으므로, 여기서는 의미를 덧붙이지 않는다.
+    return set(tokens)
 
 
 def _profile_relevance_hint_text(
@@ -1879,30 +2010,40 @@ def _shrink_profile(
         if compacted not in ({}, [], "", None):
             out[key] = compacted
 
-    if isinstance(profile_linkage, dict) and profile_linkage:
+    has_profile_linkage = isinstance(profile_linkage, dict) and bool(profile_linkage)
+    profile_linkage_level = (
+        str(profile_linkage.get("linkage_level") or "").strip()
+        if isinstance(profile_linkage, dict)
+        else ""
+    )
+    include_linked_profile_body = profile_linkage_level in {"high", "medium"}
+
+    if has_profile_linkage:
+        linkage_keys = [
+            "linkage_level",
+            "business_novelty_status",
+            "implication_mode",
+        ]
+        if include_linked_profile_body:
+            linkage_keys.extend(["matched_terms", "connection"])
         linkage_meta = {
             key: profile_linkage.get(key)
-            for key in (
-                "linkage_level",
-                "business_novelty_status",
-                "implication_mode",
-                "reason",
-                "matched_terms",
-            )
+            for key in linkage_keys
             if profile_linkage.get(key) not in ({}, [], "", None)
         }
         if linkage_meta:
             out["machine_profile_linkage_hint"] = _compact_value(linkage_meta)
         matched_areas = _jsonish_list(profile_linkage.get("matched_business_areas"))
-        if matched_areas:
+        if include_linked_profile_body and matched_areas:
             out["machine_matched_business_areas"] = [
                 _compact_profile_item(item, include_evidence=False)
                 for item in matched_areas[:3]
                 if isinstance(item, dict)
             ]
         matched_caps = _string_list(profile_linkage.get("matched_capabilities"), max_items=5)
-        if matched_caps:
+        if include_linked_profile_body and matched_caps:
             out["machine_matched_capabilities"] = matched_caps
+        return out
 
     for key in scalar_keys:
         if key not in profile:

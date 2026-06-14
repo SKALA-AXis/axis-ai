@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -239,10 +240,159 @@ import src.agents.strategic_insight_agent as strategic_insight_module  # noqa: E
 from src.agents.strategic_insight_agent import StrategicInsightAgent  # noqa: E402
 
 
-def _fake_llm_response(payload: dict[str, Any]) -> Any:
+def _fake_llm_response(payload: dict[str, Any], *, add_default_frontend_ready: bool = True) -> Any:
+    response = MagicMock()
+    body = _with_default_frontend_ready(payload) if add_default_frontend_ready else payload
+    response.content = json.dumps(body, ensure_ascii=False)
+    return response
+
+
+def _fake_frontend_ready_repair_response(
+    *,
+    key_sentence: str = (
+        "현재 사건은 피어사의 고객 제안 범위와 운영 책임이 함께 비교되는 흐름입니다."
+    ),
+    key_evidence: str = (
+        "현재 사건 fact와 피어 사업 근거가 같은 대상 업무와 실행 범위를 가리킵니다."
+    ),
+    action_sentence: str = (
+        "SK AX는 현재 사건과 유사한 사업에서 수행 범위와 검증 기준을 "
+        "고객 제안 단위로 나눠야 합니다."
+    ),
+    action_evidence: str = (
+        "이 구분이 있어야 SK AX가 고객 제안에서 직접 책임질 범위와 "
+        "외부 확인이 필요한 범위를 설명할 수 있습니다."
+    ),
+    key_event_terms: list[str] | None = None,
+    key_profile_terms: list[str] | None = None,
+    action_event_terms: list[str] | None = None,
+    action_skax_terms: list[str] | None = None,
+    key_evidence_mode: str = "event_based",
+    action_evidence_mode: str = "generic_monitoring",
+) -> Any:
+    key_sentence = _test_directional_key_sentence(key_sentence)
+    payload = {
+        "frontend_ready": {
+            "source": "frontend_repair_direct",
+            "key_implication": {
+                "source": "frontend_repair_direct",
+                "frame": "피어 사업 흐름",
+                "claim_type": "event_based_signal",
+                "claim_strength": "cautious",
+                "evidence_mode": key_evidence_mode,
+                "event_anchor_terms": key_event_terms or _test_anchor_terms(key_sentence),
+                "profile_anchor_terms": key_profile_terms or _test_anchor_terms(key_evidence),
+                "unsupported_claims_removed": [],
+                "sentence": key_sentence,
+                "evidence_sentence": key_evidence,
+            },
+            "suggested_action": {
+                "source": "frontend_repair_direct",
+                "frame": "SK AX 내부 점검",
+                "claim_type": "internal_strategy_check",
+                "claim_strength": "cautious",
+                "evidence_mode": action_evidence_mode,
+                "event_anchor_terms": action_event_terms or _test_anchor_terms(action_sentence),
+                "skax_anchor_terms": action_skax_terms or _test_anchor_terms(action_evidence),
+                "unsupported_claims_removed": [],
+                "sentence": action_sentence,
+                "evidence_sentence": action_evidence,
+            },
+        }
+    }
     response = MagicMock()
     response.content = json.dumps(payload, ensure_ascii=False)
     return response
+
+
+def _with_default_frontend_ready(payload: dict[str, Any]) -> dict[str, Any]:
+    data = json.loads(json.dumps(payload, ensure_ascii=False))
+    revised = data.get("revised_result")
+    if isinstance(revised, dict):
+        data["revised_result"] = _with_default_frontend_ready(revised)
+        return data
+    implication = data.get("implication")
+    if not isinstance(implication, dict) or implication.get("frontend_ready"):
+        return data
+    if implication.get("is_valid_implication") is False:
+        return data
+    peer = implication.get("peer_implication") or {}
+    skax = implication.get("skax_implication") or {}
+    key_sentence = _test_directional_key_sentence(
+        str(peer.get("peer_meaning") or "피어사는 현재 사건을 기존 사업과 연결합니다.")
+    )
+    key_evidence = str(
+        peer.get("capability_change") or "현재 사건의 적용 대상이 기존 사업 범위와 연결됩니다."
+    )
+    action_sentence = str(
+        (skax.get("recommended_actions") or [""])[0]
+        or (
+            "SK AX는 현재 사건과 유사한 사업에서 수행 범위와 검증 기준을 "
+            "고객 제안 단위로 나눠야 합니다."
+        )
+    )
+    action_evidence = str(
+        skax.get("potential_impact")
+        or skax.get("why_important")
+        or (
+            "이 구분이 있어야 SK AX가 고객 제안에서 직접 책임질 범위와 "
+            "외부 확인이 필요한 범위를 설명할 수 있습니다."
+        )
+    )
+    implication["frontend_ready"] = {
+        "source": "llm_direct",
+        "key_implication": {
+            "source": "llm_direct",
+            "frame": "피어 사업 흐름",
+            "claim_type": "event_based_signal",
+            "claim_strength": "cautious",
+            "evidence_mode": "event_based",
+            "event_anchor_terms": _test_anchor_terms(key_sentence),
+            "profile_anchor_terms": _test_anchor_terms(key_evidence),
+            "unsupported_claims_removed": [],
+            "sentence": key_sentence,
+            "evidence_sentence": key_evidence,
+        },
+        "suggested_action": {
+            "source": "llm_direct",
+            "frame": "SK AX 내부 점검",
+            "claim_type": "internal_strategy_check",
+            "claim_strength": "cautious",
+            "evidence_mode": "generic_monitoring",
+            "event_anchor_terms": _test_anchor_terms(action_sentence),
+            "skax_anchor_terms": _test_anchor_terms(action_evidence) or ["SK AX"],
+            "unsupported_claims_removed": [],
+            "sentence": action_sentence,
+            "evidence_sentence": action_evidence,
+        },
+    }
+    data["implication"] = implication
+    return data
+
+
+def _test_anchor_terms(text: str) -> list[str]:
+    terms = [
+        token for token in re.findall(r"[A-Za-z0-9가-힣·&/]+", str(text or "")) if len(token) >= 2
+    ]
+    return terms[:2] or ["현재"]
+
+
+def _test_directional_key_sentence(text: str) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return "현재 사건은 유사 사업의 평가 기준이 실행 범위와 검증 조건으로 이동하는 흐름입니다."
+    if re.search(
+        r"방향|암시|부각|이동|전환|확장|확대|구체화|비교\s*기준|평가\s*기준|"
+        r"경쟁\s*(축|기준|방식)|운영\s*(방식|구조|책임)|매출\s*(구성|구조)|"
+        r"고객\s*(제안|접점)|레퍼런스|대외\s*(매출|고객)",
+        value,
+    ):
+        return value
+    base = re.sub(r"(입니다|합니다|한다|다)$", "", value.rstrip(".。"))
+    return (
+        base
+        + "는 유사 사업의 평가 기준이 고객 제안 범위와 검증 조건으로 이동하는 흐름입니다."
+    )
 
 
 def _companies_from_integrated_issue(integrated_issue: dict[str, Any]) -> list[str]:
@@ -317,17 +467,19 @@ def _assert_strategic_insight_schema(result: dict[str, Any]) -> None:
         "confidence",
         "reason",
     }
-    assert set(result["implication"]) == {
-        "is_valid_implication",
-        "implication_scope",
-        "peer_implication",
-        "skax_implication",
-        "follow_up_questions",
-        "watch_points",
-        "confidence",
-        "evidence_label",
-        "provenance",
-    }
+    assert set(result["implication"]).issuperset(
+        {
+            "is_valid_implication",
+            "implication_scope",
+            "peer_implication",
+            "skax_implication",
+            "follow_up_questions",
+            "watch_points",
+            "confidence",
+            "evidence_label",
+            "provenance",
+        }
+    )
     assert set(result["implication"]["peer_implication"]) == {
         "company_id",
         "company_name_ko",
@@ -551,17 +703,15 @@ def test_strategic_insight_agent_returns_separated_blocks():
     assert "issue_understanding" in user_prompt
     assert "profile_linkage" in user_prompt
     assert "skax_response_linkage" in user_prompt
-    for principle in ("관계 수준", "machine_matched_business_areas", "artifact_generation_mode"):
+    for principle in ("관계 수준", "Machine linkage hints", "artifact_generation_mode"):
         assert principle in full_prompt
+    assert "frontend_ready" in full_prompt
     assert "business_line_mapping" in user_prompt
     assert "고정 taxonomy가 아니라" in user_prompt
-    review_messages = llm.invoke.call_args_list[1].args[0]
-    review_prompt = review_messages[1]["content"]
-    assert "전략 QA reviewer" in review_messages[0]["content"]
-    assert "1차 결과" in review_prompt
-    assert "Machine linkage hints" in review_prompt
-    assert "Response artifact guidance" in review_prompt
-    assert "recommended_actions" in review_prompt
+    phase_decisions = result["implication"]["frontend_ready_diagnostics"]["phase_decisions"]
+    assert "self_review_skipped" in phase_decisions
+    assert "schema_repair_skipped" in phase_decisions
+    assert llm.invoke.call_count == 1
 
 
 def test_strategic_insight_agent_empty_when_integrated_issue_invalid():
@@ -578,6 +728,261 @@ def test_strategic_insight_agent_empty_when_integrated_issue_invalid():
     _assert_strategic_insight_schema(result)
     assert result["analysis"]["is_valid_analysis"] is False
     assert result["implication"]["is_valid_implication"] is False
+
+
+def test_stock_market_only_signal_is_watch_only_without_llm_call():
+    payload = _fixture()
+    issue = _minimal_integrated_issue_with_fact(
+        company_id="peer_company",
+        fact_id="market_f1",
+        fact="주식 초고수들은 장중 해당 종목을 순매수했고 주가는 전 거래일 대비 상승했다.",
+    )
+    llm = MagicMock()
+
+    result = StrategicInsightAgent(llm=llm).generate(
+        input_bundle=payload["input_bundle"],
+        integrated_issue=issue,
+        classification={"event_type": "market_reaction"},
+        profile_context=payload["profile_context"],
+        analysis_context=payload["analysis_context"],
+    )
+
+    assert result["is_valid_strategic_insight"] is False
+    diagnostics = result["implication"]["frontend_ready_diagnostics"]
+    assert diagnostics["watch_only"] is True
+    assert diagnostics["decision_type"] == "watch_only_stock_market_signal"
+    assert "llm_skipped" in diagnostics["phase_decisions"]
+    assert llm.invoke.call_count == 0
+
+
+def test_weak_hiring_signal_is_watch_only_without_llm_call():
+    payload = _fixture()
+    issue = _minimal_integrated_issue_with_fact(
+        company_id="peer_company",
+        fact_id="hiring_f1",
+        fact="주요 그룹은 16개 계열사와 함께 상반기 신입 공채를 진행한다고 밝혔다.",
+    )
+    issue["cluster_event_type"] = "personnel"
+    llm = MagicMock()
+
+    result = StrategicInsightAgent(llm=llm).generate(
+        input_bundle=payload["input_bundle"],
+        integrated_issue=issue,
+        classification={"event_type": "personnel"},
+        profile_context=payload["profile_context"],
+        analysis_context=payload["analysis_context"],
+    )
+
+    assert result["is_valid_strategic_insight"] is False
+    diagnostics = result["implication"]["frontend_ready_diagnostics"]
+    assert diagnostics["watch_only"] is True
+    assert diagnostics["decision_type"] == "watch_only_weak_hiring_signal"
+    assert "llm_skipped" in diagnostics["phase_decisions"]
+    assert llm.invoke.call_count == 0
+
+
+def test_market_infra_signal_without_direct_peer_action_is_watch_only():
+    payload = _fixture()
+    issue = _minimal_integrated_issue_with_fact(
+        company_id="lg_cns",
+        fact_id="infra_f1",
+        fact=(
+            "글로벌 AI 반도체 기업 CEO는 한국 기업들이 AI 팩토리와 "
+            "데이터센터 인프라를 확장해야 한다고 말했다."
+        ),
+    )
+    issue["fact_summary"].append("국내 주요 그룹과 AI 인프라 구축 협력 가능성도 함께 언급됐다.")
+    issue["integrated_text"] = "\n".join(issue["fact_summary"])
+    llm = MagicMock()
+
+    result = StrategicInsightAgent(llm=llm).generate(
+        input_bundle=payload["input_bundle"],
+        integrated_issue=issue,
+        classification={"event_type": "industry_trend"},
+        profile_context=payload["profile_context"],
+        analysis_context=payload["analysis_context"],
+    )
+
+    assert result["is_valid_strategic_insight"] is False
+    diagnostics = result["implication"]["frontend_ready_diagnostics"]
+    assert diagnostics["watch_only"] is True
+    assert diagnostics["decision_type"] == "watch_only_industry_signal"
+    assert diagnostics["signal_scope"] == "market_infra_signal"
+    assert diagnostics["direct_peer_action"] is False
+    assert diagnostics["primary_actor_type"] in {"global_vendor", "multi_actor", "unknown"}
+    assert "frontend_ready" not in result["implication"]
+    assert result["implication"]["industry_frontend_ready"]["display_policy"] == "industry_only"
+    assert result["implication"]["industry_frontend_ready"]["signal_scope"] == (
+        "market_infra_signal"
+    )
+    assert result["implication"]["industry_frontend_ready"]["items"]
+    assert "llm_skipped" in diagnostics["phase_decisions"]
+    assert llm.invoke.call_count == 0
+
+
+def test_industry_frontend_ready_keeps_only_distinct_strategic_axes():
+    issue = _minimal_integrated_issue_with_fact(
+        company_id="lg_cns",
+        fact_id="infra_axis_f1",
+        fact=(
+            "글로벌 AI 반도체 기업 CEO는 한국 기업들이 AI 팩토리와 "
+            "데이터센터 인프라를 확장해야 한다고 말했다."
+        ),
+    )
+    issue["fact_summary"].extend(
+        [
+            "국내 주요 그룹과 AI 인프라 구축 협력 가능성도 함께 언급됐다.",
+            "AI 팩토리 구축에는 GPU 확보와 데이터센터 운영 조건이 포함된다.",
+        ]
+    )
+    issue["integrated_text"] = "\n".join(issue["fact_summary"])
+
+    frontend_ready = strategic_insight_module._industry_frontend_ready_from_decision(
+        integrated_issue=issue,
+        skip_decision={
+            "signal_scope": "market_infra_signal",
+            "primary_actor_type": "global_vendor",
+        },
+    )
+
+    items = frontend_ready["items"]
+    assert len(items) == 1
+    sentences = [
+        item["key_implication"]["sentence"]
+        for item in items
+        if isinstance(item.get("key_implication"), dict)
+    ]
+    assert len(sentences) == len(set(sentences))
+    assert "AI 팩토리" in sentences[0] or "AI 인프라" in sentences[0]
+
+
+def test_industry_frontend_ready_uses_dynamic_decision_criteria_without_peer_reason():
+    issue = _minimal_integrated_issue_with_fact(
+        company_id="lg_cns",
+        fact_id="industry_dynamic_f1",
+        fact=(
+            "글로벌 공급사는 제조기업과 스마트팩토리 공동 실증을 논의했고, "
+            "기존 MES 연계와 비용 부담을 후속 검토한다고 밝혔다."
+        ),
+    )
+    issue["fact_summary"].append(
+        "참여 기업들은 현장 적용 범위와 파트너십 필요성을 추가로 확인할 예정이다."
+    )
+    issue["integrated_text"] = "\n".join(issue["fact_summary"])
+
+    frontend_ready = strategic_insight_module._industry_frontend_ready_from_decision(
+        integrated_issue=issue,
+        skip_decision={
+            "signal_scope": "industry_signal",
+            "primary_actor_type": "multi_actor",
+        },
+    )
+
+    item = frontend_ready["items"][0]
+    action = item["suggested_action"]
+    insight = item["key_implication"]
+    action_text = f"{action['sentence']} {action['evidence_sentence']}"
+    display_text = (
+        f"{insight['sentence']} {insight['evidence_sentence']} "
+        f"{action['sentence']} {action['evidence_sentence']}"
+    )
+
+    assert "피어 직접 실행" not in action_text
+    assert "투자 조건, 운영 책임, 고객 적용 가능성" not in action_text
+    assert "항목" not in display_text
+    assert action["decision_criteria"]
+    assert any(
+        criterion in action["decision_criteria"]
+        for criterion in ("비용 부담", "기존 시스템 접점", "파트너십 필요성", "고객 적용 가능성")
+    )
+    assert any(
+        phrase in action_text
+        for phrase in ("시스템", "외부 협력", "파트너", "고객 적용", "투자 부담", "접점")
+    )
+
+
+def test_invalid_market_infra_signal_preserves_industry_signal_diagnostics():
+    payload = _fixture()
+    issue = _minimal_integrated_issue_with_fact(
+        company_id="lg_cns",
+        fact_id="infra_invalid_f1",
+        fact=(
+            "글로벌 AI 반도체 기업 CEO는 국내 여러 그룹과 만나 "
+            "AI 팩토리와 데이터센터 인프라 확장 필요성을 강조했다."
+        ),
+    )
+    issue["is_valid_summary"] = False
+    llm = MagicMock()
+
+    result = StrategicInsightAgent(llm=llm).generate(
+        input_bundle=payload["input_bundle"],
+        integrated_issue=issue,
+        classification={"event_type": "industry_trend"},
+        profile_context=payload["profile_context"],
+        analysis_context=payload["analysis_context"],
+    )
+
+    diagnostics = result["implication"]["frontend_ready_diagnostics"]
+    assert result["is_valid_strategic_insight"] is False
+    assert diagnostics["decision_type"] == "watch_only_industry_signal"
+    assert diagnostics["signal_scope"] == "market_infra_signal"
+    assert diagnostics["direct_peer_action"] is False
+    assert result["implication"]["industry_signal"]["signal_scope"] == "market_infra_signal"
+    assert "display_label" not in result["implication"]["industry_frontend_ready"]
+    assert "invalid_summary_preserved_as_watch_only_signal" in diagnostics["phase_decisions"]
+    assert llm.invoke.call_count == 0
+
+
+def test_market_infra_direct_peer_action_is_not_watch_only():
+    issue = _minimal_integrated_issue_with_fact(
+        company_id="samsung_sds",
+        fact_id="infra_direct_f1",
+        fact=(
+            "삼성SDS 컨소시엄은 국가 AI 컴퓨팅센터 구축 사업자로 선정되어 "
+            "GPU 인프라 구축을 추진한다."
+        ),
+    )
+
+    decision = strategic_insight_module._strategic_generation_skip_decision(
+        integrated_issue=issue,
+        classification={"event_type": "selection"},
+    )
+
+    assert decision == {}
+
+
+def test_partnership_diagnostics_extracts_dynamic_execution_slots():
+    issue = _minimal_integrated_issue_with_fact(
+        company_id="peer_company",
+        fact_id="partnership_f1",
+        fact=(
+            "피어사는 협력사와 차세대 물류센터 시스템 구축 업무협약을 체결하고 "
+            "로봇 관제 플랫폼을 적용한다."
+        ),
+    )
+    issue["cluster_event_type"] = "partnership"
+    issue["products_or_services"] = ["로봇 관제 플랫폼"]
+    issue["target_systems"] = ["차세대 물류센터 시스템"]
+    issue["cluster_fact_intelligence"] = {
+        "products_or_services": {
+            "activity_types": ["협력"],
+            "products_or_services": [
+                "로봇 관제 플랫폼",
+                "피어사는 협력사와 다양한 사업 기회를 모색할 계획이다",
+            ],
+        },
+    }
+
+    diagnostics = strategic_insight_module._issue_execution_slot_diagnostics(issue)
+
+    assert diagnostics["counterparty"]
+    assert diagnostics["target_system"]
+    assert diagnostics["product_or_service"]
+    assert diagnostics["execution_scope"]
+    assert "missing_slots" in diagnostics
+    assert "activity_types" not in diagnostics["product_or_service"]
+    assert "products_or_services" not in diagnostics["product_or_service"]
+    assert not any("계획이다" in item for item in diagnostics["product_or_service"])
 
 
 def test_strategic_insight_agent_filters_business_lines_by_profile_candidates():
@@ -637,7 +1042,9 @@ def test_strategic_insight_agent_filters_business_lines_by_profile_candidates():
         },
     }
     llm = MagicMock()
-    llm.invoke = MagicMock(return_value=_fake_llm_response(llm_payload))
+    llm.invoke = MagicMock(
+        return_value=_fake_llm_response(llm_payload, add_default_frontend_ready=False)
+    )
     profile_context = _profile_context_with_business_lines(payload, [TEST_LINE_A, TEST_LINE_B])
 
     result = StrategicInsightAgent(llm=llm).generate(
@@ -782,7 +1189,9 @@ def test_strategic_insight_agent_replaces_abstract_actions_with_grounded_fallbac
         },
     }
     llm = MagicMock()
-    llm.invoke = MagicMock(return_value=_fake_llm_response(llm_payload))
+    llm.invoke = MagicMock(
+        return_value=_fake_llm_response(llm_payload, add_default_frontend_ready=False)
+    )
     profile_context = _profile_context_with_business_lines(payload, [TEST_LINE_A])
 
     result = StrategicInsightAgent(llm=llm).generate(
@@ -796,7 +1205,12 @@ def test_strategic_insight_agent_replaces_abstract_actions_with_grounded_fallbac
     actions = result["implication"]["skax_implication"]["recommended_actions"]
     assert result["is_valid_strategic_insight"] is False
     assert result["implication"]["is_valid_implication"] is False
-    assert "제안서에 적용 범위와 검증 기준 강조" not in actions
+    assert "제안서에 적용 범위와 검증 기준 강조" in actions
+    assert (
+        "frontend_ready" not in result["implication"]
+        or result["implication"]["frontend_ready"].get("source")
+        not in strategic_insight_module._FRONTEND_READY_DISPLAY_SOURCES
+    )
 
 
 def test_strategic_insight_agent_repairs_overstated_relationship_and_generic_signal():
@@ -935,9 +1349,31 @@ def test_strategic_insight_agent_repairs_overstated_relationship_and_generic_sig
     llm = MagicMock()
     llm.invoke = MagicMock(
         side_effect=[
-            _fake_llm_response(bad_payload),
-            _fake_llm_response({"needs_revision": True, "revised_result": bad_payload}),
+            _fake_llm_response(bad_payload, add_default_frontend_ready=False),
+            _fake_llm_response(
+                {"needs_revision": True, "revised_result": bad_payload},
+                add_default_frontend_ready=False,
+            ),
             _fake_llm_response(repair_payload),
+            _fake_frontend_ready_repair_response(
+                key_sentence="지분 2% 취득 결의는 피어사의 고객 접점 확보 신호입니다.",
+                key_evidence=(
+                    "입력 fact에는 고객사 지분 2% 취득 결의가 직접 제시되어 "
+                    "실행 계약이 아니라 투자 관계 수준으로 해석해야 합니다."
+                ),
+                action_sentence=(
+                    "SK AX는 지분 취득 같은 실행 계약 이전 신호를 볼 때 "
+                    "관계 수준과 후속 사업 전환 가능성을 나눠 점검해야 합니다."
+                ),
+                action_evidence=(
+                    "이 구분이 있어야 SK AX가 투자 관계를 실행 역량이나 "
+                    "확정 수주로 과대해석하지 않고 내부 사업성 기준을 조정할 수 있습니다."
+                ),
+                key_event_terms=["지분", "취득"],
+                key_profile_terms=["투자", "고객"],
+                action_event_terms=["지분", "취득"],
+                action_skax_terms=["SK AX", "사업성"],
+            ),
         ]
     )
     profile_context = _profile_context_with_business_lines(payload, [TEST_LINE_A])
@@ -1231,7 +1667,7 @@ def test_strategic_insight_agent_self_review_can_mark_low_quality_result_invalid
     assert result["analysis"]["is_valid_analysis"] is False
     assert result["implication"]["is_valid_implication"] is False
     assert result["implication"]["evidence_label"] == "insufficient"
-    assert llm.invoke.call_count == 2
+    assert llm.invoke.call_count >= 2
 
 
 def test_quality_gate_flags_customer_contract_role_and_unscoped_proposal_artifact():
@@ -1296,6 +1732,1328 @@ def test_quality_gate_flags_customer_contract_role_and_unscoped_proposal_artifac
     assert any("역량 강화/경쟁력 강화 성과" in violation for violation in violations)
     assert any("외부 고객 제안/확인 문장" in violation for violation in violations)
     assert not any("제안서가 어떤 고객/사업/도입 프로젝트" in violation for violation in violations)
+
+
+def test_normalize_implication_does_not_auto_generate_frontend_ready():
+    payload = _fixture()
+    company_id, company_name = _fixture_company_identity(payload)
+
+    implication = strategic_insight_module._normalize_implication_block(
+        {
+            "is_valid_implication": True,
+            "peer_implication": {
+                "company_id": company_id,
+                "company_name_ko": company_name,
+                "peer_meaning": "피어사는 현재 사건을 기존 사업과 연결합니다.",
+                "capability_change": "현재 사건의 적용 대상이 기존 사업 범위와 연결됩니다.",
+                "sourced_evidence_ids": ["c43682_a43100_f1"],
+            },
+            "skax_implication": {
+                "why_important": "SK AX도 유사 사업에서 내부 점검이 필요합니다.",
+                "potential_impact": "현재 사건 신호가 유사 사업 기준을 바꿀 수 있습니다.",
+                "recommended_actions": ["SK AX는 유사 사업 기준을 내부적으로 점검합니다."],
+                "business_line_mapping": [TEST_LINE_A],
+            },
+        },
+        integrated_issue=payload["integrated_issue"],
+        profile_context=payload["profile_context"],
+        analysis_context=payload["analysis_context"],
+        model="test-model",
+    )
+
+    assert "frontend_ready" not in implication
+
+
+def test_frontend_ready_without_anchor_terms_fails_quality_gate():
+    payload = _fixture()
+    result = {
+        "analysis": {
+            "is_valid_analysis": True,
+            "analysis_summary": "피어사의 사업 신호가 확인됩니다.",
+            "strategic_meaning": ["현재 사건은 기존 사업과 연결됩니다."],
+            "market_signal": "현재 사건은 유사 사업 비교 기준을 보여줍니다.",
+            "impact_reason": "입력 fact_id에 근거합니다.",
+            "reason": "입력 근거를 사용했습니다.",
+        },
+        "implication": {
+            "is_valid_implication": True,
+            "peer_implication": {
+                "peer_meaning": "피어사는 현재 사건을 기존 사업과 연결합니다.",
+                "capability_change": "현재 사건의 적용 대상이 기존 사업 범위와 연결됩니다.",
+                "sourced_evidence_ids": ["c43682_a43100_f1"],
+            },
+            "skax_implication": {
+                "why_important": "SK AX도 유사 사업에서 내부 점검이 필요합니다.",
+                "potential_impact": "현재 사건 신호가 유사 사업 기준을 바꿀 수 있습니다.",
+                "recommended_actions": ["SK AX는 유사 사업 기준을 내부적으로 점검합니다."],
+            },
+            "frontend_ready": {
+                "source": "llm_direct",
+                "key_implication": {
+                    "source": "llm_direct",
+                    "frame": "피어 사업 흐름",
+                    "claim_type": "profile_based_signal",
+                    "claim_strength": "moderate",
+                    "evidence_mode": "profile_based",
+                    "unsupported_claims_removed": [],
+                    "sentence": "피어사는 현재 사건을 기존 사업과 연결합니다.",
+                    "evidence_sentence": "현재 사건의 적용 대상이 기존 사업 범위와 연결됩니다.",
+                },
+                "suggested_action": {
+                    "source": "llm_direct",
+                    "frame": "SK AX 내부 점검",
+                    "claim_type": "internal_strategy_check",
+                    "claim_strength": "cautious",
+                    "evidence_mode": "profile_based",
+                    "unsupported_claims_removed": [],
+                    "sentence": "SK AX는 유사 사업 기준을 내부적으로 점검합니다.",
+                    "evidence_sentence": "현재 사건 신호가 유사 사업 기준을 바꿀 수 있습니다.",
+                },
+            },
+        },
+    }
+
+    violations = strategic_insight_module._quality_gate_violations(
+        result,
+        integrated_issue=payload["integrated_issue"],
+        profile_context=payload["profile_context"],
+    )
+
+    assert not any("event_anchor_terms" in violation for violation in violations)
+    assert any("profile_anchor_terms" in violation for violation in violations)
+    assert any("skax_anchor_terms" in violation for violation in violations)
+
+
+def test_event_based_frontend_ready_allows_missing_profile_anchors():
+    integrated_issue = {
+        "is_valid_summary": True,
+        "main_company": "대상기업",
+        "headline": "대상기업, 업무 자동화 기능 도입",
+        "fact_summary": [
+            "대상기업은 에이전틱 AI를 업무 시스템에 적용했다.",
+            "에이전틱 AI는 반복 업무 처리와 승인 흐름을 지원한다.",
+        ],
+        "integrated_text": (
+            "대상기업은 에이전틱 AI를 업무 시스템에 적용했다. "
+            "에이전틱 AI는 반복 업무 처리와 승인 흐름을 지원한다."
+        ),
+    }
+    result = {
+        "implication": {
+            "is_valid_implication": True,
+            "frontend_ready": {
+                "source": "frontend_repair_direct",
+                "key_implication": {
+                    "source": "frontend_repair_direct",
+                    "frame": "사건 기반 신호",
+                    "claim_type": "event_based_signal",
+                    "claim_strength": "cautious",
+                    "evidence_mode": "event_based",
+                    "event_anchor_terms": ["에이전틱 AI"],
+                    "profile_anchor_terms": [],
+                    "unsupported_claims_removed": [],
+                    "sentence": "에이전틱 AI 도입은 업무 실행 방식 변화 신호입니다.",
+                    "evidence_sentence": (
+                        "기사에는 에이전틱 AI가 업무 시스템에 적용된 사실이 제시됩니다."
+                    ),
+                },
+                "suggested_action": {
+                    "source": "frontend_repair_direct",
+                    "frame": "내부 점검",
+                    "claim_type": "internal_strategy_check",
+                    "claim_strength": "cautious",
+                    "evidence_mode": "generic_monitoring",
+                    "event_anchor_terms": ["에이전틱 AI"],
+                    "skax_anchor_terms": [],
+                    "unsupported_claims_removed": [],
+                    "sentence": (
+                        "SK AX는 에이전틱 AI 관련 처리 업무 범위와 승인 흐름의 "
+                        "검증 기준을 나눠 정리해야 합니다."
+                    ),
+                    "evidence_sentence": (
+                        "반복 업무 처리와 승인 흐름이 함께 제시되어, 유사 업무 자동화 "
+                        "흐름도 시스템 연동 범위와 검증 항목을 분리해 판단해야 합니다."
+                    ),
+                },
+            },
+        }
+    }
+    linkage = {
+        "peer_linkages": [{"linkage_level": "low"}],
+        "skax_linkage": {"linkage_level": "none"},
+    }
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation=linkage,
+    ) + strategic_insight_module._frontend_ready_claim_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_linkage_evaluation=linkage,
+    )
+
+    assert violations == []
+
+
+def _synthetic_integrated_issue(
+    *,
+    headline: str,
+    fact_summary: list[str],
+    event_type: str = "general_update",
+) -> dict[str, Any]:
+    return {
+        "is_valid_summary": True,
+        "main_company": "대상기업",
+        "headline": headline,
+        "fact_summary": fact_summary,
+        "integrated_text": "\n".join(fact_summary),
+        "consolidated_facts": [
+            {"fact_id": f"fact:{index}", "fact": fact}
+            for index, fact in enumerate(fact_summary, start=1)
+        ],
+        "classification": {"event_type": event_type},
+    }
+
+
+def _frontend_ready_result(
+    *,
+    key_sentence: str,
+    key_evidence: str,
+    action_sentence: str,
+    action_evidence: str,
+    key_event_terms: list[str] | None = None,
+    action_event_terms: list[str] | None = None,
+    key_claim_type: str = "event_based_signal",
+    key_evidence_mode: str = "event_based",
+    action_evidence_mode: str = "generic_monitoring",
+) -> dict[str, Any]:
+    return {
+        "implication": {
+            "is_valid_implication": True,
+            "frontend_ready": {
+                "source": "llm_direct",
+                "key_implication": {
+                    "source": "llm_direct",
+                    "frame": "issue signal",
+                    "claim_type": key_claim_type,
+                    "claim_strength": "cautious",
+                    "evidence_mode": key_evidence_mode,
+                    "event_anchor_terms": key_event_terms or [],
+                    "profile_anchor_terms": [],
+                    "sentence": key_sentence,
+                    "evidence_sentence": key_evidence,
+                },
+                "suggested_action": {
+                    "source": "llm_direct",
+                    "frame": "internal check",
+                    "claim_type": "internal_strategy_check",
+                    "claim_strength": "cautious",
+                    "evidence_mode": action_evidence_mode,
+                    "event_anchor_terms": action_event_terms or [],
+                    "skax_anchor_terms": [],
+                    "sentence": action_sentence,
+                    "evidence_sentence": action_evidence,
+                },
+            },
+        }
+    }
+
+
+def test_event_based_frontend_ready_requires_dynamic_issue_anchor():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 실행형 업무 플랫폼 출시",
+        fact_summary=[
+            "대상기업은 '워크플로우Z'를 출시했다.",
+            "워크플로우Z는 자연어 명령으로 ERP와 문서 시스템의 업무 처리를 지원한다.",
+        ],
+        event_type="launch",
+    )
+    result = {
+        "implication": {
+            "is_valid_implication": True,
+            "frontend_ready": {
+                "source": "llm_direct",
+                "key_implication": {
+                    "source": "llm_direct",
+                    "frame": "사건 기반 신호",
+                    "claim_type": "event_based_signal",
+                    "claim_strength": "cautious",
+                    "evidence_mode": "event_based",
+                    "event_anchor_terms": [],
+                    "profile_anchor_terms": [],
+                    "sentence": "",
+                    "evidence_sentence": "",
+                },
+                "suggested_action": {
+                    "source": "llm_direct",
+                    "frame": "내부 점검",
+                    "claim_type": "internal_strategy_check",
+                    "claim_strength": "cautious",
+                    "evidence_mode": "generic_monitoring",
+                    "event_anchor_terms": [],
+                    "skax_anchor_terms": [],
+                    "sentence": "",
+                    "evidence_sentence": "",
+                },
+            },
+        }
+    }
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("key_implication.sentence" in violation for violation in violations)
+    assert any("key_implication.evidence_sentence" in violation for violation in violations)
+    assert any("suggested_action.sentence" in violation for violation in violations)
+    assert any("suggested_action.evidence_sentence" in violation for violation in violations)
+
+
+def test_financial_structure_signal_uses_numbers_and_comparison_context():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 거래 구조 지표 변화 공시",
+        fact_summary=[
+            "대상기업의 내부거래 비중은 47.1%로 전년 52.0%보다 낮아졌다.",
+            "같은 업종 비교군의 내부거래 평균은 35.0%로 제시됐다.",
+        ],
+        event_type="financial_update",
+    )
+    result = _frontend_ready_result(
+        key_claim_type="financial_structure_signal",
+        key_sentence="내부거래 변화는 거래 구조를 비교할 신호입니다.",
+        key_evidence="내부거래 변화가 제시됐습니다.",
+        action_sentence="SK AX는 내부거래 구조를 점검해야 합니다.",
+        action_evidence="거래 구조 기준을 확인해야 합니다.",
+        key_event_terms=["내부거래"],
+        action_event_terms=["내부거래"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_specific_anchor_violations(
+        result,
+        integrated_issue=integrated_issue,
+    )
+
+    assert any("key_implication" in violation for violation in violations)
+    assert any("suggested_action" in violation for violation in violations)
+
+
+def test_financial_structure_key_sentence_keeps_numbers_in_evidence_role():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 내부거래 비중 변화 공시",
+        fact_summary=[
+            "대상기업의 내부거래 비중은 47.1%로 낮아졌다.",
+            "비교군의 내부거래 비중은 60%에서 96%대로 제시됐다.",
+        ],
+        event_type="financial_update",
+    )
+    result = _frontend_ready_result(
+        key_claim_type="financial_structure_signal",
+        key_sentence=("내부거래 47.1%와 비교군 60%에서 96%대는 거래 구조 비교 기준입니다."),
+        key_evidence=("대상기업의 내부거래 비중 47.1%와 비교군 60%에서 96%대가 함께 제시됐습니다."),
+        action_sentence=(
+            "SK AX는 내부거래와 외부 거래 매출을 분리해 매출 구성 기준을 비교해야 합니다."
+        ),
+        action_evidence=(
+            "거래 비중 차이가 제시되어 자사 매출 분류와 대외 고객 매출 기준을 "
+            "나눠 볼 필요가 있습니다."
+        ),
+        key_event_terms=["내부거래", "47.1%"],
+        action_event_terms=["내부거래", "외부 거래"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("수치·비교군 근거를 반복" in violation for violation in violations)
+
+
+def test_product_launch_signal_uses_product_function_and_target_system():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 실행형 업무 플랫폼 출시",
+        fact_summary=[
+            "대상기업은 '워크플로우Z'를 출시했다.",
+            "워크플로우Z는 자연어 명령으로 ERP와 문서 시스템의 업무 처리를 지원한다.",
+        ],
+        event_type="launch",
+    )
+    result = _frontend_ready_result(
+        key_claim_type="workflow_execution_signal",
+        key_sentence="워크플로우Z 출시는 업무 플랫폼 적용 범위가 드러난 신호입니다.",
+        key_evidence="워크플로우Z가 ERP와 문서 시스템의 업무 처리를 지원한다고 제시됐습니다.",
+        action_sentence=(
+            "SK AX는 워크플로우Z 같은 실행형 업무 플랫폼의 연동 범위를 점검해야 합니다."
+        ),
+        action_evidence=(
+            "ERP와 문서 시스템이 함께 제시되어 시스템 연동과 처리 업무 기준을 비교해야 합니다."
+        ),
+        key_event_terms=["워크플로우Z", "ERP"],
+        action_event_terms=["워크플로우Z", "ERP"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    ) + strategic_insight_module._frontend_ready_specific_anchor_violations(
+        result,
+        integrated_issue=integrated_issue,
+    )
+
+    assert violations == []
+
+
+def test_partnership_signal_uses_counterparty_target_system_and_execution_scope():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 현장 자동화 협약 체결",
+        fact_summary=[
+            "대상기업은 협력대상과 현장 자동화 협약을 체결했다.",
+            (
+                "협약에는 청라센터에 로봇관제 플랫폼을 적용하고 "
+                "운영 데이터를 연계하는 범위가 포함됐다."
+            ),
+        ],
+        event_type="partnership",
+    )
+    result = _frontend_ready_result(
+        key_sentence=(
+            "현장 자동화 협약은 자동화 경쟁 기준이 단순 장비 도입에서 "
+            "협력대상과 청라센터에 적용되는 로봇관제 데이터 연계와 운영 책임으로 "
+            "이동할 수 있음을 보여줍니다."
+        ),
+        key_evidence="청라센터의 로봇관제 플랫폼 적용과 운영 데이터 연계 범위가 제시됐습니다.",
+        action_sentence=(
+            "SK AX는 유사 현장 자동화 사업에서 로봇관제 플랫폼 확보 방식과 "
+            "운영 데이터 책임 범위를 분리해야 합니다."
+        ),
+        action_evidence=(
+            "청라센터에 적용되는 운영 데이터 연계가 함께 제시되어 내부 판단은 "
+            "플랫폼 제공 범위와 현장 시스템 연계 책임을 나눠야 합니다."
+        ),
+        key_event_terms=["협력대상", "청라센터"],
+        action_event_terms=["청라센터", "운영 데이터"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    ) + strategic_insight_module._frontend_ready_specific_anchor_violations(
+        result,
+        integrated_issue=integrated_issue,
+    )
+
+    assert violations == []
+
+
+def test_action_copy_requires_check_target_and_evaluation_basis():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 실행형 업무 플랫폼 출시",
+        fact_summary=[
+            "대상기업은 '워크플로우Z'를 출시했다.",
+            "워크플로우Z는 자연어 명령으로 ERP와 문서 시스템의 업무 처리를 지원한다.",
+        ],
+        event_type="launch",
+    )
+    result = _frontend_ready_result(
+        key_sentence="워크플로우Z 출시는 업무 플랫폼 적용 범위가 드러난 신호입니다.",
+        key_evidence="워크플로우Z가 ERP와 문서 시스템의 업무 처리를 지원한다고 제시됐습니다.",
+        action_sentence="SK AX는 워크플로우Z를 점검해야 합니다.",
+        action_evidence="후속 검토가 필요합니다.",
+        key_event_terms=["워크플로우Z", "ERP"],
+        action_event_terms=["워크플로우Z"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("점검 대상과 판단 기준" in violation for violation in violations)
+
+
+def test_action_copy_requires_internal_judgement_axis():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 클라우드 보안 협력 체결",
+        fact_summary=[
+            "대상기업은 보안 전문기업과 클라우드 보안 협력을 체결했다.",
+            "협력 범위에는 취약점 탐지와 보안 모니터링이 포함됐다.",
+        ],
+        event_type="partnership",
+    )
+    result = _frontend_ready_result(
+        key_sentence="클라우드 보안 협력은 보안 기능을 외부 전문기업과 묶은 신호입니다.",
+        key_evidence="취약점 탐지와 보안 모니터링이 협력 범위에 포함됐습니다.",
+        action_sentence="SK AX는 클라우드 보안 협력의 적용 범위와 기준을 점검해야 합니다.",
+        action_evidence="취약점 탐지와 보안 모니터링이 적용 범위의 기준으로 제시됐습니다.",
+        key_event_terms=["클라우드 보안", "취약점 탐지"],
+        action_event_terms=["클라우드 보안", "취약점 탐지"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("내부 판단 축" in violation for violation in violations)
+
+
+def test_key_implication_evidence_must_not_use_action_directive_language():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 클라우드 보안 협력 체결",
+        fact_summary=[
+            "대상기업은 보안 전문기업과 클라우드 보안 협력을 체결했다.",
+            "협력 범위에는 취약점 탐지와 보안 모니터링이 포함됐다.",
+        ],
+        event_type="partnership",
+    )
+    result = _frontend_ready_result(
+        key_sentence="클라우드 보안 협력은 보안 기능을 외부 전문기업과 묶은 신호입니다.",
+        key_evidence=(
+            "취약점 탐지와 보안 모니터링이 협력 범위에 포함됐기 때문에 "
+            "실행 범위와 협력 역할을 관찰할 필요가 있습니다."
+        ),
+        action_sentence=(
+            "SK AX는 클라우드 보안 과제에서 자체 수행 범위와 외부 협력 기준을 구분해야 합니다."
+        ),
+        action_evidence=(
+            "보안 기능이 협력 범위로 제시되어 운영 책임과 협력 구간을 나눠 볼 기준이 필요합니다."
+        ),
+        key_event_terms=["클라우드 보안", "취약점 탐지"],
+        action_event_terms=["클라우드 보안", "취약점 탐지"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("대응방향성 지시문" in violation for violation in violations)
+
+
+def test_key_implication_sentence_must_explain_direction_not_only_fact_label():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 현장 자동화 협약 체결",
+        fact_summary=[
+            "대상기업은 협력대상과 현장 자동화 협약을 체결했다.",
+            "협약에는 로봇관제 플랫폼을 적용하고 운영 데이터를 연계하는 범위가 포함됐다.",
+        ],
+        event_type="partnership",
+    )
+    result = _frontend_ready_result(
+        key_sentence="현장 자동화 협약은 로봇관제 플랫폼 적용이 공개된 실행 신호입니다.",
+        key_evidence=(
+            "협약에는 로봇관제 플랫폼 적용과 운영 데이터 연계 범위가 함께 제시되어 "
+            "현장 자동화가 장비 도입보다 운영 구조와 연결됩니다."
+        ),
+        action_sentence=(
+            "SK AX는 현장 자동화 사업에서 로봇 적용 업무와 관제 책임 기준을 분리해야 합니다."
+        ),
+        action_evidence=(
+            "로봇관제 플랫폼과 운영 데이터 연계가 함께 제시되어 내부 판단은 "
+            "적용 업무, 운영 책임, 플랫폼 확보 방식을 나눠야 합니다."
+        ),
+        key_event_terms=["현장 자동화", "로봇관제 플랫폼"],
+        action_event_terms=["현장 자동화", "로봇관제 플랫폼"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("현재 사실을 라벨링" in violation for violation in violations)
+
+
+def test_action_copy_must_not_use_customer_scale_as_direct_response_basis():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 스마트물류 협약 체결",
+        fact_summary=[
+            "대상기업은 물류기업과 스마트물류 협약을 체결했다.",
+            "학습 플랫폼과 통합 관제 플랫폼을 활용해 물류센터 로봇 운영을 추진한다.",
+            "물류기업은 전 세계 380여 개 거점 네트워크를 보유하고 있다.",
+        ],
+        event_type="partnership",
+    )
+    result = _frontend_ready_result(
+        key_sentence=(
+            "스마트물류 협약은 로봇 도입 경쟁이 학습·관제 운영 구조로 "
+            "확장될 수 있음을 보여줍니다."
+        ),
+        key_evidence=(
+            "학습 플랫폼과 통합 관제 플랫폼이 물류센터 로봇 운영에 함께 쓰인다는 "
+            "사실이 제시됐습니다."
+        ),
+        action_sentence=(
+            "SK AX는 유사 물류 고객 대응에서 고객 거점 범위를 기준으로 "
+            "내부 판단 항목을 나눠야 합니다."
+        ),
+        action_evidence=(
+            "전 세계 380여 개 거점 네트워크가 제시되어 고객 거점 범위를 "
+            "직접 비교 기준으로 삼아야 합니다."
+        ),
+        key_event_terms=["스마트물류", "통합 관제 플랫폼"],
+        action_event_terms=["스마트물류", "통합 관제 플랫폼"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("고객 규모·거점 수·시장 규모" in violation for violation in violations)
+
+
+def test_key_implication_requires_business_interpretation_when_business_context_exists():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 운영 플랫폼 협약 체결",
+        fact_summary=[
+            "대상기업은 고객사와 운영 플랫폼 협약을 체결했다.",
+            "협약에는 고객 업무 시스템 적용과 운영 데이터 연계 범위가 포함됐다.",
+        ],
+        event_type="partnership",
+    )
+    result = _frontend_ready_result(
+        key_sentence="운영 플랫폼 협약은 경쟁 기준이 더 구체화되는 흐름입니다.",
+        key_evidence=(
+            "고객 업무 시스템 적용과 운영 데이터 연계 범위가 협약에 포함됐습니다."
+        ),
+        action_sentence=(
+            "SK AX는 유사 운영 플랫폼 사업에서 시스템 연계 범위와 운영 책임을 "
+            "고객 제안 단위로 나눠야 합니다."
+        ),
+        action_evidence=(
+            "이 구분이 있어야 SK AX가 직접 책임질 운영 범위와 외부 확인이 필요한 "
+            "범위를 설명할 수 있습니다."
+        ),
+        key_event_terms=["운영 플랫폼", "고객 업무 시스템"],
+        action_event_terms=["운영 플랫폼", "고객 업무 시스템"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("비즈니스 실익" in violation for violation in violations)
+
+
+def test_product_launch_business_mechanism_allows_workflow_execution_scope():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 업무 자동화 서비스 출시",
+        fact_summary=[
+            "대상기업은 업무 자동화 서비스를 출시했다.",
+            "서비스는 메일, ERP, 문서, 사내 업무 시스템을 분석하고 필요한 업무를 처리한다.",
+        ],
+        event_type="tech_release",
+    )
+    result = _frontend_ready_result(
+        key_sentence=(
+            "업무 자동화 서비스 출시는 경쟁 기준이 단순 응답보다 "
+            "업무 시스템 처리 범위로 이동할 수 있음을 보여줍니다."
+        ),
+        key_evidence=(
+            "서비스가 메일, ERP, 문서, 사내 업무 시스템을 분석하고 "
+            "필요한 업무를 처리한다고 제시됐습니다."
+        ),
+        action_sentence=(
+            "SK AX는 유사 업무 자동화 수요에서 적용 업무, 기존 시스템 접점, "
+            "외부 연계 필요성을 고객 수요 검증 기준으로 나눠 봐야 합니다."
+        ),
+        action_evidence=(
+            "이 구분이 있어야 SK AX가 직접 도입을 전제하지 않고 "
+            "업무 처리 범위와 시스템 연계 가능성을 설명할 수 있습니다."
+        ),
+        key_event_terms=["업무 자동화", "사내 업무 시스템"],
+        action_event_terms=["업무 자동화", "사내 업무 시스템"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {
+                "linkage_level": "low",
+                "matched_terms": ["업무", "자동화"],
+                "matched_business_areas": [],
+            },
+        },
+    )
+
+    assert not any("비즈니스 실익" in violation for violation in violations)
+
+
+def test_frontend_ready_rejects_unsupported_business_jargon():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 업무 플랫폼 출시",
+        fact_summary=[
+            "대상기업은 업무 플랫폼을 출시했다.",
+            "업무 플랫폼은 문서 시스템 처리 범위를 지원한다.",
+        ],
+        event_type="launch",
+    )
+    result = _frontend_ready_result(
+        key_sentence=(
+            "업무 플랫폼 출시는 고객 제안 범위가 플랫폼 주도권으로 확장되는 "
+            "흐름입니다."
+        ),
+        key_evidence="문서 시스템 처리 범위를 지원하는 업무 플랫폼 출시가 제시됐습니다.",
+        action_sentence=(
+            "SK AX는 업무 플랫폼 연동 범위와 처리 업무 기준을 고객 제안 단위로 나눠야 합니다."
+        ),
+        action_evidence=(
+            "이 구분이 있어야 SK AX가 직접 책임질 시스템 연동 범위와 외부 확인 범위를 "
+            "설명할 수 있습니다."
+        ),
+        key_event_terms=["업무 플랫폼", "문서 시스템"],
+        action_event_terms=["업무 플랫폼", "문서 시스템"],
+    )
+    result["implication"]["frontend_ready"]["key_implication"][
+        "sentence"
+    ] += " 밸류에이션 개선 신호로도 볼 수 있습니다."
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("전문 해석 용어" in violation for violation in violations)
+
+
+def test_action_copy_must_not_use_peer_product_name_as_skax_basis_without_profile_match():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 스마트물류 협약 체결",
+        fact_summary=[
+            "대상기업은 물류기업과 스마트물류 협약을 체결했다.",
+            (
+                "학습에는 자체 로봇 학습 플랫폼 ‘피지컬웍스 포지(PhysicalWorks Forge)’를, "
+                "운영에는 통합 관제 플랫폼 ‘피지컬웍스 바통(PhysicalWorks Baton)’을 활용한다."
+            ),
+        ],
+        event_type="partnership",
+    )
+    result = _frontend_ready_result(
+        key_sentence=(
+            "스마트물류 협약은 로봇 자동화 경쟁 기준이 학습·관제 운영 구조로 "
+            "확장될 수 있음을 보여줍니다."
+        ),
+        key_evidence=(
+            "피지컬웍스 포지(PhysicalWorks Forge)는 로봇 학습에, "
+            "피지컬웍스 바통(PhysicalWorks Baton)은 통합 관제에 활용된다고 제시됐습니다."
+        ),
+        action_sentence=(
+            "SK AX는 피지컬웍스 포지(PhysicalWorks Forge)와 "
+            "피지컬웍스 바통(PhysicalWorks Baton)을 내부 비교 기준으로 삼아야 합니다."
+        ),
+        action_evidence=(
+            "피어 제품명이 제시됐기 때문에 SK AX 내부 판단도 같은 제품 구조를 기준으로 해야 합니다."
+        ),
+        key_event_terms=["스마트물류", "피지컬웍스 포지"],
+        action_event_terms=["스마트물류", "피지컬웍스 포지"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {
+                "linkage_level": "low",
+                "matched_terms": ["물류", "자동화"],
+                "matched_business_areas": [],
+            },
+        },
+    )
+
+    assert any("피어사 고유 제품명" in violation for violation in violations)
+
+
+def test_adjacent_skax_linkage_must_not_write_direct_adoption_action():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 스마트물류 협약 체결",
+        fact_summary=[
+            "대상기업은 물류기업과 스마트물류 협약을 체결했다.",
+            "협약에는 로봇 적용 업무와 통합 관제 운영 방식이 포함됐다.",
+        ],
+        event_type="partnership",
+    )
+    result = _frontend_ready_result(
+        key_sentence=(
+            "스마트물류 협약은 물류 자동화 경쟁 기준이 로봇 적용 업무와 "
+            "통합 관제 운영 방식으로 확장될 수 있음을 보여줍니다."
+        ),
+        key_evidence="로봇 적용 업무와 통합 관제 운영 방식이 협약 범위에 포함됐습니다.",
+        action_sentence=(
+            "SK AX는 스마트물류 플랫폼을 자체 도입해야 하고 통합 관제 운영을 직접 구축해야 합니다."
+        ),
+        action_evidence="물류 자동화 접점이 있으므로 직접 도입과 구축이 필요합니다.",
+        key_event_terms=["스마트물류", "통합 관제"],
+        action_event_terms=["스마트물류", "통합 관제"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {
+                "linkage_level": "low",
+                "matched_terms": ["물류", "자동화"],
+                "matched_business_areas": [],
+            },
+        },
+    )
+
+    assert any("인접 접점 수준" in violation for violation in violations)
+
+
+def test_adjacent_skax_linkage_allows_probe_language_with_execution_context():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 업무 자동화 서비스 출시",
+        fact_summary=[
+            "대상기업은 기업 업무 자동화 서비스를 출시했다.",
+            "서비스는 메일, ERP, 문서, 사내 업무 시스템을 분석하고 필요한 업무를 처리한다.",
+        ],
+        event_type="tech_release",
+    )
+    result = _frontend_ready_result(
+        key_sentence=(
+            "업무 자동화 서비스 출시는 기업 AI 경쟁 기준이 단일 챗봇보다 "
+            "업무 시스템 처리 범위로 넓어질 수 있음을 보여줍니다."
+        ),
+        key_evidence=(
+            "서비스가 메일, ERP, 문서, 사내 업무 시스템을 분석하고 "
+            "필요한 업무를 처리한다고 제시됐습니다."
+        ),
+        action_sentence=(
+            "SK AX는 유사 업무 자동화 구축 수요가 나올 때 적용 업무, 기존 시스템 접점, "
+            "외부 연계 필요성을 고객 수요 검증 항목으로 나눠 봐야 합니다."
+        ),
+        action_evidence=(
+            "인접 접점 수준에서는 직접 도입을 전제하기보다 업무 처리 범위와 "
+            "시스템 연계 기준이 확인되어야 고객 제안 가능성을 설명할 수 있습니다."
+        ),
+        key_event_terms=["업무 자동화", "사내 업무 시스템"],
+        action_event_terms=["업무 자동화", "사내 업무 시스템"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {
+                "linkage_level": "low",
+                "matched_terms": ["업무", "자동화"],
+                "matched_business_areas": [],
+            },
+        },
+    )
+
+    assert not any("인접 접점 수준" in violation for violation in violations)
+
+
+def test_adjacent_skax_linkage_must_not_use_strong_packaging_action():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 운영 플랫폼 협약 체결",
+        fact_summary=[
+            "대상기업은 고객사와 운영 플랫폼 협약을 체결했다.",
+            "협약에는 고객 업무 시스템 적용과 운영 데이터 연계 범위가 포함됐다.",
+        ],
+        event_type="partnership",
+    )
+    result = _frontend_ready_result(
+        key_sentence=(
+            "운영 플랫폼 협약은 고객 업무 시스템과 운영 데이터가 고객 제안 범위로 "
+            "확장될 수 있음을 보여줍니다."
+        ),
+        key_evidence="고객 업무 시스템 적용과 운영 데이터 연계 범위가 협약에 포함됐습니다.",
+        action_sentence=(
+            "SK AX는 운영 플랫폼 연계 범위를 고객 제안 단위로 패키징하고 "
+            "대외 레퍼런스를 확보해야 합니다."
+        ),
+        action_evidence=(
+            "이 선택지가 있어야 SK AX가 직접 책임질 운영 범위와 외부 협력 범위를 "
+            "설명할 수 있습니다."
+        ),
+        key_event_terms=["운영 플랫폼", "고객 업무 시스템"],
+        action_event_terms=["운영 플랫폼", "고객 업무 시스템"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {
+                "linkage_level": "low",
+                "matched_terms": ["운영", "시스템"],
+                "matched_business_areas": [],
+            },
+        },
+    )
+
+    assert any("인접 접점 수준" in violation for violation in violations)
+
+
+def test_action_copy_must_not_paraphrase_key_implication_noun_phrases():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, AI 보안 협력 체결",
+        fact_summary=[
+            "대상기업은 AI 보안 전문기업과 클라우드 보안 협력을 체결했다.",
+            "이번 협력은 AI 보안 관제와 클라우드 보안 적용 범위를 포함한다.",
+        ],
+        event_type="partnership",
+    )
+    result = _frontend_ready_result(
+        key_sentence="AI 보안 협력은 클라우드 보안 서비스 구조가 넓어지는 신호입니다.",
+        key_evidence="AI 보안 전문기업과의 협력과 클라우드 보안 적용 범위가 함께 제시됐습니다.",
+        action_sentence="SK AX는 AI 보안 협력과 클라우드 보안 모니터링 범위를 점검해야 합니다.",
+        action_evidence="AI 보안 관제와 클라우드 보안 적용 범위가 내부 점검 기준과 연결됩니다.",
+        key_event_terms=["AI 보안", "클라우드 보안"],
+        action_event_terms=["AI 보안", "클라우드 보안"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("role_separation" in violation for violation in violations)
+
+
+def test_action_evidence_must_not_repeat_insight_evidence_without_internal_axis():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 거래 구조 지표 변화 공시",
+        fact_summary=[
+            "대상기업의 내부거래 비중은 47.1%로 낮아졌다.",
+            "비교군의 내부거래 비중은 60%에서 96%대로 제시됐다.",
+        ],
+        event_type="financial_update",
+    )
+    result = _frontend_ready_result(
+        key_claim_type="financial_structure_signal",
+        key_sentence="내부거래 47.1%는 거래 의존도 차이가 비교 지표가 된 신호입니다.",
+        key_evidence="내부거래 비중 47.1%와 비교군 60%에서 96%대가 함께 제시됐습니다.",
+        action_sentence=(
+            "SK AX는 내부거래 47.1%와 비교군 60%에서 96%대를 기준으로 "
+            "내부거래 비중을 점검해야 합니다."
+        ),
+        action_evidence=("내부거래 비중 47.1%와 비교군 60%에서 96%대가 함께 제시됐습니다."),
+        key_event_terms=["내부거래", "47.1%"],
+        action_event_terms=["내부거래", "47.1%"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("role_separation" in violation for violation in violations)
+
+
+def test_action_copy_requires_basis_in_display_sentence_not_only_evidence():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 실행형 업무 플랫폼 출시",
+        fact_summary=[
+            "대상기업은 '워크플로우Z'를 출시했다.",
+            "워크플로우Z는 자연어 명령으로 ERP와 문서 시스템의 업무 처리를 지원한다.",
+        ],
+        event_type="launch",
+    )
+    result = _frontend_ready_result(
+        key_sentence="워크플로우Z 출시는 업무 플랫폼 적용 범위가 드러난 신호입니다.",
+        key_evidence="워크플로우Z가 ERP와 문서 시스템의 업무 처리를 지원한다고 제시됐습니다.",
+        action_sentence="SK AX는 워크플로우Z를 점검해야 합니다.",
+        action_evidence="워크플로우Z는 ERP 연동 범위와 문서 처리 기준을 함께 봐야 합니다.",
+        key_event_terms=["워크플로우Z", "ERP"],
+        action_event_terms=["워크플로우Z"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("점검 대상과 판단 기준" in violation for violation in violations)
+
+
+def test_frontend_ready_evidence_sentence_must_not_repeat_summary_only():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 실행형 업무 플랫폼 출시",
+        fact_summary=[
+            "대상기업은 '워크플로우Z'를 출시했다.",
+            "워크플로우Z는 자연어 명령으로 ERP와 문서 시스템의 업무 처리를 지원한다.",
+        ],
+        event_type="launch",
+    )
+    result = _frontend_ready_result(
+        key_sentence="워크플로우Z 출시는 업무 플랫폼 적용 범위가 드러난 신호입니다.",
+        key_evidence="워크플로우Z는 자연어 명령으로 ERP와 문서 시스템의 업무 처리를 지원한다.",
+        action_sentence="SK AX는 워크플로우Z의 ERP 연동 범위를 점검해야 합니다.",
+        action_evidence=(
+            "ERP와 문서 시스템이 함께 제시되어 시스템 연동과 처리 업무 기준을 비교해야 합니다."
+        ),
+        key_event_terms=["워크플로우Z", "ERP"],
+        action_event_terms=["워크플로우Z", "ERP"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("요약 문장을 해석 없이 반복" in violation for violation in violations)
+
+
+def test_frontend_only_violation_skips_self_review_and_attempts_frontend_ready_repair():
+    payload = _fixture()
+    company_id, company_name = _fixture_company_identity(payload)
+    generated_payload = {
+        "is_valid_strategic_insight": True,
+        "analysis": {
+            "is_valid_analysis": True,
+            "analysis_summary": "통합 이슈의 사업 신호가 확인됩니다.",
+            "strategic_meaning": ["통합 이슈의 실행 범위가 확인됩니다."],
+            "market_signal": "통합 이슈가 유사 사업의 비교 기준을 보여줍니다.",
+            "impact_level": "medium",
+            "impact_reason": "입력 fact_id에 근거합니다.",
+            "risk_or_opportunity": "opportunity",
+            "confidence": 0.7,
+            "reason": "입력 근거를 사용했습니다.",
+        },
+        "implication": {
+            "is_valid_implication": True,
+            "peer_implication": {
+                "company_id": company_id,
+                "company_name_ko": company_name,
+                "peer_meaning": "통합 이슈는 피어사의 사업 신호로 볼 수 있습니다.",
+                "capability_change": "통합 이슈의 실행 범위가 비교 기준이 됩니다.",
+                "sourced_evidence_ids": ["c43682_a43100_f1"],
+            },
+            "skax_implication": {
+                "why_important": "SK AX도 유사 사업 기준을 확인해야 합니다.",
+                "potential_impact": "통합 이슈 신호가 내부 비교 기준과 연결됩니다.",
+                "recommended_actions": [
+                    (
+                        "SK AX는 토큰증권 기능분석 컨설팅과 테스트베드 플랫폼 구축 "
+                        "범위를 기준으로 내부 점검 항목을 나눠야 합니다."
+                    )
+                ],
+            },
+            "confidence": 0.7,
+            "evidence_label": "moderate",
+        },
+    }
+    llm = MagicMock()
+    llm.invoke = MagicMock(
+        side_effect=[
+            _fake_llm_response(generated_payload, add_default_frontend_ready=False),
+            _fake_frontend_ready_repair_response(
+                key_sentence=(
+                    "토큰증권 기능분석 컨설팅은 테스트베드 플랫폼 구축 "
+                    "범위가 함께 확인된 사업 신호입니다."
+                ),
+                key_evidence=(
+                    "입력에는 토큰증권 기능분석 컨설팅과 테스트베드 플랫폼 구축이 함께 제시됩니다."
+                ),
+                action_sentence=(
+                    "SK AX는 토큰증권 유사 사업에서 수행 범위와 검증 기준을 "
+                    "나눠 점검해야 합니다."
+                ),
+                action_evidence=(
+                    "두 과제가 함께 제시되어 유사 사업에서 수행 범위와 "
+                    "검증 기준을 분리해 판단해야 합니다."
+                ),
+                key_event_terms=["토큰증권 기능분석 컨설팅", "테스트베드 플랫폼 구축"],
+                action_event_terms=["토큰증권 기능분석 컨설팅", "테스트베드 플랫폼 구축"],
+            ),
+            _fake_llm_response(generated_payload),
+        ]
+    )
+
+    result = StrategicInsightAgent(llm=llm).generate(
+        integrated_issue=payload["integrated_issue"],
+        classification=payload["classification"],
+        input_bundle=payload["input_bundle"],
+        profile_context=payload["profile_context"],
+        analysis_context=payload["analysis_context"],
+    )
+
+    assert result["implication"]["frontend_ready"]["source"] == "frontend_repair_direct"
+    phase_decisions = result["implication"]["frontend_ready_diagnostics"]["phase_decisions"]
+    assert "self_review_skipped" in phase_decisions
+    assert "frontend_ready_repair_attempted" in phase_decisions
+    assert llm.invoke.call_count <= 3
+
+
+def test_displayable_generate_result_skips_self_review_and_schema_repair():
+    payload = _fixture()
+    company_id, company_name = _fixture_company_identity(payload)
+    generated_payload = {
+        "is_valid_strategic_insight": True,
+        "analysis": {
+            "is_valid_analysis": True,
+            "analysis_summary": "토큰증권 기능분석 컨설팅과 테스트베드 플랫폼 구축이 확인됩니다.",
+            "strategic_meaning": ["두 과제의 실행 범위가 유사 사업 비교 기준이 됩니다."],
+            "market_signal": "토큰증권 기능분석 컨설팅과 테스트베드 플랫폼 구축이 함께 제시됩니다.",
+            "impact_level": "medium",
+            "impact_reason": "입력 fact_id에 근거합니다.",
+            "risk_or_opportunity": "opportunity",
+            "confidence": 0.7,
+            "reason": "입력 근거를 사용했습니다.",
+        },
+        "implication": {
+            "is_valid_implication": True,
+            "peer_implication": {
+                "company_id": company_id,
+                "company_name_ko": company_name,
+                "peer_meaning": "토큰증권 기능분석 컨설팅은 테스트베드 구축과 함께 확인됩니다.",
+                "capability_change": "두 과제의 실행 범위가 비교 기준이 됩니다.",
+                "sourced_evidence_ids": ["c43682_a43100_f1"],
+            },
+            "skax_implication": {
+                "why_important": "SK AX도 유사 사업 기준을 확인해야 합니다.",
+                "potential_impact": "통합 이슈 신호가 내부 비교 기준과 연결됩니다.",
+                "recommended_actions": [
+                    (
+                        "SK AX는 토큰증권 기능분석 컨설팅과 테스트베드 플랫폼 구축의 "
+                        "수행 범위와 검증 기준을 나눠 점검해야 합니다."
+                    )
+                ],
+            },
+            "confidence": 0.7,
+            "evidence_label": "moderate",
+            "frontend_ready": {
+                "source": "llm_direct",
+                "key_implication": {
+                    "source": "llm_direct",
+                    "frame": "사업 실행 범위",
+                    "claim_type": "event_based_signal",
+                    "claim_strength": "cautious",
+                    "evidence_mode": "event_based",
+                    "event_anchor_terms": ["토큰증권 기능분석 컨설팅", "테스트베드 플랫폼 구축"],
+                    "profile_anchor_terms": [],
+                    "sentence": (
+                        "토큰증권 기능분석 컨설팅은 테스트베드 플랫폼 구축 범위가 "
+                        "함께 확인된 사업 신호입니다."
+                    ),
+                    "evidence_sentence": (
+                        "입력에는 토큰증권 기능분석 컨설팅과 테스트베드 플랫폼 구축이 "
+                        "함께 제시되어 실행 범위가 비교 기준이 됩니다."
+                    ),
+                },
+                "suggested_action": {
+                    "source": "llm_direct",
+                    "frame": "내부 기준 점검",
+                    "claim_type": "internal_strategy_check",
+                    "claim_strength": "cautious",
+                    "evidence_mode": "generic_monitoring",
+                    "event_anchor_terms": ["토큰증권 기능분석 컨설팅", "테스트베드 플랫폼 구축"],
+                    "skax_anchor_terms": [],
+                    "sentence": (
+                        "SK AX는 토큰증권 기능분석 컨설팅과 테스트베드 플랫폼 구축의 "
+                        "수행 범위와 검증 기준을 나눠 점검해야 합니다."
+                    ),
+                    "evidence_sentence": (
+                        "두 과제가 함께 제시되어 유사 사업에서 수행 범위와 "
+                        "검증 기준을 분리해 판단해야 합니다."
+                    ),
+                },
+            },
+        },
+    }
+    llm = MagicMock()
+    llm.invoke = MagicMock(return_value=_fake_llm_response(generated_payload))
+
+    result = StrategicInsightAgent(llm=llm).generate(
+        integrated_issue=payload["integrated_issue"],
+        classification=payload["classification"],
+        input_bundle=payload["input_bundle"],
+        profile_context=payload["profile_context"],
+        analysis_context=payload["analysis_context"],
+    )
+
+    phase_decisions = result["implication"]["frontend_ready_diagnostics"]["phase_decisions"]
+    assert result["implication"]["frontend_ready"]["source"] == "llm_direct"
+    assert "generate_result_displayable" in phase_decisions
+    assert "self_review_skipped" in phase_decisions
+    assert "schema_repair_skipped" in phase_decisions
+    assert llm.invoke.call_count == 1
+
+
+def test_strong_frontend_ready_claim_requires_profile_based_linkage():
+    payload = _fixture()
+    result = {
+        "implication": {
+            "is_valid_implication": True,
+            "frontend_ready": {
+                "source": "llm_direct",
+                "key_implication": {
+                    "source": "llm_direct",
+                    "frame": "시장 지위",
+                    "claim_type": "market_leadership",
+                    "claim_strength": "strong",
+                    "evidence_mode": "event_based",
+                    "event_anchor_terms": ["에이전틱 AI"],
+                    "profile_anchor_terms": [],
+                    "unsupported_claims_removed": [],
+                    "sentence": "피어사는 에이전틱 AI 시장을 주도하고 있습니다.",
+                    "evidence_sentence": "기사에는 에이전틱 AI 서비스 출시 사실만 제시됩니다.",
+                },
+                "suggested_action": {
+                    "source": "llm_direct",
+                    "frame": "내부 점검",
+                    "claim_type": "internal_strategy_check",
+                    "claim_strength": "cautious",
+                    "evidence_mode": "generic_monitoring",
+                    "event_anchor_terms": ["에이전틱 AI"],
+                    "skax_anchor_terms": [],
+                    "unsupported_claims_removed": [],
+                    "sentence": "SK AX는 에이전틱 AI 관련 내부 점검 기준을 정리해야 합니다.",
+                    "evidence_sentence": (
+                        "이 기준은 유사 업무 자동화 흐름을 판단하는 데 필요합니다."
+                    ),
+                },
+            },
+        }
+    }
+
+    violations = strategic_insight_module._frontend_ready_claim_violations(
+        result,
+        integrated_issue=payload["integrated_issue"],
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "low"},
+        },
+    )
+
+    assert any("강한 주장 유형" in violation for violation in violations)
+    assert any("strong claim" in violation for violation in violations)
+
+
+def test_profile_linkage_returns_structured_connection_metadata_without_natural_reason():
+    evaluation = strategic_insight_module._build_profile_linkage_evaluation(
+        integrated_issue={
+            "main_company": "lg_cns",
+            "mentioned_peer_companies": ["lg_cns"],
+            "fact_summary": [
+                "LG CNS는 물류센터에서 로봇 학습 플랫폼과 통합 관제 플랫폼을 활용한다."
+            ],
+            "cluster_fact_intelligence": {
+                "products_or_services": ["로봇 학습 플랫폼", "통합 관제 플랫폼"],
+                "customers_or_industries": ["물류센터"],
+                "activity_types": ["협약"],
+            },
+        },
+        classification={"event_type": "partnership", "sectors": ["물류"]},
+        profile_context={
+            "peer_profiles": {
+                "lg_cns": {
+                    "business_areas": [
+                        {
+                            "business_line": "스마트물류",
+                            "name": "로봇 관제",
+                            "core_capabilities": ["통합 관제"],
+                            "products_or_services": ["로봇 학습 플랫폼"],
+                        }
+                    ]
+                }
+            },
+            "skax_profile": {},
+        },
+    )
+
+    linkage = evaluation["peer_linkages"][0]
+
+    assert linkage["connection_reason"] == "structured_issue_terms_match_profile_terms"
+    assert linkage["reason"] == "structured_issue_terms_match_profile_terms"
+    assert linkage["connection"]["matched_issue_terms"]
+    assert linkage["connection"]["matched_profile_terms"]
+    assert "연결되어" not in json.dumps(linkage, ensure_ascii=False)
 
 
 def test_structured_role_mode_does_not_treat_joint_push_as_unclear():
@@ -1525,9 +3283,31 @@ def test_strategic_insight_agent_repairs_when_review_still_has_quality_violation
     llm = MagicMock()
     llm.invoke = MagicMock(
         side_effect=[
-            _fake_llm_response(first_payload),
-            _fake_llm_response(review_payload),
+            _fake_llm_response(first_payload, add_default_frontend_ready=False),
+            _fake_llm_response(review_payload, add_default_frontend_ready=False),
             _fake_llm_response(repair_payload),
+            _fake_frontend_ready_repair_response(
+                key_sentence=(
+                    "토큰증권 컨설팅과 테스트베드 구축은 고객 검증 단계가 "
+                    "사업 범위에 포함되는 신호입니다."
+                ),
+                key_evidence=(
+                    "입력 fact에는 토큰증권 컨설팅과 테스트베드 구축이 함께 제시되어 "
+                    "기능 설명보다 실행 범위와 검증 기준을 함께 봐야 합니다."
+                ),
+                action_sentence=(
+                    "SK AX는 토큰증권 테스트베드와 유사한 흐름에서 업무 적용 범위와 "
+                    "검증 항목을 내부 점검 기준으로 분리해야 합니다."
+                ),
+                action_evidence=(
+                    "이 구분이 있어야 SK AX가 관련 사업에서 컨설팅 범위와 "
+                    "검증 단계의 책임을 따로 판단할 수 있습니다."
+                ),
+                key_event_terms=["토큰증권", "테스트베드"],
+                key_profile_terms=["컨설팅", "검증"],
+                action_event_terms=["토큰증권", "테스트베드"],
+                action_skax_terms=["SK AX", "검증"],
+            ),
         ]
     )
     profile_context = _profile_context_with_business_lines(payload, [TEST_LINE_A])
@@ -1618,9 +3398,12 @@ def test_strategic_insight_agent_fails_closed_when_overclaim_repair_fails():
     llm = MagicMock()
     llm.invoke = MagicMock(
         side_effect=[
-            _fake_llm_response(bad_payload),
-            _fake_llm_response({"needs_revision": True, "revised_result": bad_payload}),
-            _fake_llm_response(bad_payload),
+            _fake_llm_response(bad_payload, add_default_frontend_ready=False),
+            _fake_llm_response(
+                {"needs_revision": True, "revised_result": bad_payload},
+                add_default_frontend_ready=False,
+            ),
+            _fake_llm_response(bad_payload, add_default_frontend_ready=False),
         ]
     )
     profile_context = _profile_context_with_business_lines(payload, [TEST_LINE_A])

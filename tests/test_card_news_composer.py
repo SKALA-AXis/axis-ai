@@ -4,6 +4,7 @@ from src.composers.card_news_composer import (
     CardNewsComposer,
     _card_from_summary,
     _plain_summary_lines,
+    _public_copy_cleanup,
 )
 
 
@@ -197,26 +198,383 @@ def test_card_news_from_analysis_package_adds_grounded_display_sections(monkeypa
     assert card["published_date"] == "2026-06-10"
     assert list(sections) == ["summary", "insight", "action"]
     assert len(sections["summary"]["items"]) == 3
-    insight_text = " ".join(sections["insight"]["items"])
-    assert "LG CNS" in insight_text
-    assert "금융권 핵심 시스템 전환 과제" in insight_text
-    assert "비교 기준" in insight_text
-    assert "후속 단계" in insight_text
-    assert "핵심 변수" in insight_text
-    assert "근거 없는 피어 역량 확장 문장" not in sections["insight"]["items"]
-    action_text = " ".join(sections["action"]["items"])
-    assert "SK AX" in action_text
-    assert "금융 IT 현대화 신호와 유사한 사업" in action_text
-    assert "어디까지 감당할 수 있는지" in action_text
-    assert "직접 담당 가능한 범위" in action_text
-    assert "외부 보완이 필요한 범위" in action_text
-    assert "모니터링해야 합니다" in action_text
-    assert "근거 없는 외부 제안 문장" not in sections["action"]["items"]
-    assert [slide["layout_type"] for slide in card["slides"]] == ["summary", "insight", "action"]
+    assert sections["insight"]["items"] == []
+    assert sections["action"]["items"] == []
+    assert card["needs_review"] is True
+    assert [slide["layout_type"] for slide in card["slides"]] == ["summary"]
     assert card["analysis_package"]["issue_understanding"] == package["issue_understanding"]
     assert card["analysis_package"]["profile_linkage"] == package["profile_linkage"]
     assert card["analysis_package"]["skax_response_linkage"] == package["skax_response_linkage"]
     assert card["analysis_package"]["grounding_summary"] == package["grounding_summary"]
+
+
+def test_card_news_prefers_frontend_ready_copy_without_rewriting(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    package = {
+        "bundle_id": "news:7",
+        "input_bundle": {
+            "items": [
+                {
+                    "id": 7,
+                    "title": "테스트 기사",
+                    "source_name": "news",
+                    "url": "https://example.com/article",
+                    "published_at": "2026-06-12T09:00:00+09:00",
+                }
+            ]
+        },
+        "integrated_issue": {
+            "is_valid_summary": True,
+            "cluster_id": 7,
+            "main_company": "lg_cns",
+            "headline": "LG CNS, 물류 자동화 협약",
+            "source_article_ids": [7],
+            "fact_summary": [
+                "LG CNS는 물류센터 로봇 자동화 협약을 체결했다.",
+                "로봇 학습 플랫폼과 통합 관제 플랫폼을 활용한다.",
+                "물류 현장 데이터를 기반으로 운영 체계를 구축할 예정이다.",
+            ],
+        },
+        "analysis": {
+            "analysis_summary": "이 문장이 frontend_ready를 이기면 안 된다.",
+            "strategic_meaning": ["후보 점수화로 선택되면 안 되는 문장"],
+            "market_signal": "템플릿형 시장 신호",
+            "confidence": 0.8,
+        },
+        "implication": {
+            "is_valid_implication": True,
+            "peer_implication": {
+                "company_id": "lg_cns",
+                "company_name_ko": "LG CNS",
+                "peer_meaning": "후보 선택 경로로 쓰이면 안 되는 피어 문장",
+                "capability_change": "후보 선택 경로로 쓰이면 안 되는 역량 문장",
+            },
+            "skax_implication": {
+                "why_important": "후보 선택 경로로 쓰이면 안 되는 SK AX 문장",
+                "potential_impact": "후보 선택 경로로 쓰이면 안 되는 영향 문장",
+                "recommended_actions": ["후보 선택 경로로 쓰이면 안 되는 대응 문장"],
+                "business_line_mapping": ["물류"],
+            },
+            "frontend_ready": {
+                "source": "llm_direct",
+                "key_implication": {
+                    "source": "llm_direct",
+                    "frame": "피어 물류 자동화 적용",
+                    "event_anchor_terms": ["로봇 학습 플랫폼", "통합 관제 플랫폼"],
+                    "profile_anchor_terms": ["물류센터", "관제"],
+                    "sentence": (
+                        "LG CNS는 물류센터를 로봇 학습·관제 플랫폼의 적용처로 "
+                        "넓히는 흐름을 보여준다."
+                    ),
+                    "evidence_sentence": (
+                        "기사에는 로봇 학습 플랫폼과 통합 관제 플랫폼을 활용해 "
+                        "물류 현장 데이터를 기반으로 운영 체계를 구축한다는 사실이 제시됐다."
+                    ),
+                },
+                "suggested_action": {
+                    "source": "llm_direct",
+                    "frame": "SK AX 물류 자동화 점검",
+                    "event_anchor_terms": ["로봇 학습 플랫폼", "통합 관제 플랫폼"],
+                    "skax_anchor_terms": ["제조·물류", "관제"],
+                    "sentence": (
+                        "SK AX는 제조·물류 고객군에서 운영 데이터와 관제 역량을 "
+                        "묶어 볼 필요가 있다."
+                    ),
+                    "evidence_sentence": (
+                        "이번 사례가 로봇 장비보다 학습·관제·현장 데이터 운영을 "
+                        "함께 다루기 때문이다."
+                    ),
+                },
+            },
+            "confidence": 0.75,
+            "evidence_label": "moderate",
+        },
+        "validation": {"classification": {"event_type": "partnership", "sector": "ax"}},
+    }
+
+    card = CardNewsComposer().generate_from_analysis_package(package)
+    sections = {section["type"]: section for section in card["display_sections"]}
+
+    assert sections["summary"]["items"] == package["integrated_issue"]["fact_summary"]
+    assert sections["insight"]["items"] == [
+        (
+            "핵심 시사점: LG CNS는 물류센터를 로봇 학습·관제 플랫폼의 적용처로 "
+            "넓히는 흐름을 보여준다.\n"
+            "근거/설명: 기사에는 로봇 학습 플랫폼과 통합 관제 플랫폼을 활용해 "
+            "물류 현장 데이터를 기반으로 운영 체계를 구축한다는 사실이 제시됐다."
+        )
+    ]
+    assert sections["action"]["items"] == [
+        (
+            "핵심 대응: SK AX는 제조·물류 고객군에서 운영 데이터와 관제 역량을 "
+            "묶어 볼 필요가 있다.\n"
+            "근거/설명: 이번 사례가 로봇 장비보다 학습·관제·현장 데이터 운영을 "
+            "함께 다루기 때문이다."
+        )
+    ]
+    assert "후보 선택 경로" not in " ".join(
+        sections["insight"]["items"] + sections["action"]["items"]
+    )
+
+
+def _package_for_frontend_ready_policy(frontend_ready: dict | None = None) -> dict:
+    return {
+        "input_bundle": {"items": [{"id": 1, "title": "정책 테스트"}]},
+        "integrated_issue": {
+            "is_valid_summary": True,
+            "cluster_id": 1,
+            "main_company": "lg_cns",
+            "headline": "LG CNS, 물류 자동화 협약",
+            "fact_summary": ["LG CNS는 물류 자동화 협약을 체결했다."],
+        },
+        "analysis": {
+            "analysis_summary": "분석 fallback 문장",
+            "strategic_meaning": ["분석 후보 문장"],
+            "market_signal": "시장 후보 문장",
+        },
+        "implication": {
+            "is_valid_implication": True,
+            "peer_implication": {
+                "company_id": "lg_cns",
+                "company_name_ko": "LG CNS",
+                "peer_meaning": "기존 implication 피어 문장",
+                "capability_change": "기존 implication 역량 문장",
+            },
+            "skax_implication": {
+                "why_important": "기존 implication SK AX 문장",
+                "potential_impact": "기존 implication 영향 문장",
+                "recommended_actions": ["기존 implication 대응 문장"],
+                "business_line_mapping": ["물류"],
+            },
+            "confidence": 0.7,
+            "evidence_label": "moderate",
+            **({"frontend_ready": frontend_ready} if frontend_ready is not None else {}),
+        },
+        "validation": {"classification": {"event_type": "partnership", "sector": "ax"}},
+    }
+
+
+def test_card_news_does_not_show_derived_frontend_ready_source() -> None:
+    package = _package_for_frontend_ready_policy(
+        {
+            "source": "derived_from_implication",
+            "key_implication": {
+                "source": "derived_from_implication",
+                "frame": "피어 분석",
+                "event_anchor_terms": ["물류 자동화"],
+                "profile_anchor_terms": ["물류"],
+                "sentence": "보이면 안 되는 시사점",
+                "evidence_sentence": "보이면 안 되는 근거",
+            },
+            "suggested_action": {
+                "source": "derived_from_implication",
+                "frame": "대응 분석",
+                "event_anchor_terms": ["물류 자동화"],
+                "skax_anchor_terms": ["물류"],
+                "sentence": "보이면 안 되는 대응",
+                "evidence_sentence": "보이면 안 되는 대응 근거",
+            },
+        }
+    )
+
+    card = CardNewsComposer().generate_from_analysis_package(package)
+    sections = {section["type"]: section for section in card["display_sections"]}
+
+    assert sections["insight"]["items"] == []
+    assert sections["action"]["items"] == []
+    assert card["needs_review"] is True
+
+
+def test_card_news_does_not_show_report_copy_repair_frontend_ready_source() -> None:
+    package = _package_for_frontend_ready_policy(
+        {
+            "source": "report_copy_repair_direct",
+            "key_implication": {
+                "source": "report_copy_repair_direct",
+                "frame": "피어 분석",
+                "event_anchor_terms": ["물류 자동화"],
+                "profile_anchor_terms": ["물류"],
+                "sentence": "보이면 안 되는 report copy 시사점",
+                "evidence_sentence": "보이면 안 되는 report copy 근거",
+            },
+            "suggested_action": {
+                "source": "report_copy_repair_direct",
+                "frame": "대응 분석",
+                "event_anchor_terms": ["물류 자동화"],
+                "skax_anchor_terms": ["물류"],
+                "sentence": "보이면 안 되는 report copy 대응",
+                "evidence_sentence": "보이면 안 되는 report copy 대응 근거",
+            },
+        }
+    )
+
+    card = CardNewsComposer().generate_from_analysis_package(package)
+    sections = {section["type"]: section for section in card["display_sections"]}
+
+    assert sections["insight"]["items"] == []
+    assert sections["action"]["items"] == []
+    assert card["needs_review"] is True
+
+
+def test_card_news_shows_industry_frontend_ready_with_industry_labels() -> None:
+    package = _package_for_frontend_ready_policy()
+    package["implication"]["industry_frontend_ready"] = {
+        "source": "industry_signal_direct",
+        "signal_scope": "market_infra_signal",
+        "display_policy": "industry_only",
+        "items": [
+            {
+                "strategic_axis": "market_infra_capacity",
+                "event_anchor_terms": ["AI 인프라", "데이터센터", "GPU"],
+                "key_implication": {
+                    "source": "industry_signal_direct",
+                    "frame": "industry_signal",
+                    "event_anchor_terms": ["AI 인프라", "데이터센터"],
+                    "sentence": (
+                        "AI 인프라와 데이터센터는 산업 경쟁 기준이 구체화되는 신호입니다."
+                    ),
+                    "evidence_sentence": (
+                        "글로벌 벤더 중심으로 AI 인프라와 데이터센터 관련 내용이 제시되어 "
+                        "산업 인프라 조건을 읽는 근거가 됩니다."
+                    ),
+                },
+                "suggested_action": {
+                    "source": "industry_signal_direct",
+                    "frame": "industry_response_check",
+                    "event_anchor_terms": ["AI 인프라", "데이터센터"],
+                    "sentence": (
+                        "SK AX는 AI 인프라와 데이터센터 시장을 볼 때 투자·운영 조건을 "
+                        "분리해 모니터링해야 합니다."
+                    ),
+                    "evidence_sentence": (
+                        "피어 직접 실행이 아니라 산업 인프라 신호이므로 투자 규모와 "
+                        "참여 주체를 나눠 보는 기준이 필요합니다."
+                    ),
+                },
+            }
+        ],
+    }
+
+    card = CardNewsComposer().generate_from_analysis_package(package)
+    sections = {section["type"]: section for section in card["display_sections"]}
+
+    assert sections["insight"]["title"] == "시사점"
+    assert sections["action"]["title"] == "대응방안"
+    assert sections["insight"]["display_policy"] == "industry_only"
+    assert sections["action"]["signal_scope"] == "market_infra_signal"
+    assert sections["insight"]["items"]
+    assert sections["action"]["items"]
+    assert card["needs_review"] is False
+    assert card["frontend_implication"]["display_policy"] == "industry_only"
+    assert "display_label" not in card["frontend_implication"]
+    assert "기존 implication" not in " ".join(
+        sections["insight"]["items"] + sections["action"]["items"]
+    )
+
+
+def test_card_news_shows_frontend_repair_direct_frontend_ready_source() -> None:
+    package = _package_for_frontend_ready_policy(
+        {
+            "source": "frontend_repair_direct",
+            "key_implication": {
+                "source": "frontend_repair_direct",
+                "frame": "피어 분석",
+                "claim_type": "event_based_signal",
+                "claim_strength": "cautious",
+                "evidence_mode": "event_based",
+                "event_anchor_terms": ["물류 자동화"],
+                "profile_anchor_terms": [],
+                "sentence": "물류 자동화 협약은 현장 운영 방식 변화 신호입니다.",
+                "evidence_sentence": "기사에는 물류 자동화 협약 체결 사실이 제시됐습니다.",
+            },
+            "suggested_action": {
+                "source": "frontend_repair_direct",
+                "frame": "대응 분석",
+                "claim_type": "internal_strategy_check",
+                "claim_strength": "cautious",
+                "evidence_mode": "generic_monitoring",
+                "event_anchor_terms": ["물류 자동화"],
+                "skax_anchor_terms": [],
+                "sentence": "SK AX는 물류 자동화 관련 내부 대응 범위를 점검해야 합니다.",
+                "evidence_sentence": "이 점검은 유사 물류 자동화 흐름과 연결됩니다.",
+            },
+        }
+    )
+
+    card = CardNewsComposer().generate_from_analysis_package(package)
+    sections = {section["type"]: section for section in card["display_sections"]}
+
+    assert sections["insight"]["items"] == [
+        "핵심 시사점: 물류 자동화 협약은 현장 운영 방식 변화 신호입니다.\n"
+        "근거/설명: 기사에는 물류 자동화 협약 체결 사실이 제시됐습니다."
+    ]
+    assert sections["action"]["items"] == [
+        "핵심 대응: SK AX는 물류 자동화 관련 내부 대응 범위를 점검해야 합니다.\n"
+        "근거/설명: 이 점검은 유사 물류 자동화 흐름과 연결됩니다."
+    ]
+    assert card["needs_review"] is False
+
+
+def test_card_news_display_sync_does_not_overwrite_original_recommended_actions() -> None:
+    package = _package_for_frontend_ready_policy(
+        {
+            "source": "frontend_repair_direct",
+            "key_implication": {
+                "source": "frontend_repair_direct",
+                "frame": "피어 분석",
+                "claim_type": "event_based_signal",
+                "claim_strength": "cautious",
+                "evidence_mode": "event_based",
+                "event_anchor_terms": ["물류 자동화"],
+                "profile_anchor_terms": [],
+                "sentence": "물류 자동화 협약은 현장 운영 방식 변화 신호입니다.",
+                "evidence_sentence": "기사에는 물류 자동화 협약 체결 사실이 제시됐습니다.",
+            },
+            "suggested_action": {
+                "source": "frontend_repair_direct",
+                "frame": "대응 분석",
+                "claim_type": "internal_strategy_check",
+                "claim_strength": "cautious",
+                "evidence_mode": "generic_monitoring",
+                "event_anchor_terms": ["물류 자동화"],
+                "skax_anchor_terms": [],
+                "sentence": "SK AX는 물류 자동화 관련 내부 대응 범위를 점검해야 합니다.",
+                "evidence_sentence": "이 점검은 유사 물류 자동화 흐름과 연결됩니다.",
+            },
+        }
+    )
+
+    card = CardNewsComposer().generate_from_analysis_package(package)
+
+    assert card["implication"]["skax_implication"]["recommended_actions"] == [
+        "기존 implication 대응 문장"
+    ]
+    assert card["implication"]["frontend"]["suggested_actions"] == [
+        "핵심 대응: SK AX는 물류 자동화 관련 내부 대응 범위를 점검해야 합니다.\n"
+        "근거/설명: 이 점검은 유사 물류 자동화 흐름과 연결됩니다."
+    ]
+
+
+def test_card_news_without_frontend_ready_does_not_run_editorial_fallback() -> None:
+    package = _package_for_frontend_ready_policy()
+
+    card = CardNewsComposer().generate_from_analysis_package(package)
+    sections = {section["type"]: section for section in card["display_sections"]}
+    visible = " ".join(sections["insight"]["items"] + sections["action"]["items"])
+
+    assert sections["insight"]["items"] == []
+    assert sections["action"]["items"] == []
+    assert "분석 후보" not in visible
+    assert "기존 implication" not in visible
+    assert card["frontend_implication"]["key_implications"] == []
+    assert card["frontend_implication"]["suggested_actions"] == []
+    assert card["needs_review"] is True
+
+
+def test_public_copy_cleanup_does_not_rewrite_semantic_terms() -> None:
+    text = "피어 프로필과 프로필 접점은 피어사 분석에 남아야 한다."
+
+    assert _public_copy_cleanup(text) == text
 
 
 def test_card_news_action_section_filters_actions_without_issue_grounding() -> None:
@@ -297,8 +655,8 @@ def test_card_news_action_section_filters_actions_without_issue_grounding() -> N
     assert "제안서" not in action_text
     assert "PoC" not in action_text
     assert "검증표" not in action_text
-    assert "SK AX" in action_text
-    assert "운영 책임" in action_text
+    assert action_text == ""
+    assert card["needs_review"] is True
 
 
 def test_card_news_from_cluster_summary_uses_source_published_date(monkeypatch):
