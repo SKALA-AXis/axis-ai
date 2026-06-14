@@ -217,6 +217,59 @@ def test_mixer_validation_does_not_persist_ellipsis_when_clipping():
     assert len(result["final_one_liner"]) > 100
 
 
+def test_mixer_validation_normalizes_display_sentence_endings():
+    content = json.dumps(
+        {
+            "mix_insight": (
+                "AI 관련 발표는 더 이상 기능 소개만으로 충분하지 않고, "
+                "인프라 투자 논의가 실제 업무 시스템 적용 범위와 외부 매출 구조로 "
+                "이어질 수 있는지를 설명하는 근거가."
+            ),
+            "common_pattern": {
+                "finding": "기술 적용 범위가 고객 설득 기준으로 이어진다",
+                "rationale": "두 이슈 모두 적용 범위와 매출 구조를 판단 근거로 제시한다.",
+                "evidence_card_ids": ["CN-1", "CN-2"],
+            },
+            "comparison_point": {
+                "finding": "한쪽은 업무 적용 범위, 다른 쪽은 매출 구조를 앞세운다.",
+                "rationale": "같은 AI 흐름 안에서도 설명해야 하는 성과 기준이 다르다.",
+                "evidence_card_ids": ["CN-1", "CN-2"],
+            },
+            "hidden_conclusion": {
+                "finding": (
+                    "AI 발표의 판단 기준은 기능 소개에서 적용 범위와 수익화 근거로 이동한다."
+                ),
+                "rationale": "두 이슈를 함께 보면 기술 메시지가 사업 성과 설명으로 바뀐다.",
+                "evidence_card_ids": ["CN-1", "CN-2"],
+            },
+            "recommended_actions": ["고객군별 AI 적용 범위와 수익화 기준을 먼저 정한다."],
+            "action_details": [
+                {
+                    "action": "고객군별 AI 적용 범위와 수익화 기준을 먼저 정한다.",
+                    "why": "기능 소개만으로는 고객 설득 근거가 부족하다.",
+                    "use_case": "오퍼링/상품화",
+                    "evidence_card_ids": ["CN-1", "CN-2"],
+                }
+            ],
+            "sources_used": ["CN-1", "CN-2"],
+            "confidence": 0.8,
+        },
+        ensure_ascii=False,
+    )
+
+    result = mixer_module._parse_and_validate(
+        content,
+        cards=[{"id": "CN-1"}, {"id": "CN-2"}],
+        card_ids=["CN-1", "CN-2"],
+    )
+
+    assert result["mix_insight"] == ""
+    assert result["common_pattern"]["finding"].endswith("이어집니다.")
+    assert result["recommended_actions"][0].endswith("정합니다.")
+    assert result["action_details"][0]["why"].endswith("니다.")
+    assert "mix_insight:empty" in mixer_module._mixer_sentence_quality_issues(result)
+
+
 def test_mixer_accepts_integrated_issue_ids_and_exposes_sources(monkeypatch):
     issue_ids = [
         "11111111-1111-1111-1111-111111111111",

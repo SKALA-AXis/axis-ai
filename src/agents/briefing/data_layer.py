@@ -5,6 +5,7 @@
 
 import json
 import logging
+import re
 from datetime import UTC
 from pathlib import Path
 from typing import Any
@@ -961,10 +962,42 @@ def _dedupe_keep_order(values: list[str]) -> list[str]:
 
 
 def _clip_text(value: str, max_chars: int) -> str:
-    text_value = str(value or "").strip()
+    text_value = _strip_visual_ellipsis(str(value or "").strip())
+    if max_chars <= 0:
+        return ""
     if len(text_value) <= max_chars:
         return text_value
-    return text_value[: max_chars - 1].rstrip() + "…"
+    clipped = text_value[:max_chars].rstrip()
+    sentence_boundary = _last_sentence_boundary(clipped)
+    if sentence_boundary >= int(max_chars * 0.45):
+        return clipped[: sentence_boundary + 1].strip()
+    clause_boundary = max(clipped.rfind(mark) for mark in (",", ";", ":", "·", "ㆍ", "/", "-"))
+    if clause_boundary >= int(max_chars * 0.50):
+        clipped = clipped[:clause_boundary].rstrip()
+    else:
+        word_boundary = clipped.rfind(" ")
+        if word_boundary >= int(max_chars * 0.55):
+            clipped = clipped[:word_boundary].rstrip()
+    return clipped.rstrip(" ,;:/·ㆍ-").strip()
+
+
+def _last_sentence_boundary(value: str) -> int:
+    for index in range(len(value) - 1, -1, -1):
+        char = value[index]
+        if char in "!？?。！？":
+            return index
+        if char == "." and not (
+            index > 0
+            and index + 1 < len(value)
+            and value[index - 1].isdigit()
+            and value[index + 1].isdigit()
+        ):
+            return index
+    return -1
+
+
+def _strip_visual_ellipsis(value: str) -> str:
+    return re.sub(r"\s*(?:\.{3,}|…|⋯)\s*", " ", str(value or "")).strip()
 
 
 def _first_source_published_at(sources: list[Any]) -> object:

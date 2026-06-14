@@ -12,6 +12,10 @@ from src.shared.json_helpers import json_dict as _json_dict
 
 KST = ZoneInfo("Asia/Seoul")
 
+_PROMPT_TEXT_LIMIT = 520
+_PROMPT_SHORT_TEXT_LIMIT = 220
+_PROMPT_LIST_LIMIT = 5
+
 
 def _safe_float(value: object, *, default: float) -> float:
     if not isinstance(value, (str, int, float)):
@@ -33,23 +37,141 @@ def _compact_analysis_unit_for_display(card: dict[str, Any]) -> dict[str, Any]:
         "company": card.get("company"),
         "peer_id": card.get("peer_id"),
         "company_label": _company_label(card),
-        "title": card.get("title"),
+        "title": _compact_prompt_text(card.get("title"), max_chars=_PROMPT_SHORT_TEXT_LIMIT),
         "source_raw_article_ids": card.get("source_raw_article_ids") or [],
-        "evidence_refs": _json_list(evidence_payload.get("evidence_refs"))[:8],
+        "evidence_refs": _compact_evidence_refs(evidence_payload.get("evidence_refs")),
         "quality_flags": _json_list(card.get("quality_flags")),
         "analysis_package": _compact_analysis_package(package),
     }
 
 
 def _compact_analysis_package(package: dict[str, Any]) -> dict[str, Any]:
+    classification = _json_dict(package.get("classification"))
+    integrated = _json_dict(package.get("integrated_issue"))
+    analysis = _json_dict(package.get("analysis"))
+    implication = _json_dict(package.get("implication"))
+    validation = _json_dict(package.get("validation"))
     return {
         "bundle_id": package.get("bundle_id"),
-        "classification": _json_dict(package.get("classification")),
-        "integrated_issue": _json_dict(package.get("integrated_issue")),
-        "analysis": _json_dict(package.get("analysis")),
-        "implication": _json_dict(package.get("implication")),
-        "validation": _json_dict(package.get("validation")),
+        "classification": _compact_prompt_dict(
+            classification,
+            (
+                "main_company",
+                "event_type",
+                "sector",
+                "sectors",
+                "mentioned_peer_companies",
+                "keywords",
+            ),
+        ),
+        "integrated_issue": _compact_prompt_dict(
+            integrated,
+            (
+                "integrated_issue_id",
+                "main_issue",
+                "headline",
+                "one_line_summary",
+                "content_summary",
+                "integrated_text",
+                "source_article_ids",
+            ),
+        ),
+        "analysis": _compact_prompt_dict(
+            analysis,
+            (
+                "analysis_summary",
+                "market_signal",
+                "strategic_meaning",
+                "key_numbers",
+                "confidence",
+            ),
+        ),
+        "implication": _compact_implication_for_prompt(implication),
+        "validation": _compact_prompt_dict(
+            validation,
+            ("pass", "is_valid", "sc_score", "confidence", "reason", "quality_flags"),
+        ),
     }
+
+
+def _compact_implication_for_prompt(implication: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "peer_implication": _compact_prompt_dict(
+            _json_dict(implication.get("peer_implication")),
+            (
+                "peer_meaning",
+                "capability_change",
+                "strategy_shift",
+                "business_impact",
+            ),
+        ),
+        "skax_implication": _compact_prompt_dict(
+            _json_dict(implication.get("skax_implication")),
+            (
+                "why_important",
+                "potential_impact",
+                "recommended_actions",
+                "risk_factors",
+                "opportunity",
+            ),
+        ),
+        "confidence": implication.get("confidence"),
+    }
+
+
+def _compact_prompt_dict(source: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in keys:
+        value = source.get(key)
+        if value in (None, "", [], {}):
+            continue
+        compact[key] = _compact_prompt_value(value)
+    return compact
+
+
+def _compact_prompt_value(value: Any, *, max_chars: int = _PROMPT_TEXT_LIMIT) -> Any:
+    if isinstance(value, str):
+        return _compact_prompt_text(value, max_chars=max_chars)
+    if isinstance(value, list):
+        return [
+            _compact_prompt_value(item, max_chars=max_chars)
+            for item in value[:_PROMPT_LIST_LIMIT]
+            if item not in (None, "", [], {})
+        ]
+    if isinstance(value, dict):
+        compact: dict[str, Any] = {}
+        for key, item in list(value.items())[:_PROMPT_LIST_LIMIT]:
+            if item in (None, "", [], {}):
+                continue
+            compact[str(key)] = _compact_prompt_value(item, max_chars=max_chars)
+        return compact
+    return value
+
+
+def _compact_prompt_text(value: object, *, max_chars: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= max_chars:
+        return text
+    clipped = text[:max_chars].rstrip()
+    for marker in (".", "。", "!", "?", "다."):
+        index = clipped.rfind(marker)
+        if index >= max_chars // 2:
+            return clipped[: index + len(marker)].strip()
+    return clipped.rsplit(" ", 1)[0].strip()
+
+
+def _compact_evidence_refs(value: object) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for item in _json_list(value)[:3]:
+        if not isinstance(item, dict):
+            continue
+        compact = _compact_prompt_dict(
+            item,
+            ("evidence_ref_id", "text", "source_ids", "source_raw_article_ids"),
+        )
+        if compact:
+            refs.append(compact)
+    return refs
 
 
 def _company_label(card: dict[str, Any]) -> str:
