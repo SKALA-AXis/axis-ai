@@ -51,6 +51,7 @@ from src.config.relevance_policy import (
 from src.config.sectors import SECTOR_IDS, SectorMatch, match_sector_details, match_sectors
 from src.db.article_store import INDUSTRY_TREND_COMPANY
 from src.db.postgres import SessionLocal
+from src.llm import LLMSpec, build_chat_llm
 
 log = logging.getLogger(__name__)
 
@@ -78,15 +79,11 @@ _LLM_ALLOWED_SOURCE_NAMES = {
 
 
 def _get_llm() -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
     global _llm
 
     if _llm is None:
-        _llm = ChatOpenAI(
-            model="gpt-4o",
-            temperature=0.1,
-            max_completion_tokens=_LLM_MAX_COMPLETION_TOKENS,
+        _llm = build_chat_llm(
+            LLMSpec(model="gpt-4o", temperature=0.1, max_tokens=_LLM_MAX_COMPLETION_TOKENS)
         )
 
     return _llm
