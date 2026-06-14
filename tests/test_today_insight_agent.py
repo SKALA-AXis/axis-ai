@@ -243,7 +243,7 @@ def test_today_insight_agent_generates_ui_ready_executive_payload(monkeypatch) -
     assert response.memory_document.observed_facts
     assert response.memory_document.important_memory
     assert response.memory_document.next_analysis_hints
-    assert response.provenance["prompt_version"] == "today-insight-v1.3-signals-focus"
+    assert response.provenance["prompt_version"] == "today-insight-v1.4-qualitative-signals"
     assert saved and saved[0]["headline"] == response.headline
     assert card_lookup_args[0]["window_days"] == 60
     assert "prior_today_insight_memory" in fake_llm.prompts[0]
@@ -256,6 +256,102 @@ def test_today_insight_agent_generates_ui_ready_executive_payload(monkeypatch) -
         "sparse",
     }
     assert "엔터프라이즈 LLM 운영·보안 대응 기회" in fake_llm.prompts[0]
+
+
+def test_build_context_keeps_comparison_facts_within_anchor_current_inputs(monkeypatch) -> None:
+    anchor = date(2026, 6, 12)
+
+    current_lg_issues = [
+        {
+            "id": f"11111111-1111-1111-1111-11111111111{idx}",
+            "created_date_kst": anchor.isoformat(),
+            "latest_source_date_kst": anchor.isoformat(),
+            "has_anchor_source": True,
+            "main_company": "lg_cns",
+            "event_type": "contract",
+            "sectors": ["ax"],
+            "headline": f"LG CNS 현재 이슈 {idx}",
+            "one_line_summary": "LG CNS의 현재 기준 계약 신호입니다.",
+            "content_summary": "anchor-date 소스가 확인된 현재 이슈입니다.",
+            "source_ids": [idx],
+            "sources": [
+                {
+                    "id": f"raw-{idx}",
+                    "title": f"LG CNS 현재 이슈 {idx}",
+                    "source_name": "AXIS News",
+                }
+            ],
+            "confidence": 0.9,
+        }
+        for idx in range(8)
+    ]
+    stale_backfill_issue = {
+        "id": "22222222-2222-2222-2222-222222222222",
+        "created_date_kst": anchor.isoformat(),
+        "latest_source_date_kst": "2025-12-23",
+        "has_anchor_source": False,
+        "main_company": "samsung_sds",
+        "event_type": "contract",
+        "sectors": ["ax"],
+        "headline": "삼성SDS, 오픈AI와 리셀러 파트너 계약 체결",
+        "one_line_summary": "과거 소스 기반 이슈가 오늘 재생성됐습니다.",
+        "content_summary": "소스 날짜가 anchor-date가 아닙니다.",
+        "source_ids": [99],
+        "sources": [],
+        "confidence": 0.95,
+    }
+    overflow_issue = {
+        **stale_backfill_issue,
+        "id": "33333333-3333-3333-3333-333333333333",
+        "latest_source_date_kst": anchor.isoformat(),
+        "has_anchor_source": True,
+        "one_line_summary": "anchor-date 소스가 있지만 max_issues 밖 후보입니다.",
+    }
+
+    monkeypatch.setattr(comparison_engine, "_fetch_keyword_trend_rows", lambda **kwargs: [])
+    monkeypatch.setattr(
+        today_module,
+        "_fetch_integrated_issues",
+        lambda **kwargs: [*current_lg_issues, stale_backfill_issue, overflow_issue],
+    )
+    monkeypatch.setattr(today_module, "_fetch_cards_for_issues", lambda issue_ids, **kwargs: [])
+    monkeypatch.setattr(today_module, "_fetch_anchor_date_cards", lambda **kwargs: [])
+    monkeypatch.setattr(today_module, "_fetch_recent_cards", lambda **kwargs: [])
+    monkeypatch.setattr(today_module, "_fetch_prior_today_reports", lambda **kwargs: [])
+    monkeypatch.setattr(today_module, "_fetch_analysis_ledger", lambda **kwargs: [])
+    monkeypatch.setattr(today_module, "_load_profile_context", lambda **kwargs: {})
+    monkeypatch.setattr(today_module, "_load_skax_context", lambda **kwargs: {})
+
+    context = today_module._build_context(
+        TodayInsightGenerateRequest(
+            anchor_date=anchor,
+            max_issues=8,
+            max_cards=12,
+        ),
+        anchor,
+    )
+
+    comparison = context["comparison_facts"]
+    salience_titles = json.dumps(
+        [
+            item.get("title")
+            for item in comparison.get("salience_candidates", [])
+            if isinstance(item, dict)
+        ],
+        ensure_ascii=False,
+    )
+    primary_titles = json.dumps(
+        [
+            item.get("title")
+            for item in comparison.get("primary_selection", {}).get("items", [])
+            if isinstance(item, dict)
+        ],
+        ensure_ascii=False,
+    )
+    assert len(context["current_issues"]) == 8
+    assert "삼성SDS" not in salience_titles
+    assert "삼성SDS" not in primary_titles
+    assert all(issue["main_company"] == "lg_cns" for issue in context["current_issues"])
 
 
 def test_today_insight_agent_returns_cached_payload_without_regeneration(monkeypatch) -> None:
@@ -295,6 +391,7 @@ def test_today_insight_agent_cache_only_does_not_generate_when_cache_missing(mon
     fake_llm = _FakeLLM()
     saved: list[dict[str, Any]] = []
     monkeypatch.setattr(today_module, "_load_latest_report_record", lambda anchor_date: None)
+    monkeypatch.setattr(today_module, "_fetch_prior_today_reports", lambda **kwargs: [])
     monkeypatch.setattr(today_module, "_get_llm", lambda: fake_llm)
     monkeypatch.setattr(
         today_module, "_save_report", lambda result, input_snapshot: saved.append(result)
@@ -379,6 +476,8 @@ def test_today_insight_agent_returns_fallback_when_no_source_data(monkeypatch) -
 
     response = TodayInsightGenerateResponse.model_validate(result)
     assert response.warning == "today insight source data unavailable"
+    assert response.provenance["result_kind"] == "no_current_signals"
+    assert response.provenance["is_status_placeholder"] is True
     assert response.signals[0].label == "주요 신호"
     assert response.signals[2].label == "다음 판단"
 
@@ -505,3 +604,20 @@ def test_fit_llm_prompt_context_avoids_blind_truncation_marker() -> None:
     assert llm_context["comparison_facts"]["primary_selection"]["items"][0]["title"] == "핵심"
     assert "generation_focus" in llm_context
     assert "signals" in llm_context["generation_focus"]["llm_priority_fields"]
+
+
+def test_today_insight_public_copy_qualifies_internal_scores() -> None:
+    text = (
+        "영향도 점수 0.7, 노출 점수 0.244로 "
+        "low_visibility_definite_event로 분류됐습니다."
+    )
+
+    sanitized = today_module._sanitize_public_text(text)
+
+    assert "0.7" not in sanitized
+    assert "0.244" not in sanitized
+    assert "점수" not in sanitized
+    assert "low_visibility_definite_event" not in sanitized
+    assert "내용 영향은 큰 편" in sanitized
+    assert "보도 확산은 아직 낮은 편" in sanitized
+    assert "노출은 낮지만 내용이 확인된 이벤트" in sanitized
