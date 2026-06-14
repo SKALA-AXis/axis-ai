@@ -53,6 +53,13 @@ GLOBAL_COMPANIES: Final[dict[str, GlobalCompanyConfig]] = {
             "메타",
         ],
     },
+    "openai": {
+        "name_ko": "오픈AI",
+        "aliases": [
+            "OpenAI",
+            "오픈AI",
+        ],
+    },
 }
 
 GLOBAL_COMPANY_IDS: Final[list[str]] = list(GLOBAL_COMPANIES.keys())

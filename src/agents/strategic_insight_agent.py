@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Sequence
@@ -73,7 +74,6 @@ from src.agents.strategic_insight.profile_linkage import (  # noqa: F401  — �
     _profile_linkage_for_company,
     _profile_linkage_guidance,
     _profile_linkage_issue_context,
-    _profile_linkage_reason,
     _profile_relevance_hint_text,
     _profile_relevance_score,
     _rank_relevant_profile_items,
@@ -103,6 +103,8 @@ from src.agents.strategic_insight.prompts import (  # noqa: F401  — 분리 모
     ACTION_REPAIR_USER_PROMPT_TEMPLATE,
     COUNTERPARTY_REPAIR_SYSTEM_PROMPT,
     COUNTERPARTY_REPAIR_USER_PROMPT_TEMPLATE,
+    FRONTEND_READY_REPAIR_SYSTEM_PROMPT,
+    FRONTEND_READY_REPAIR_USER_PROMPT_TEMPLATE,
     REPAIR_SYSTEM_PROMPT,
     REPAIR_USER_PROMPT_TEMPLATE,
     REPORT_COPY_REPAIR_SYSTEM_PROMPT,
@@ -123,6 +125,7 @@ from src.agents.strategic_insight.utils import (  # noqa: F401  — 분리 모�
     _with_particle,
 )
 from src.analysis.models import AnalysisContext, AnalysisInputBundle, ProfileContext
+from src.config.global_companies import GLOBAL_COMPANY_ALIASES
 from src.db.postgres import SessionLocal
 from src.rag.precedent_search import QdrantPrecedentSearch
 from src.services.analysis_context_builder import AnalysisContextBuilder
@@ -131,10 +134,27 @@ from src.services.profile_context_loader import ProfileContextLoader
 
 log = logging.getLogger(__name__)
 
-_LLM_MODEL = "gpt-4o"
+_DEFAULT_LLM_MODEL = "gpt-4o"
+_DEFAULT_FRONTEND_READY_MODEL = "gpt-5.5"
+_LLM_MODEL = os.getenv("STRATEGIC_INSIGHT_MODEL", _DEFAULT_LLM_MODEL)
+_FRONTEND_READY_MODEL = os.getenv(
+    "FRONTEND_READY_MODEL",
+    _DEFAULT_FRONTEND_READY_MODEL,
+)
+_FRONTEND_READY_REPAIR_MODEL = os.getenv(
+    "FRONTEND_READY_REPAIR_MODEL",
+    _FRONTEND_READY_MODEL,
+)
+_SELF_REVIEW_MODEL_RAW = os.getenv("SELF_REVIEW_MODEL", _LLM_MODEL)
+_SELF_REVIEW_DISABLED_VALUES = {"", "0", "false", "off", "none", "disabled"}
+_SELF_REVIEW_DISABLED = (
+    str(_SELF_REVIEW_MODEL_RAW or "").strip().casefold() in _SELF_REVIEW_DISABLED_VALUES
+)
+_SELF_REVIEW_MODEL = "" if _SELF_REVIEW_DISABLED else _SELF_REVIEW_MODEL_RAW
 _PROMPT_VERSION = "strategic-insight-v1.61-llm-structured-reasoning"
 _LLM_TEMPERATURE = 0.0
-_LLM_MAX_COMPLETION_TOKENS = 2600
+_LLM_MAX_COMPLETION_TOKENS = 5000
+_LLM_REQUEST_TIMEOUT_SECONDS = float(os.getenv("STRATEGIC_INSIGHT_LLM_TIMEOUT_SECONDS", "120"))
 
 _IMPACT_LEVELS = {"high", "medium", "low"}
 _RISK_OR_OPPORTUNITY = {"risk", "opportunity", "neutral"}
@@ -148,6 +168,10 @@ _UNSUPPORTED_CLAIM_PATTERNS = (
     r"시장\s*선점",
     r"선점",
     r"기술적\s*우위",
+    r"기술적\s*역량[을를\s]*입증",
+    r"역량[을를\s]*입증",
+    r"성과[가를은\s]*입증",
+    r"검증된\s*역량",
     r"격차[가를은\s]*(확대|벌어|커|발생|나타)",
     r"리더십\s*확보",
     r"매출\s*기여",
@@ -169,50 +193,47 @@ _NUMERIC_TOKEN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_INTERNAL_CHECKPOINT_GROUPS: dict[str, str] = {
-    "scope": r"범위|대상\s*업무|대상\s*시스템|적용\s*범위|고객군|유사\s*사업",
-    "ownership": r"책임|역할\s*분담|운영\s*구조|수행\s*주체|관리\s*주체",
-    "validation": r"검증|성능|용량|평가\s*기준|확인\s*기준|전환\s*조건|안착\s*조건",
-    "risk": r"리스크|위험|장애\s*대응|보안|권한|운영\s*조건|처리\s*기준",
-    "strategy": r"사업\s*기회|역량\s*공백|영업\s*전략|보완|모니터링|후속\s*확인",
-}
-_SKAX_ACTION_VERB_GROUPS: dict[str, str] = {
-    "diagnose": r"점검|확인|비교|분석|검토",
-    "define": r"정의|기준화|명시|구체화|항목화",
-    "design": r"구조화|구성|설계|재구성|분리|구분",
-    "operate": r"관리|추적|측정|반영|모니터링",
-}
-_DOMAIN_ALIASES: dict[str, set[str]] = {
-    "금융": {"금융", "금융권", "은행", "보험", "증권", "카드", "코어뱅킹"},
-    "제조": {"제조", "공장", "생산", "스마트팩토리", "팩토리"},
-    "공공": {"공공", "정부", "지자체", "공공기관", "국가"},
-    "물류": {"물류", "배송", "창고", "풀필먼트"},
-    "유통": {"유통", "리테일", "커머스", "이커머스"},
-    "통신": {"통신", "텔코", "네트워크", "5G"},
-    "의료": {"의료", "병원", "헬스케어", "바이오"},
-    "헬스케어": {"헬스케어", "의료", "병원", "건강관리"},
-    "인프라": {"인프라", "데이터센터", "컴퓨팅센터", "GPU", "서버", "클러스터", "스토리지"},
-}
+_INTERNAL_CHECKPOINT_GROUPS: dict[str, str] = {}
+_SKAX_ACTION_VERB_GROUPS: dict[str, str] = {}
+_DOMAIN_ALIASES: dict[str, set[str]] = {}
 OVERCLAIM_PATTERNS: dict[str, tuple[str, ...]] = {
     "counterparty": (
         r"신규\s*사업",
-        r"사업\s*(영역|범위)?\s*(확장|확대)",
-        r"영역\s*(확장|확대)",
+        r"사업\s*확장",
+        r"영역\s*확장",
         r"입지\s*강화",
         r"역량\s*강화",
-        r"경쟁력\s*강화",
-        r"레퍼런스\s*확보",
     ),
     "new_signal": (
-        r"확정\s*(성과|사업|진출|확장)",
-        r"입증",
-        r"역량\s*강화",
-        r"성과[가를은\s]*(입증|확대|개선|창출)",
-        r"경쟁력\s*강화",
+        r"성과[가를은\s]*입증",
+        r"역량[을를\s]*(강화|입증|검증)",
+        r"검증된\s*역량",
+        r"경쟁력[을를\s]*강화",
         r"입지\s*강화",
-        r"사업\s*(영역|범위)?\s*(확장|확대)",
+        r"사업\s*확장",
     ),
 }
+
+
+def _llm_model_for_phase(phase: str) -> str:
+    phase_name = str(phase or "").strip()
+    if phase_name.startswith(("frontend_ready_repair", "quality_repair")):
+        return _FRONTEND_READY_REPAIR_MODEL
+    if phase_name.startswith("frontend_ready_generate"):
+        return _FRONTEND_READY_MODEL
+    if phase_name == "self_review" and _SELF_REVIEW_MODEL:
+        return _SELF_REVIEW_MODEL
+    return _LLM_MODEL
+
+
+def _llm_model_config_diagnostics() -> dict[str, Any]:
+    return {
+        "strategic_insight_model": _LLM_MODEL,
+        "frontend_ready_model": _FRONTEND_READY_MODEL,
+        "frontend_ready_repair_model": _FRONTEND_READY_REPAIR_MODEL,
+        "self_review_model": _SELF_REVIEW_MODEL or None,
+        "self_review_disabled": _SELF_REVIEW_DISABLED,
+    }
 
 
 class StrategicInsightAgent:
@@ -237,6 +258,7 @@ class StrategicInsightAgent:
         )
         self.enable_self_review = enable_self_review
         self.model = _LLM_MODEL
+        self._llm_cache: dict[str, ChatOpenAI] = {}
 
     def generate(
         self,
@@ -255,6 +277,32 @@ class StrategicInsightAgent:
         context_dict = _analysis_context_to_dict(analysis_context)
         cluster_metadata = cluster_metadata or _cluster_metadata_from_bundle(bundle_dict)
 
+        early_skip_decision = _strategic_generation_skip_decision(
+            integrated_issue=integrated_issue,
+            classification=classification,
+        )
+        if early_skip_decision and not _is_valid_integrated_issue(integrated_issue):
+            skipped = _empty_strategic_insight(
+                integrated_issue=integrated_issue,
+                classification=classification,
+                cluster_metadata=cluster_metadata,
+                reason=str(early_skip_decision.get("reason") or ""),
+            )
+            skipped = _attach_strategy_skip_diagnostics(
+                skipped,
+                skip_decision=early_skip_decision,
+                integrated_issue=integrated_issue,
+                profile_linkage_evaluation={},
+                action_artifact_plan={},
+            )
+            return _attach_generation_phase_diagnostics(
+                skipped,
+                decisions=[
+                    str(early_skip_decision.get("decision_type") or "watch_only_precheck"),
+                    "llm_skipped",
+                    "invalid_summary_preserved_as_watch_only_signal",
+                ],
+            )
         if not _is_valid_integrated_issue(integrated_issue):
             return _empty_strategic_insight(
                 integrated_issue=integrated_issue,
@@ -283,6 +331,28 @@ class StrategicInsightAgent:
             classification=classification,
             profile_linkage_evaluation=profile_linkage_evaluation,
         )
+        skip_decision = early_skip_decision
+        if skip_decision:
+            skipped = _empty_strategic_insight(
+                integrated_issue=integrated_issue,
+                classification=classification,
+                cluster_metadata=cluster_metadata,
+                reason=str(skip_decision.get("reason") or ""),
+            )
+            skipped = _attach_strategy_skip_diagnostics(
+                skipped,
+                skip_decision=skip_decision,
+                integrated_issue=integrated_issue,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                action_artifact_plan=action_artifact_plan,
+            )
+            return _attach_generation_phase_diagnostics(
+                skipped,
+                decisions=[
+                    str(skip_decision.get("decision_type") or "watch_only_precheck"),
+                    "llm_skipped",
+                ],
+            )
         context_for_model = _analysis_context_for_model(
             context_dict,
             integrated_issue=integrated_issue,
@@ -352,6 +422,12 @@ class StrategicInsightAgent:
                 analysis_context=context_for_model,
                 model=self.model,
             )
+            result = _with_fallback_linkage_payloads(
+                result,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                integrated_issue=integrated_issue,
+                action_artifact_plan=action_artifact_plan,
+            )
             if not self.enable_self_review:
                 return self._finalize_quality_gate(
                     result,
@@ -359,6 +435,115 @@ class StrategicInsightAgent:
                     profile_context=profile_dict,
                     profile_linkage_evaluation=profile_linkage_evaluation,
                     action_artifact_plan=action_artifact_plan,
+                )
+            initial_violations = _quality_gate_violations(
+                result,
+                integrated_issue=integrated_issue,
+                profile_context=profile_dict,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                action_artifact_plan=action_artifact_plan,
+            )
+            if _has_displayable_frontend_ready(
+                result,
+                integrated_issue=integrated_issue,
+                profile_context=profile_dict,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+            ):
+                non_frontend = [
+                    item
+                    for item in initial_violations
+                    if not str(item or "").startswith("frontend_ready")
+                ]
+                result_for_display = (
+                    _mark_quality_gate_failed(
+                        result,
+                        non_frontend,
+                        preserve_frontend_ready=True,
+                    )
+                    if non_frontend
+                    else _restore_valid_flags_if_structurally_safe(result)
+                )
+                return _attach_generation_phase_diagnostics(
+                    _attach_sentence_grounding(
+                        result_for_display,
+                        integrated_issue=integrated_issue,
+                        profile_context=profile_dict,
+                    ),
+                    decisions=[
+                        "generate_result_displayable",
+                        "self_review_skipped",
+                        "schema_repair_skipped",
+                    ],
+                )
+            if not initial_violations:
+                return _attach_generation_phase_diagnostics(
+                    _attach_sentence_grounding(
+                        _restore_valid_flags_if_structurally_safe(result),
+                        integrated_issue=integrated_issue,
+                        profile_context=profile_dict,
+                    ),
+                    decisions=[
+                        "generate_result_clean",
+                        "self_review_skipped",
+                        "schema_repair_skipped",
+                    ],
+                )
+            if _frontend_ready_only_violations(initial_violations):
+                repaired = self._repair_quality_violations(
+                    result,
+                    violations=initial_violations,
+                    integrated_issue=integrated_issue,
+                    classification=classification,
+                    profile_context=profile_dict,
+                    analysis_context=context_for_model,
+                    bundle_id=str(
+                        bundle_dict.get("bundle_id")
+                        or integrated_issue.get("bundle_id")
+                        or cluster_metadata.get("bundle_id")
+                        or ""
+                    ),
+                    profile_relevance_text=profile_relevance_text,
+                    include_financial_profile_context=include_financial_profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
+                )
+                return _attach_generation_phase_diagnostics(
+                    repaired,
+                    decisions=[
+                        "generate_result_frontend_only_violation",
+                        "self_review_skipped",
+                        "frontend_ready_repair_attempted",
+                    ],
+                )
+            if not _requires_self_review_for_violations(
+                initial_violations,
+                result=result,
+            ):
+                repaired = self._repair_quality_violations(
+                    result,
+                    violations=initial_violations,
+                    integrated_issue=integrated_issue,
+                    classification=classification,
+                    profile_context=profile_dict,
+                    analysis_context=context_for_model,
+                    bundle_id=str(
+                        bundle_dict.get("bundle_id")
+                        or integrated_issue.get("bundle_id")
+                        or cluster_metadata.get("bundle_id")
+                        or ""
+                    ),
+                    profile_relevance_text=profile_relevance_text,
+                    include_financial_profile_context=include_financial_profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
+                )
+                return _attach_generation_phase_diagnostics(
+                    repaired,
+                    decisions=[
+                        "generate_result_schema_or_copy_violation",
+                        "self_review_skipped",
+                        "quality_repair_attempted",
+                    ],
                 )
             reviewed = self._review_and_revise(
                 result,
@@ -384,26 +569,24 @@ class StrategicInsightAgent:
                 action_artifact_plan=action_artifact_plan,
             )
             if "quality_gate_failed" in _json_dumps(reviewed):
-                fallback = _two_section_fact_based_fallback(
+                if not _has_displayable_frontend_ready(
                     reviewed,
                     integrated_issue=integrated_issue,
                     profile_context=profile_dict,
-                    model=self.model,
                     profile_linkage_evaluation=profile_linkage_evaluation,
-                    action_artifact_plan=action_artifact_plan,
-                )
-                fallback_violations = _quality_gate_violations(
-                    fallback,
-                    integrated_issue=integrated_issue,
-                    profile_context=profile_dict,
-                    profile_linkage_evaluation=profile_linkage_evaluation,
-                    action_artifact_plan=action_artifact_plan,
-                )
-                if not fallback_violations:
-                    return _attach_sentence_grounding(
-                        fallback,
+                ):
+                    if _frontend_ready_repair_already_attempted(reviewed):
+                        return _attach_sentence_grounding(
+                            reviewed,
+                            integrated_issue=integrated_issue,
+                            profile_context=profile_dict,
+                        )
+                    return self._finalize_quality_gate(
+                        reviewed,
                         integrated_issue=integrated_issue,
                         profile_context=profile_dict,
+                        profile_linkage_evaluation=profile_linkage_evaluation,
+                        action_artifact_plan=action_artifact_plan,
                     )
                 return _attach_sentence_grounding(
                     reviewed,
@@ -526,16 +709,21 @@ class StrategicInsightAgent:
         )
         return result
 
-    def _get_llm(self) -> ChatOpenAI:
+    def _get_llm(self, *, model: str | None = None) -> ChatOpenAI:
         from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
 
-        if self._llm is None:
-            self._llm = ChatOpenAI(
-                model=_LLM_MODEL,
+        if self._llm is not None:
+            return self._llm
+        model_name = str(model or _LLM_MODEL or _DEFAULT_LLM_MODEL).strip() or _DEFAULT_LLM_MODEL
+        if model_name not in self._llm_cache:
+            self._llm_cache[model_name] = ChatOpenAI(
+                model=model_name,
                 temperature=_LLM_TEMPERATURE,
                 max_completion_tokens=_LLM_MAX_COMPLETION_TOKENS,
+                timeout=_LLM_REQUEST_TIMEOUT_SECONDS,
+                max_retries=1,
             )
-        return self._llm
+        return self._llm_cache[model_name]
 
     def _invoke_llm(
         self,
@@ -549,6 +737,7 @@ class StrategicInsightAgent:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+        model_name = _llm_model_for_phase(phase)
         try:
             from src.observability import tracing_config
 
@@ -557,13 +746,14 @@ class StrategicInsightAgent:
                 phase=phase,
                 prompt_version=_PROMPT_VERSION,
                 bundle_id=bundle_id,
+                model=model_name,
             )
         except Exception:
             config = None
         response = (
-            self._get_llm().invoke(messages, config=config)
+            self._get_llm(model=model_name).invoke(messages, config=config)
             if config
-            else self._get_llm().invoke(messages)
+            else self._get_llm(model=model_name).invoke(messages)
         )
         return response.content if isinstance(response.content, str) else str(response.content)
 
@@ -608,47 +798,140 @@ class StrategicInsightAgent:
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
             )
-        fallback = _two_section_fact_based_fallback(
+        if _has_displayable_frontend_ready(
             result,
             integrated_issue=integrated_issue,
             profile_context=profile_context,
-            model=self.model,
             profile_linkage_evaluation=profile_linkage_evaluation,
-            action_artifact_plan=action_artifact_plan,
-        )
-        fallback_violations = _quality_gate_violations(
-            fallback,
-            integrated_issue=integrated_issue,
-            profile_context=profile_context,
-            profile_linkage_evaluation=profile_linkage_evaluation,
-            action_artifact_plan=action_artifact_plan,
-        )
-        if not fallback_violations:
+        ):
+            polish_violations = _frontend_ready_claim_violations(
+                result,
+                integrated_issue=integrated_issue,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+            )
+            if polish_violations and _can_attempt_frontend_ready_repair_for_issue(
+                result,
+                integrated_issue=integrated_issue,
+            ):
+                try:
+                    repaired = self._repair_frontend_ready_result(
+                        result,
+                        violations=violations + polish_violations,
+                        integrated_issue=integrated_issue,
+                        classification={},
+                        profile_context=profile_context,
+                        analysis_context={},
+                        bundle_id=str(integrated_issue.get("bundle_id") or ""),
+                        profile_linkage_evaluation=profile_linkage_evaluation,
+                        action_artifact_plan=action_artifact_plan,
+                    )
+                    if _has_displayable_frontend_ready(
+                        repaired,
+                        integrated_issue=integrated_issue,
+                        profile_context=profile_context,
+                        profile_linkage_evaluation=profile_linkage_evaluation,
+                    ):
+                        return _attach_sentence_grounding(
+                            _mark_quality_gate_failed(
+                                repaired,
+                                violations,
+                                preserve_frontend_ready=True,
+                            ),
+                            integrated_issue=integrated_issue,
+                            profile_context=profile_context,
+                        )
+                except Exception as exc:  # noqa: BLE001 - display polish is best-effort.
+                    log.warning(
+                        "StrategicInsightAgent frontend_ready polish skipped | error=%s",
+                        exc,
+                    )
             return _attach_sentence_grounding(
-                fallback,
+                _mark_quality_gate_failed(result, violations, preserve_frontend_ready=True),
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
             )
-        guarded = _minimal_quality_guard(
+        frontend_ready_before = _frontend_ready_diagnostics_snapshot(
             result,
             integrated_issue=integrated_issue,
             profile_context=profile_context,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
+        if _can_attempt_frontend_ready_repair_for_issue(
+            result,
+            integrated_issue=integrated_issue,
+        ):
+            try:
+                repaired = self._repair_frontend_ready_result(
+                    result,
+                    violations=violations,
+                    integrated_issue=integrated_issue,
+                    classification={},
+                    profile_context=profile_context,
+                    analysis_context={},
+                    bundle_id=str(integrated_issue.get("bundle_id") or ""),
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
+                )
+                frontend_ready_after = _frontend_ready_diagnostics_snapshot(
+                    repaired,
+                    integrated_issue=integrated_issue,
+                    profile_context=profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                )
+                repaired = _attach_frontend_ready_diagnostics(
+                    repaired,
+                    before=frontend_ready_before,
+                    after=frontend_ready_after,
+                )
+                remaining = _quality_gate_violations(
+                    repaired,
+                    integrated_issue=integrated_issue,
+                    profile_context=profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
+                )
+                if frontend_ready_after.get("displayable"):
+                    non_frontend = [
+                        item
+                        for item in remaining
+                        if not str(item or "").startswith("frontend_ready")
+                    ]
+                    return _attach_sentence_grounding(
+                        _mark_quality_gate_failed(
+                            repaired,
+                            non_frontend or violations,
+                            preserve_frontend_ready=True,
+                        )
+                        if non_frontend
+                        else _restore_valid_flags_if_structurally_safe(repaired),
+                        integrated_issue=integrated_issue,
+                        profile_context=profile_context,
+                    )
+            except Exception as exc:  # noqa: BLE001 - frontend repair is best-effort.
+                log.warning(
+                    "StrategicInsightAgent frontend_ready finalize repair failed | error=%s",
+                    exc,
+                )
+        failed = _attach_frontend_ready_diagnostics(
+            result,
+            before=frontend_ready_before,
+            after=_frontend_ready_diagnostics_snapshot(
+                result,
+                integrated_issue=integrated_issue,
+                profile_context=profile_context,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+            ),
+            removed_reason="frontend_ready 전용 repair가 화면 표시 조건을 충족하지 못했습니다.",
         )
         remaining = _quality_gate_violations(
-            guarded,
+            failed,
             integrated_issue=integrated_issue,
             profile_context=profile_context,
             profile_linkage_evaluation=profile_linkage_evaluation,
             action_artifact_plan=action_artifact_plan,
         )
-        if remaining:
-            return _attach_sentence_grounding(
-                _mark_quality_gate_failed(guarded, remaining),
-                integrated_issue=integrated_issue,
-                profile_context=profile_context,
-            )
         return _attach_sentence_grounding(
-            _restore_valid_flags_if_structurally_safe(guarded),
+            _mark_quality_gate_failed(failed, remaining or violations),
             integrated_issue=integrated_issue,
             profile_context=profile_context,
         )
@@ -764,7 +1047,19 @@ class StrategicInsightAgent:
                 action_artifact_plan=action_artifact_plan,
             )
             if violations:
-                return _mark_quality_gate_failed(result, violations)
+                return self._repair_quality_violations(
+                    result,
+                    violations=violations,
+                    integrated_issue=integrated_issue,
+                    classification=classification,
+                    profile_context=profile_context,
+                    analysis_context=analysis_context,
+                    bundle_id=bundle_id,
+                    profile_relevance_text=profile_relevance_text,
+                    include_financial_profile_context=include_financial_profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
+                )
             return result
 
     def _repair_quality_violations(
@@ -798,8 +1093,134 @@ class StrategicInsightAgent:
             classification=classification,
             profile_linkage_evaluation=profile_linkage_evaluation,
         )
+        frontend_ready_before = _frontend_ready_diagnostics_snapshot(
+            current,
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
+        if frontend_ready_before.get("displayable"):
+            polish_violations = _frontend_ready_claim_violations(
+                current,
+                integrated_issue=integrated_issue,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+            )
+            if polish_violations and _can_attempt_frontend_ready_repair_for_issue(
+                current,
+                integrated_issue=integrated_issue,
+            ):
+                current = self._repair_frontend_ready_result(
+                    current,
+                    violations=current_violations + polish_violations,
+                    integrated_issue=integrated_issue,
+                    classification=classification,
+                    profile_context=profile_context,
+                    analysis_context=analysis_context,
+                    bundle_id=bundle_id,
+                    profile_relevance_text=profile_relevance_text,
+                    include_financial_profile_context=include_financial_profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                    action_artifact_plan=action_artifact_plan,
+                )
+                frontend_ready_after = _frontend_ready_diagnostics_snapshot(
+                    current,
+                    integrated_issue=integrated_issue,
+                    profile_context=profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                )
+                if frontend_ready_after.get("displayable"):
+                    current = _attach_frontend_ready_diagnostics(
+                        current,
+                        before=frontend_ready_before,
+                        after=frontend_ready_after,
+                    )
+                    return _mark_quality_gate_failed(
+                        current,
+                        current_violations,
+                        preserve_frontend_ready=True,
+                    )
+            current = _attach_frontend_ready_diagnostics(
+                current,
+                before=frontend_ready_before,
+                after=frontend_ready_before,
+            )
+            non_frontend = [
+                violation
+                for violation in current_violations
+                if not str(violation or "").startswith("frontend_ready")
+            ]
+            if non_frontend:
+                return _mark_quality_gate_failed(
+                    current,
+                    non_frontend,
+                    preserve_frontend_ready=True,
+                )
+            return current
+        if (
+            not frontend_ready_before.get("displayable")
+            and _frontend_ready_only_violations(current_violations)
+            and _can_attempt_frontend_ready_repair_for_issue(
+                current,
+                integrated_issue=integrated_issue,
+            )
+        ):
+            current = self._repair_frontend_ready_result(
+                current,
+                violations=current_violations,
+                integrated_issue=integrated_issue,
+                classification=classification,
+                profile_context=profile_context,
+                analysis_context=analysis_context,
+                bundle_id=bundle_id,
+                profile_relevance_text=profile_relevance_text,
+                include_financial_profile_context=include_financial_profile_context,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                action_artifact_plan=action_artifact_plan,
+            )
+            frontend_ready_after = _frontend_ready_diagnostics_snapshot(
+                current,
+                integrated_issue=integrated_issue,
+                profile_context=profile_context,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+            )
+            current = _attach_frontend_ready_diagnostics(
+                current,
+                before=frontend_ready_before,
+                after=frontend_ready_after,
+            )
+            current_violations = _quality_gate_violations(
+                current,
+                integrated_issue=integrated_issue,
+                profile_context=profile_context,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+                action_artifact_plan=action_artifact_plan,
+            )
+            if frontend_ready_after.get("displayable"):
+                remaining = [
+                    violation
+                    for violation in current_violations
+                    if not str(violation or "").startswith("frontend_ready")
+                ]
+                if remaining:
+                    return _mark_quality_gate_failed(
+                        current,
+                        remaining,
+                        preserve_frontend_ready=True,
+                    )
+                return current
+        elif not _can_attempt_frontend_ready_repair_for_issue(
+            current,
+            integrated_issue=integrated_issue,
+        ):
+            current = _attach_frontend_ready_diagnostics(
+                current,
+                before=frontend_ready_before,
+                after=frontend_ready_before,
+                removed_reason="IntegratedIssue에 카드뉴스용 문장을 만들 사실 근거가 부족합니다.",
+            )
+            return _mark_quality_gate_failed(current, current_violations)
         try:
-            for attempt in range(3):
+            for attempt in range(2):
                 prompt = REPAIR_USER_PROMPT_TEMPLATE.format(
                     integrated_issue_json=_json_dumps(
                         _integrated_issue_for_prompt(integrated_issue)
@@ -840,6 +1261,7 @@ class StrategicInsightAgent:
                     analysis_context=analysis_context,
                     model=self.model,
                 )
+                current = _mark_frontend_ready_source(current, "schema_repair_direct")
                 current_violations = _quality_gate_violations(
                     current,
                     integrated_issue=integrated_issue,
@@ -849,6 +1271,8 @@ class StrategicInsightAgent:
                 )
                 if not current_violations:
                     return current
+                if _frontend_ready_only_violations(current_violations):
+                    break
             if _main_company_is_customer_or_buyer(integrated_issue):
                 current = self._repair_counterparty_role_result(
                     current,
@@ -871,126 +1295,153 @@ class StrategicInsightAgent:
                 )
                 if not current_violations:
                     return current
-            if current_violations:
-                current = self._repair_report_copy_result(
-                    current,
-                    violations=current_violations,
-                    integrated_issue=integrated_issue,
-                    classification=classification,
-                    profile_context=profile_context,
-                    analysis_context=analysis_context,
-                    bundle_id=bundle_id,
-                    profile_relevance_text=profile_relevance_text,
-                    include_financial_profile_context=include_financial_profile_context,
-                    profile_linkage_evaluation=profile_linkage_evaluation,
-                    action_artifact_plan=action_artifact_plan,
-                )
-                current_violations = _quality_gate_violations(
-                    current,
-                    integrated_issue=integrated_issue,
-                    profile_context=profile_context,
-                    profile_linkage_evaluation=profile_linkage_evaluation,
-                    action_artifact_plan=action_artifact_plan,
-                )
-                if not current_violations:
-                    return current
-            fallback = _two_section_fact_based_fallback(
+            if _has_displayable_frontend_ready(
                 current,
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
-                model=self.model,
                 profile_linkage_evaluation=profile_linkage_evaluation,
-                action_artifact_plan=action_artifact_plan,
-            )
-            fallback_violations = _quality_gate_violations(
-                fallback,
+            ):
+                return _mark_quality_gate_failed(
+                    current,
+                    current_violations,
+                    preserve_frontend_ready=True,
+                )
+            if not _can_attempt_frontend_ready_repair_for_issue(
+                current,
                 integrated_issue=integrated_issue,
+            ):
+                return _mark_quality_gate_failed(current, current_violations)
+            current = self._repair_frontend_ready_result(
+                current,
+                violations=current_violations,
+                integrated_issue=integrated_issue,
+                classification=classification,
                 profile_context=profile_context,
+                analysis_context=analysis_context,
+                bundle_id=bundle_id,
+                profile_relevance_text=profile_relevance_text,
+                include_financial_profile_context=include_financial_profile_context,
                 profile_linkage_evaluation=profile_linkage_evaluation,
                 action_artifact_plan=action_artifact_plan,
             )
-            if not fallback_violations:
-                return fallback
-            guarded = _minimal_quality_guard(
+            frontend_ready_after = _frontend_ready_diagnostics_snapshot(
                 current,
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
+                profile_linkage_evaluation=profile_linkage_evaluation,
             )
-            if (
-                len(
-                    _string_list(
-                        ((guarded.get("implication") or {}).get("skax_implication") or {}).get(
-                            "recommended_actions"
-                        ),
-                        max_items=3,
-                    )
-                )
-                < 2
-            ):
-                guarded = self._repair_missing_recommended_actions(
-                    guarded,
-                    integrated_issue=integrated_issue,
-                    profile_context=profile_context,
-                    bundle_id=bundle_id,
-                    profile_relevance_text=profile_relevance_text,
-                    action_artifact_plan=action_artifact_plan,
-                )
-                guarded = _minimal_quality_guard(
-                    guarded,
-                    integrated_issue=integrated_issue,
-                    profile_context=profile_context,
-                )
-            guarded = _ensure_safe_recommended_actions(
-                guarded,
-                integrated_issue=integrated_issue,
-                profile_context=profile_context,
-                action_artifact_plan=action_artifact_plan,
+            current = _attach_frontend_ready_diagnostics(
+                current,
+                before=frontend_ready_before,
+                after=frontend_ready_after,
             )
-            if not _string_list(
-                ((guarded.get("implication") or {}).get("skax_implication") or {}).get(
-                    "recommended_actions"
-                ),
-                max_items=3,
-            ):
-                guarded = _two_section_fact_based_fallback(
-                    guarded,
-                    integrated_issue=integrated_issue,
-                    profile_context=profile_context,
-                    model=self.model,
-                    profile_linkage_evaluation=profile_linkage_evaluation,
-                    action_artifact_plan=action_artifact_plan,
-                )
-            final_remaining = _quality_gate_violations(
-                guarded,
+            current_violations = _quality_gate_violations(
+                current,
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
                 profile_linkage_evaluation=profile_linkage_evaluation,
                 action_artifact_plan=action_artifact_plan,
             )
-            if final_remaining:
-                return _mark_quality_gate_failed(guarded, final_remaining)
-            return guarded
+            if not current_violations:
+                return current
+            if _has_displayable_frontend_ready(
+                current,
+                integrated_issue=integrated_issue,
+                profile_context=profile_context,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+            ):
+                return _mark_quality_gate_failed(
+                    current,
+                    current_violations,
+                    preserve_frontend_ready=True,
+                )
+            return _mark_quality_gate_failed(current, current_violations)
         except Exception as exc:  # noqa: BLE001 - fail closed instead of passing risky copy.
             log.warning(
                 "StrategicInsightAgent quality repair failed | bundle=%s error=%s",
                 bundle_id,
                 exc,
             )
-            guarded = _minimal_quality_guard(
+            failed = _attach_frontend_ready_diagnostics(
                 result,
-                integrated_issue=integrated_issue,
-                profile_context=profile_context,
+                before=frontend_ready_before,
+                after=_frontend_ready_diagnostics_snapshot(
+                    result,
+                    integrated_issue=integrated_issue,
+                    profile_context=profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                ),
+                removed_reason=str(exc),
             )
             final_remaining = _quality_gate_violations(
-                guarded,
+                failed,
                 integrated_issue=integrated_issue,
                 profile_context=profile_context,
                 profile_linkage_evaluation=profile_linkage_evaluation,
                 action_artifact_plan=action_artifact_plan,
             )
+            if _can_attempt_frontend_ready_repair_for_issue(
+                failed,
+                integrated_issue=integrated_issue,
+            ):
+                try:
+                    repaired = self._repair_frontend_ready_result(
+                        failed,
+                        violations=final_remaining or current_violations,
+                        integrated_issue=integrated_issue,
+                        classification=classification,
+                        profile_context=profile_context,
+                        analysis_context=analysis_context,
+                        bundle_id=bundle_id,
+                        profile_relevance_text=profile_relevance_text,
+                        include_financial_profile_context=include_financial_profile_context,
+                        profile_linkage_evaluation=profile_linkage_evaluation,
+                        action_artifact_plan=action_artifact_plan,
+                    )
+                    frontend_ready_after = _frontend_ready_diagnostics_snapshot(
+                        repaired,
+                        integrated_issue=integrated_issue,
+                        profile_context=profile_context,
+                        profile_linkage_evaluation=profile_linkage_evaluation,
+                    )
+                    repaired = _attach_frontend_ready_diagnostics(
+                        repaired,
+                        before=frontend_ready_before,
+                        after=frontend_ready_after,
+                        removed_reason=str(exc),
+                    )
+                    repaired_remaining = _quality_gate_violations(
+                        repaired,
+                        integrated_issue=integrated_issue,
+                        profile_context=profile_context,
+                        profile_linkage_evaluation=profile_linkage_evaluation,
+                        action_artifact_plan=action_artifact_plan,
+                    )
+                    if frontend_ready_after.get("displayable"):
+                        non_frontend = [
+                            item
+                            for item in repaired_remaining
+                            if not str(item or "").startswith("frontend_ready")
+                        ]
+                        return (
+                            _mark_quality_gate_failed(
+                                repaired,
+                                non_frontend,
+                                preserve_frontend_ready=True,
+                            )
+                            if non_frontend
+                            else _restore_valid_flags_if_structurally_safe(repaired)
+                        )
+                except Exception as frontend_exc:  # noqa: BLE001 - keep fail-closed fallback.
+                    log.warning(
+                        "StrategicInsightAgent frontend_ready repair after quality failure "
+                        "failed | bundle=%s error=%s",
+                        bundle_id,
+                        frontend_exc,
+                    )
             if final_remaining:
-                return _mark_quality_gate_failed(guarded, final_remaining)
-            return guarded
+                return _mark_quality_gate_failed(failed, final_remaining)
+            return failed
 
     def _repair_counterparty_role_result(
         self,
@@ -1048,14 +1499,17 @@ class StrategicInsightAgent:
             bundle_id=bundle_id,
             phase="quality_repair_counterparty_role",
         )
-        return _parse_and_normalize(
-            content,
-            integrated_issue=integrated_issue,
-            classification=classification,
-            cluster_metadata={},
-            profile_context=profile_context,
-            analysis_context=analysis_context,
-            model=self.model,
+        return _mark_frontend_ready_source(
+            _parse_and_normalize(
+                content,
+                integrated_issue=integrated_issue,
+                classification=classification,
+                cluster_metadata={},
+                profile_context=profile_context,
+                analysis_context=analysis_context,
+                model=self.model,
+            ),
+            "counterparty_repair_direct",
         )
 
     def _repair_report_copy_result(
@@ -1116,15 +1570,141 @@ class StrategicInsightAgent:
             bundle_id=bundle_id,
             phase="quality_repair_report_copy",
         )
-        return _parse_and_normalize(
-            content,
+        return _mark_frontend_ready_source(
+            _parse_and_normalize(
+                content,
+                integrated_issue=integrated_issue,
+                classification=classification,
+                cluster_metadata={},
+                profile_context=profile_context,
+                analysis_context=analysis_context,
+                model=self.model,
+            ),
+            "report_copy_repair_direct",
+        )
+
+    def _repair_frontend_ready_result(
+        self,
+        result: dict[str, Any],
+        *,
+        violations: list[str],
+        integrated_issue: dict[str, Any],
+        classification: dict[str, Any],
+        profile_context: dict[str, Any],
+        analysis_context: dict[str, Any],
+        bundle_id: str,
+        profile_relevance_text: str = "",
+        include_financial_profile_context: bool = False,
+        profile_linkage_evaluation: dict[str, Any] | None = None,
+        action_artifact_plan: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        del analysis_context
+        profile_linkage_evaluation = (
+            profile_linkage_evaluation
+            or _build_profile_linkage_evaluation(
+                integrated_issue=integrated_issue,
+                classification=classification,
+                profile_context=profile_context,
+                relevance_hint_text=profile_relevance_text,
+            )
+        )
+        action_artifact_plan = action_artifact_plan or _action_artifact_plan_for_prompt(
             integrated_issue=integrated_issue,
             classification=classification,
-            cluster_metadata={},
-            profile_context=profile_context,
-            analysis_context=analysis_context,
-            model=self.model,
+            profile_linkage_evaluation=profile_linkage_evaluation,
         )
+        base_prompt = FRONTEND_READY_REPAIR_USER_PROMPT_TEMPLATE.format(
+            integrated_issue_json=_json_dumps(_integrated_issue_for_prompt(integrated_issue)),
+            profile_json=_json_dumps(
+                _profile_for_prompt(
+                    profile_context,
+                    integrated_issue=integrated_issue,
+                    relevance_hint_text=profile_relevance_text,
+                    include_financial_context=include_financial_profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                )
+            ),
+            profile_linkage_json=_json_dumps(profile_linkage_evaluation),
+            action_artifact_plan_json=_json_dumps(action_artifact_plan),
+            issue_execution_slots_json=_json_dumps(
+                _issue_execution_slot_diagnostics(integrated_issue)
+            ),
+            business_lines_json=_json_dumps(
+                _business_line_candidate_details(
+                    profile_context,
+                    integrated_issue=integrated_issue,
+                    relevance_hint_text=profile_relevance_text,
+                )
+            ),
+            result_json=_json_dumps(result),
+            violations_json=_json_dumps(violations),
+        )
+        repaired = result
+        retry_notes: list[str] = []
+        for attempt in range(2):
+            prompt = base_prompt
+            if retry_notes:
+                prompt = (
+                    base_prompt
+                    + "\n\n## 이전 frontend_ready repair 실패\n"
+                    + "\n".join(retry_notes)
+                    + "\nfrontend_ready JSON 객체만 다시 출력하세요."
+                )
+            content = self._invoke_llm(
+                system_prompt=FRONTEND_READY_REPAIR_SYSTEM_PROMPT,
+                user_prompt=prompt,
+                bundle_id=bundle_id,
+                phase=f"frontend_ready_repair_{attempt + 1}",
+            )
+            data = _parse_json_loose(content)
+            frontend_ready = _json_dict(
+                data.get("frontend_ready") if isinstance(data, dict) else {}
+            )
+            if (
+                not frontend_ready
+                and isinstance(data, dict)
+                and ("key_implication" in data or "suggested_action" in data)
+            ):
+                frontend_ready = _json_dict(data)
+            if frontend_ready:
+                repaired = _merge_frontend_ready_payload(
+                    result,
+                    frontend_ready=frontend_ready,
+                    source="frontend_repair_direct",
+                    integrated_issue=integrated_issue,
+                )
+                normalized_frontend = _normalize_frontend_ready(
+                    frontend_ready,
+                    default_source="frontend_repair_direct",
+                )
+                anchor_violations = _frontend_ready_specific_anchor_violations(
+                    repaired,
+                    integrated_issue=integrated_issue,
+                )
+                required_violations = _frontend_ready_required_violations(
+                    repaired,
+                    integrated_issue=integrated_issue,
+                    profile_context=profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                )
+                claim_violations = _frontend_ready_claim_violations(
+                    repaired,
+                    integrated_issue=integrated_issue,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                )
+                if (
+                    normalized_frontend
+                    and not required_violations
+                    and not anchor_violations
+                    and not claim_violations
+                ):
+                    return repaired
+                retry_notes.extend(required_violations + anchor_violations + claim_violations)
+            retry_notes.append(
+                "응답에서 sentence/evidence_sentence를 포함한 key_implication 및 "
+                "suggested_action 구조를 찾지 못했습니다."
+            )
+        return repaired
 
     def _repair_missing_recommended_actions(
         self,
@@ -2113,7 +2693,7 @@ def _normalize_implication_block(
         and (peer["peer_meaning"] or skax["why_important"])
         and (skax["recommended_actions"] or skax["opportunities"] or skax["potential_impact"])
     )
-    return {
+    implication_out: dict[str, Any] = {
         "is_valid_implication": is_valid,
         "implication_scope": "peer_and_skax",
         "peer_implication": peer,
@@ -2126,11 +2706,321 @@ def _normalize_implication_block(
             "generator": "StrategicInsightAgent",
             "prompt_version": _PROMPT_VERSION,
             "model": model,
+            "model_config": _llm_model_config_diagnostics(),
             "used_fact_ids": sourced_evidence_ids,
             "used_context_layers": used_layers,
             "run_at": datetime.now(UTC).isoformat(),
         },
     }
+    frontend_ready = _normalize_frontend_ready(data.get("frontend_ready"))
+    frontend_ready = _frontend_ready_with_issue_evidence_anchors(
+        frontend_ready,
+        integrated_issue=integrated_issue,
+    )
+    if frontend_ready:
+        implication_out["frontend_ready"] = frontend_ready
+    return implication_out
+
+
+_FRONTEND_READY_SOURCES = {
+    "llm_direct",
+    "repair_direct",
+    "frontend_repair_direct",
+    "schema_repair_direct",
+    "report_copy_repair_direct",
+    "counterparty_repair_direct",
+    "action_repair_direct",
+    "derived_from_implication",
+    "composer_editorial",
+    "legacy_fallback",
+}
+_FRONTEND_READY_DISPLAY_SOURCES = {"llm_direct", "frontend_repair_direct"}
+_FRONTEND_READY_CLAIM_TYPES = {
+    "event_based_signal",
+    "profile_based_signal",
+    "financial_structure_signal",
+    "governance_exposure_signal",
+    "self_or_market_signal",
+    "market_adoption_signal",
+    "market_leadership",
+    "capability_improvement",
+    "performance_improvement",
+    "operational_shift",
+    "workflow_execution_signal",
+    "internal_strategy_check",
+}
+_FRONTEND_READY_CLAIM_STRENGTHS = {"strong", "moderate", "cautious"}
+_FRONTEND_READY_EVIDENCE_MODES = {
+    "profile_based",
+    "event_based",
+    "generic_monitoring",
+}
+_FRONTEND_READY_STRONG_CLAIM_TYPES = {
+    "market_leadership",
+    "capability_improvement",
+    "performance_improvement",
+}
+
+
+def _normalize_frontend_ready(value: Any, *, default_source: str = "llm_direct") -> dict[str, Any]:
+    data = _json_dict(value)
+    source = _normalize_frontend_ready_source(data.get("source"), default_source)
+    key_implication = _normalize_frontend_ready_block(
+        data.get("key_implication"),
+        default_source=source,
+        anchor_key="profile_anchor_terms",
+    )
+    suggested_action = _normalize_frontend_ready_block(
+        data.get("suggested_action"),
+        default_source=source,
+        anchor_key="skax_anchor_terms",
+    )
+    out: dict[str, Any] = {}
+    if source:
+        out["source"] = source
+    insight_basis = _normalize_frontend_basis(data.get("insight_basis"))
+    action_basis = _normalize_frontend_basis(data.get("action_basis"))
+    if insight_basis:
+        out["insight_basis"] = insight_basis
+    if action_basis:
+        out["action_basis"] = action_basis
+    if key_implication:
+        out["key_implication"] = key_implication
+    if suggested_action:
+        out["suggested_action"] = suggested_action
+    if "key_implication" not in out and "suggested_action" not in out:
+        return {}
+    return out
+
+
+def _normalize_frontend_basis(value: Any) -> dict[str, Any]:
+    data = _json_dict(value)
+    if not data:
+        return {}
+    out: dict[str, Any] = {}
+    for key in (
+        "event_anchor",
+        "check_target",
+        "used_fact_ids",
+        "used_profile_refs",
+    ):
+        values = _string_list(data.get(key), max_items=8)
+        if values:
+            out[key] = values
+    for key in (
+        "observed_change",
+        "comparison_context",
+        "strategic_reading",
+        "skax_question",
+        "response_angle",
+        "required_condition",
+        "confidence",
+    ):
+        text = str(data.get(key) or "").strip()
+        if text:
+            out[key] = text
+    return out
+
+
+def _normalize_frontend_ready_block(
+    value: Any,
+    *,
+    default_source: str,
+    anchor_key: str,
+) -> dict[str, Any]:
+    data = _json_dict(value)
+    sentence = _strip_frontend_ready_label(data.get("sentence"))
+    evidence_sentence = _strip_frontend_ready_label(data.get("evidence_sentence"))
+    if not sentence and not evidence_sentence:
+        return {}
+    source = _normalize_frontend_ready_source(data.get("source"), default_source)
+    return {
+        "source": source,
+        "frame": str(data.get("frame") or "").strip(),
+        "claim_type": _choice(
+            data.get("claim_type"),
+            _FRONTEND_READY_CLAIM_TYPES,
+            "internal_strategy_check"
+            if anchor_key == "skax_anchor_terms"
+            else "event_based_signal",
+        ),
+        "claim_strength": _choice(
+            data.get("claim_strength"),
+            _FRONTEND_READY_CLAIM_STRENGTHS,
+            "cautious",
+        ),
+        "evidence_mode": _choice(
+            data.get("evidence_mode"),
+            _FRONTEND_READY_EVIDENCE_MODES,
+            "generic_monitoring" if anchor_key == "skax_anchor_terms" else "event_based",
+        ),
+        "event_anchor_terms": _string_list(data.get("event_anchor_terms"), max_items=8),
+        anchor_key: _string_list(data.get(anchor_key), max_items=8),
+        "unsupported_claims_removed": _string_list(
+            data.get("unsupported_claims_removed"),
+            max_items=8,
+        ),
+        "sentence": sentence,
+        "evidence_sentence": evidence_sentence,
+    }
+
+
+def _normalize_frontend_ready_source(value: Any, default: str) -> str:
+    source = str(value or default or "").strip()
+    return source if source in _FRONTEND_READY_SOURCES else default
+
+
+def _frontend_ready_with_issue_evidence_anchors(
+    frontend_ready: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(frontend_ready, dict) or not frontend_ready:
+        return frontend_ready
+    out = json.loads(json.dumps(frontend_ready, ensure_ascii=False, default=str))
+    for block_key in ("key_implication", "suggested_action"):
+        block = out.get(block_key)
+        if not isinstance(block, dict):
+            continue
+        event_terms = _string_list(block.get("event_anchor_terms"), max_items=8)
+        evidence_sentence = str(block.get("evidence_sentence") or "").strip()
+        if _evidence_sentence_has_issue_anchor(
+            evidence_sentence,
+            integrated_issue=integrated_issue,
+            event_terms=event_terms,
+        ):
+            continue
+        fact_line = _issue_fact_line_for_frontend_evidence(
+            block,
+            integrated_issue=integrated_issue,
+        )
+        if not fact_line:
+            continue
+        block["evidence_sentence"] = _prepend_issue_fact_to_evidence(
+            fact_line,
+            evidence_sentence,
+        )
+    return out
+
+
+def _issue_fact_line_for_frontend_evidence(
+    block: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+) -> str:
+    fact_lines = _issue_fact_lines(integrated_issue)
+    if not fact_lines:
+        return ""
+    event_terms = _string_list(block.get("event_anchor_terms"), max_items=8)
+    event_terms.extend(_specific_event_anchors_for_frontend(integrated_issue)[:8])
+    context_text = " ".join(
+        [
+            str(block.get("sentence") or ""),
+            str(block.get("evidence_sentence") or ""),
+            " ".join(event_terms),
+        ]
+    )
+    context_tokens = _distinct_anchor_tokens(context_text)
+    best_line = ""
+    best_score = -1
+    for index, line in enumerate(fact_lines):
+        line_text = str(line or "").strip()
+        if not line_text:
+            continue
+        line_norm = _anchor_norm(line_text)
+        score = 0
+        for term in event_terms:
+            term_norm = _anchor_norm(term)
+            if term_norm and term_norm in line_norm:
+                score += 4
+        for token in context_tokens:
+            token_norm = _anchor_norm(token)
+            if token_norm and token_norm in line_norm:
+                score += 1
+        # Keep the original fact order as a stable tie-breaker.
+        score = score * 1000 - index
+        if score > best_score:
+            best_score = score
+            best_line = line_text
+    return best_line
+
+
+def _prepend_issue_fact_to_evidence(fact_line: str, evidence_sentence: str) -> str:
+    fact = re.sub(r"\s+", " ", str(fact_line or "")).strip()
+    evidence = re.sub(r"\s+", " ", str(evidence_sentence or "")).strip()
+    if not fact:
+        return evidence
+    if evidence and _anchor_norm(fact) in _anchor_norm(evidence):
+        return evidence
+    if fact[-1] not in ".!?。":
+        fact += "."
+    if not evidence:
+        return fact
+    return f"{fact} {evidence}"
+
+
+def _mark_frontend_ready_source(result: dict[str, Any], source: str) -> dict[str, Any]:
+    out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+    implication = out.get("implication") or {}
+    if not isinstance(implication, dict):
+        return out
+    frontend_ready = _normalize_frontend_ready(
+        implication.get("frontend_ready"),
+        default_source=source,
+    )
+    if not frontend_ready:
+        implication.pop("frontend_ready", None)
+        out["implication"] = implication
+        return out
+    frontend_ready["source"] = source
+    for block_key in ("key_implication", "suggested_action"):
+        block = frontend_ready.get(block_key)
+        if isinstance(block, dict):
+            block["source"] = source
+    implication["frontend_ready"] = frontend_ready
+    out["implication"] = implication
+    return out
+
+
+def _merge_frontend_ready_payload(
+    result: dict[str, Any],
+    *,
+    frontend_ready: dict[str, Any],
+    source: str,
+    integrated_issue: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+    implication = out.get("implication") or {}
+    if not isinstance(implication, dict):
+        implication = {}
+    normalized = _normalize_frontend_ready(frontend_ready, default_source=source)
+    if normalized and integrated_issue:
+        normalized = _frontend_ready_with_issue_evidence_anchors(
+            normalized,
+            integrated_issue=integrated_issue,
+        )
+    if normalized:
+        normalized["source"] = source
+        for basis_key in ("insight_basis", "action_basis"):
+            basis = normalized.get(basis_key)
+            if isinstance(basis, dict):
+                normalized[basis_key] = basis
+        for block_key in ("key_implication", "suggested_action"):
+            block = normalized.get(block_key)
+            if isinstance(block, dict):
+                block["source"] = source
+        implication["frontend_ready"] = normalized
+    else:
+        implication.pop("frontend_ready", None)
+    out["implication"] = implication
+    return out
+
+
+def _strip_frontend_ready_label(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^핵심\s*(?:시사점|대응)\s*:\s*", "", text).strip()
+    text = re.sub(r"^근거\s*/?\s*설명\s*:\s*", "", text).strip()
+    return text
 
 
 def _empty_strategic_insight(
@@ -2178,6 +3068,7 @@ def _empty_strategic_insight(
             "generator": "StrategicInsightAgent",
             "prompt_version": _PROMPT_VERSION,
             "model": _LLM_MODEL,
+            "model_config": _llm_model_config_diagnostics(),
             "used_fact_ids": [],
             "used_context_layers": [],
             "run_at": datetime.now(UTC).isoformat(),
@@ -2206,13 +3097,1280 @@ def _is_valid_integrated_issue(integrated_issue: dict[str, Any]) -> bool:
     return bool(
         integrated_issue
         and integrated_issue.get("is_valid_summary", True)
-        and integrated_issue.get("main_company")
         and (
             integrated_issue.get("integrated_text")
             or integrated_issue.get("fact_summary")
             or integrated_issue.get("consolidated_facts")
+            or integrated_issue.get("one_line_summary")
+            or integrated_issue.get("headline")
         )
     )
+
+
+def _strategic_generation_skip_decision(
+    *,
+    integrated_issue: dict[str, Any],
+    classification: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a watch-only decision for issues that lack strategic action evidence.
+
+    This gate is intentionally evidence-structure based. It does not block a
+    company, card id, or fixed output phrase; it checks whether the current issue
+    contains enough business facts for StrategicInsightAgent to create
+    frontend_ready copy without inventing a strategy angle.
+    """
+    if _stock_market_watch_only_issue(
+        integrated_issue=integrated_issue,
+        classification=classification,
+    ):
+        return {
+            "decision_type": "watch_only_stock_market_signal",
+            "watch_only": True,
+            "reason": (
+                "주식 매매·시황성 신호만 확인되어 전략 시사점/대응방향을 생성하지 않았습니다."
+            ),
+            "evidence": _watch_only_evidence_summary(
+                integrated_issue,
+                category="stock_market",
+            ),
+        }
+    industry_decision = _industry_or_market_infra_watch_only_decision(
+        integrated_issue=integrated_issue,
+        classification=classification,
+    )
+    if industry_decision:
+        return industry_decision
+    hiring_decision = _weak_hiring_watch_only_decision(
+        integrated_issue=integrated_issue,
+        classification=classification,
+    )
+    if hiring_decision:
+        return hiring_decision
+    return {}
+
+
+def _stock_market_watch_only_issue(
+    *,
+    integrated_issue: dict[str, Any],
+    classification: dict[str, Any],
+) -> bool:
+    del classification
+    fact_lines = _issue_fact_lines(integrated_issue)
+    grounding = _integrated_grounding_text(integrated_issue)
+    if not grounding.strip():
+        return False
+    stock_lines = [line for line in fact_lines if _has_stock_market_signal(line)]
+    if not stock_lines and not _has_stock_market_signal(grounding):
+        return False
+    business_lines = [
+        line
+        for line in fact_lines
+        if _has_direct_business_signal(line) and not _stock_line_without_business_link(line)
+    ]
+    if business_lines:
+        return False
+    return bool(stock_lines) or _stock_line_without_business_link(grounding)
+
+
+def _industry_or_market_infra_watch_only_decision(
+    *,
+    integrated_issue: dict[str, Any],
+    classification: dict[str, Any],
+) -> dict[str, Any]:
+    grounding = _integrated_grounding_text(integrated_issue)
+    if not grounding.strip():
+        return {}
+    if _has_direct_peer_action_signal(integrated_issue):
+        return {}
+    scope = _industry_signal_scope(
+        integrated_issue=integrated_issue,
+        classification=classification,
+    )
+    if scope not in {"industry_signal", "market_infra_signal"}:
+        return {}
+    primary_actor_type = _primary_actor_type_for_issue(integrated_issue)
+    return {
+        "decision_type": "watch_only_industry_signal",
+        "watch_only": True,
+        "signal_scope": scope,
+        "direct_peer_action": False,
+        "peer_mention_only": _has_peer_mention(integrated_issue),
+        "primary_actor_type": primary_actor_type,
+        "reason": (
+            "피어사의 직접 실행 사실보다 산업 구조/시장 인프라 변화 신호가 중심이라 "
+            "peer 카드뉴스용 시사점/대응방향을 생성하지 않았습니다."
+        ),
+        "evidence": _industry_signal_evidence_summary(
+            integrated_issue=integrated_issue,
+            classification=classification,
+            signal_scope=scope,
+            primary_actor_type=primary_actor_type,
+        ),
+    }
+
+
+def _has_direct_peer_action_signal(integrated_issue: dict[str, Any]) -> bool:
+    fact_lines = _issue_fact_lines(integrated_issue)
+    peer_variants: set[str] = set()
+    for company_id in _companies_from_integrated_issue(integrated_issue):
+        peer_variants.update(_company_variants_for_direct_action_match(company_id))
+    peer_variants = {variant for variant in peer_variants if _anchor_norm(variant)}
+    if not peer_variants:
+        return False
+    for line in fact_lines:
+        if not _has_direct_business_signal(line):
+            continue
+        if _text_has_anchor_term(line, sorted(peer_variants)):
+            return True
+    return False
+
+
+def _has_peer_mention(integrated_issue: dict[str, Any]) -> bool:
+    grounding = _integrated_grounding_text(integrated_issue)
+    variants: set[str] = set()
+    for company_id in _companies_from_integrated_issue(integrated_issue):
+        variants.update(_company_variants_for_direct_action_match(company_id))
+    return bool(variants and _text_has_anchor_term(grounding, sorted(variants)))
+
+
+def _company_variants_for_direct_action_match(company_id: Any) -> set[str]:
+    value = str(company_id or "").strip()
+    if not value:
+        return set()
+    variants = set(_company_token_variants(value))
+    variants.update(str(alias or "").strip() for alias in expand_peer_aliases(value))
+    variants.add(value)
+    return {variant for variant in variants if variant}
+
+
+def _industry_signal_scope(
+    *,
+    integrated_issue: dict[str, Any],
+    classification: dict[str, Any],
+) -> str:
+    grounding = _integrated_grounding_text(integrated_issue)
+    event_type = str(
+        classification.get("event_type")
+        or integrated_issue.get("cluster_event_type")
+        or integrated_issue.get("event_type")
+        or ""
+    ).casefold()
+    if _has_market_infra_signal(grounding):
+        return "market_infra_signal"
+    if event_type in {"industry_trend", "market_trend", "policy", "regulation"}:
+        return "industry_signal"
+    if re.search(r"산업\s*구조|시장\s*구조|경쟁\s*기준|시장\s*전망|업계\s*전망", grounding):
+        return "industry_signal"
+    return ""
+
+
+def _has_market_infra_signal(text: Any) -> bool:
+    value = str(text or "")
+    return bool(
+        re.search(
+            r"AI\s*인프라|인공지능\s*인프라|AI\s*팩토리|GPU|그래픽처리장치|"
+            r"데이터\s*센터|데이터센터|컴퓨팅\s*센터|AI\s*컴퓨팅|"
+            r"반도체\s*인프라|클라우드\s*인프라|인프라\s*(확장|투자|구축|확보)",
+            value,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _primary_actor_type_for_issue(integrated_issue: dict[str, Any]) -> str:
+    grounding = _integrated_grounding_text(integrated_issue)
+    if re.search(r"정부|과학기술정보통신부|과기정통부|산업부|공정위|금융위", grounding):
+        return "public_sector"
+    if re.search(r"글로벌\s*(벤더|기업|빅테크)|해외\s*(벤더|기업)", grounding) or (
+        _global_company_alias_pattern()
+        and re.search(_global_company_alias_pattern(), grounding, flags=re.IGNORECASE)
+    ):
+        return "global_vendor"
+    actor_like_terms = re.findall(
+        r"[가-힣A-Za-z0-9&._-]+(?:그룹|컨소시엄|기업|회사|기관|정부|벤더)",
+        grounding,
+    )
+    if len(set(actor_like_terms)) >= 2:
+        return "multi_actor"
+    return "unknown"
+
+
+def _global_company_alias_pattern() -> str:
+    aliases: list[str] = []
+    for values in GLOBAL_COMPANY_ALIASES.values():
+        aliases.extend(_string_list(values, max_items=20))
+    escaped = [
+        re.escape(alias).replace(r"\ ", r"\s*")
+        for alias in sorted(set(aliases), key=len, reverse=True)
+        if alias
+    ]
+    return "|".join(escaped)
+
+
+def _industry_signal_evidence_summary(
+    *,
+    integrated_issue: dict[str, Any],
+    classification: dict[str, Any],
+    signal_scope: str,
+    primary_actor_type: str,
+) -> dict[str, Any]:
+    fact_lines = _issue_fact_lines(integrated_issue)
+    return {
+        "category": "industry_signal",
+        "signal_scope": signal_scope,
+        "primary_actor_type": primary_actor_type,
+        "event_type": str(
+            classification.get("event_type")
+            or integrated_issue.get("cluster_event_type")
+            or integrated_issue.get("event_type")
+            or ""
+        ),
+        "direct_peer_action": False,
+        "peer_mention_only": _has_peer_mention(integrated_issue),
+        "market_infra_lines": [line for line in fact_lines if _has_market_infra_signal(line)][:5],
+        "business_signal_lines": [line for line in fact_lines if _has_direct_business_signal(line)][
+            :5
+        ],
+        "fact_line_count": len(fact_lines),
+    }
+
+
+def _has_stock_market_signal(text: Any) -> bool:
+    value = str(text or "")
+    if not value.strip():
+        return False
+    strong_pattern = (
+        r"주식\s*초고수|순매수|순매도|매수|매도|거래량|수익률|"
+        r"주가|증시|시황|코스피|코스닥|장중|종가|전\s*거래일"
+    )
+    return bool(re.search(strong_pattern, value, flags=re.IGNORECASE))
+
+
+def _has_direct_business_signal(text: Any) -> bool:
+    value = str(text or "")
+    if not value.strip():
+        return False
+    if _has_stock_market_signal(value):
+        return bool(
+            re.search(
+                r"계약|수주|공급|협약|선정|출시|구축|운영|도입|매출|실적|"
+                r"영업이익|투자\s*(?:유치|집행|결정|계획|확대)|지분\s*취득|"
+                r"인수|합병|파트너십|사업자|사업\s*참여|업무협약",
+                value,
+                flags=re.IGNORECASE,
+            )
+        )
+    return bool(
+        re.search(
+            r"계약|수주|공급|협약|선정|출시|구축|운영|도입|매출|실적|"
+            r"영업이익|투자|인수|합병|파트너십|서비스|플랫폼|제품|고객|"
+            r"사업자|사업\s*참여|업무협약",
+            value,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _stock_line_without_business_link(text: Any) -> bool:
+    value = str(text or "")
+    return _has_stock_market_signal(value) and not _has_direct_business_signal(value)
+
+
+def _weak_hiring_watch_only_decision(
+    *,
+    integrated_issue: dict[str, Any],
+    classification: dict[str, Any],
+) -> dict[str, Any]:
+    event_type = str(
+        classification.get("event_type")
+        or integrated_issue.get("cluster_event_type")
+        or integrated_issue.get("event_type")
+        or ""
+    ).casefold()
+    grounding = _integrated_grounding_text(integrated_issue)
+    is_hiring_or_org = event_type in {"personnel", "hiring", "organization"} or bool(
+        re.search(r"채용|공채|인사|임원|조직|전담\s*조직", grounding)
+    )
+    if not is_hiring_or_org:
+        return {}
+    anchors = _hiring_signal_anchors(grounding)
+    if anchors.get("job_or_tech") or anchors.get("organization_or_business"):
+        return {}
+    return {
+        "decision_type": "watch_only_weak_hiring_signal",
+        "watch_only": True,
+        "reason": (
+            "채용·인사성 이슈이지만 직무군, 기술/사업 영역, 신규 조직/사업 "
+            "연결성이 충분하지 않아 전략 시사점/대응방향을 생성하지 않았습니다."
+        ),
+        "evidence": {
+            "event_type": event_type,
+            "hiring_or_org_terms": anchors.get("hiring_or_org_terms", []),
+            "job_or_tech_terms": anchors.get("job_or_tech", []),
+            "organization_or_business_terms": anchors.get("organization_or_business", []),
+            "scale_terms": anchors.get("scale", []),
+        },
+    }
+
+
+def _hiring_signal_anchors(text: Any) -> dict[str, list[str]]:
+    value = str(text or "")
+
+    def matches(pattern: str) -> list[str]:
+        return list(dict.fromkeys(re.findall(pattern, value, flags=re.IGNORECASE)))[:8]
+
+    return {
+        "hiring_or_org_terms": matches(r"채용|공채|인사|임원|조직|전담\s*조직"),
+        "job_or_tech": matches(
+            r"직무|직군|개발자|엔지니어|(?<![A-Za-z])AI(?![A-Za-z])|"
+            r"인공지능|클라우드|데이터|보안|로봇|(?<![A-Za-z])SW(?![A-Za-z])|"
+            r"소프트웨어|(?<![A-Za-z])ERP(?![A-Za-z])|컨설팅|전략|물류|"
+            r"스마트팩토리|제조"
+        ),
+        "organization_or_business": matches(
+            r"사업부|센터|본부|전담|신설|조직\s*개편|연구소|법인|부문|"
+            r"신규\s*사업|사업\s*확대"
+        ),
+        "scale": matches(r"[0-9][0-9,]*\s*(?:명|개|여\s*명|여\s*개)|규모|채용\s*인원"),
+    }
+
+
+def _watch_only_evidence_summary(
+    integrated_issue: dict[str, Any],
+    *,
+    category: str,
+) -> dict[str, Any]:
+    fact_lines = _issue_fact_lines(integrated_issue)
+    return {
+        "category": category,
+        "stock_market_lines": [line for line in fact_lines if _has_stock_market_signal(line)][:5],
+        "business_signal_lines": [line for line in fact_lines if _has_direct_business_signal(line)][
+            :5
+        ],
+        "fact_line_count": len(fact_lines),
+    }
+
+
+def _issue_fact_lines(integrated_issue: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    lines.extend(_string_list(integrated_issue.get("fact_summary"), max_items=12))
+    for _, fact_text in _fact_texts(integrated_issue):
+        if fact_text:
+            lines.append(fact_text)
+    for key in ("headline", "one_line_summary", "main_event"):
+        value = str(integrated_issue.get(key) or "").strip()
+        if value:
+            lines.append(value)
+    result: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        normalized = _anchor_norm(line)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(line)
+    return result
+
+
+def _attach_strategy_skip_diagnostics(
+    result: dict[str, Any],
+    *,
+    skip_decision: dict[str, Any],
+    integrated_issue: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any],
+    action_artifact_plan: dict[str, Any],
+) -> dict[str, Any]:
+    out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+    implication = out.get("implication") or {}
+    implication["frontend_ready_diagnostics"] = {
+        "watch_only": True,
+        "decision_type": skip_decision.get("decision_type"),
+        "signal_scope": skip_decision.get("signal_scope"),
+        "direct_peer_action": skip_decision.get("direct_peer_action"),
+        "peer_mention_only": skip_decision.get("peer_mention_only"),
+        "primary_actor_type": skip_decision.get("primary_actor_type"),
+        "reason": skip_decision.get("reason"),
+        "evidence": skip_decision.get("evidence") or {},
+        "model_config": _llm_model_config_diagnostics(),
+        "issue_execution_slots": _issue_execution_slot_diagnostics(integrated_issue),
+        "profile_based_downgrade": _profile_based_downgrade_diagnostics(
+            {},
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        ),
+        "action_mode": action_artifact_plan.get("action_mode"),
+        "displayable": False,
+    }
+    if skip_decision.get("decision_type") == "watch_only_industry_signal":
+        implication["industry_signal"] = {
+            "signal_scope": skip_decision.get("signal_scope"),
+            "primary_actor_type": skip_decision.get("primary_actor_type"),
+            "direct_peer_action": False,
+            "peer_mention_only": skip_decision.get("peer_mention_only"),
+            "reason": skip_decision.get("reason"),
+            "evidence": skip_decision.get("evidence") or {},
+        }
+        industry_frontend_ready = _industry_frontend_ready_from_decision(
+            integrated_issue=integrated_issue,
+            skip_decision=skip_decision,
+        )
+        if industry_frontend_ready:
+            implication["industry_frontend_ready"] = industry_frontend_ready
+            implication["frontend_ready_diagnostics"]["displayable"] = True
+            implication["frontend_ready_diagnostics"]["display_policy"] = "industry_only"
+    out["implication"] = implication
+    return out
+
+
+def _industry_frontend_ready_from_decision(
+    *,
+    integrated_issue: dict[str, Any],
+    skip_decision: dict[str, Any],
+) -> dict[str, Any]:
+    axes = _industry_frontend_axes(integrated_issue)
+    if not axes:
+        return {}
+    candidate_items: list[dict[str, Any]] = []
+    used_axis_keys: set[str] = set()
+    used_anchor_norms: set[str] = set()
+    for axis in axes:
+        axis_key = str(axis.get("strategic_axis") or "").strip()
+        anchors = _string_list(axis.get("event_anchor_terms"), max_items=6)
+        anchor_key = "::".join(sorted(_anchor_norm(anchor) for anchor in anchors[:3]))
+        if (
+            not axis_key
+            or not anchors
+            or axis_key in used_axis_keys
+            or anchor_key in used_anchor_norms
+        ):
+            continue
+        item = _industry_frontend_item(
+            axis,
+            integrated_issue=integrated_issue,
+            skip_decision=skip_decision,
+        )
+        if item:
+            candidate_items.append(item)
+            used_axis_keys.add(axis_key)
+            used_anchor_norms.add(anchor_key)
+        if len(candidate_items) >= 3:
+            break
+    items = _merge_similar_industry_frontend_items(
+        candidate_items,
+        integrated_issue=integrated_issue,
+        skip_decision=skip_decision,
+    )
+    if not items:
+        return {}
+    return {
+        "source": "industry_signal_direct",
+        "signal_scope": skip_decision.get("signal_scope") or "industry_signal",
+        "display_policy": "industry_only",
+        "direct_peer_action": False,
+        "primary_actor_type": skip_decision.get("primary_actor_type"),
+        "items": items,
+    }
+
+
+def _industry_frontend_axes(integrated_issue: dict[str, Any]) -> list[dict[str, Any]]:
+    grounding = _integrated_grounding_text(integrated_issue)
+    if not grounding.strip():
+        return []
+    fact_lines = _issue_fact_lines(integrated_issue)
+    axes: list[dict[str, Any]] = []
+    infra_anchors = _ordered_anchor_matches(
+        grounding,
+        (
+            r"AI\s*인프라",
+            r"인공지능\s*인프라",
+            r"AI\s*팩토리",
+            r"데이터\s*센터",
+            r"데이터센터",
+            r"GPU",
+            r"그래픽처리장치",
+            r"AI\s*컴퓨팅",
+            r"컴퓨팅\s*센터",
+            r"클라우드\s*인프라",
+            r"반도체\s*인프라",
+        ),
+    )
+    numeric_or_capacity = [
+        anchor
+        for anchor in _specific_event_anchors_for_frontend(integrated_issue)
+        if re.search(r"[0-9]|조원|억원|장|개|데이터\s*센터|GPU", anchor, flags=re.IGNORECASE)
+    ][:4]
+    if len(set(infra_anchors + numeric_or_capacity)) >= 2:
+        anchors = _dedupe_keep_order([*infra_anchors, *numeric_or_capacity])[:6]
+        evidence_lines = _industry_lines_with_anchors(fact_lines, anchors)
+        axes.append(
+            {
+                "strategic_axis": "market_infra_capacity",
+                "event_anchor_terms": anchors,
+                "decision_criteria": _industry_decision_criteria_from_issue(
+                    _industry_axis_context_text(evidence_lines, grounding=grounding),
+                    anchors=anchors,
+                    axis_key="market_infra_capacity",
+                ),
+                "evidence_lines": evidence_lines,
+            }
+        )
+    actor_patterns = [
+        r"글로벌\s*(?:벤더|기업|빅테크)",
+        r"국내\s*(?:주요\s*)?(?:기업|그룹)",
+        r"[가-힣A-Za-z0-9&._-]+그룹",
+        r"컨소시엄",
+        r"협력",
+        r"공동",
+        r"정부",
+    ]
+    global_alias_pattern = _global_company_alias_pattern()
+    if global_alias_pattern:
+        actor_patterns.append(global_alias_pattern)
+    actor_anchors = _ordered_anchor_matches(grounding, actor_patterns)
+    actor_anchors = _prefer_collective_actor_anchors(actor_anchors)
+    relationship_anchors = _ordered_anchor_matches(
+        grounding,
+        (r"협력", r"공동", r"파트너십", r"투자", r"구축", r"확장"),
+    )
+    if len(set(actor_anchors)) >= 2 or (actor_anchors and relationship_anchors):
+        anchors = _dedupe_keep_order([*actor_anchors, *relationship_anchors])[:6]
+        evidence_lines = _industry_lines_with_anchors(fact_lines, anchors)
+        axes.append(
+            {
+                "strategic_axis": "multi_actor_coordination",
+                "event_anchor_terms": anchors,
+                "decision_criteria": _industry_decision_criteria_from_issue(
+                    _industry_axis_context_text(evidence_lines, grounding=grounding),
+                    anchors=anchors,
+                    axis_key="multi_actor_coordination",
+                ),
+                "evidence_lines": evidence_lines,
+            }
+        )
+    adoption_anchors = _ordered_anchor_matches(
+        grounding,
+        (
+            r"기업\s*AI",
+            r"AI\s*도입",
+            r"업무\s*자동화",
+            r"AI\s*서비스",
+            r"클라우드\s*전환",
+            r"운영\s*요구",
+        ),
+    )
+    if len(adoption_anchors) >= 2:
+        anchors = adoption_anchors[:6]
+        evidence_lines = _industry_lines_with_anchors(fact_lines, anchors)
+        axes.append(
+            {
+                "strategic_axis": "enterprise_ai_adoption",
+                "event_anchor_terms": anchors,
+                "decision_criteria": _industry_decision_criteria_from_issue(
+                    _industry_axis_context_text(evidence_lines, grounding=grounding),
+                    anchors=anchors,
+                    axis_key="enterprise_ai_adoption",
+                ),
+                "evidence_lines": evidence_lines,
+            }
+        )
+    return axes
+
+
+def _industry_frontend_item(
+    axis: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+    skip_decision: dict[str, Any],
+) -> dict[str, Any]:
+    anchors = _string_list(axis.get("event_anchor_terms"), max_items=6)
+    if len(anchors) < 2:
+        return {}
+    anchor_phrase = _anchor_phrase(anchors, max_items=3)
+    decision_criteria = _string_list(axis.get("decision_criteria"), max_items=4)
+    if not decision_criteria:
+        decision_criteria = _industry_decision_criteria_from_issue(
+            _integrated_grounding_text(integrated_issue),
+            anchors=anchors,
+            axis_key=str(axis.get("strategic_axis") or ""),
+        )
+    evidence_lines = _string_list(axis.get("evidence_lines"), max_items=2)
+    evidence_text = _industry_evidence_sentence(
+        evidence_lines,
+        anchors=anchors,
+        decision_criteria=decision_criteria,
+        primary_actor_type=str(skip_decision.get("primary_actor_type") or ""),
+    )
+    action_sentence = _industry_action_sentence(anchors, decision_criteria=decision_criteria)
+    action_evidence = _industry_action_evidence_sentence(
+        axis_key=str(axis.get("strategic_axis") or ""),
+        anchors=anchors,
+        decision_criteria=decision_criteria,
+    )
+    return {
+        "strategic_axis": axis.get("strategic_axis"),
+        "event_anchor_terms": anchors,
+        "decision_criteria": decision_criteria,
+        "evidence_lines": evidence_lines,
+        "key_implication": {
+            "source": "industry_signal_direct",
+            "frame": "industry_signal",
+            "claim_type": "self_or_market_signal",
+            "claim_strength": "cautious",
+            "evidence_mode": "event_based",
+            "event_anchor_terms": anchors,
+            "decision_criteria": decision_criteria,
+            "sentence": _industry_implication_sentence(
+                str(axis.get("strategic_axis") or ""),
+                anchor_phrase,
+                decision_criteria=decision_criteria,
+                anchors=anchors,
+            ),
+            "evidence_sentence": evidence_text,
+        },
+        "suggested_action": {
+            "source": "industry_signal_direct",
+            "frame": "industry_response_check",
+            "claim_type": "internal_strategy_check",
+            "claim_strength": "cautious",
+            "evidence_mode": "generic_monitoring",
+            "event_anchor_terms": anchors,
+            "decision_criteria": decision_criteria,
+            "sentence": action_sentence,
+            "evidence_sentence": action_evidence,
+        },
+    }
+
+
+def _merge_similar_industry_frontend_items(
+    candidate_items: Sequence[dict[str, Any]],
+    *,
+    integrated_issue: dict[str, Any],
+    skip_decision: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not candidate_items:
+        return []
+    groups: list[list[dict[str, Any]]] = []
+    for item in candidate_items:
+        if not isinstance(item, dict) or not item:
+            continue
+        placed = False
+        for group in groups:
+            if not all(
+                _industry_frontend_items_are_separable(item, existing) for existing in group
+            ):
+                group.append(item)
+                placed = True
+                break
+        if not placed:
+            groups.append([item])
+        if len(groups) >= 3:
+            # Keep collecting only inside the first three meaningful groups.
+            continue
+    merged: list[dict[str, Any]] = []
+    for group in groups[:3]:
+        if len(group) == 1:
+            merged.append(group[0])
+        else:
+            merged_item = _merged_industry_frontend_item(
+                group,
+                integrated_issue=integrated_issue,
+                skip_decision=skip_decision,
+            )
+            if merged_item:
+                merged.append(merged_item)
+    return merged[:3]
+
+
+def _merged_industry_frontend_item(
+    items: Sequence[dict[str, Any]],
+    *,
+    integrated_issue: dict[str, Any],
+    skip_decision: dict[str, Any],
+) -> dict[str, Any]:
+    anchors: list[str] = []
+    criteria: list[str] = []
+    evidence_lines: list[str] = []
+    axis_keys: list[str] = []
+    for item in items:
+        axis_keys.append(str(item.get("strategic_axis") or "").strip())
+        anchors.extend(_string_list(item.get("event_anchor_terms"), max_items=8))
+        criteria.extend(_string_list(item.get("decision_criteria"), max_items=8))
+        evidence_lines.extend(_string_list(item.get("evidence_lines"), max_items=3))
+    merged_axis = {
+        "strategic_axis": "+".join(value for value in _dedupe_keep_order(axis_keys) if value)
+        or "industry_signal",
+        "event_anchor_terms": _dedupe_keep_order(anchors)[:6],
+        "decision_criteria": _dedupe_keep_order(criteria)[:4],
+        "evidence_lines": _dedupe_keep_order(evidence_lines)[:2],
+    }
+    return _industry_frontend_item(
+        merged_axis,
+        integrated_issue=integrated_issue,
+        skip_decision=skip_decision,
+    )
+
+
+def _industry_frontend_items_are_separable(
+    item: dict[str, Any],
+    existing: dict[str, Any],
+) -> bool:
+    checks = [
+        _industry_sets_are_substantially_different(
+            _industry_item_conclusion_terms(item),
+            _industry_item_conclusion_terms(existing),
+        ),
+        _industry_sets_are_substantially_different(
+            _industry_item_action_terms(item),
+            _industry_item_action_terms(existing),
+        ),
+        _industry_sets_are_substantially_different(
+            _industry_item_anchor_norms(item),
+            _industry_item_anchor_norms(existing),
+        ),
+        _industry_sets_are_substantially_different(
+            _industry_item_decision_criteria(item),
+            _industry_item_decision_criteria(existing),
+        ),
+        _industry_sets_are_substantially_different(
+            _industry_item_action_result_terms(item),
+            _industry_item_action_result_terms(existing),
+        ),
+    ]
+    return sum(1 for value in checks if value) >= 3
+
+
+def _industry_sets_are_substantially_different(left: set[str], right: set[str]) -> bool:
+    if not left or not right:
+        return False
+    shared_ratio = len(left & right) / max(len(left | right), 1)
+    return shared_ratio < 0.45 and len(left - right) >= 2 and len(right - left) >= 1
+
+
+def _industry_frontend_item_is_distinct(
+    item: dict[str, Any],
+    existing_items: Sequence[dict[str, Any]],
+) -> bool:
+    if not existing_items:
+        return True
+    new_axis = str(item.get("strategic_axis") or "").strip()
+    new_terms = _industry_item_conclusion_terms(item)
+    for existing in existing_items:
+        existing_axis = str(existing.get("strategic_axis") or "").strip()
+        if new_axis and existing_axis and new_axis == existing_axis:
+            return False
+        existing_terms = _industry_item_conclusion_terms(existing)
+        if not new_terms or not existing_terms:
+            continue
+        shared_ratio = len(new_terms & existing_terms) / max(len(new_terms | existing_terms), 1)
+        unique_terms = new_terms - existing_terms
+        if shared_ratio >= 0.62 and len(unique_terms) < 2:
+            return False
+        new_criteria = _industry_item_decision_criteria(item)
+        existing_criteria = _industry_item_decision_criteria(existing)
+        if new_criteria and existing_criteria:
+            criteria_shared_ratio = len(new_criteria & existing_criteria) / max(
+                len(new_criteria | existing_criteria),
+                1,
+            )
+            if criteria_shared_ratio >= 0.55 and len(new_criteria - existing_criteria) < 2:
+                return False
+    return True
+
+
+def _industry_item_conclusion_terms(item: dict[str, Any]) -> set[str]:
+    key_block = item.get("key_implication") or {}
+    if not isinstance(key_block, dict):
+        return set()
+    sentence = str(key_block.get("sentence") or "")
+    for anchor in _string_list(item.get("event_anchor_terms"), max_items=8):
+        sentence = sentence.replace(anchor, " ")
+    terms = _frontend_ready_role_terms(sentence)
+    return {
+        term
+        for term in terms
+        if term
+        not in {
+            "산업",
+            "신호",
+            "논의",
+            "관련",
+            "특정",
+            "피어",
+            "피어사",
+            "실행",
+        }
+    }
+
+
+def _industry_item_action_terms(item: dict[str, Any]) -> set[str]:
+    action_block = item.get("suggested_action") or {}
+    if not isinstance(action_block, dict):
+        return set()
+    text = " ".join(
+        [
+            str(action_block.get("sentence") or ""),
+            str(action_block.get("evidence_sentence") or ""),
+        ]
+    )
+    for anchor in _string_list(item.get("event_anchor_terms"), max_items=8):
+        text = text.replace(anchor, " ")
+    terms = _frontend_ready_role_terms(text)
+    return {
+        term
+        for term in terms
+        if term
+        not in {
+            "sk",
+            "ax",
+            "자사",
+            "시장",
+            "신호",
+            "기준",
+            "판단",
+            "입력",
+            "근거",
+            "조건",
+        }
+    }
+
+
+def _industry_item_anchor_norms(item: dict[str, Any]) -> set[str]:
+    return {
+        _anchor_norm(anchor)
+        for anchor in _string_list(item.get("event_anchor_terms"), max_items=8)
+        if _anchor_norm(anchor)
+    }
+
+
+def _industry_item_decision_criteria(item: dict[str, Any]) -> set[str]:
+    result: set[str] = set()
+    for key in ("key_implication", "suggested_action"):
+        block = item.get(key) or {}
+        if not isinstance(block, dict):
+            continue
+        result.update(_string_list(block.get("decision_criteria"), max_items=8))
+    result.update(_string_list(item.get("decision_criteria"), max_items=8))
+    return {_anchor_norm(value) for value in result if _anchor_norm(value)}
+
+
+def _industry_item_action_result_terms(item: dict[str, Any]) -> set[str]:
+    result_phrase = _industry_action_result_phrase(
+        _string_list(item.get("decision_criteria"), max_items=8)
+    )
+    return _frontend_ready_role_terms(result_phrase)
+
+
+def _industry_implication_sentence(
+    axis_key: str,
+    anchor_phrase: str,
+    *,
+    decision_criteria: Sequence[str],
+    anchors: Sequence[str] | None = None,
+) -> str:
+    del axis_key
+    anchor_reading = _industry_anchor_market_reading(anchors or ())
+    if anchor_reading:
+        return f"{anchor_phrase} 논의는 {anchor_reading}"
+    market_reading = _industry_market_reading_phrase(decision_criteria)
+    if market_reading:
+        return (
+            f"{anchor_phrase} 논의는 시장의 관심이 개별 기술 발표보다 "
+            f"{market_reading} 쪽으로 넓어질 수 있음을 보여줍니다."
+        )
+    return (
+        f"{anchor_phrase} 논의는 특정 실행 주체보다 참여 구조와 적용 조건을 함께 "
+        "읽어야 하는 시장 신호로 볼 수 있습니다."
+    )
+
+
+def _industry_axis_context_text(lines: Sequence[str], *, grounding: str) -> str:
+    selected = _string_list(lines, max_items=3)
+    if selected:
+        return "\n".join(selected)
+    return str(grounding or "")
+
+
+def _industry_decision_criteria_from_issue(
+    text: Any,
+    *,
+    anchors: Sequence[str],
+    axis_key: str,
+) -> list[str]:
+    del axis_key
+    value = "\n".join([str(text or ""), *[str(anchor or "") for anchor in anchors]])
+    criteria_patterns: tuple[tuple[str, str], ...] = (
+        ("투자 조건", r"투자|예산|사업비|규모|조원|억원|자금|CAPEX"),
+        ("비용 부담", r"비용|부담|원가|가격"),
+        ("운영 책임", r"운영|관제|책임|관리|유지|서비스\s*개시"),
+        ("기술 공급 구조", r"공급|벤더|기술|GPU|그래픽처리장치|반도체|클라우드|플랫폼|모델|장비"),
+        ("고객 적용 가능성", r"고객|적용|도입|사용|서비스|업무|기업\s*AI"),
+        ("기존 시스템 접점", r"기존\s*시스템|시스템\s*연계|연계|ERP|전환|업무\s*시스템"),
+        ("파트너십 필요성", r"협력|제휴|공동|파트너|협약|MOU"),
+        ("참여 주체", r"참여|주체|그룹|기업|기관|정부|벤더|컨소시엄|총수|CEO"),
+        ("후속 사업화 조건", r"후속|추가\s*논의|사업화|상용화|출시|계약|확대"),
+        ("규제/정책 대응 조건", r"정부|정책|규제|공공|과기정통부|금융위|공정위"),
+        (
+            "데이터/인프라 준비 수준",
+            r"데이터|인프라|데이터\s*센터|데이터센터|AI\s*팩토리|컴퓨팅|GPU",
+        ),
+        ("고객 제안 단위", r"제안|고객|서비스|패키지|솔루션"),
+        ("내부 관리 지표", r"지표|성과|매출|비중|수익|모니터링"),
+    )
+    matched: list[str] = []
+    for label, pattern in criteria_patterns:
+        if re.search(pattern, value, flags=re.IGNORECASE):
+            matched.append(label)
+    return matched[:4]
+
+
+def _ordered_anchor_matches(text: Any, patterns: Sequence[str]) -> list[str]:
+    value = str(text or "")
+    matches: list[str] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, value, flags=re.IGNORECASE):
+            token = re.sub(r"\s+", " ", match.group(0)).strip()
+            if token:
+                matches.append(token)
+    return _dedupe_keep_order(matches)
+
+
+def _industry_lines_with_anchors(lines: Sequence[str], anchors: Sequence[str]) -> list[str]:
+    result: list[str] = []
+    for line in lines:
+        if _text_has_anchor_term(line, anchors):
+            result.append(str(line).strip())
+        if len(result) >= 2:
+            break
+    return result
+
+
+def _industry_evidence_sentence(
+    evidence_lines: Sequence[str],
+    *,
+    anchors: Sequence[str],
+    decision_criteria: Sequence[str],
+    primary_actor_type: str,
+) -> str:
+    primary = _anchor_phrase(anchors, max_items=2)
+    line = str(
+        next(
+            (item for item in evidence_lines if _is_substantive_industry_evidence_line(item)),
+            next((item for item in evidence_lines if str(item).strip()), ""),
+        )
+    ).strip()
+    evidence_reading = _industry_evidence_reading_phrase(decision_criteria)
+    actor_context = {
+        "global_vendor": "글로벌 벤더 중심의 논의에서",
+        "public_sector": "정부·공공 주체가 포함된 흐름에서",
+        "multi_actor": "복수 주체가 함께 언급된 흐름에서",
+    }.get(primary_actor_type, "이 사건에서")
+    if line:
+        fact_clause = _short_fact_clause(line)
+        if evidence_reading:
+            return (
+                f"{actor_context} {fact_clause} {evidence_reading}이 함께 드러나 "
+                f"{primary} 논의가 실제 적용 조건과 연결됩니다."
+            )
+        return (
+            f"{actor_context} {fact_clause} {primary} 논의가 단순 발표보다 "
+            "참여 구조와 적용 조건을 함께 포함하는 흐름으로 이어집니다."
+        )
+    if evidence_reading:
+        return (
+            f"{actor_context} {primary}와 {evidence_reading}이 함께 언급되어 "
+            "시장 변화가 기술 발표보다 실행 구조와 맞물려 있음을 보여줍니다."
+        )
+    return (
+        f"{actor_context} {primary}가 반복적으로 제시되어, 해당 논의가 "
+        "참여 주체와 적용 조건을 함께 봐야 하는 흐름임을 보여줍니다."
+    )
+
+
+def _industry_action_sentence(
+    anchors: Sequence[str],
+    *,
+    decision_criteria: Sequence[str],
+) -> str:
+    anchor_phrase = _anchor_phrase(anchors, max_items=3)
+    action_reading = _industry_dynamic_action_reading_from_anchors(
+        anchors
+    ) or _industry_action_reading_phrase(decision_criteria)
+    if action_reading:
+        action_object = _with_korean_object_particle(action_reading)
+        return (
+            f"SK AX는 {anchor_phrase} 흐름에서 {action_object} 기준으로 "
+            "검토 범위를 구분해야 합니다."
+        )
+    return (
+        f"SK AX는 {anchor_phrase} 흐름을 볼 때 드러난 참여 구조와 "
+        "적용 조건을 기준으로 검토 범위를 구분해야 합니다."
+    )
+
+
+def _industry_action_evidence_sentence(
+    *,
+    axis_key: str,
+    anchors: Sequence[str],
+    decision_criteria: Sequence[str],
+) -> str:
+    del axis_key
+    anchor_phrase = _anchor_phrase(anchors, max_items=2)
+    result_phrase = _industry_action_result_phrase(decision_criteria)
+    evidence_reading = _industry_action_evidence_reading_phrase(decision_criteria)
+    dynamic_reading = _industry_dynamic_action_reading_from_anchors(anchors)
+    if dynamic_reading:
+        return (
+            f"{anchor_phrase} 흐름에서 {dynamic_reading}이 부각되므로, SK AX도 "
+            "고객 적용 가능성과 운영 지원이 맞닿는 지점을 먼저 가려볼 수 있습니다."
+        )
+    if evidence_reading and result_phrase:
+        result_object = _with_korean_object_particle(result_phrase)
+        return (
+            f"{anchor_phrase}와 함께 {evidence_reading}이 드러난 만큼, SK AX도 "
+            f"{result_object} 중심으로 고객 적용 가능성과 협력 필요성을 나눠 볼 수 있습니다."
+        )
+    return (
+        f"{anchor_phrase}가 제시된 만큼, SK AX는 직접 사업화를 단정하기보다 "
+        "참여 주체와 적용 조건을 기준으로 후속 판단 범위를 좁혀야 합니다."
+    )
+
+
+def _industry_criteria_phrase(criteria: Sequence[str], *, max_items: int = 3) -> str:
+    return "·".join(_dedupe_keep_order(_string_list(criteria, max_items=max_items)))
+
+
+def _industry_market_reading_phrase(criteria: Sequence[str]) -> str:
+    normalized = {_anchor_norm(item) for item in criteria}
+    parts: list[str] = []
+    if {_anchor_norm("데이터/인프라 준비 수준"), _anchor_norm("기술 공급 구조")} & normalized:
+        parts.append("기술을 실제로 운영할 기반과 공급 구조")
+    if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
+        parts.append("여러 주체가 역할을 나누는 협력 구조")
+    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 제안 단위")} & normalized:
+        parts.append("고객 업무에 적용되는 방식")
+    if {_anchor_norm("운영 책임"), _anchor_norm("기존 시스템 접점")} & normalized:
+        parts.append("운영 책임과 기존 시스템 연결 방식")
+    if {_anchor_norm("투자 조건"), _anchor_norm("비용 부담")} & normalized:
+        parts.append("투자 부담과 실행 가능성")
+    if {_anchor_norm("후속 사업화 조건"), _anchor_norm("규제/정책 대응 조건")} & normalized:
+        parts.append("후속 사업화와 정책 조건")
+    if {_anchor_norm("내부 관리 지표")} & normalized:
+        parts.append("성과를 추적할 관리 기준")
+    return _natural_join(_dedupe_keep_order(parts)[:2])
+
+
+def _industry_evidence_reading_phrase(criteria: Sequence[str]) -> str:
+    normalized = {_anchor_norm(item) for item in criteria}
+    parts: list[str] = []
+    if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
+        parts.append("참여 주체 간 협력 관계")
+    if {_anchor_norm("데이터/인프라 준비 수준"), _anchor_norm("기술 공급 구조")} & normalized:
+        parts.append("기술·인프라를 갖추는 방식")
+    if {_anchor_norm("운영 책임"), _anchor_norm("기존 시스템 접점")} & normalized:
+        parts.append("운영과 시스템 연결 조건")
+    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 제안 단위")} & normalized:
+        parts.append("고객 적용 가능성")
+    if {_anchor_norm("투자 조건"), _anchor_norm("비용 부담")} & normalized:
+        parts.append("투자와 비용 부담")
+    if {_anchor_norm("후속 사업화 조건"), _anchor_norm("규제/정책 대응 조건")} & normalized:
+        parts.append("후속 사업화나 정책 조건")
+    if {_anchor_norm("내부 관리 지표")} & normalized:
+        parts.append("성과 추적 필요성")
+    return _natural_join(_dedupe_keep_order(parts)[:2])
+
+
+def _industry_action_reading_phrase(criteria: Sequence[str]) -> str:
+    normalized = {_anchor_norm(item) for item in criteria}
+    parts: list[str] = []
+    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 제안 단위")} & normalized:
+        parts.append("고객 적용 가능성이 있는 접점")
+    if {_anchor_norm("운영 책임"), _anchor_norm("기존 시스템 접점")} & normalized:
+        parts.append("운영 지원이나 기존 시스템과 맞닿는 범위")
+    if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
+        parts.append("외부 협력이 필요한 구간")
+    if {_anchor_norm("기술 공급 구조"), _anchor_norm("데이터/인프라 준비 수준")} & normalized:
+        parts.append("기술·인프라 준비를 직접 맡을 수 있는 범위")
+    if {_anchor_norm("투자 조건"), _anchor_norm("비용 부담")} & normalized:
+        parts.append("투자 부담을 감당할 수 있는 조건")
+    if {_anchor_norm("후속 사업화 조건"), _anchor_norm("규제/정책 대응 조건")} & normalized:
+        parts.append("후속 사업화나 정책 변화에 따라 달라질 부분")
+    if {_anchor_norm("내부 관리 지표")} & normalized:
+        parts.append("내부적으로 추적할 성과 기준")
+    return _natural_join(_dedupe_keep_order(parts)[:2])
+
+
+def _industry_action_evidence_reading_phrase(criteria: Sequence[str]) -> str:
+    normalized = {_anchor_norm(item) for item in criteria}
+    parts: list[str] = []
+    if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
+        parts.append("참여 구조")
+    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 제안 단위")} & normalized:
+        parts.append("고객 적용 방향")
+    if {_anchor_norm("운영 책임"), _anchor_norm("기존 시스템 접점")} & normalized:
+        parts.append("운영·시스템 연결 조건")
+    if {_anchor_norm("기술 공급 구조"), _anchor_norm("데이터/인프라 준비 수준")} & normalized:
+        parts.append("기술·인프라 준비 방식")
+    if {_anchor_norm("투자 조건"), _anchor_norm("비용 부담")} & normalized:
+        parts.append("투자 부담")
+    if {_anchor_norm("후속 사업화 조건"), _anchor_norm("규제/정책 대응 조건")} & normalized:
+        parts.append("후속 적용 조건")
+    if {_anchor_norm("내부 관리 지표")} & normalized:
+        parts.append("성과 추적 기준")
+    return _natural_join(_dedupe_keep_order(parts)[:2])
+
+
+def _natural_join(values: Sequence[str]) -> str:
+    items = [str(item or "").strip() for item in values if str(item or "").strip()]
+    if len(items) <= 1:
+        return items[0] if items else ""
+    return " 및 ".join(items)
+
+
+def _short_fact_clause(value: Any, *, max_chars: int = 92) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    text = re.sub(r"(?:다|요)\.\s*$", "", text)
+    if len(text) <= max_chars:
+        return text + "는 점에서,"
+    shortened = text[:max_chars].rstrip(" ,.;:·ㆍ")
+    return shortened + " 등이 제시되며,"
+
+
+def _is_substantive_industry_evidence_line(value: Any) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) < 18:
+        return False
+    if re.search(r"\.\.\.|…", text):
+        return False
+    return bool(re.search(r"발표|강조|구축|투자|협력|참여|운영|도입|확장|필요|진행|논의", text))
+
+
+def _industry_dynamic_action_reading_from_anchors(anchors: Sequence[str]) -> str:
+    value = " ".join(str(anchor or "") for anchor in anchors)
+    if not value.strip():
+        return ""
+    if re.search(r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I):
+        return "고객 업무에 실제로 연결될 수 있는 처리 범위와 기존 시스템 접점"
+    if re.search(r"데이터\s*센터|데이터센터|GPU|AI\s*팩토리|컴퓨팅|인프라", value, flags=re.I):
+        return "고객 적용과 운영 지원으로 이어질 수 있는 인프라 접점"
+    if re.search(r"협력|제휴|파트너|컨소시엄|그룹|기업|정부|기관|참여", value, flags=re.I):
+        return "참여 주체별 역할과 협력 필요성이 생기는 구간"
+    if re.search(r"계약|수주|공급|구축|운영|운용|실증|도입", value, flags=re.I):
+        return "실행 범위와 후속 운영 책임이 생기는 구간"
+    if re.search(r"매출|비중|수익|거래|성과|지표", value, flags=re.I):
+        return "성과와 거래 구조를 설명할 수 있는 관리 기준"
+    return ""
+
+
+def _industry_anchor_market_reading(anchors: Sequence[str]) -> str:
+    value = " ".join(str(anchor or "") for anchor in anchors)
+    if not value.strip():
+        return ""
+    if re.search(r"데이터\s*센터|데이터센터|GPU|AI\s*팩토리|컴퓨팅|인프라", value, flags=re.I):
+        return (
+            "AI 경쟁이 개별 모델·서비스 출시보다 인프라 구축 조건과 "
+            "운영 기반 중심으로 전개될 수 있음을 보여줍니다."
+        )
+    if re.search(r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I):
+        return (
+            "기업 도입 기준이 기능 소개보다 실제 업무 적용 범위와 "
+            "시스템 연결성으로 이동할 수 있음을 보여줍니다."
+        )
+    if re.search(r"계약|수주|공급|구축|운영|운용|실증|도입", value, flags=re.I):
+        return (
+            "시장 평가가 단일 발표보다 실행 범위와 후속 운영 책임을 "
+            "함께 보는 방향으로 옮겨갈 수 있음을 보여줍니다."
+        )
+    if re.search(r"협력|제휴|파트너|컨소시엄|그룹|기업|정부|기관|참여", value, flags=re.I):
+        return (
+            "개별 기업의 단독 움직임보다 참여 주체 간 역할과 협력 구조가 "
+            "더 중요한 판단 축으로 부각될 수 있음을 보여줍니다."
+        )
+    if re.search(r"매출|비중|수익|거래|성과|지표", value, flags=re.I):
+        return (
+            "시장 평가가 규모 자체보다 성과와 거래 구조를 설명할 수 있는 "
+            "기준으로 이동할 수 있음을 보여줍니다."
+        )
+    return ""
+
+
+def _with_korean_object_particle(phrase: Any) -> str:
+    value = str(phrase or "").strip()
+    if not value:
+        return ""
+    return f"{value}{'을' if _has_korean_final_consonant(value) else '를'}"
+
+
+def _has_korean_final_consonant(value: str) -> bool:
+    for char in reversed(str(value or "").strip()):
+        code = ord(char)
+        if 0xAC00 <= code <= 0xD7A3:
+            return (code - 0xAC00) % 28 != 0
+        if char.isalnum():
+            return True
+    return False
+
+
+def _industry_action_result_phrase(criteria: Sequence[str]) -> str:
+    normalized = {_anchor_norm(item) for item in criteria}
+    result: list[str] = []
+    if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
+        result.append("협력 필요성")
+    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 제안 단위")} & normalized:
+        result.append("고객 접점")
+    if {_anchor_norm("운영 책임"), _anchor_norm("기존 시스템 접점")} & normalized:
+        result.append("운영·시스템 연계 조건")
+    if {
+        _anchor_norm("투자 조건"),
+        _anchor_norm("비용 부담"),
+        _anchor_norm("내부 관리 지표"),
+    } & normalized:
+        result.append("내부 관리 기준")
+    if {_anchor_norm("기술 공급 구조"), _anchor_norm("데이터/인프라 준비 수준")} & normalized:
+        result.append("기술·인프라 준비 수준")
+    if {_anchor_norm("후속 사업화 조건"), _anchor_norm("규제/정책 대응 조건")} & normalized:
+        result.append("후속 확인 조건")
+    return "·".join(_dedupe_keep_order(result)[:3])
+
+
+def _prefer_collective_actor_anchors(anchors: Sequence[str]) -> list[str]:
+    cleaned = _dedupe_keep_order(anchors)
+    has_collective = any(
+        re.search(r"국내\s*(?:주요\s*)?(?:기업|그룹)|복수\s*기업", anchor) for anchor in cleaned
+    )
+    if not has_collective:
+        return cleaned
+    filtered: list[str] = []
+    for anchor in cleaned:
+        if re.fullmatch(r"[가-힣A-Za-z0-9&._-]+그룹", anchor) and not re.search(
+            r"국내",
+            anchor,
+        ):
+            continue
+        filtered.append(anchor)
+    return filtered
+
+
+def _anchor_phrase(anchors: Sequence[str], *, max_items: int = 3) -> str:
+    cleaned = _dedupe_keep_order(_string_list(anchors, max_items=max_items))
+    if not cleaned:
+        return "이번 산업 신호"
+    if len(cleaned) == 1:
+        return cleaned[0]
+    return "·".join(cleaned[:max_items])
+
+
+def _dedupe_keep_order(values: Sequence[Any]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        norm = _anchor_norm(text)
+        if not text or not norm or norm in seen:
+            continue
+        result.append(text)
+        seen.add(norm)
+    return result
 
 
 def _integrated_issue_for_prompt(integrated_issue: dict[str, Any]) -> dict[str, Any]:
@@ -2941,6 +5099,21 @@ def _quality_gate_violations(
     integrated_evidence_text = _integrated_grounding_text(integrated_issue)
     grounded_numeric_keys = _grounded_numeric_keys_for_issue(integrated_issue)
     violations: list[str] = []
+    violations.extend(
+        _frontend_ready_required_violations(
+            result,
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
+    )
+    violations.extend(
+        _frontend_ready_claim_violations(
+            result,
+            integrated_issue=integrated_issue,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
+    )
     for label, value_text in _quality_checked_texts(result):
         if "quality_gate_failed:" in value_text:
             value_text = value_text.split("| quality_gate_failed:", 1)[0].strip()
@@ -3040,6 +5213,7 @@ def _quality_gate_violations(
             label=label,
             integrated_issue=integrated_issue,
             profile_context=profile_context,
+            profile_linkage_evaluation=profile_linkage_evaluation,
         )
         if unsupported_profile_violation:
             violations.append(f"{label}: {unsupported_profile_violation}")
@@ -3059,9 +5233,6 @@ def _quality_gate_violations(
         )
         if unsupported_domain_violation:
             violations.append(f"{label}: {unsupported_domain_violation}")
-    repetition_violation = _two_section_repetition_violation(result)
-    if repetition_violation:
-        violations.append(repetition_violation)
     return list(dict.fromkeys(violations))
 
 
@@ -3088,7 +5259,1864 @@ def _quality_checked_texts(result: dict[str, Any]) -> list[tuple[str, str]]:
     for field in ("follow_up_questions", "watch_points"):
         for index, value in enumerate(_string_list(implication.get(field), max_items=3), 1):
             items.append((f"implication.{field}[{index}]", value))
+    frontend_ready = implication.get("frontend_ready") or {}
+    if isinstance(frontend_ready, dict):
+        key_implication = frontend_ready.get("key_implication") or {}
+        suggested_action = frontend_ready.get("suggested_action") or {}
+        if isinstance(key_implication, dict):
+            items.extend(
+                [
+                    (
+                        "frontend_ready.key_implication.sentence",
+                        key_implication.get("sentence"),
+                    ),
+                    (
+                        "frontend_ready.key_implication.evidence_sentence",
+                        key_implication.get("evidence_sentence"),
+                    ),
+                ]
+            )
+        if isinstance(suggested_action, dict):
+            items.extend(
+                [
+                    (
+                        "frontend_ready.suggested_action.sentence",
+                        suggested_action.get("sentence"),
+                    ),
+                    (
+                        "frontend_ready.suggested_action.evidence_sentence",
+                        suggested_action.get("evidence_sentence"),
+                    ),
+                ]
+            )
     return [(label, str(value or "").strip()) for label, value in items if str(value or "").strip()]
+
+
+def _frontend_ready_required_violations(
+    result: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+    profile_context: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any] | None = None,
+) -> list[str]:
+    implication = result.get("implication") or {}
+    frontend_ready = implication.get("frontend_ready") or {}
+    if not isinstance(frontend_ready, dict):
+        return ["frontend_ready: 카드뉴스용 직접 생성 문장이 없습니다."]
+    violations: list[str] = []
+    source = str(frontend_ready.get("source") or "").strip()
+    if source not in _FRONTEND_READY_DISPLAY_SOURCES:
+        violations.append(
+            "frontend_ready.source: llm_direct 또는 frontend_repair_direct "
+            "결과만 화면에 노출할 수 있습니다."
+        )
+    for section_key, label in (
+        ("key_implication", "피어사 시사점"),
+        ("suggested_action", "SK AX 대응방향"),
+    ):
+        block = frontend_ready.get(section_key) or {}
+        if not isinstance(block, dict):
+            block = {}
+        block_source = str(block.get("source") or source or "").strip()
+        if not str(block.get("sentence") or "").strip():
+            violations.append(
+                f"frontend_ready.{section_key}.sentence: {label} 결론 문장이 없습니다."
+            )
+        if not str(block.get("evidence_sentence") or "").strip():
+            violations.append(
+                f"frontend_ready.{section_key}.evidence_sentence: "
+                f"{label} 근거/설명 문장이 없습니다."
+            )
+        if block_source not in _FRONTEND_READY_DISPLAY_SOURCES:
+            violations.append(
+                f"frontend_ready.{section_key}.source: 직접 생성된 카드뉴스 문장이 아닙니다."
+            )
+        event_terms = _string_list(block.get("event_anchor_terms"), max_items=8)
+        anchor_key = (
+            "skax_anchor_terms" if section_key == "suggested_action" else "profile_anchor_terms"
+        )
+        profile_terms = _string_list(block.get(anchor_key), max_items=8)
+        evidence_mode = str(block.get("evidence_mode") or "").strip()
+        requires_profile_anchor = evidence_mode == "profile_based"
+        if requires_profile_anchor and not profile_terms:
+            violations.append(
+                f"frontend_ready.{section_key}.{anchor_key}: 프로필/대응 anchor가 없습니다."
+            )
+
+        text = " ".join(
+            [
+                str(block.get("sentence") or ""),
+                str(block.get("evidence_sentence") or ""),
+            ]
+        )
+        internal_copy_violation = _frontend_ready_internal_copy_term_violation(text)
+        if internal_copy_violation:
+            violations.append(f"frontend_ready.{section_key}: {internal_copy_violation}")
+        if not event_terms and not _evidence_sentence_has_dynamic_grounding(
+            text,
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+        ):
+            violations.append(
+                f"frontend_ready.{section_key}.event_anchor_terms: 현재 사건 anchor가 없습니다."
+            )
+        if event_terms and not _text_has_anchor_term(text, event_terms):
+            violations.append(
+                f"frontend_ready.{section_key}: 문장에 현재 사건 anchor가 연결되지 않았습니다."
+            )
+        if _frontend_ready_evidence_repeats_summary(
+            block.get("evidence_sentence"),
+            integrated_issue=integrated_issue,
+        ):
+            violations.append(
+                f"frontend_ready.{section_key}.evidence_sentence: "
+                "요약 문장을 해석 없이 반복했습니다."
+            )
+        evidence_anchor_violation = _frontend_ready_evidence_sentence_anchor_violation(
+            block,
+            integrated_issue=integrated_issue,
+        )
+        if evidence_anchor_violation:
+            violations.append(
+                f"frontend_ready.{section_key}.evidence_sentence: {evidence_anchor_violation}"
+            )
+        if section_key == "key_implication":
+            direction_violation = _frontend_ready_key_sentence_direction_violation(
+                block.get("sentence"),
+                integrated_issue=integrated_issue,
+            )
+            if direction_violation:
+                violations.append(f"frontend_ready.key_implication.sentence: {direction_violation}")
+            business_depth_violation = _frontend_ready_key_business_depth_violation(
+                block.get("sentence"),
+                integrated_issue=integrated_issue,
+            )
+            if business_depth_violation:
+                violations.append(
+                    f"frontend_ready.key_implication.sentence: {business_depth_violation}"
+                )
+            action_language_violation = _frontend_ready_insight_evidence_action_language_violation(
+                block.get("evidence_sentence")
+            )
+            if action_language_violation:
+                violations.append(
+                    f"frontend_ready.key_implication.evidence_sentence: {action_language_violation}"
+                )
+            interpretation_violation = _frontend_ready_financial_interpretation_overlap_violation(
+                block,
+                integrated_issue=integrated_issue,
+            )
+            if interpretation_violation:
+                violations.append(f"frontend_ready.key_implication: {interpretation_violation}")
+        concept_violation = _frontend_ready_unsupported_business_concept_violation(
+            block,
+            integrated_issue=integrated_issue,
+        )
+        if concept_violation:
+            violations.append(f"frontend_ready.{section_key}: {concept_violation}")
+        if (
+            requires_profile_anchor
+            and profile_terms
+            and not _text_has_anchor_term(
+                text,
+                profile_terms,
+            )
+        ):
+            violations.append(
+                f"frontend_ready.{section_key}: 문장에 프로필/대응 anchor가 연결되지 않았습니다."
+            )
+        if section_key == "key_implication" and _mentions_skax_actor(text):
+            violations.append(
+                "frontend_ready.key_implication: 시사점에 SK AX 대응 관점이 섞였습니다."
+            )
+        if section_key == "suggested_action" and not _mentions_skax_actor(
+            str(block.get("sentence") or "")
+        ):
+            violations.append("frontend_ready.suggested_action: SK AX 행동 관점이 없습니다.")
+        if section_key == "suggested_action":
+            action_violation = _frontend_ready_action_specificity_violation(
+                block,
+                integrated_issue=integrated_issue,
+            )
+            if action_violation:
+                violations.append(f"frontend_ready.suggested_action: {action_violation}")
+            depth_violation = _frontend_ready_action_depth_violation(
+                block,
+                integrated_issue=integrated_issue,
+            )
+            if depth_violation:
+                violations.append(f"frontend_ready.suggested_action: {depth_violation}")
+            choice_violation = _frontend_ready_action_choice_violation(block)
+            if choice_violation:
+                violations.append(f"frontend_ready.suggested_action: {choice_violation}")
+            scale_violation = _frontend_ready_action_auxiliary_scale_overreach_violation(block)
+            if scale_violation:
+                violations.append(f"frontend_ready.suggested_action: {scale_violation}")
+            mode_violation = _frontend_ready_skax_action_mode_violation(
+                block,
+                integrated_issue=integrated_issue,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+            )
+            if mode_violation:
+                violations.append(f"frontend_ready.suggested_action: {mode_violation}")
+            peer_product_violation = _frontend_ready_peer_product_as_skax_basis_violation(
+                block,
+                integrated_issue=integrated_issue,
+                profile_linkage_evaluation=profile_linkage_evaluation,
+            )
+            if peer_product_violation:
+                violations.append(f"frontend_ready.suggested_action: {peer_product_violation}")
+    role_violation = _frontend_ready_role_separation_violation(frontend_ready)
+    if role_violation:
+        violations.append(f"frontend_ready.role_separation: {role_violation}")
+    return violations
+
+
+def _frontend_ready_evidence_repeats_summary(
+    evidence_sentence: Any,
+    *,
+    integrated_issue: dict[str, Any],
+) -> bool:
+    evidence = str(evidence_sentence or "").strip()
+    evidence_norm = _anchor_norm(evidence)
+    if len(evidence_norm) < 12:
+        return False
+    for summary_line in _string_list(integrated_issue.get("fact_summary"), max_items=8):
+        summary_norm = _anchor_norm(summary_line)
+        if len(summary_norm) < 12:
+            continue
+        if evidence_norm == summary_norm:
+            return True
+        if len(evidence_norm) >= len(summary_norm) and summary_norm in evidence_norm:
+            interpretation_tail = evidence_norm.replace(summary_norm, "", 1)
+            if len(interpretation_tail) < 8:
+                return True
+    return False
+
+
+def _frontend_ready_insight_evidence_action_language_violation(
+    evidence_sentence: Any,
+) -> str:
+    evidence = str(evidence_sentence or "").strip()
+    if not evidence:
+        return ""
+    if _mentions_skax_actor(evidence):
+        return "시사점 근거/설명에 SK AX 대응 관점이 섞였습니다."
+    directive_pattern = (
+        r"(관찰|점검|검토|대응|모니터링|확인|비교|구분|보완|정리)"
+        r"(?:할\s*필요|해야|해야\s*한다|해야\s*합니다|해야\s*함|할\s*수\s*있|"
+        r"하는\s*것이\s*필요|필요가\s*있|필요합니다)"
+        r"|내부\s*(?:검토|점검|대응|모니터링)[가-힣\s]*(?:필요|해야)"
+    )
+    if re.search(directive_pattern, evidence):
+        return (
+            "시사점 근거/설명에 대응방향성 지시문이 섞였습니다. "
+            "근거/설명은 기사 사실이 왜 시사점 결론을 뒷받침하는지만 설명해야 합니다."
+        )
+    return ""
+
+
+def _frontend_ready_internal_copy_term_violation(text: Any) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    internal_patterns: tuple[tuple[str, str], ...] = (
+        (r"입력\s*근거", "내부 검증 표현인 '입력 근거'가 화면 문장에 노출됐습니다."),
+        (r"\banchor\b|앵커", "내부 검증 표현인 anchor가 화면 문장에 노출됐습니다."),
+        (r"이\s*기준이\s*있어야", "내부 검증식 표현이 화면 문장에 노출됐습니다."),
+        (r"기사\s*안에서\s*확인됩니다", "메타 설명이 화면 문장에 노출됐습니다."),
+        (r"자사\s*관여\s*가능\s*영역", "내부 검토식 표현이 화면 문장에 노출됐습니다."),
+        (r"추가\s*검증(?:이\s*필요한)?\s*조건", "내부 검증식 표현이 화면 문장에 노출됐습니다."),
+    )
+    for pattern, message in internal_patterns:
+        if re.search(pattern, value, flags=re.IGNORECASE):
+            return message
+    return ""
+
+
+def _frontend_ready_key_sentence_direction_violation(
+    sentence: Any,
+    *,
+    integrated_issue: dict[str, Any],
+) -> str:
+    value = str(sentence or "").strip()
+    if not value:
+        return ""
+    if _mentions_skax_actor(value):
+        return ""
+    direction_pattern = (
+        r"방향|암시|부각|이동|전환|확장|확대|구체화|재편|분화|"
+        r"비교\s*기준|평가\s*기준|경쟁\s*(축|기준|방식)|"
+        r"고객\s*(요구|수요|기준)|운영\s*(방식|구조|책임)|"
+        r"제안\s*(방식|구조|단위)|서비스\s*구조|협력\s*구조|"
+        r"매출\s*(구성|구조)|거래\s*(구조|의존도)|대외\s*(매출|고객)"
+    )
+    has_direction = bool(re.search(direction_pattern, value, flags=re.IGNORECASE))
+    generic_signal_pattern = (
+        r"(?:실행|관찰|공개|확인|연결|적용|선정|협약|도입|출시)\s*"
+        r"(?:된\s*)?(?:흐름|장면|사례|신호)"
+    )
+    generic_signal_only = bool(re.search(generic_signal_pattern, value))
+    if generic_signal_only and not has_direction:
+        return (
+            "핵심 시사점이 현재 사실을 라벨링하는 수준입니다. "
+            "현재 사건이 앞으로 어떤 경쟁 기준, 사업 구조, 운영 방식, 고객 요구를 "
+            "암시하는지 상위 해석을 담아야 합니다."
+        )
+    if not has_direction and _frontend_ready_sentence_restates_issue_fact(
+        value,
+        integrated_issue=integrated_issue,
+    ):
+        return (
+            "핵심 시사점이 기사 사실 요약에 가깝습니다. "
+            "결론 문장은 사실 자체보다 그 사실이 암시하는 방향성이나 평가 기준을 말해야 합니다."
+        )
+    return ""
+
+
+def _frontend_ready_key_business_depth_violation(
+    sentence: Any,
+    *,
+    integrated_issue: dict[str, Any],
+) -> str:
+    value = str(sentence or "").strip()
+    if not value or _mentions_skax_actor(value):
+        return ""
+    business_terms_pattern = (
+        r"고객\s*(접점|제안|수요|요구|군|확보)|대외\s*(시장|매출|고객|성과)|"
+        r"매출\s*(구성|구조|기반)|거래\s*(구조|의존도|독립성)|"
+        r"수익\s*모델|반복\s*매출|플랫폼\s*(주도권|화|운영|구조|기반|활용|제안|구성|역할|책임)|플랫폼화|"
+        r"고객\s*락인|락인|레퍼런스|운영\s*(책임|구조|방식|체계)|"
+        r"사업\s*(구조|자생력|실익)|제안\s*(단위|구조|방식)|"
+        r"파트너십|협력\s*구조|비캡티브|"
+        r"업무\s*(시스템|처리|자동화|범위)|대상\s*시스템|"
+        r"처리\s*범위|적용\s*(업무|대상|범위)|시스템\s*(접점|연계|처리)|"
+        r"학습\s*(데이터|플랫폼|구조|방식)|통합\s*관제|관제\s*(책임|플랫폼|구조|운영)|"
+        r"로봇\s*(학습|운영|적용|자동화)|현장\s*(적용|운영|시스템\s*연계)|물류센터\s*(운영|자동화|적용)|"
+        r"계약\s*(구조|형태|범위|금액|기간|체결|추가)|공급\s*계약|추가\s*수주|"
+        r"운영\s*계약|운용\s*지원|구축[·ㆍ/\\ -]*운용|자원\s*확보|"
+        r"참여\s*(기업|주체|구조)|사업\s*참여|인프라\s*(구축|운영|확보|준비)|"
+        r"데이터센터|현장\s*실사|기술\s*공급\s*구조"
+    )
+    if re.search(business_terms_pattern, value, flags=re.IGNORECASE):
+        return ""
+    generic_direction_pattern = (
+        r"경쟁\s*(기준|축|방식)|평가\s*기준|비교\s*기준|"
+        r"부각|이동|전환|확장|확대|구체화|암시"
+    )
+    if re.search(generic_direction_pattern, value, flags=re.IGNORECASE):
+        grounding = _integrated_grounding_text(integrated_issue)
+        if _is_product_or_service_launch_issue(integrated_issue) and (
+            _workflow_execution_business_terms(grounding)
+        ):
+            return ""
+        if _business_context_terms(grounding):
+            return (
+                "핵심 시사점이 경쟁 기준 변화만 말하고 비즈니스 실익을 충분히 "
+                "해석하지 못했습니다. 입력 근거에서 설명 가능한 고객 접점, 대외 매출, "
+                "운영 책임, 플랫폼/서비스 구조, 레퍼런스 같은 사업적 판단 축을 "
+                "함께 담아야 합니다."
+            )
+    return ""
+
+
+def _frontend_ready_unsupported_business_concept_violation(
+    block: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+) -> str:
+    sentence = str(block.get("sentence") or "")
+    evidence = str(block.get("evidence_sentence") or "")
+    text = f"{sentence} {evidence}"
+    if not text.strip():
+        return ""
+    grounding = _integrated_grounding_text(integrated_issue)
+    concept_rules: tuple[tuple[str, str, str], ...] = (
+        (
+            r"밸류에이션|캡티브(?:\s*트랩)?|공시(?:\s*체계)?|오케스트레이션|SaaS",
+            r"밸류에이션|캡티브(?:\s*트랩)?|공시(?:\s*체계)?|오케스트레이션|SaaS",
+            "입력 근거에 없는 전문 해석 용어를 사용했습니다.",
+        ),
+        (
+            r"고객\s*락인|락인",
+            r"락인|전환\s*비용|장기\s*계약|구독|반복\s*사용|플랫폼|관제|"
+            r"운영\s*데이터|고객\s*데이터|계정|멤버십",
+            "고객 락인 해석은 플랫폼·데이터·장기 이용 구조 근거가 있을 때만 사용할 수 있습니다.",
+        ),
+        (
+            r"반복\s*매출|수익\s*모델|수익모델",
+            r"매출|수익|구독|계약|서비스|운영|요금|과금|반복",
+            "반복 매출/수익모델 해석은 매출·수익·계약·과금 근거가 있을 때만 사용할 수 있습니다.",
+        ),
+        (
+            r"플랫폼화|플랫폼\s*주도권",
+            r"플랫폼|관제|운영|서비스|솔루션|데이터|시스템",
+            "플랫폼화/플랫폼 주도권 해석은 플랫폼·운영·데이터 구조 근거가 "
+            "있을 때만 사용할 수 있습니다.",
+        ),
+        (
+            r"사업\s*자생력|비캡티브|대외\s*(?:AX|AI|클라우드)\s*사업",
+            r"대외|외부|비캡티브|내부\s*거래|내부거래|AX|AI|클라우드|매출",
+            "대외 사업 자생력 해석은 대외 매출·내부거래·관련 사업 근거가 "
+            "있을 때만 사용할 수 있습니다.",
+        ),
+        (
+            r"선점|장악|입증",
+            r"선점|장악|입증",
+            "선점·장악·입증 같은 강한 성과 표현은 입력 근거가 있을 때만 사용할 수 있습니다.",
+        ),
+    )
+    for concept_pattern, support_pattern, message in concept_rules:
+        if re.search(concept_pattern, text, flags=re.IGNORECASE) and not re.search(
+            support_pattern,
+            grounding,
+            flags=re.IGNORECASE,
+        ):
+            return message
+    return ""
+
+
+def _business_context_terms(text: Any) -> set[str]:
+    value = str(text or "")
+    terms: set[str] = set()
+    for pattern in (
+        r"고객|대외|외부|매출|수익|계약|협약|서비스|플랫폼|솔루션|관제|"
+        r"운영|데이터|레퍼런스|적용처|고객군|파트너십|협력|거래|내부거래|"
+        r"비중|시장|제안|물류센터|업무\s*시스템|클라우드|AI|AX",
+    ):
+        if re.search(pattern, value, flags=re.IGNORECASE):
+            terms.add(pattern)
+    return terms
+
+
+def _workflow_execution_business_terms(text: Any) -> set[str]:
+    value = str(text or "")
+    terms: set[str] = set()
+    for pattern in (
+        r"업무\s*(자동화|시스템|처리|범위)",
+        r"사내\s*업무\s*시스템",
+        r"메일|ERP|데이터베이스|문서",
+        r"사용자\s*PC",
+        r"자연어\s*명령",
+        r"필요한\s*업무를\s*대신\s*처리",
+        r"데스크톱\s*에이전틱\s*AI",
+        r"처리\s*범위|적용\s*(업무|대상|범위)",
+    ):
+        if re.search(pattern, value, flags=re.IGNORECASE):
+            terms.add(pattern)
+    return terms
+
+
+def _is_product_or_service_launch_issue(integrated_issue: dict[str, Any]) -> bool:
+    classification = integrated_issue.get("classification") or {}
+    event_text = " ".join(
+        str(item or "").strip().casefold()
+        for item in (
+            integrated_issue.get("cluster_event_type"),
+            integrated_issue.get("event_type"),
+            classification.get("event_type") if isinstance(classification, dict) else "",
+        )
+    )
+    if re.search(r"tech_release|product_release|service_launch|launch|출시|공개", event_text):
+        return True
+    grounding = _integrated_grounding_text(integrated_issue)
+    return bool(re.search(r"출시|공개|선보였|서비스를\s*시작", grounding))
+
+
+def _frontend_ready_sentence_restates_issue_fact(
+    sentence: str,
+    *,
+    integrated_issue: dict[str, Any],
+) -> bool:
+    sentence_terms = _frontend_ready_role_terms(sentence)
+    if len(sentence_terms) < 3:
+        return False
+    for summary_line in _string_list(integrated_issue.get("fact_summary"), max_items=8):
+        fact_terms = _frontend_ready_role_terms(summary_line)
+        if len(fact_terms) < 3:
+            continue
+        overlap = len(sentence_terms & fact_terms) / max(len(sentence_terms | fact_terms), 1)
+        if overlap >= 0.62:
+            return True
+    return False
+
+
+def _frontend_ready_financial_interpretation_overlap_violation(
+    block: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+) -> str:
+    if not _is_financial_or_transaction_frontend_block(block, integrated_issue):
+        return ""
+    sentence = str(block.get("sentence") or "")
+    evidence = str(block.get("evidence_sentence") or "")
+    if not sentence.strip() or not evidence.strip():
+        return ""
+    sentence_numbers = _numeric_token_keys(sentence)
+    evidence_numbers = _numeric_token_keys(evidence)
+    shared_numbers = sentence_numbers & evidence_numbers
+    sentence_structure_terms = _financial_structure_terms(sentence)
+    evidence_structure_terms = _financial_structure_terms(evidence)
+    shared_structure_terms = sentence_structure_terms & evidence_structure_terms
+    if shared_numbers and (
+        len(sentence_numbers) >= 2 or len(shared_numbers) >= 2 or len(shared_structure_terms) >= 2
+    ):
+        return (
+            "재무/거래구조 시사점 결론이 수치·비교군 근거를 반복합니다. "
+            "결론은 매출 구성, 거래 의존도, 평가 기준 같은 상위 해석으로 쓰고 "
+            "수치와 비교군은 근거/설명에 배치해야 합니다."
+        )
+    return ""
+
+
+def _is_financial_or_transaction_frontend_block(
+    block: dict[str, Any],
+    integrated_issue: dict[str, Any],
+) -> bool:
+    claim_type = str(block.get("claim_type") or "").strip()
+    if claim_type in {"financial_structure_signal", "governance_exposure_signal"}:
+        return True
+    event_type = str(
+        integrated_issue.get("cluster_event_type") or integrated_issue.get("event_type") or ""
+    ).casefold()
+    if event_type in {"financial_update", "performance", "earnings", "governance"}:
+        return True
+    grounding = _integrated_grounding_text(integrated_issue)
+    return bool(_financial_structure_terms(grounding) and _numeric_token_keys(grounding))
+
+
+def _numeric_token_keys(text: Any) -> set[str]:
+    return {
+        key
+        for token in re.findall(
+            r"\d+(?:[.,]\d+)*\s*(?:%|원|조|억|만|천만|백만|달러|usd|krw|대|개)?",
+            str(text or ""),
+            flags=re.IGNORECASE,
+        )
+        if (key := _numeric_token_key(token))
+    }
+
+
+def _financial_structure_terms(text: Any) -> set[str]:
+    value = str(text or "")
+    terms: set[str] = set()
+    for pattern in (
+        r"내부\s*거래",
+        r"내부거래",
+        r"대외\s*(?:매출|고객|거래)",
+        r"외부\s*(?:매출|고객|거래)",
+        r"매출\s*(?:구성|구조|비중|분류)",
+        r"거래\s*(?:구성|구조|비중|의존도|상대)",
+        r"그룹사\s*(?:매출|거래|의존도)",
+        r"수익성",
+        r"영업\s*이익",
+        r"비교군",
+        r"업종\s*(?:평균|기준)",
+    ):
+        if re.search(pattern, value, flags=re.IGNORECASE):
+            terms.add(_anchor_norm(pattern.replace("\\s*", "")))
+    return terms
+
+
+def _frontend_ready_action_specificity_violation(
+    block: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+) -> str:
+    sentence = str(block.get("sentence") or "")
+    evidence = str(block.get("evidence_sentence") or "")
+    text = f"{sentence} {evidence}"
+    if not text.strip():
+        return ""
+    issue_anchors = _specific_event_anchors_for_frontend(integrated_issue)
+    has_issue_target = not issue_anchors or _text_has_anchor_term(text, issue_anchors)
+    basis_pattern = (
+        r"범위|기준|비율|수치|고객|대상|기능|권한|보안|연동|시스템|운영|책임|"
+        r"구조|조건|리스크|위험|성과|비교|일정|처리|검증|매출|구성|적용|"
+        r"역할|계약|협약|거래|모니터링"
+    )
+    sentence_has_evaluation_basis = bool(re.search(basis_pattern, sentence))
+    has_evaluation_basis = bool(
+        re.search(
+            basis_pattern,
+            text,
+        )
+    )
+    generic_action_only = (
+        bool(
+            re.search(
+                r"(점검|검토|확인|모니터링)(해야|할\s*필요|할\s*수|합니다|한다|하십시오)",
+                sentence,
+            )
+        )
+        and not sentence_has_evaluation_basis
+    )
+    if not has_issue_target:
+        return "현재 사건에서 나온 점검 대상이 문장에 연결되지 않았습니다."
+    if generic_action_only or not has_evaluation_basis:
+        return "점검 대상과 판단 기준이 함께 드러나야 합니다."
+    if not _has_action_execution_perspective(text):
+        return (
+            "SK AX 내부 판단 축이 부족합니다. 대응 대상, 판단 기준, 실행 관점이 "
+            "함께 드러나야 합니다."
+        )
+    return ""
+
+
+def _frontend_ready_action_depth_violation(
+    block: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+) -> str:
+    sentence = str(block.get("sentence") or "")
+    evidence = str(block.get("evidence_sentence") or "")
+    text = f"{sentence} {evidence}"
+    if not text.strip():
+        return ""
+    if _is_financial_or_transaction_frontend_block(block, integrated_issue):
+        depth_pattern = (
+            r"매출\s*(구성|분류|구조)|거래\s*(비중|구조|의존도)|"
+            r"내부\s*거래|내부거래|대외\s*(매출|고객|거래)|외부\s*(매출|고객|거래)|"
+            r"비교\s*(가능|기준|항목)|분류\s*기준|산정\s*기준|관리\s*지표|"
+            r"추적|설명\s*가능|증명|검증"
+        )
+    else:
+        depth_pattern = (
+            r"증명|검증|설명\s*가능|비교\s*가능|분류\s*기준|산정\s*기준|관리\s*지표|"
+            r"대외\s*(성과|고객|설명)|고객\s*(제안|레퍼런스|수요|확인)|"
+            r"레퍼런스|운영\s*(책임|구간|범위|조건)|책임\s*(구간|범위|분담|구조)|"
+            r"자체\s*(수행|제공|담당)|외부\s*(협력|파트너|보완|연계)|파트너십|"
+            r"수행\s*(범위|책임)|적용\s*가능성|기존\s*시스템\s*접점|"
+            r"시스템\s*(연계|연동)|연동\s*범위|현장\s*시스템|"
+            r"처리\s*업무\s*기준|업무\s*처리\s*범위|사업성\s*기준|"
+            r"후속\s*확인\s*기준|전환\s*가능성|리스크\s*(관리|기준|부담)|시장\s*모니터링"
+        )
+    if re.search(depth_pattern, text, flags=re.IGNORECASE):
+        return ""
+    shallow_action_pattern = r"(점검|검토|정리|확인|모니터링)(해야|할\s*필요|할\s*수|합니다|한다)"
+    if re.search(shallow_action_pattern, sentence):
+        return (
+            "대응방향이 단순 점검/정리에서 멈췄습니다. SK AX가 무엇을 "
+            "증명·검증하거나 어떤 기준으로 설명 가능하게 만들어야 하는지까지 "
+            "드러나야 합니다."
+        )
+    return (
+        "대응방향에 실행 결과 관점이 부족합니다. 대응 대상과 판단 기준뿐 아니라 "
+        "대외 설명, 고객 제안, 운영 책임, 매출 구조, 자체/외부 협력, "
+        "검증 기준 중 입력 사건에 맞는 실행 관점이 필요합니다."
+    )
+
+
+def _frontend_ready_action_choice_violation(block: dict[str, Any]) -> str:
+    sentence = str(block.get("sentence") or "")
+    evidence = str(block.get("evidence_sentence") or "")
+    text = f"{sentence} {evidence}"
+    if not text.strip():
+        return ""
+    choice_pattern = (
+        r"자체\s*(수행|제공|담당|역량)|외부\s*(협력|파트너|보완|연계)|파트너십|"
+        r"대외\s*(성과|매출|고객|설명)|비캡티브|레퍼런스|"
+        r"고객\s*(군|수요|제안|접점|확인)|제안\s*(단위|구조|범위)|"
+        r"매출\s*(구성|분류|구조)|성과\s*(지표|관리|추적)|관리\s*지표|추적|"
+        r"운영\s*(책임|구간|범위|조건)|책임\s*(구간|범위|분담|구조)|"
+        r"서비스\s*(범위|구조)|기존\s*시스템\s*접점|시스템\s*(연계|연동)|"
+        r"수요\s*검증|적용\s*가능성|모니터링|분리|구분|나눠|비교"
+    )
+    if re.search(choice_pattern, text, flags=re.IGNORECASE):
+        return ""
+    shallow_end_pattern = (
+        r"(점검|검토|정리|확인|모니터링)(?:해야\s*한다|해야\s*합니다|할\s*필요가\s*있다|"
+        r"할\s*필요가\s*있습니다|할\s*수\s*있다|할\s*수\s*있습니다)\s*[.!。]?$"
+    )
+    if re.search(shallow_end_pattern, sentence.strip()):
+        return (
+            "대응방향이 관찰자 톤의 점검 문장으로 끝났습니다. SK AX가 비교할 선택지"
+            "(자체/외부 협력, 고객군, 레퍼런스, 매출·성과 지표, 제안 단위, "
+            "운영 책임, 수요 검증 등)를 입력 근거 안에서 제시해야 합니다."
+        )
+    return (
+        "대응방향에 SK AX의 선택지가 부족합니다. 대응 대상과 판단 기준을 넘어서 "
+        "자체 수행/외부 협력, 고객군, 레퍼런스, 성과 지표, 제안 단위, "
+        "운영 책임, 수요 검증 중 입력 사건에 맞는 선택 축을 포함해야 합니다."
+    )
+
+
+def _frontend_ready_action_auxiliary_scale_overreach_violation(block: dict[str, Any]) -> str:
+    sentence = str(block.get("sentence") or "")
+    evidence = str(block.get("evidence_sentence") or "")
+    text = f"{sentence} {evidence}"
+    if not text.strip():
+        return ""
+    execution_structure_pattern = (
+        r"적용\s*(업무|대상|범위)|운영\s*(책임|구간|범위|방식|조건)|"
+        r"플랫폼\s*(확보|운영|구조|연계)|학습|관제|현장\s*시스템|"
+        r"시스템\s*(연계|연동|접점)|로봇\s*(적용|운영|학습)|"
+        r"자체\s*(수행|제공|담당)|외부\s*(협력|파트너|연계|보완)|파트너십"
+    )
+    has_execution_structure = bool(
+        re.search(execution_structure_pattern, text, flags=re.IGNORECASE)
+    )
+    scale_basis_pattern = (
+        r"(?:고객|시장|사업|투자|매출|거점|네트워크)\s*(?:규모|범위|수)|"
+        r"거점\s*(?:범위|수|규모)|시장\s*규모|사업\s*규모|고객\s*규모|"
+        r"네트워크\s*(?:범위|규모)"
+    )
+    if re.search(scale_basis_pattern, sentence) and not has_execution_structure:
+        return (
+            "고객 규모·거점 수·시장 규모 같은 보조 정보를 SK AX 대응 결론의 "
+            "직접 기준으로 사용했습니다. 대응 결론은 적용 업무, 운영 책임, "
+            "플랫폼 확보 방식, 현장 시스템 연계처럼 실행 구조에서 가져와야 합니다."
+        )
+    if not re.search(scale_basis_pattern, text):
+        return ""
+    direct_basis_pattern = r"(?:기준|판단|점검|검토|비교|구분|분리|나눠|내부\s*판단|대응\s*기준)"
+    for match in re.finditer(scale_basis_pattern, text):
+        start = max(match.start() - 18, 0)
+        end = min(match.end() + 28, len(text))
+        window = text[start:end]
+        if re.search(direct_basis_pattern, window) and not has_execution_structure:
+            return (
+                "고객 규모·거점 수·시장 규모 같은 보조 정보를 SK AX 대응 기준으로 "
+                "직접 연결했습니다. 대응 기준은 적용 업무, 운영 책임, 플랫폼 확보 방식, "
+                "학습/관제 역할, 현장 시스템 연계처럼 현재 사건의 실행 구조에서 가져와야 합니다."
+            )
+    return ""
+
+
+def _frontend_ready_skax_action_mode_violation(
+    block: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any] | None,
+) -> str:
+    if _is_financial_or_transaction_frontend_block(block, integrated_issue):
+        return ""
+    mode = _skax_action_mode_from_profile_linkage(profile_linkage_evaluation)
+    if mode == "direct_business_match":
+        return ""
+    text = " ".join(
+        [
+            str(block.get("sentence") or ""),
+            str(block.get("evidence_sentence") or ""),
+        ]
+    )
+    if not text.strip():
+        return ""
+    has_direct_action = _has_direct_skax_execution_action(text)
+    if mode == "watch_or_monitor":
+        if has_direct_action:
+            return (
+                "SK AX 프로필 연결 근거가 약한데 직접 사업 대응처럼 작성했습니다. "
+                "연결 근거가 거의 없으면 피어/산업 동향 모니터링, 수요 검증, "
+                "접점 확인 수준으로 낮춰야 합니다."
+            )
+    if mode == "adjacent_opportunity_probe" and has_direct_action:
+        return (
+            "SK AX 프로필 연결이 인접 접점 수준인데 직접 도입/확보/구축처럼 작성했습니다. "
+            "고객 수요, 적용 가능성, 파트너십 필요성, 기존 시스템 접점 검토로 낮춰야 합니다."
+        )
+    return ""
+
+
+def _has_direct_skax_execution_action(text: str) -> bool:
+    value = str(text or "")
+    if not value.strip():
+        return False
+    direct_execution_pattern = (
+        r"(?:도입|확보|구축|운영|제공|수행|책임|확대|강화|차별화|패키징|사업화|선점|묶)"
+        r"\s*(?:해야|해야\s*합니다|한다|합니다|할\s*필요|할\s*수|할\s*것|하는\s*방향)"
+    )
+    strong_packaging_pattern = (
+        r"(?:고객\s*제안\s*단위|사업\s*라인|서비스\s*단위)[가-힣\s]*(?:패키징|차별화|확대|강화)"
+        r"|대외\s*레퍼런스[가-힣\s]*(?:확보|강화)"
+        r"|제안\s*(?:기준|구조|단위)[가-힣\s]*(?:보완|강화|확대)"
+        r"|내부\s*비교\s*항목으로\s*삼아야"
+        r"|기존\s*사업/역량\s*안에서"
+        r"|기존\s*사업\s*안에서"
+    )
+    return bool(
+        re.search(direct_execution_pattern, value) or re.search(strong_packaging_pattern, value)
+    )
+
+
+def _skax_action_mode_from_profile_linkage(
+    profile_linkage_evaluation: dict[str, Any] | None,
+) -> str:
+    linkage = _profile_linkage_for_company(
+        profile_linkage_evaluation or {},
+        company_id="sk_ax",
+        scope="skax",
+    )
+    level = str(linkage.get("linkage_level") or "none")
+    matched_areas = _jsonish_list(linkage.get("matched_business_areas"))
+    matched_terms = _string_list(linkage.get("matched_terms"), max_items=12)
+    matched_capabilities = _string_list(linkage.get("matched_capabilities"), max_items=12)
+    specific_levels = {
+        str(area.get("specificity_level") or "").strip()
+        for area in matched_areas
+        if isinstance(area, dict)
+    }
+    has_specific_area = bool(
+        specific_levels & {"product_or_service", "core_capability", "business_area"}
+    )
+    has_area_evidence = any(
+        isinstance(area, dict)
+        and (
+            _string_list(area.get("matched_issue_terms"), max_items=5)
+            or _string_list(area.get("matched_capabilities"), max_items=5)
+            or _string_list(area.get("matched_products_or_services"), max_items=5)
+            or str(area.get("evidence_text") or "").strip()
+            or str(area.get("why_relevant_to_issue") or "").strip()
+        )
+        for area in matched_areas
+    )
+    if level in {"high", "medium"} and has_specific_area and has_area_evidence:
+        return "direct_business_match"
+    if level in {"high", "medium", "low"} and (
+        matched_terms or matched_capabilities or matched_areas or str(linkage.get("reason") or "")
+    ):
+        return "adjacent_opportunity_probe"
+    return "watch_or_monitor"
+
+
+def _frontend_ready_peer_product_as_skax_basis_violation(
+    block: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any] | None,
+) -> str:
+    if _is_financial_or_transaction_frontend_block(block, integrated_issue):
+        return ""
+    peer_only_terms = _peer_only_issue_product_terms(
+        integrated_issue,
+        profile_linkage_evaluation=profile_linkage_evaluation,
+    )
+    if not peer_only_terms:
+        return ""
+    sentence = str(block.get("sentence") or "")
+    evidence = str(block.get("evidence_sentence") or "")
+    matched_in_sentence = [
+        term for term in peer_only_terms if _text_has_anchor_term(sentence, [term])
+    ]
+    matched_in_evidence = [
+        term for term in peer_only_terms if _text_has_anchor_term(evidence, [term])
+    ]
+    action_basis_pattern = (
+        r"처럼|같은\s*제품|동일한\s*제품|비교\s*기준|"
+        r"내부\s*비교|판단\s*기준|삼아야|직접\s*(기준|비교)"
+    )
+    if matched_in_sentence and re.search(action_basis_pattern, sentence):
+        return (
+            "피어사 고유 제품명을 SK AX 대응방향의 직접 기준처럼 사용했습니다. "
+            "SK AX 프로필에 같은 제품/역량 근거가 없으면 제품명 대신 해당 제품이 맡는 "
+            "기능, 적용 업무, 대상 시스템, 운영 역할, 기존 시스템 접점 같은 "
+            "구조 표현으로 낮춰야 합니다."
+        )
+    if matched_in_evidence and re.search(action_basis_pattern, evidence):
+        return (
+            "피어사 고유 제품명을 SK AX 내부 판단 근거처럼 사용했습니다. "
+            "대응방향 근거에서는 피어 제품명보다 현재 사건의 기능·업무 범위와 "
+            "SK AX 연결 강도를 기준으로 설명해야 합니다."
+        )
+    return ""
+
+
+def _peer_only_issue_product_terms(
+    integrated_issue: dict[str, Any],
+    *,
+    profile_linkage_evaluation: dict[str, Any] | None,
+) -> list[str]:
+    issue_terms = _issue_specific_product_terms_for_action(integrated_issue)
+    if not issue_terms:
+        return []
+    skax_terms = _skax_profile_product_terms(profile_linkage_evaluation)
+    out: list[str] = []
+    for term in issue_terms:
+        if any(_anchor_norm(term) == _anchor_norm(skax_term) for skax_term in skax_terms):
+            continue
+        out.append(term)
+    return out[:8]
+
+
+def _issue_specific_product_terms_for_action(integrated_issue: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    grounding = _integrated_grounding_text(integrated_issue)
+    values.extend(re.findall(r"[‘'\"“”]([^‘'\"“”]{2,60})[’'\"“”]", grounding))
+    out: list[str] = []
+    generic_pattern = (
+        r"사업|협약|계약|서비스|플랫폼$|시스템$|솔루션$|센터$|물류$|자동화$|"
+        r"AI$|AX$|DX$|프로젝트|구축|운영"
+    )
+    for value in values:
+        text = re.sub(r"\s+", " ", str(value or "")).strip(" ,.;:()[]")
+        if len(text) < 3 or len(text) > 60:
+            continue
+        if re.search(r"[.!?。]\s*", text):
+            continue
+        if re.search(
+            r"컨설팅|구축|계약|협약|투자|분석|검증|업무|사업|프로젝트|"
+            r"실증|적용|도입|운영|전환",
+            text,
+        ):
+            continue
+        if re.fullmatch(generic_pattern, text, flags=re.IGNORECASE):
+            continue
+        is_product_like = bool(re.search(r"[A-Z][A-Za-z0-9]+", text) or " " in text)
+        if not is_product_like:
+            # Keep quoted/English/product-like names; avoid broad Korean category nouns.
+            continue
+        if any(_anchor_norm(text) == _anchor_norm(existing) for existing in out):
+            continue
+        out.append(text)
+    return out[:10]
+
+
+def _skax_profile_product_terms(
+    profile_linkage_evaluation: dict[str, Any] | None,
+) -> list[str]:
+    linkage = _profile_linkage_for_company(
+        profile_linkage_evaluation or {},
+        company_id="sk_ax",
+        scope="skax",
+    )
+    values: list[str] = []
+    values.extend(_string_list(linkage.get("matched_terms"), max_items=20))
+    values.extend(_string_list(linkage.get("matched_capabilities"), max_items=20))
+    for area in _jsonish_list(linkage.get("matched_business_areas")):
+        if not isinstance(area, dict):
+            continue
+        values.extend(_string_list(area.get("matched_products_or_services"), max_items=20))
+        values.extend(_string_list(area.get("products_or_services"), max_items=20))
+        values.extend(_string_list(area.get("matched_capabilities"), max_items=20))
+    return values
+
+
+def _has_action_execution_perspective(text: str) -> bool:
+    value = str(text or "")
+    if not value.strip():
+        return False
+    perspective_groups = (
+        r"자체\s*(수행|제공|담당|역량)|내부\s*(수행|점검|검토|기준|역량|책임)|"
+        r"외부\s*(협력|파트너|보완|연계)|파트너십|협력\s*(필요|구간|구조|범위)|"
+        r"고객\s*(제안|대상|군|요구|확인)|제안\s*(단위|구조|범위)|"
+        r"운영\s*(책임|범위|구간|조건|데이터|체계)|책임\s*(구간|범위|분담|구조)|"
+        r"연동\s*(범위|구조|방식)|시스템\s*연동|처리\s*업무\s*기준|업무\s*처리\s*범위|"
+        r"매출\s*(구성|분류|구조)|거래\s*(비중|구조|의존도)|대외\s*(매출|고객)|"
+        r"리스크\s*(관리|기준|부담)|시장\s*모니터링|수행\s*(범위|책임)|"
+        r"역할\s*(분담|구조)|검증\s*(기준|항목|범위)|비교\s*(기준|항목|해야)|"
+        r"분리|구분|나눠"
+    )
+    return bool(re.search(perspective_groups, value, flags=re.IGNORECASE))
+
+
+_FRONTEND_READY_GENERIC_ROLE_TERMS = {
+    "이번",
+    "해당",
+    "현재",
+    "사건",
+    "신호",
+    "시장",
+    "피어",
+    "피어사",
+    "기업",
+    "사업",
+    "서비스",
+    "기반",
+    "관련",
+    "흐름",
+    "관점",
+    "의미",
+    "결론",
+    "근거",
+    "설명",
+    "필요",
+    "해야",
+    "합니다",
+    "한다",
+    "보여",
+    "가능",
+    "점검",
+    "검토",
+    "확인",
+    "모니터링",
+    "강화",
+    "경쟁력",
+    "신호입니다",
+    "sk",
+    "ax",
+    "skax",
+}
+
+
+def _frontend_ready_role_separation_violation(frontend_ready: dict[str, Any]) -> str:
+    key_block = frontend_ready.get("key_implication") or {}
+    action_block = frontend_ready.get("suggested_action") or {}
+    if not isinstance(key_block, dict) or not isinstance(action_block, dict):
+        return ""
+    key_sentence = str(key_block.get("sentence") or "").strip()
+    action_sentence = str(action_block.get("sentence") or "").strip()
+    if not key_sentence or not action_sentence:
+        return ""
+    key_norm = _anchor_norm(key_sentence)
+    action_norm = _anchor_norm(action_sentence)
+    if len(key_norm) >= 18 and (key_norm in action_norm or action_norm in key_norm):
+        return "시사점과 대응방향 결론문이 서로의 문장을 거의 그대로 반복합니다."
+
+    key_terms = _frontend_ready_role_terms(key_sentence)
+    action_terms = _frontend_ready_role_terms(action_sentence)
+    if not key_terms or not action_terms:
+        return ""
+    shared_terms = key_terms & action_terms
+    shared_bigrams = _frontend_ready_role_bigrams(key_sentence) & _frontend_ready_role_bigrams(
+        action_sentence
+    )
+    action_unique_terms = action_terms - key_terms
+    jaccard = len(shared_terms) / max(len(key_terms | action_terms), 1)
+    if len(shared_bigrams) >= 2 and len(action_unique_terms) < 4:
+        return (
+            "대응방향이 시사점의 핵심 명사 조합을 반복하고 있어, "
+            "SK AX가 볼 점검 대상과 판단 기준을 별도로 드러내야 합니다."
+        )
+    if jaccard >= 0.58 and len(action_unique_terms) < 4:
+        return (
+            "대응방향이 시사점을 단순히 바꿔 말한 수준입니다. "
+            "피어/시장 의미와 SK AX 대응 범위를 분리해야 합니다."
+        )
+    evidence_violation = _frontend_ready_evidence_role_separation_violation(
+        str(key_block.get("evidence_sentence") or ""),
+        str(action_block.get("evidence_sentence") or ""),
+    )
+    if evidence_violation:
+        return evidence_violation
+    return ""
+
+
+def _frontend_ready_evidence_role_separation_violation(
+    key_evidence: str,
+    action_evidence: str,
+) -> str:
+    if not key_evidence.strip() or not action_evidence.strip():
+        return ""
+    key_terms = _frontend_ready_role_terms(key_evidence)
+    action_terms = _frontend_ready_role_terms(action_evidence)
+    if not key_terms or not action_terms:
+        return ""
+    shared_bigrams = _frontend_ready_role_bigrams(key_evidence) & _frontend_ready_role_bigrams(
+        action_evidence
+    )
+    shared_ratio = len(key_terms & action_terms) / max(len(key_terms | action_terms), 1)
+    repeats_evidence = len(shared_bigrams) >= 2 or shared_ratio >= 0.55
+    if repeats_evidence and not _has_action_evidence_internal_axis(action_evidence):
+        return (
+            "대응방향 근거/설명이 시사점 근거를 반복합니다. "
+            "action 근거에는 SK AX가 볼 내부 판단 축을 별도로 설명해야 합니다."
+        )
+    return ""
+
+
+def _has_action_evidence_internal_axis(text: str) -> bool:
+    value = str(text or "")
+    if not value.strip():
+        return False
+    axis_pattern = (
+        r"SK\s*AX|자사|내부\s*(수행|점검|검토|기준|역량|책임|대응|판단|분류)|"
+        r"외부\s*(협력|파트너|보완|연계)|파트너십|"
+        r"분리|구분|나눠|분류\s*기준|판단\s*기준|비교\s*(기준|항목|해야)|"
+        r"매출\s*(구성|분류|구조)|대외\s*(매출|고객)|그룹사\s*기반|의존도|"
+        r"수행\s*(범위|책임)|책임\s*(구간|범위|분담|구조)|운영\s*책임|"
+        r"리스크\s*(관리|기준|부담)|연동\s*(범위|구조|방식)|시스템\s*연동|"
+        r"처리\s*업무\s*기준|업무\s*처리\s*범위|검증\s*(기준|항목|범위)"
+    )
+    return bool(re.search(axis_pattern, value, flags=re.IGNORECASE))
+
+
+def _frontend_ready_role_terms(text: str) -> set[str]:
+    terms: set[str] = set()
+    for token in _anchor_tokens(text):
+        norm = _frontend_ready_role_term_norm(token)
+        if len(norm) < 2 or norm in _FRONTEND_READY_GENERIC_ROLE_TERMS:
+            continue
+        if re.fullmatch(r"[0-9.,]+", norm):
+            continue
+        terms.add(norm)
+    return terms
+
+
+def _frontend_ready_role_bigrams(text: str) -> set[str]:
+    tokens: list[str] = []
+    for token in _anchor_tokens(text):
+        norm = _frontend_ready_role_term_norm(token)
+        if len(norm) < 2 or norm in _FRONTEND_READY_GENERIC_ROLE_TERMS:
+            continue
+        tokens.append(norm)
+    return {f"{tokens[index]}::{tokens[index + 1]}" for index in range(len(tokens) - 1)}
+
+
+def _frontend_ready_role_term_norm(value: Any) -> str:
+    norm = _anchor_norm(value)
+    return re.sub(
+        r"(으로써|으로서|에게서|에서는|에게|에서|으로|로서|부터|까지|과의|와의|"
+        r"은|는|이|가|을|를|과|와|의)$",
+        "",
+        norm,
+    )
+
+
+def _frontend_ready_specific_anchor_violations(
+    result: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+) -> list[str]:
+    anchors = _specific_event_anchors_for_frontend(integrated_issue)
+    if len(anchors) < 2:
+        return []
+    implication = result.get("implication") or {}
+    frontend_ready = implication.get("frontend_ready") or {}
+    if not isinstance(frontend_ready, dict):
+        return []
+    violations: list[str] = []
+    for section_key, label in (
+        ("key_implication", "시사점"),
+        ("suggested_action", "대응방향"),
+    ):
+        block = frontend_ready.get(section_key) or {}
+        if not isinstance(block, dict):
+            continue
+        text = " ".join(
+            [
+                str(block.get("sentence") or ""),
+                str(block.get("evidence_sentence") or ""),
+            ]
+        )
+        matched = [anchor for anchor in anchors if _text_has_anchor_term(text, [anchor])]
+        if len(set(matched)) < 2:
+            violations.append(
+                f"frontend_ready.{section_key}: {label} 문장에 현재 사건의 구체 anchor가 "
+                f"부족합니다. 다음 중 2개 이상을 직접 사용하세요: {', '.join(anchors[:8])}"
+            )
+    return violations
+
+
+def _specific_event_anchors_for_frontend(integrated_issue: dict[str, Any]) -> list[str]:
+    texts: list[str] = []
+    texts.extend(
+        str(item or "") for item in _string_list(integrated_issue.get("fact_summary"), max_items=8)
+    )
+    for _, fact_text in _fact_texts(integrated_issue):
+        texts.append(fact_text)
+    for key in ("headline", "main_event", "one_line_summary"):
+        texts.append(str(integrated_issue.get(key) or ""))
+    joined = "\n".join(text for text in texts if text)
+    candidates: list[str] = []
+    candidates.extend(
+        re.findall(
+            r"[0-9][0-9.,]*\s*(?:%|억원|조원|조|개|명|년|개월|주|분|장|여\s*개)",
+            joined,
+        )
+    )
+    candidates.extend(re.findall(r"[‘'\"“”]([^‘'\"“”]{2,40})[’'\"“”]", joined))
+    candidates.extend(re.findall(r"\b[A-Z][A-Za-z0-9&+._-]{1,}\b", joined))
+    for token in re.findall(r"[가-힣A-Za-z0-9][가-힣A-Za-z0-9&+·_-]{2,}", joined):
+        normalized = re.sub(
+            r"(하기로|했습니다|합니다|했다|한다|하려는|하는|으로|에서|에게|과|와|은|는|이|가|을|를|의)$",
+            "",
+            token.strip(),
+        )
+        if len(_anchor_norm(normalized)) >= 4:
+            candidates.append(normalized)
+    generic_norms = {
+        _anchor_norm(item)
+        for item in (
+            "이번",
+            "해당",
+            "시장",
+            "경쟁",
+            "가능성",
+            "기업",
+            "업무",
+            "서비스",
+            "사업",
+            "기반",
+            "관련",
+            "추진",
+            "제공",
+            "활용",
+        )
+    }
+    for company_id in _companies_from_integrated_issue(integrated_issue):
+        generic_norms.add(_anchor_norm(company_id))
+        for variant in _company_token_variants(company_id):
+            generic_norms.add(_anchor_norm(variant))
+    result: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        value = re.sub(r"\s+", " ", str(candidate or "")).strip(" ,.;:()[]")
+        norm = _anchor_norm(value)
+        if len(norm) < 3 or norm in generic_norms or norm in seen:
+            continue
+        if any(norm and norm in _anchor_norm(existing) for existing in result):
+            continue
+        result.append(value)
+        seen.add(norm)
+        if len(result) >= 12:
+            break
+    return result
+
+
+def _has_displayable_frontend_ready(
+    result: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+    profile_context: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any] | None = None,
+) -> bool:
+    required_violations = _frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context=profile_context,
+        profile_linkage_evaluation=profile_linkage_evaluation,
+    )
+    claim_violations = _frontend_ready_claim_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_linkage_evaluation=profile_linkage_evaluation or {},
+    )
+    return not required_violations and not claim_violations
+
+
+def _frontend_ready_diagnostics_snapshot(
+    result: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+    profile_context: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    implication = result.get("implication") or {}
+    frontend_ready = implication.get("frontend_ready") or {}
+    if not isinstance(frontend_ready, dict):
+        frontend_ready = {}
+    required_violations = _frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context=profile_context,
+        profile_linkage_evaluation=profile_linkage_evaluation,
+    )
+    claim_violations = _frontend_ready_claim_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_linkage_evaluation=profile_linkage_evaluation or {},
+    )
+    key_block = frontend_ready.get("key_implication") or {}
+    action_block = frontend_ready.get("suggested_action") or {}
+    if not isinstance(key_block, dict):
+        key_block = {}
+    if not isinstance(action_block, dict):
+        action_block = {}
+    execution_slots = _issue_execution_slot_diagnostics(integrated_issue)
+    return {
+        "has_frontend_ready": bool(frontend_ready),
+        "source": str(frontend_ready.get("source") or "").strip() or None,
+        "key_implication_source": str(key_block.get("source") or "").strip() or None,
+        "suggested_action_source": str(action_block.get("source") or "").strip() or None,
+        "required_violations": required_violations,
+        "claim_violations": claim_violations,
+        "model_config": _llm_model_config_diagnostics(),
+        "issue_execution_slots": execution_slots,
+        "profile_based_downgrade": _profile_based_downgrade_diagnostics(
+            frontend_ready,
+            profile_linkage_evaluation=profile_linkage_evaluation or {},
+        ),
+        "displayable": not required_violations,
+    }
+
+
+def _issue_execution_slot_diagnostics(integrated_issue: dict[str, Any]) -> dict[str, Any]:
+    signals = _extract_issue_structured_signals(
+        integrated_issue=integrated_issue,
+        classification={},
+    )
+    schema_keys = set(signals.keys()) | _nested_mapping_keys(integrated_issue)
+    grounding = _integrated_grounding_text(integrated_issue)
+    counterparties = _issue_counterparty_terms(integrated_issue, grounding)
+    target_systems = _slot_terms(
+        [
+            *signals.get("target_systems", []),
+            *_regex_slot_terms(
+                grounding,
+                r"[가-힣A-Za-z0-9&+·._-]{2,40}(?:시스템|센터|플랫폼|인프라|서비스|사업|공장|물류센터)",
+            ),
+        ],
+        max_items=8,
+        exclude_values=schema_keys,
+    )
+    products_or_services = _slot_terms(
+        [
+            *signals.get("products_or_services", []),
+            *re.findall(r"[‘'\"“”]([^‘'\"“”]{2,40})[’'\"“”]", grounding),
+        ],
+        max_items=8,
+        exclude_values=schema_keys,
+        reject_sentence_like=True,
+    )
+    execution_scope = _slot_terms(
+        [
+            *signals.get("activity_types", []),
+            str(signals.get("event_type") or ""),
+            *_regex_slot_terms(
+                grounding,
+                r"(?:업무협약|실시협약|주주간\s*계약|계약\s*체결|최종\s*선정|"
+                r"구축|운영|도입|출시|개시|실증|공급|전환|투자|협력)",
+            ),
+        ],
+        max_items=8,
+        exclude_values=schema_keys,
+    )
+    slots = {
+        "counterparty": counterparties,
+        "target_system": target_systems,
+        "product_or_service": products_or_services,
+        "execution_scope": execution_scope,
+    }
+    return {
+        **slots,
+        "missing_slots": [key for key, value in slots.items() if not value],
+    }
+
+
+def _issue_counterparty_terms(
+    integrated_issue: dict[str, Any],
+    grounding: str,
+) -> list[str]:
+    values: list[str] = []
+    for key in (
+        "counterparty",
+        "counterparties",
+        "partner",
+        "partners",
+        "customers",
+        "customer",
+        "related_companies",
+        "matched_companies",
+        "companies_involved",
+    ):
+        values.extend(_string_values_from_any(integrated_issue.get(key)))
+    values.extend(
+        re.findall(
+            r"([가-힣A-Za-z0-9&+·._ -]{2,40})(?:와|과)\s*"
+            r"(?:[^.\n]{0,60})"
+            r"(?:업무협약|협약|계약|파트너십|공동|협력)",
+            grounding,
+        )
+    )
+    main_norms = {
+        _anchor_norm(item)
+        for company_id in _companies_from_integrated_issue(integrated_issue)
+        for item in [company_id, *_company_token_variants(company_id)]
+    }
+    filtered: list[str] = []
+    for value in values:
+        cleaned = re.sub(r"\s+", " ", str(value or "")).strip(" ,.;:()[]")
+        norm = _anchor_norm(cleaned)
+        if not norm or norm in main_norms:
+            continue
+        if any(norm == _anchor_norm(existing) for existing in filtered):
+            continue
+        filtered.append(cleaned)
+        if len(filtered) >= 8:
+            break
+    return filtered
+
+
+def _regex_slot_terms(text: str, pattern: str) -> list[str]:
+    return [
+        re.sub(r"\s+", " ", str(item or "")).strip(" ,.;:()[]")
+        for item in re.findall(pattern, text, flags=re.IGNORECASE)
+        if str(item or "").strip()
+    ]
+
+
+def _nested_mapping_keys(value: Any, *, max_keys: int = 200) -> set[str]:
+    keys: set[str] = set()
+
+    def collect(item: Any) -> None:
+        if len(keys) >= max_keys:
+            return
+        if isinstance(item, dict):
+            for key, nested in item.items():
+                cleaned = re.sub(r"\s+", " ", str(key or "")).strip()
+                if cleaned:
+                    keys.add(cleaned)
+                collect(nested)
+                if len(keys) >= max_keys:
+                    return
+        elif isinstance(item, list | tuple | set):
+            for nested in item:
+                collect(nested)
+                if len(keys) >= max_keys:
+                    return
+
+    collect(value)
+    return keys
+
+
+def _slot_terms(
+    values: Sequence[Any],
+    *,
+    max_items: int,
+    exclude_values: set[str] | None = None,
+    reject_sentence_like: bool = False,
+) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    excluded_norms = {_anchor_norm(value) for value in (exclude_values or set())}
+    for value in values:
+        cleaned = re.sub(r"\s+", " ", str(value or "")).strip(" ,.;:()[]")
+        norm = _anchor_norm(cleaned)
+        if reject_sentence_like and _looks_like_sentence_slot(cleaned):
+            continue
+        if len(norm) < 2 or norm in seen or norm in excluded_norms:
+            continue
+        seen.add(norm)
+        result.append(cleaned)
+        if len(result) >= max_items:
+            break
+    return result
+
+
+def _looks_like_sentence_slot(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if len(value) > 45:
+        return True
+    if len(value.split()) >= 7:
+        return True
+    return bool(re.search(r"(?:다|했다|한다|된다|있다|예정이다|계획이다)[.!?]?$", value))
+
+
+def _profile_based_downgrade_diagnostics(
+    frontend_ready: dict[str, Any],
+    *,
+    profile_linkage_evaluation: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not isinstance(frontend_ready, dict):
+        frontend_ready = {}
+    diagnostics: list[dict[str, Any]] = []
+    for section_key, scope, anchor_key in (
+        ("key_implication", "peer", "profile_anchor_terms"),
+        ("suggested_action", "skax", "skax_anchor_terms"),
+    ):
+        linkage_level = _relevant_profile_linkage_level_from_evaluation(
+            profile_linkage_evaluation,
+            scope=scope,
+        )
+        if linkage_level not in {"high", "medium"}:
+            continue
+        block = frontend_ready.get(section_key) or {}
+        if not isinstance(block, dict):
+            block = {}
+        evidence_mode = str(block.get("evidence_mode") or "").strip() or None
+        if evidence_mode == "profile_based":
+            continue
+        anchors = _string_list(block.get(anchor_key), max_items=8)
+        reason = (
+            f"{anchor_key}_missing" if not anchors else "writer_selected_non_profile_based_mode"
+        )
+        diagnostics.append(
+            {
+                "section": section_key,
+                "scope": scope,
+                "linkage_level": linkage_level,
+                "evidence_mode": evidence_mode,
+                "reason": reason,
+                "anchor_terms": anchors,
+            }
+        )
+    return diagnostics
+
+
+def _attach_frontend_ready_diagnostics(
+    result: dict[str, Any],
+    *,
+    before: dict[str, Any],
+    after: dict[str, Any],
+    removed_reason: str = "",
+) -> dict[str, Any]:
+    out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+    implication = out.get("implication") or {}
+    after_required = _string_list(after.get("required_violations"), max_items=20)
+    after_claim = _string_list(after.get("claim_violations"), max_items=20)
+    reason = str(removed_reason or "").strip()
+    if not reason and (after_required or after_claim):
+        reason = " / ".join([*after_required[:3], *after_claim[:3]])
+    implication["frontend_ready_diagnostics"] = {
+        "frontend_ready_before_repair": before,
+        "frontend_ready_after_repair": after,
+        "required_violations": after_required,
+        "claim_violations": after_claim,
+        "displayable": bool(after.get("displayable")),
+        "removed_reason": reason,
+    }
+    out["implication"] = implication
+    return out
+
+
+def _attach_generation_phase_diagnostics(
+    result: dict[str, Any],
+    *,
+    decisions: Sequence[str],
+) -> dict[str, Any]:
+    out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+    implication = out.get("implication") or {}
+    diagnostics = implication.get("frontend_ready_diagnostics")
+    if not isinstance(diagnostics, dict):
+        diagnostics = {}
+    diagnostics["phase_decisions"] = _string_list(decisions, max_items=12)
+    diagnostics["model_config"] = _llm_model_config_diagnostics()
+    implication["frontend_ready_diagnostics"] = diagnostics
+    out["implication"] = implication
+    return out
+
+
+def _can_attempt_frontend_ready_repair(result: dict[str, Any]) -> bool:
+    return _can_attempt_frontend_ready_repair_for_issue(result, integrated_issue={})
+
+
+def _frontend_ready_repair_already_attempted(result: dict[str, Any]) -> bool:
+    implication = result.get("implication") or {}
+    if not isinstance(implication, dict):
+        return False
+    diagnostics = implication.get("frontend_ready_diagnostics") or {}
+    if not isinstance(diagnostics, dict):
+        return False
+    return bool(
+        diagnostics.get("frontend_ready_after_repair")
+        or diagnostics.get("removed_reason")
+        or diagnostics.get("required_violations")
+        or diagnostics.get("claim_violations")
+    )
+
+
+def _can_attempt_frontend_ready_repair_for_issue(
+    result: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+) -> bool:
+    del result
+    if not isinstance(integrated_issue, dict) or not integrated_issue:
+        return False
+    if integrated_issue.get("is_valid_summary") is False:
+        return False
+    return bool(
+        integrated_issue.get("integrated_text")
+        or integrated_issue.get("fact_summary")
+        or integrated_issue.get("consolidated_facts")
+        or integrated_issue.get("one_line_summary")
+        or integrated_issue.get("headline")
+    )
+
+
+def _frontend_ready_only_violations(violations: list[str]) -> bool:
+    normalized = [str(violation or "").strip() for violation in violations if violation]
+    return bool(normalized) and all(
+        violation.startswith("frontend_ready") for violation in normalized
+    )
+
+
+def _requires_self_review_for_violations(
+    violations: Sequence[str],
+    *,
+    result: dict[str, Any],
+) -> bool:
+    if _SELF_REVIEW_DISABLED:
+        return False
+    normalized = " ".join(str(violation or "") for violation in violations if violation)
+    if not normalized.strip():
+        return False
+    if _frontend_ready_only_violations(list(violations)):
+        return False
+    hard_risk_pattern = (
+        r"계약\s*상대방|고객\s*슬롯|공급자|수행사|운영\s*주체|도입\s*주체|"
+        r"과대해석|과대|역할|신규\s*사업|사업\s*확장|입지|경쟁력|"
+        r"시장\s*점유율|선도|주도|리더십|역량\s*강화|성과|수익성|"
+        r"매출\s*(성장|확대)|영업이익|사업\s*기회|확장|넓히"
+    )
+    if re.search(hard_risk_pattern, normalized):
+        return True
+    result_text = _json_dumps(result)
+    return bool(re.search(hard_risk_pattern, result_text))
+
+
+def _frontend_ready_claim_violations(
+    result: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any],
+) -> list[str]:
+    implication = result.get("implication") or {}
+    frontend_ready = implication.get("frontend_ready") or {}
+    if not isinstance(frontend_ready, dict):
+        return []
+    violations: list[str] = []
+    for section_key, scope in (
+        ("key_implication", "peer"),
+        ("suggested_action", "skax"),
+    ):
+        block = frontend_ready.get(section_key) or {}
+        if not isinstance(block, dict):
+            continue
+        claim_type = str(block.get("claim_type") or "").strip()
+        claim_strength = str(block.get("claim_strength") or "").strip()
+        evidence_mode = str(block.get("evidence_mode") or "").strip()
+        linkage_level = _relevant_profile_linkage_level_from_evaluation(
+            profile_linkage_evaluation,
+            scope=scope,
+        )
+        if not claim_type:
+            violations.append(f"frontend_ready.{section_key}.claim_type: 주장 유형이 없습니다.")
+            continue
+        if claim_type not in _FRONTEND_READY_CLAIM_TYPES:
+            violations.append(
+                f"frontend_ready.{section_key}.claim_type: 허용되지 않은 주장 유형입니다."
+            )
+        if claim_strength not in _FRONTEND_READY_CLAIM_STRENGTHS:
+            violations.append(f"frontend_ready.{section_key}.claim_strength: 주장 강도가 없습니다.")
+        if evidence_mode not in _FRONTEND_READY_EVIDENCE_MODES:
+            violations.append(f"frontend_ready.{section_key}.evidence_mode: 근거 모드가 없습니다.")
+
+        if linkage_level in {"low", "none", ""}:
+            if evidence_mode == "profile_based":
+                violations.append(
+                    f"frontend_ready.{section_key}: 프로필 연결이 약한데 "
+                    "profile_based로 작성했습니다."
+                )
+            if claim_strength == "strong":
+                violations.append(
+                    f"frontend_ready.{section_key}: 프로필 연결이 약한데 "
+                    "strong claim으로 작성했습니다."
+                )
+
+        if claim_type in _FRONTEND_READY_STRONG_CLAIM_TYPES:
+            if evidence_mode != "profile_based" or linkage_level not in {"high", "medium"}:
+                violations.append(
+                    f"frontend_ready.{section_key}: 강한 주장 유형은 "
+                    "충분한 프로필 근거가 필요합니다."
+                )
+            if claim_strength == "strong" and linkage_level != "high":
+                violations.append(
+                    f"frontend_ready.{section_key}: strong claim은 high linkage에서만 허용합니다."
+                )
+
+        inferred = _infer_frontend_claim_type(
+            " ".join(
+                [
+                    str(block.get("sentence") or ""),
+                    str(block.get("evidence_sentence") or ""),
+                ]
+            )
+        )
+        if inferred in _FRONTEND_READY_STRONG_CLAIM_TYPES and (
+            evidence_mode != "profile_based" or linkage_level not in {"high", "medium"}
+        ):
+            violations.append(
+                f"frontend_ready.{section_key}: 문장 표현은 강한 주장에 "
+                "가깝지만 근거 모드가 부족합니다."
+            )
+        effect_violation = _frontend_ready_unsupported_effect_violation(
+            " ".join(
+                [
+                    str(block.get("sentence") or ""),
+                    str(block.get("evidence_sentence") or ""),
+                ]
+            ),
+            integrated_issue=integrated_issue,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
+        if effect_violation:
+            violations.append(f"frontend_ready.{section_key}: {effect_violation}")
+    return violations
+
+
+def _infer_frontend_claim_type(text: str) -> str:
+    value = str(text or "")
+    if re.search(r"주도|선도|리더십|우위|점유율|입지[을를]?\s*강화", value):
+        return "market_leadership"
+    if re.search(r"역량[을를]?\s*(강화|고도화|개선|높)|경쟁력[을를]?\s*(강화|높)", value):
+        return "capability_improvement"
+    if re.search(
+        r"성과[을를]?\s*(개선|향상|높)|효율성[을를]?\s*(향상|개선|높)|수익성[을를]?\s*(개선|높)",
+        value,
+    ):
+        return "performance_improvement"
+    if re.search(r"업무\s*처리|실행형|자동화|연동|운영\s*방식", value):
+        return "workflow_execution_signal"
+    return "event_based_signal"
+
+
+def _frontend_ready_unsupported_effect_violation(
+    text: str,
+    *,
+    integrated_issue: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any],
+) -> str:
+    del profile_linkage_evaluation
+    value = str(text or "")
+    if not value.strip():
+        return ""
+    grounding = _integrated_grounding_text(integrated_issue)
+    grounding_norm = _anchor_norm(grounding)
+    effect_groups = (
+        (
+            r"외부\s*시장\s*확장|사업\s*다각화|시장\s*확장",
+            ("외부시장", "비계열", "고객확대", "시장확장", "사업다각화"),
+        ),
+        (
+            r"경쟁력[을를]?\s*(강화|높)|차별화",
+            ("경쟁력강화", "경쟁력을강화", "차별화", "우위확보"),
+        ),
+        (
+            r"역량[을를]?\s*(강화|고도화|개선|높)",
+            ("역량강화", "역량을강화", "역량고도화", "역량을고도화"),
+        ),
+        (
+            r"효율성[을를]?\s*(향상|개선|높)|성과[을를]?\s*(개선|향상|높)",
+            ("효율성", "성과개선", "향상", "단축", "감소"),
+        ),
+        (
+            r"입지[을를]?\s*강화|리더십|시장\s*주도|시장[의\s]*주목|새로운\s*기준",
+            ("입지강화", "입지를강화", "리더십", "시장주도", "새로운기준"),
+        ),
+    )
+    for pattern, support_terms in effect_groups:
+        if not re.search(pattern, value):
+            continue
+        if any(_anchor_norm(term) in grounding_norm for term in support_terms):
+            continue
+        return (
+            "현재 사건/프로필 근거로 직접 뒷받침되지 않는 효과성 표현이 있습니다. "
+            "관찰 가능한 지표·적용 방식·관계 구조 중심으로 낮춰야 합니다."
+        )
+    return ""
+
+
+def _text_has_anchor_term(text: str, terms: Sequence[str]) -> bool:
+    text_norm = _anchor_norm(text)
+    if not text_norm:
+        return False
+    for term in terms:
+        term_norm = _anchor_norm(term)
+        if len(term_norm) < 2:
+            continue
+        if term_norm in text_norm:
+            return True
+        tokens = _anchor_tokens(term)
+        if not tokens:
+            continue
+        matched = [token for token in tokens if _anchor_norm(token) in text_norm]
+        if len(tokens) == 1 and matched:
+            return True
+        if any(len(_anchor_norm(token)) >= 4 for token in matched):
+            return True
+        if len(matched) >= 2:
+            return True
+    return False
+
+
+def _anchor_norm(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "").casefold())
+
+
+def _anchor_tokens(value: Any) -> list[str]:
+    return [
+        token
+        for token in re.findall(r"[0-9A-Za-z가-힣]+", str(value or ""))
+        if len(_anchor_norm(token)) >= 2
+    ]
+
+
+def _evidence_sentence_has_dynamic_grounding(
+    text: str,
+    *,
+    integrated_issue: dict[str, Any],
+    profile_context: dict[str, Any],
+) -> bool:
+    evidence_tokens = _distinct_anchor_tokens(text)
+    if not evidence_tokens:
+        return False
+    grounding_text = " ".join(
+        [
+            _integrated_grounding_text(integrated_issue),
+            _json_dumps(_profile_for_prompt(profile_context, integrated_issue=integrated_issue)),
+        ]
+    )
+    grounding_norm = _anchor_norm(grounding_text)
+    matched = [token for token in evidence_tokens if _anchor_norm(token) in grounding_norm]
+    if any(len(_anchor_norm(token)) >= 5 for token in matched):
+        return True
+    return len(matched) >= 2
+
+
+def _evidence_sentence_has_issue_anchor(
+    evidence_sentence: Any,
+    *,
+    integrated_issue: dict[str, Any],
+    event_terms: Sequence[str] | None = None,
+) -> bool:
+    evidence = str(evidence_sentence or "").strip()
+    if not evidence:
+        return False
+    candidate_terms = _dedupe_keep_order(
+        [
+            *_string_list(event_terms or [], max_items=8),
+            *_specific_event_anchors_for_frontend(integrated_issue),
+        ]
+    )
+    if candidate_terms and _text_has_anchor_term(evidence, candidate_terms):
+        return True
+
+    evidence_tokens = _distinct_anchor_tokens(evidence)
+    if not evidence_tokens:
+        return False
+    grounding_norm = _anchor_norm(_integrated_grounding_text(integrated_issue))
+    matched = [token for token in evidence_tokens if _anchor_norm(token) in grounding_norm]
+    if any(len(_anchor_norm(token)) >= 5 for token in matched):
+        return True
+    return len(matched) >= 2
+
+
+def _frontend_ready_evidence_sentence_anchor_violation(
+    block: dict[str, Any],
+    *,
+    integrated_issue: dict[str, Any],
+) -> str:
+    evidence_sentence = block.get("evidence_sentence")
+    event_terms = _string_list(block.get("event_anchor_terms"), max_items=8)
+    issue_anchors = _specific_event_anchors_for_frontend(integrated_issue)
+    if not event_terms and not issue_anchors:
+        return ""
+    if _evidence_sentence_has_issue_anchor(
+        evidence_sentence,
+        integrated_issue=integrated_issue,
+        event_terms=event_terms,
+    ):
+        return ""
+    return "근거/설명에 현재 사건의 구체 기사 anchor가 연결되지 않았습니다."
+
+
+def _distinct_anchor_tokens(value: Any) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for token in _anchor_tokens(value):
+        normalized = _anchor_norm(token)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(token)
+    return result
+
+
+def _mentions_skax_actor(text: str) -> bool:
+    return bool(re.search(r"SK\s*AX|자사|우리\s*회사", str(text or ""), flags=re.IGNORECASE))
 
 
 def _business_novelty_overclaim_violation(
@@ -3231,15 +7259,17 @@ def _skax_external_customer_facing_violation(text: str) -> str:
 
 def _action_text_has_internal_strategy_checkpoint(text: str) -> bool:
     value = str(text or "")
-    matched_groups = [
-        group for group, pattern in _INTERNAL_CHECKPOINT_GROUPS.items() if re.search(pattern, value)
+    tokens = [
+        token
+        for token in _content_tokens(value)
+        if len(token) >= 2 and not _is_generic_business_term(token)
     ]
-    return len(matched_groups) >= 2
+    return _mentions_skax_actor(value) and len(set(tokens)) >= 3
 
 
 def _action_text_has_skax_change(text: str) -> bool:
     value = str(text or "")
-    return any(re.search(pattern, value) for pattern in _SKAX_ACTION_VERB_GROUPS.values())
+    return _mentions_skax_actor(value) and _sentence_count(value) >= 1
 
 
 def _unsupported_skax_profile_term_violation(
@@ -3290,29 +7320,8 @@ def _unsupported_domain_term_violation(
     label: str,
     integrated_issue: dict[str, Any],
 ) -> str:
-    if not label.startswith("skax_implication."):
-        return ""
-    if _is_follow_up_or_watch_field(label):
-        return ""
-    evidence_text = _integrated_grounding_text(integrated_issue)
-    evidence_tokens = _content_tokens(evidence_text)
-    output_tokens = _content_tokens(text)
-    unsupported = sorted(
-        domain
-        for domain in output_tokens & set(_DOMAIN_ALIASES)
-        if not _domain_supported_by_evidence(
-            domain,
-            evidence_tokens=evidence_tokens,
-            evidence_text=evidence_text,
-        )
-    )
-    if not unsupported:
-        return ""
-    return (
-        "현재 사건 근거에 없는 산업/도메인 용어를 SK AX 대응 방향에 사용했습니다: "
-        f"{', '.join(unsupported[:3])}. 현재 사건의 대상 업무/적용 범위/"
-        "검증 기준으로 낮춰야 합니다."
-    )
+    del text, label, integrated_issue
+    return ""
 
 
 def _domain_supported_by_evidence(
@@ -3602,6 +7611,13 @@ def _recommended_action_quality_violation(
     if not text or not label.startswith("skax_implication.recommended_actions"):
         return ""
     evidence_text = _integrated_grounding_text(integrated_issue or {})
+    specific_anchors = set(_specific_event_anchors_for_frontend(integrated_issue or {}))
+    if specific_anchors and not _action_text_has_issue_signal(text, specific_anchors):
+        return (
+            "대응방향에 현재 사건의 구체 anchor가 연결되지 않았습니다. "
+            "현재 사건의 대상 사업·시스템·서비스·수치·고객군 중 최소 하나를 "
+            "직접 기준으로 삼아야 합니다."
+        )
     if re.search(r"주가|거래를\s*마쳤|시장\s*반응|투자자\s*반응", text):
         return (
             "대응방향이 주가/시장 반응을 실행 근거로 사용했습니다. 전략 대응은 현재 사건의 "
@@ -3823,9 +7839,11 @@ def _scope_expansion_guard_violation(
         return ""
     value = str(text or "")
     event_text = _integrated_grounding_text(integrated_issue)
-    context_text = _grounding_text(
-        integrated_issue=integrated_issue,
-        profile_context=profile_context,
+    context_text = "\n".join(
+        [
+            event_text,
+            _json_dumps(profile_linkage_evaluation or {}),
+        ]
     )
     event_lower = event_text.casefold()
     context_lower = context_text.casefold()
@@ -4330,7 +8348,12 @@ def _split_sentences(text: str) -> list[str]:
     return [item for item in re.split(r"[.!?。]\s*", str(text or "").strip()) if item.strip()]
 
 
-def _mark_quality_gate_failed(result: dict[str, Any], violations: list[str]) -> dict[str, Any]:
+def _mark_quality_gate_failed(
+    result: dict[str, Any],
+    violations: list[str],
+    *,
+    preserve_frontend_ready: bool = False,
+) -> dict[str, Any]:
     out = _scrub_failed_output(json.loads(json.dumps(result, ensure_ascii=False, default=str)))
     out["is_valid_strategic_insight"] = False
     analysis = out.get("analysis") or {}
@@ -4338,7 +8361,8 @@ def _mark_quality_gate_failed(result: dict[str, Any], violations: list[str]) -> 
     analysis["is_valid_analysis"] = False
     analysis["confidence"] = min(_clamp_float(analysis.get("confidence"), 0.0), 0.3)
     base_reason = str(analysis.get("reason") or "").strip()
-    violation_text = " / ".join(violations[:3])
+    safe_violations = [_safe_quality_gate_violation_text(item) for item in violations[:3]]
+    violation_text = " / ".join(item for item in safe_violations if item)
     analysis["reason"] = (
         f"{base_reason} | quality_gate_failed: {violation_text}"
         if base_reason
@@ -4347,9 +8371,21 @@ def _mark_quality_gate_failed(result: dict[str, Any], violations: list[str]) -> 
     implication["is_valid_implication"] = False
     implication["confidence"] = min(_clamp_float(implication.get("confidence"), 0.0), 0.3)
     implication["evidence_label"] = "insufficient"
+    if not preserve_frontend_ready:
+        implication.pop("frontend_ready", None)
     out["analysis"] = analysis
     out["implication"] = implication
     return out
+
+
+def _safe_quality_gate_violation_text(violation: Any) -> str:
+    text = re.sub(r"\s+", " ", str(violation or "")).strip()
+    if not text:
+        return ""
+    scrubbed = _scrub_failed_output(text)
+    if isinstance(scrubbed, str) and scrubbed:
+        return scrubbed
+    return "근거 범위를 벗어난 고위험 주장 제거"
 
 
 def _scrub_failed_output(value: Any) -> Any:
@@ -5019,22 +9055,57 @@ def _has_relevant_peer_profile_context(
     *,
     integrated_issue: dict[str, Any],
 ) -> bool:
-    prompt_profile = _profile_for_prompt(profile_context, integrated_issue=integrated_issue)
-    peer_profiles = prompt_profile.get("peer_profiles") or {}
+    peer_profiles = profile_context.get("peer_profiles") or {}
     if not isinstance(peer_profiles, dict):
         return False
     for company_id in _companies_from_integrated_issue(integrated_issue):
         peer = peer_profiles.get(company_id) or {}
         if not isinstance(peer, dict):
             continue
-        if any(
+        profile_parts = [
             peer.get(key)
             for key in (
                 "business_areas",
                 "core_capabilities",
+                "products_or_services",
                 "recent_changes",
+                "recent_signals",
                 "capability_evolution",
+                "one_liner",
             )
+            if peer.get(key)
+        ]
+        if not profile_parts:
+            continue
+        # Legacy peer_implication text is not shown as card copy anymore.  If a
+        # peer profile body exists, keep the old safety behavior without
+        # recomputing the expensive prompt-shaped profile.
+        return True
+    return False
+
+
+def _has_relevant_peer_profile_linkage(
+    profile_linkage_evaluation: dict[str, Any] | None,
+    *,
+    integrated_issue: dict[str, Any],
+) -> bool:
+    if not isinstance(profile_linkage_evaluation, dict):
+        return False
+    for company_id in _companies_from_integrated_issue(integrated_issue):
+        linkage = _profile_linkage_for_company(
+            profile_linkage_evaluation,
+            company_id=company_id,
+            scope="peer",
+        )
+        if not isinstance(linkage, dict):
+            continue
+        if _linkage_rank(str(linkage.get("linkage_level") or "none")) < _linkage_rank("medium"):
+            continue
+        if (
+            _string_list(linkage.get("matched_terms"), max_items=8)
+            or _string_list(linkage.get("matched_capabilities"), max_items=8)
+            or _jsonish_list(linkage.get("matched_business_areas"))
+            or str(linkage.get("reason") or "").strip()
         ):
             return True
     return False
@@ -5137,11 +9208,18 @@ def _unsupported_peer_profile_claim_violation(
     label: str,
     integrated_issue: dict[str, Any],
     profile_context: dict[str, Any],
+    profile_linkage_evaluation: dict[str, Any] | None = None,
 ) -> str | None:
     if not label.startswith(
         ("peer_implication.peer_meaning", "peer_implication.capability_change")
     ):
         return None
+    if isinstance(profile_linkage_evaluation, dict):
+        if _has_relevant_peer_profile_linkage(
+            profile_linkage_evaluation,
+            integrated_issue=integrated_issue,
+        ):
+            return None
     if _has_relevant_peer_profile_context(profile_context, integrated_issue=integrated_issue):
         return None
     if not _mentions_profile_based_peer_claim(text):
@@ -6524,10 +10602,13 @@ def _compact_issue_term(subject: str) -> str:
 
 def _checkpoint_hint_from_action_plan(action_artifact_plan: dict[str, Any]) -> str:
     issue_terms = _action_plan_issue_terms(action_artifact_plan)
-    if any(re.search(r"GPU|컴퓨팅|인프라|센터|서버|클러스터", term, re.I) for term in issue_terms):
-        return "구축 범위, 용량 기준, 장애 대응, 보안·권한 통제"
-    if any(re.search(r"시스템|전환|현대화|단말|플랫폼", term, re.I) for term in issue_terms):
-        return "전환 범위, 업무 영향도, 일정 조건, 장애 대응"
+    focused_terms = [
+        term
+        for term in _dedupe_keep_order(_string_list(issue_terms, max_items=4))
+        if _anchor_norm(term)
+    ][:3]
+    if focused_terms:
+        return f"{'·'.join(focused_terms)} 관련 범위, 책임, 일정 조건, 검증 기준"
     return "범위, 책임, 일정 조건, 검증 기준, 리스크"
 
 
