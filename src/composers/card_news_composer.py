@@ -21,6 +21,7 @@ from src.config.companies import COMPANY_ALIASES, company_name_ko
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES, global_company_name_ko
 from src.config.sectors import SECTOR_KEYWORDS, match_sectors
 from src.db.article_store import get_articles_by_ids
+from src.llm import LLMSpec, build_chat_llm
 
 log = logging.getLogger(__name__)
 
@@ -144,12 +145,13 @@ _ISSUE_CARD_PROMPT = """\
 
 
 def _get_llm() -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
     global _llm
     if _llm is None:
         model_name = os.getenv("CARD_NEWS_COMPOSER_MODEL", "gpt-4o")
-        _llm = ChatOpenAI(model=model_name, temperature=0.3, max_completion_tokens=1024)
+        # env 로 모델 지정 가능 → gpt-5 라도 reasoning_effort 미전달(기존 동작) 위해 None.
+        _llm = build_chat_llm(
+            LLMSpec(model=model_name, temperature=0.3, max_tokens=1024, reasoning_effort=None)
+        )
     return _llm
 
 
