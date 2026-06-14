@@ -335,11 +335,20 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
                 "명확히 씁니다. 정확성이 반복 회피보다 우선입니다."
             ),
             ("- 모든 기본 노출 문장은 '~합니다' 또는 '~있습니다' 문체로 끝냅니다."),
-            "- 모든 기본 노출 문장은 완결된 한국어 문장이어야 하며, 조사·명사구·접속절에서 끊기면 안 됩니다.",
+            (
+                "- 모든 기본 노출 문장은 완결된 한국어 문장이어야 하며, "
+                "조사·명사구·접속절에서 끊기면 안 됩니다."
+            ),
             "- 말줄임표(..., …, ⋯)를 쓰지 않습니다.",
-            "- 글자 수가 부담되면 문장을 자르지 말고 같은 의미를 더 짧은 완결 문장으로 다시 씁니다.",
+            (
+                "- 글자 수가 부담되면 문장을 자르지 말고 같은 의미를 "
+                "더 짧은 완결 문장으로 다시 씁니다."
+            ),
             "- title과 description은 같은 내용을 반복하지 않습니다.",
-            "- 같은 카드 안의 첫 문장과 둘째 문장은 각각 다른 역할이어야 합니다. 첫 문장은 핵심 결론, 둘째 문장은 근거 또는 의미를 설명합니다.",
+            (
+                "- 같은 카드 안의 첫 문장과 둘째 문장은 각각 다른 역할이어야 합니다. "
+                "첫 문장은 핵심 결론, 둘째 문장은 근거 또는 의미를 설명합니다."
+            ),
             "",
             "# Internal Selection-Inference Procedure",
             "- 내부적으로만 아래 절차를 수행하고, 절차 내용은 JSON에 쓰지 마세요.",
@@ -370,7 +379,10 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             "- 단계 title과 같은 문장을 items.title로 반복하지 않습니다.",
             "- 같은 description을 여러 item에서 반복하지 않습니다.",
             "- title을 description에서 같은 표현으로 반복하지 않습니다.",
-            "- key_change_cards의 market_signal.description과 competitor_move.description을 같은 의미로 쓰지 않습니다.",
+            (
+                "- key_change_cards의 market_signal.description과 "
+                "competitor_move.description을 같은 의미로 쓰지 않습니다."
+            ),
             "- 모든 description을 같은 도입부로 시작하지 않습니다.",
             (
                 "- description을 '움직임은', '사례들은', '이러한 변화는'처럼 "
@@ -499,7 +511,10 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             "- 같은 화면 카드 안에서 title/description/why_important가 서로 다른 역할을 하는가?",
             "- 문장이 말줄임표 없이 끝까지 완결되어 있는가?",
             "- 모든 기본 노출 문장의 말투가 '~합니다' 또는 '~있습니다'로 통일되어 있는가?",
-            "- 화면 문장에 '선택된 카드', '피어 프로필', '프로필' 같은 내부 용어가 남아 있지 않은가?",
+            (
+                "- 화면 문장에 '선택된 카드', '피어 프로필', '프로필' 같은 "
+                "내부 용어가 남아 있지 않은가?"
+            ),
             "- competitor_move와 전략 시사가 한 회사에만 쏠리지 않는가?",
             "- key_change_cards.description이 입력 카드 중 최소 2개 이상의 대표 신호를 반영하는가?",
             "- 모든 수치와 회사 표현은 analysis_units에 근거가 있는가?",
@@ -530,7 +545,10 @@ def _display_copy_revision_prompt(
             "- 말줄임표(..., …, ⋯)를 쓰지 않습니다.",
             "- 문장이 끊겼으면 마침표만 붙이지 말고 같은 의미의 짧은 완결 문장으로 다시 씁니다.",
             "- 기본 노출 문장은 '~합니다' 또는 '~있습니다' 문체로 통일합니다.",
-            "- title/description/why_important가 같은 내용을 반복하면 각 필드 역할에 맞게 다시 분리합니다.",
+            (
+                "- title/description/why_important가 같은 내용을 반복하면 "
+                "각 필드 역할에 맞게 다시 분리합니다."
+            ),
             "- market_reading, sk_ax_view, core_change, summary, so_what은 만들지 않습니다.",
             "- 회사명은 근거를 명확히 해야 할 때만 씁니다.",
             ("- 이미 한 번 설명한 회사+신호 조합은 다음 항목에서 문맥형 표현으로 바꿉니다."),

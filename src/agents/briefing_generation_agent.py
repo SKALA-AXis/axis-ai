@@ -4662,7 +4662,8 @@ def _grounded_key_change_description(
         if signal_text:
             return _join_display_sentences(
                 f"{scope}에서 {signal_text}{_subject_particle(signal_text)} 함께 확인됩니다. "
-                "이 조합은 개별 기업 이벤트보다 시장의 수요와 평가 기준이 운영 기반 중심으로 움직이고 있음을 보여줍니다.",
+                "이 조합은 개별 기업 이벤트보다 시장의 수요와 평가 기준이 "
+                "운영 기반 중심으로 움직이고 있음을 보여줍니다.",
                 period_tail,
             )
         return company_basis
@@ -4676,7 +4677,8 @@ def _grounded_key_change_description(
         if signal_text:
             return _join_display_sentences(
                 f"{scope}에서 {signal_text}{_subject_particle(signal_text)} 확인됩니다. "
-                "이는 경쟁사들이 시장 신호를 고객 적용 범위와 구축 방식으로 해석하고 있음을 뜻합니다.",
+                "이는 경쟁사들이 시장 신호를 고객 적용 범위와 구축 방식으로 "
+                "해석하고 있음을 뜻합니다.",
                 period_tail,
             )
     return _brief_sentence(title, max_chars=_DISPLAY_TITLE_MAX)
