@@ -30,6 +30,7 @@ from src.contracts.today_insight_schemas import (
     TodayInsightGenerateResponse,
 )
 from src.db.postgres import SessionLocal
+from src.llm import LLMSpec, build_chat_llm
 from src.observability.langfuse_client import tracing_config
 from src.services.peer_id_aliases import PEER_ID_ALIASES, normalize_to_canonical_id
 from src.services.profile_context_loader import ProfileContextLoader
@@ -113,19 +114,18 @@ def _llm_max_completion_tokens() -> int:
 
 
 def _get_llm() -> ChatOpenAI:
-    from langchain_openai import ChatOpenAI  # lazy: transformers 체인 회피
-
     global _llm
     if _llm is None:
-        llm_kwargs: dict[str, Any] = {
-            "model": _LLM_MODEL,
-            "temperature": 0.18,
-            "max_completion_tokens": _llm_max_completion_tokens(),
-            "model_kwargs": {"response_format": {"type": "json_object"}},
-        }
-        if str(_LLM_MODEL).startswith("gpt-5"):
-            llm_kwargs["reasoning_effort"] = os.getenv("TODAY_INSIGHT_REASONING_EFFORT", "low")
-        _llm = ChatOpenAI(**llm_kwargs)
+        # gpt-5 reasoning_effort 분기·json_object 래핑은 공용 팩토리가 처리.
+        _llm = build_chat_llm(
+            LLMSpec(
+                model=_LLM_MODEL,
+                temperature=0.18,
+                max_tokens=_llm_max_completion_tokens(),
+                json_object=True,
+                reasoning_effort=os.getenv("TODAY_INSIGHT_REASONING_EFFORT", "low"),
+            )
+        )
     return _llm
 
 
