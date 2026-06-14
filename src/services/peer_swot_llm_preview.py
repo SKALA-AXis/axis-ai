@@ -33,12 +33,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from langchain_openai import ChatOpenAI
 from sqlalchemy import text
 
 from src.config.env_loader import load_profile
 from src.config.openai_policy import openai_calls_enabled, openai_disabled_reason
 from src.db.postgres import SessionLocal, reconfigure_from_env
+from src.llm import LLMSpec, build_chat_llm
 
 log = logging.getLogger("generate_peer_swot_llm_preview")
 
@@ -944,7 +944,10 @@ def build_diagnostic_evidence(
 class PeerSwotAgent:
     def __init__(self, *, model: str) -> None:
         self.model = model
-        self.llm = ChatOpenAI(model=model, temperature=0.1, max_completion_tokens=1800)
+        # env 로 모델 지정 가능 → gpt-5 라도 reasoning_effort 미전달(기존 동작) 위해 None.
+        self.llm = build_chat_llm(
+            LLMSpec(model=model, temperature=0.1, max_tokens=1800, reasoning_effort=None)
+        )
 
     def generate(self, evidence_pack: dict[str, Any]) -> dict[str, Any]:
         comparison_raw = self._invoke_json(
