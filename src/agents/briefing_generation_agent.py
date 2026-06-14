@@ -190,6 +190,10 @@ log = logging.getLogger(__name__)
 BriefingType = Literal["daily", "weekly", "monthly"]
 
 _MAX_DISPLAY_CARDS = 3
+_DISPLAY_TITLE_MAX = 260
+_DISPLAY_BODY_MAX = 640
+_DISPLAY_REASON_MAX = 520
+_DISPLAY_FLOW_MAX = 720
 
 
 class BriefingGenerationAgent:
@@ -367,6 +371,16 @@ class BriefingGenerationAgent:
                 selected_cards=selected_cards,
                 llm=self._llm,
             )
+        report = _apply_period_perspective_to_report(report)
+        report = _refresh_front_briefing_report(
+            report=report,
+            briefing_type=briefing_type,
+            period=period,
+            selected_cards=selected_cards,
+        )
+        report = _strip_visual_ellipsis_from_payload(report)
+        report = _sanitize_internal_display_terms_from_payload(report)
+        report = _normalize_visible_sentence_endings(report)
         if save or cacheable_request:
             # 기본형 요청은 save 플래그와 무관하게 저장 — 다음 조회가 재사용하도록
             # 캐시를 채운다 (id 단위 UPSERT 라 중복 적재 없음).
@@ -408,12 +422,11 @@ def _resolve_period(
     elif briefing_type == "weekly":
         anchor = _parse_date(anchor_date) or today
         start = anchor - timedelta(days=anchor.weekday())
-        end = start + timedelta(days=6)
+        end = anchor
     elif briefing_type == "monthly":
         anchor = _parse_date(anchor_date) or today
         start = anchor.replace(day=1)
-        next_month = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
-        end = next_month - timedelta(days=1)
+        end = anchor
     else:
         raise ValueError(f"unsupported briefing_type: {briefing_type}")
 
@@ -455,6 +468,254 @@ def _clean_ids(values: list[str] | None) -> list[str]:
             seen.add(item)
             out.append(item)
     return out
+
+
+def _strip_visual_ellipsis_from_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return re.sub(r"\s*(?:\.{3,}|…|⋯)\s*", " ", value).strip()
+    if isinstance(value, list):
+        return [_strip_visual_ellipsis_from_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _strip_visual_ellipsis_from_payload(item) for key, item in value.items()}
+    return value
+
+
+def _sanitize_internal_display_terms_from_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return _sanitize_internal_display_terms(value)
+    if isinstance(value, list):
+        return [_sanitize_internal_display_terms_from_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_internal_display_terms_from_payload(item) for key, item in value.items()
+        }
+    return value
+
+
+def _sanitize_internal_display_terms(value: str) -> str:
+    text = str(value or "").strip()
+    replacements = (
+        ("선택된 카드들의", "이번 기간 근거의"),
+        ("선택된 카드들은", "이번 기간 근거는"),
+        ("선택된 카드에서", "이번 기간 근거에서"),
+        ("선택된 카드의", "이번 기간 근거의"),
+        ("선택된 카드", "이번 기간 근거"),
+        ("피어 프로필의 기존 역량", "경쟁사의 기존 사업 역량"),
+        ("피어 프로필 역량", "경쟁사의 기존 사업 역량"),
+        ("피어 프로필", "경쟁사 기존 사업 정보"),
+        ("프로필의 기존 역량", "기존 사업 역량"),
+        ("프로필 역량", "기존 사업 역량"),
+        ("프로필의", "기존 사업 정보의"),
+        ("프로필", "기존 사업 정보"),
+    )
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _sanitize_visible_copy_text(value: str) -> str:
+    text = _sanitize_internal_display_terms(value)
+    text = _strip_period_scope_prefix(text)
+    text = _normalize_duplicate_company_prefix(text)
+    text = _normalize_korean_plain_ending(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _strip_period_scope_prefix(value: str) -> str:
+    text = str(value or "").strip()
+    text = re.sub(
+        r"^\d{4}년\s*\d{1,2}월\s*\d{1,2}일\s*일간에\s*수집된\s*근거에서\s*",
+        "",
+        text,
+    )
+    text = re.sub(
+        r"^\d{4}년\s*\d{1,2}월\s*\d{1,2}일부터\s*"
+        r"\d{4}년\s*\d{1,2}월\s*\d{1,2}일까지\s*(?:주간|월간|기간)에\s*수집된\s*근거에서\s*",
+        "",
+        text,
+    )
+    return text.strip()
+
+
+def _normalize_duplicate_company_prefix(value: str) -> str:
+    text = str(value or "").strip()
+    company_names = ("LG CNS", "삼성SDS", "포스코DX", "현대오토에버", "SK AX")
+    for company in company_names:
+        pattern = rf"^{re.escape(company)}\s*:\s*{re.escape(company)}(?=(?:은|는|이|가|의|,|\s))"
+        text = re.sub(pattern, company, text)
+    return text
+
+
+def _normalize_korean_plain_ending(value: str) -> str:
+    text = str(value or "").strip()
+    replacements = (
+        (" 낮췄다.", " 낮췄습니다."),
+        (" 높였다.", " 높였습니다."),
+        (" 기록했다.", " 기록했습니다."),
+        (" 출시했다.", " 출시했습니다."),
+        (" 체결했다.", " 체결했습니다."),
+        (" 선정됐다.", " 선정됐습니다."),
+        (" 내정됐다.", " 내정됐습니다."),
+        (" 밝혔다.", " 밝혔습니다."),
+        (" 확대했다.", " 확대했습니다."),
+        (" 강화했다.", " 강화했습니다."),
+    )
+    for old, new in replacements:
+        if text.endswith(old):
+            return f"{text.removesuffix(old)}{new}"
+    return text
+
+
+def _refresh_front_briefing_report(
+    *,
+    report: dict[str, Any],
+    briefing_type: BriefingType,
+    period: dict[str, Any],
+    selected_cards: list[dict[str, Any]],
+) -> dict[str, Any]:
+    updated = copy.deepcopy(report)
+    grounded_key_changes = _grounded_front_key_change_cards(updated)
+    if grounded_key_changes:
+        updated["key_change_cards"] = grounded_key_changes
+        updated["core_change"] = {"items": copy.deepcopy(grounded_key_changes)}
+    grounded_lead = _grounded_front_briefing_lead(updated)
+    if grounded_lead:
+        updated["briefing_lead"] = grounded_lead
+        updated["executive_summary"] = grounded_lead
+    briefing_report = _front_briefing_report_payload(
+        result=updated,
+        briefing_type=briefing_type,
+        period=period,
+        selected_cards=selected_cards,
+    )
+    updated["briefingReport"] = briefing_report
+    updated["flowSteps"] = briefing_report["flowSteps"]
+    return updated
+
+
+def _apply_period_perspective_to_report(report: dict[str, Any]) -> dict[str, Any]:
+    updated = copy.deepcopy(report)
+    entries = _front_evidence_entries(updated)
+    for items in (
+        _json_list(updated.get("key_change_cards")),
+        _json_list(_json_dict(updated.get("core_change")).get("items")),
+    ):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            insight_type = str(item.get("insight_type") or "")
+            period_description = _period_key_change_description(updated, insight_type, entries)
+            if period_description:
+                item["description"] = period_description
+                continue
+            tail = _period_perspective_tail(updated, insight_type)
+            description = str(item.get("description") or "").strip()
+            if tail and description and tail not in description:
+                item["description"] = _brief_sentences(
+                    _join_display_sentences(description, tail),
+                    max_sentences=4,
+                    max_chars=_DISPLAY_BODY_MAX,
+                )
+    return updated
+
+
+def _normalize_visible_sentence_endings(report: dict[str, Any]) -> dict[str, Any]:
+    """화면 문장 필드만 마침표를 통일한다.
+
+    selectedCards, evidenceSources, history title 같은 원문/라벨성 값은 건드리지 않는다.
+    """
+
+    updated = copy.deepcopy(report)
+    for key in (
+        "key_summary",
+        "sk_implication",
+        "briefing_lead",
+        "executive_summary",
+    ):
+        _ensure_sentence_field(updated, key)
+
+    for card in _json_list(updated.get("key_change_cards")):
+        if isinstance(card, dict):
+            _ensure_sentence_fields(card, ("title", "description", "summary", "why_important"))
+    core_change = _json_dict(updated.get("core_change"))
+    for card in _json_list(core_change.get("items")):
+        if isinstance(card, dict):
+            _ensure_sentence_fields(card, ("title", "description", "summary", "why_important"))
+
+    flow = _json_dict(updated.get("interpretation_flow"))
+    for step in _json_list(flow.get("steps")):
+        if not isinstance(step, dict):
+            continue
+        for item in _json_list(step.get("items")):
+            if isinstance(item, dict):
+                _ensure_sentence_fields(item, ("title", "description"))
+
+    for snapshot_key in ("dailySnapshot", "weeklySnapshot"):
+        snapshot = _json_dict(updated.get(snapshot_key))
+        _ensure_sentence_field(snapshot, "summary")
+        for section in _json_list(snapshot.get("sections")):
+            if not isinstance(section, dict):
+                continue
+            _ensure_sentence_field(section, "summary")
+            for item in _json_list(section.get("items")):
+                if isinstance(item, dict):
+                    _ensure_sentence_field(item, "headline")
+
+    briefing_report = _json_dict(updated.get("briefingReport"))
+    _ensure_sentence_fields(
+        briefing_report,
+        ("headline", "briefingLead", "briefingSummaryLine"),
+    )
+    _ensure_sentence_list(briefing_report, "whatHappenedDigest")
+    for card in _json_list(briefing_report.get("signalCards")):
+        if isinstance(card, dict):
+            _ensure_sentence_fields(card, ("title", "summary", "reason"))
+    for section_key in ("meaning", "benchmark"):
+        for item in _json_list(briefing_report.get(section_key)):
+            if isinstance(item, dict):
+                _ensure_sentence_fields(item, ("title", "reason", "description", "summary"))
+    for step in _json_list(briefing_report.get("flowSteps")):
+        if isinstance(step, dict):
+            _ensure_sentence_fields(step, ("headline", "description"))
+            _ensure_sentence_list(step, "details")
+
+    for step in _json_list(updated.get("flowSteps")):
+        if isinstance(step, dict):
+            _ensure_sentence_fields(step, ("headline", "description"))
+            _ensure_sentence_list(step, "details")
+
+    return updated
+
+
+def _ensure_sentence_fields(container: dict[str, Any], keys: tuple[str, ...]) -> None:
+    for key in keys:
+        _ensure_sentence_field(container, key)
+
+
+def _ensure_sentence_field(container: dict[str, Any], key: str) -> None:
+    value = container.get(key)
+    if isinstance(value, str):
+        container[key] = _ensure_terminal_period(_sanitize_visible_copy_text(value))
+
+
+def _ensure_sentence_list(container: dict[str, Any], key: str) -> None:
+    values = container.get(key)
+    if isinstance(values, list):
+        container[key] = [
+            _ensure_terminal_period(_sanitize_visible_copy_text(item))
+            if isinstance(item, str)
+            else item
+            for item in values
+        ]
+
+
+def _ensure_terminal_period(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if re.search(r"[.!?。！？]$", text):
+        return text
+    return f"{text}."
 
 
 def _provenance_base(
@@ -679,7 +940,7 @@ def _company_issue_phrases_from_result(result: dict[str, Any]) -> list[str]:
         )
         issue = _brief_noun_phrase(issue, max_chars=76)
         if company and issue.startswith(company):
-            issue = issue.removeprefix(company).lstrip("의 ·:-")
+            issue = _strip_leading_company_prefix(issue, company)
         if company and issue:
             phrases.append(f"{company}의 {issue}")
     return _dedupe_keep_order(phrases)
@@ -740,7 +1001,7 @@ def _aggregate_text(
         return _brief_sentence(fallback, max_chars=max_chars)
     if len(texts) == 1:
         return _brief_sentence(texts[0], max_chars=max_chars)
-    joined = " ".join(_brief_sentence(text, max_chars=110) for text in texts[:max_items])
+    joined = " ".join(_brief_sentence(text, max_chars=max_chars) for text in texts[:max_items])
     return _clip_text(joined, max_chars=max_chars)
 
 
@@ -869,11 +1130,14 @@ def _normalize_briefing_trends(
         trend = _trend_item_from_card(card, role=role)
         trend.update(
             {
-                "title": _brief_sentence(item.get("title") or trend.get("title"), max_chars=120),
+                "title": _brief_sentence(
+                    item.get("title") or trend.get("title"),
+                    max_chars=_DISPLAY_TITLE_MAX,
+                ),
                 "reason": _brief_sentences(
                     item.get("reason") or trend.get("reason"),
                     max_sentences=2,
-                    max_chars=220,
+                    max_chars=_DISPLAY_REASON_MAX,
                 ),
                 "source_name": _first_text(item.get("source_name"), trend.get("source_name")),
                 "published_at": _first_text(item.get("published_at"), trend.get("published_at")),
@@ -914,7 +1178,7 @@ def _trend_title(card: dict[str, Any]) -> str:
     company = _company_label(card)
     if company and headline and company not in headline:
         headline = f"{company} - {headline}"
-    return _brief_sentence(headline, max_chars=120)
+    return _brief_sentence(headline, max_chars=_DISPLAY_TITLE_MAX)
 
 
 def _trend_reason(card: dict[str, Any], *, role: Literal["immediate", "watch"]) -> str:
@@ -936,7 +1200,7 @@ def _trend_reason(card: dict[str, Any], *, role: Literal["immediate", "watch"]) 
             analysis.get("analysis_summary"),
         )
         fallback = "후속 수주, 고객 확산, 실행 근거를 이어서 확인할 필요가 있습니다."
-    return _brief_sentences(reason or fallback, max_sentences=2, max_chars=220)
+    return _brief_sentences(reason or fallback, max_sentences=2, max_chars=_DISPLAY_REASON_MAX)
 
 
 def _normalize_briefing_sections(
@@ -953,7 +1217,7 @@ def _normalize_briefing_sections(
     for item in _json_list(value):
         if not isinstance(item, dict):
             continue
-        title = _brief_sentence(item.get("title"), max_chars=80)
+        title = _brief_sentence(item.get("title"), max_chars=_DISPLAY_TITLE_MAX)
         if not title:
             continue
         related_ids = _valid_card_ids(
@@ -962,7 +1226,7 @@ def _normalize_briefing_sections(
             fallback=source_card_ids,
         )
         bullets = [
-            _brief_sentence(bullet, max_chars=120)
+            _brief_sentence(bullet, max_chars=_DISPLAY_BODY_MAX)
             for bullet in _json_list(item.get("bullets"))
             if str(bullet or "").strip()
         ][:4]
@@ -972,7 +1236,7 @@ def _normalize_briefing_sections(
                 "summary": _brief_sentences(
                     item.get("summary") or executive_summary,
                     max_sentences=2,
-                    max_chars=240,
+                    max_chars=_DISPLAY_BODY_MAX,
                 ),
                 "bullets": bullets,
                 "related_card_ids": related_ids,
@@ -985,7 +1249,11 @@ def _normalize_briefing_sections(
     sections.append(
         {
             "title": "핵심 인사이트 요약",
-            "summary": _brief_sentences(executive_summary, max_sentences=2, max_chars=240),
+            "summary": _brief_sentences(
+                executive_summary,
+                max_sentences=2,
+                max_chars=_DISPLAY_BODY_MAX,
+            ),
             "bullets": key_bullets,
             "related_card_ids": source_card_ids,
         }
@@ -1027,7 +1295,7 @@ def _section_bullets_from_basis(briefing_basis: dict[str, Any]) -> list[str]:
         _block_text(briefing_basis.get("strategy_implication"), "finding"),
     ]
     return [
-        _brief_sentence(item, max_chars=120)
+        _brief_sentence(item, max_chars=_DISPLAY_BODY_MAX)
         for item in _dedupe_keep_order([str(value or "").strip() for value in candidates])
         if item
     ][:4]
@@ -1041,7 +1309,7 @@ def _briefing_trends_summary(trends: list[dict[str, Any]]) -> str:
         reasons,
         "통합 이슈 근거 기준으로 우선순위를 나눠 정리했습니다.",
         max_items=2,
-        max_chars=220,
+        max_chars=_DISPLAY_BODY_MAX,
     )
 
 
@@ -1052,7 +1320,7 @@ def _evidence_summary_from_basis(
     source_card_ids: list[str],
 ) -> list[str]:
     provided = [
-        _brief_sentence(item, max_chars=140)
+        _brief_sentence(item, max_chars=_DISPLAY_BODY_MAX)
         for item in _json_list(briefing_basis.get("evidence_summary"))
         if str(item or "").strip()
     ]
@@ -1097,7 +1365,7 @@ def _frontend_briefings_payload(
             "date": period["date_to"].isoformat(),
             "title": report_title,
             "status": "delivered",
-            "summary": _brief_sentence(executive_summary, max_chars=160),
+            "summary": _brief_sentence(executive_summary, max_chars=_DISPLAY_BODY_MAX),
             "primaryCount": len(immediate_trends),
             "watchCount": len(watch_trends),
             "evidence": evidence_sources[:3],
@@ -1153,7 +1421,7 @@ def _frontend_snapshot(
         )
     return {
         "title": title,
-        "summary": _brief_sentence(summary or executive_summary, max_chars=180),
+        "summary": _brief_sentence(summary or executive_summary, max_chars=_DISPLAY_BODY_MAX),
         "sections": [
             {
                 "title": primary_title,
@@ -1180,7 +1448,7 @@ def _frontend_weekly_title(period: dict[str, Any]) -> str:
 
 def _frontend_section_item(trend: dict[str, Any]) -> dict[str, str]:
     return {
-        "headline": _brief_sentence(trend.get("title"), max_chars=120),
+        "headline": _brief_sentence(trend.get("title"), max_chars=_DISPLAY_TITLE_MAX),
         "source": _trend_source_label(trend),
     }
 
@@ -1254,11 +1522,11 @@ def _build_report(
     briefing_lead = _brief_sentences(
         _block_text(briefing_basis.get("lead"), "finding") or _display_core_summary(briefing_basis),
         max_sentences=2,
-        max_chars=220,
+        max_chars=_DISPLAY_BODY_MAX,
     )
     key_summary = _brief_sentence(
         _display_core_title(selected_cards, briefing_basis),
-        max_chars=140,
+        max_chars=_DISPLAY_TITLE_MAX,
     )
     sk_ax_implication = _first_text(
         _block_text(briefing_basis.get("strategy_implication"), "finding"),
@@ -1401,7 +1669,7 @@ def _front_card_news_item(card: dict[str, Any]) -> dict[str, Any]:
     source_url = _first_text(source.get("url"), source.get("link"), source.get("source_url"), "#")
     source_name = _source_name(source)
     title = _card_display_title(card)
-    summary = _front_card_summary_lines(card)
+    summary = [_sanitize_visible_copy_text(line) for line in _front_card_summary_lines(card)]
     package = _analysis_package(card)
     analysis = _json_dict(package.get("analysis"))
     implication = _json_dict(package.get("implication"))
@@ -1424,7 +1692,7 @@ def _front_card_news_item(card: dict[str, Any]) -> dict[str, Any]:
         "source": source_name,
         "sourceUrl": source_url,
         "detailTitle": title,
-        "detailDescription": _card_summary(card),
+        "detailDescription": _sanitize_visible_copy_text(_card_summary(card)),
         "detailPoints": _dedupe_keep_order(
             [
                 _first_text(analysis.get("analysis_summary")),
@@ -1557,8 +1825,8 @@ def _front_briefing_meaning(
     ]
     return [
         {
-            "title": _brief_sentence(title, max_chars=140),
-            "reason": _brief_sentence(reason, max_chars=180),
+            "title": _brief_sentence(title, max_chars=_DISPLAY_TITLE_MAX),
+            "reason": _brief_sentences(reason, max_sentences=2, max_chars=_DISPLAY_REASON_MAX),
         }
         for title, reason in candidates
         if _first_text(title)
@@ -1577,8 +1845,8 @@ def _front_briefing_benchmark(result: dict[str, Any]) -> list[dict[str, str]]:
     ]
     return [
         {
-            "title": _brief_sentence(title, max_chars=140),
-            "reason": _brief_sentence(reason, max_chars=180),
+            "title": _brief_sentence(title, max_chars=_DISPLAY_TITLE_MAX),
+            "reason": _brief_sentences(reason, max_sentences=2, max_chars=_DISPLAY_REASON_MAX),
         }
         for title, reason in candidates
         if _first_text(title)
@@ -1721,14 +1989,16 @@ def _display_market_reading(
         block = briefing_basis.get(key)
         if not isinstance(block, dict):
             continue
-        finding = _clip_text(str(block.get("finding") or "").strip(), max_chars=140)
+        finding = _clip_text(str(block.get("finding") or "").strip(), max_chars=_DISPLAY_TITLE_MAX)
         if not finding:
             continue
         items.append(
             (
                 label,
                 finding,
-                _brief_sentences(block.get("rationale"), max_sentences=2, max_chars=180),
+                _brief_sentences(
+                    block.get("rationale"), max_sentences=2, max_chars=_DISPLAY_REASON_MAX
+                ),
             )
         )
     return [
@@ -1796,7 +2066,7 @@ def _core_change_insight_items(
         _market_signal_title_candidates(entries, briefing_basis),
         avoid=[],
         fallback="기간 내 카드뉴스에서 시장 변화 신호가 확인되었습니다.",
-        max_chars=140,
+        max_chars=_DISPLAY_TITLE_MAX,
     )
     market_summary = _select_distinct_sentence(
         [
@@ -1804,8 +2074,8 @@ def _core_change_insight_items(
             *_market_signal_summary_candidates(entries, briefing_basis),
         ],
         avoid=[lead_text, market_title],
-        fallback="선택된 카드들의 분석 결과에서 공통 수요와 평가 기준 변화가 확인되었습니다.",
-        max_chars=180,
+        fallback="공통 수요와 평가 기준 변화가 같은 방향으로 확인되고 있습니다.",
+        max_chars=_DISPLAY_BODY_MAX,
     )
     market_so_what = _select_distinct_sentence(
         _so_what_candidates(entries, briefing_basis),
@@ -1813,7 +2083,7 @@ def _core_change_insight_items(
         fallback=(
             "이 변화는 고객 제안과 경쟁사 대응에서 확인해야 할 평가 기준을 바꿀 수 있습니다."
         ),
-        max_chars=180,
+        max_chars=_DISPLAY_REASON_MAX,
     )
     competitor_title = _select_distinct_sentence(
         [
@@ -1824,7 +2094,7 @@ def _core_change_insight_items(
         fallback=(
             "경쟁사들은 기간 내 감지된 시장 변화에 맞춰 사업과 기술 메시지를 조정하고 있습니다."
         ),
-        max_chars=140,
+        max_chars=_DISPLAY_TITLE_MAX,
     )
     competitor_summary = _select_distinct_sentence(
         [
@@ -1832,9 +2102,35 @@ def _core_change_insight_items(
             *_competitor_move_summary_candidates(entries, briefing_basis, selected_cards),
         ],
         avoid=[market_title, market_summary, market_so_what, competitor_title],
-        fallback=_competitor_move_summary(selected_cards),
-        max_chars=180,
+        fallback=(
+            "경쟁사 움직임은 개별 기술 발표보다 구축 범위, 실행 구조, "
+            "고객 설득 근거를 함께 제시하는 방향으로 이동하고 있습니다."
+        ),
+        max_chars=_DISPLAY_BODY_MAX,
     )
+    if _is_too_similar(competitor_summary, [market_summary], threshold=0.62):
+        competitor_summary = _select_distinct_sentence(
+            _competitor_move_summary_candidates(entries, briefing_basis, selected_cards),
+            avoid=[market_title, market_summary, market_so_what, competitor_title],
+            fallback=(
+                "경쟁사들은 기술 역량을 단일 기능 설명이 아니라 고객이 비교할 "
+                "구축 방식과 실행 근거로 전환하고 있습니다."
+            ),
+            max_chars=_DISPLAY_BODY_MAX,
+        )
+    if (
+        len(_entry_company_labels(entries)) >= 2
+        and _visible_company_count(
+            competitor_summary,
+            entries,
+        )
+        < 2
+    ):
+        competitor_summary = _brief_sentences(
+            _competitor_move_flow_summary(entries),
+            max_sentences=3,
+            max_chars=_DISPLAY_BODY_MAX,
+        )
     competitor_so_what = _select_distinct_sentence(
         _competitor_so_what_candidates(entries, briefing_basis),
         avoid=[market_title, market_summary, market_so_what, competitor_title, competitor_summary],
@@ -1842,7 +2138,7 @@ def _core_change_insight_items(
             "경쟁사 움직임을 함께 보면 개별 이슈보다 "
             "경쟁 방식과 고객 설득 기준의 변화가 더 분명해집니다."
         ),
-        max_chars=180,
+        max_chars=_DISPLAY_REASON_MAX,
     )
     return [
         {
@@ -1989,12 +2285,16 @@ def _competitor_so_what_candidates(
 def _repeated_signal_candidate(entries: list[dict[str, Any]]) -> str:
     if len(entries) >= 2:
         return "여러 카드에서 같은 방향의 시장 변화와 수요 신호가 함께 확인되었습니다."
-    return "선택된 카드에서 시장 변화 신호가 확인되었습니다."
+    return "기간 내 시장 변화 신호가 확인되었습니다."
 
 
 def _competitor_move_group_title(entries: list[dict[str, Any]]) -> str:
+    companies = _entry_company_labels(entries)
     if len(entries) >= 2:
-        return "경쟁사들은 감지된 수요 변화에 맞춰 사업 방향과 실행 메시지를 구체화하고 있습니다."
+        if companies:
+            joined = _join_korean(companies[:3])
+            return f"{joined}의 사업 메시지가 서로 다른 실행 축으로 나뉘고 있습니다."
+        return "경쟁사별 사업 메시지가 고객 적용 범위와 구축 방식으로 나뉘고 있습니다."
     return "경쟁사들은 기간 내 감지된 변화에 맞춰 사업과 기술 메시지를 조정하고 있습니다."
 
 
@@ -2006,33 +2306,85 @@ def _market_signal_reason_summary(entries: list[dict[str, Any]]) -> str:
             _first_from_list(entry.get("strategic_meaning")),
             entry.get("analysis_summary"),
         )
-        reason = _strip_terminal_punctuation(_brief_sentence(reason, max_chars=76))
+        reason = _strip_terminal_punctuation(_brief_sentence(reason, max_chars=220))
         if reason:
             reasons.append(reason)
     reasons = _dedupe_keep_order(reasons)
     if len(reasons) >= 2:
-        return "구체 근거로는 " + " / ".join(reasons[:2])
+        return " ".join(f"{reason}." for reason in reasons[:2])
     if reasons:
-        return f"구체 근거를 보면 이 변화는 단발 이슈가 아니라 {reasons[0]} 흐름과 연결됩니다."
+        return f"이 변화는 단발 이슈보다 {reasons[0]} 흐름과 연결됩니다."
     if len(entries) >= 2:
-        return (
-            "선택된 카드들의 분석 결과가 같은 방향의 수요 변화와 "
-            "평가 기준 변화를 함께 가리키고 있습니다."
-        )
-    return "선택된 카드의 분석 결과가 이후 수요 변화와 평가 기준을 확인할 시장 신호로 해석됩니다."
+        return "수요 변화와 평가 기준 변화가 같은 방향으로 확인되고 있습니다."
+    return "이 신호는 이후 수요 변화와 평가 기준을 확인할 시장 변화로 해석됩니다."
 
 
 def _competitor_move_flow_summary(entries: list[dict[str, Any]]) -> str:
     if len(entries) >= 2:
+        clauses = _company_issue_clauses(entries)
+        if clauses:
+            joined = " ".join(clauses[:2])
+            return (
+                f"{joined} 이 흐름은 같은 시장 신호라도 경쟁사마다 고객 적용 범위와 "
+                "구축 방식을 다르게 제시하고 있음을 보여줍니다."
+            )
         return (
-            "선택된 카드들은 경쟁사들이 감지된 수요 변화에 맞춰 기술·사업 역량을 "
-            "실행 근거와 고객 설득 메시지로 연결하고 있음을 보여줍니다."
+            "경쟁사별 발표가 고객 적용 범위, 구축 방식, 성과 근거를 비교할 신호로 나뉘고 있습니다."
         )
     signal = _first_text(
         _first_from_list([entry.get("peer_meaning") for entry in entries]),
         _first_from_list([entry.get("analysis_summary") for entry in entries]),
     )
-    return _brief_sentence(signal, max_chars=180)
+    return _brief_sentence(signal, max_chars=_DISPLAY_BODY_MAX)
+
+
+def _entry_company_labels(entries: list[dict[str, Any]]) -> list[str]:
+    return _dedupe_keep_order(
+        [
+            str(entry.get("company_label") or "").strip()
+            for entry in entries
+            if str(entry.get("company_label") or "").strip()
+        ]
+    )
+
+
+def _visible_company_count(value: str, entries: list[dict[str, Any]]) -> int:
+    text = str(value or "")
+    return sum(1 for company in _entry_company_labels(entries) if company in text)
+
+
+def _company_issue_clauses(entries: list[dict[str, Any]]) -> list[str]:
+    clauses: list[str] = []
+    seen_companies: set[str] = set()
+    for entry in entries:
+        company = _first_text(entry.get("company_label"), entry.get("company"))
+        if company in seen_companies:
+            continue
+        issue = _company_issue_sentence_text(entry)
+        if company and issue.startswith(company):
+            issue = _strip_leading_company_prefix(issue, company)
+        if company and issue:
+            clauses.append(f"{company}는 {issue}")
+            seen_companies.add(company)
+        if len(clauses) >= 3:
+            break
+    return _dedupe_keep_order(clauses)
+
+
+def _company_issue_sentence_text(entry: dict[str, Any]) -> str:
+    company = _first_text(entry.get("company_label"), entry.get("company"))
+    for candidate in (
+        entry.get("peer_meaning"),
+        entry.get("main_issue"),
+        entry.get("analysis_summary"),
+    ):
+        raw = str(candidate or "")
+        if "프로필" in raw or "profile" in raw.lower():
+            continue
+        phrase = _readable_briefing_phrase(raw, company=company, max_chars=140)
+        if phrase:
+            return _front_polite_sentence(phrase)
+    return ""
 
 
 def _cross_card_importance_sentence(entries: list[dict[str, Any]]) -> str:
@@ -2057,7 +2409,7 @@ def _combine_company_signals(entries: list[dict[str, Any]], key: str) -> str:
     phrases = []
     for entry in entries[:3]:
         company = str(entry.get("company_label") or "").strip()
-        signal = _brief_sentence(entry.get(key), max_chars=80)
+        signal = _brief_sentence(entry.get(key), max_chars=_DISPLAY_BODY_MAX)
         if company and signal:
             phrases.append(f"{company}: {signal}")
     return " / ".join(phrases)
@@ -2095,7 +2447,7 @@ def _generic_distinct_sentence(avoid: list[str], *, max_chars: int) -> str:
 def _competitor_move_summary(selected_cards: list[dict[str, Any]]) -> str:
     phrases: list[str] = []
     for card in selected_cards[:3]:
-        signal = _brief_sentence(_card_summary(card), max_chars=80)
+        signal = _brief_sentence(_card_summary(card), max_chars=_DISPLAY_BODY_MAX)
         if signal:
             phrases.append(signal)
     if phrases:
@@ -2244,7 +2596,7 @@ def _briefing_lead(
     _ = selected_cards
     if not key_summary:
         return f"{period['label']} 동안 확인된 카드뉴스 기반 흐름입니다."
-    return _brief_sentence(key_summary, max_chars=180)
+    return _brief_sentence(key_summary, max_chars=_DISPLAY_BODY_MAX)
 
 
 def _period_label(briefing_type: BriefingType, start: date, end: date) -> str:
@@ -2284,7 +2636,7 @@ def _normalize_flow_step(step: object, default_evidence: list[Any] | None = None
     description = _brief_sentences(
         step.get("description") or step.get("rationale") or one_liner,
         max_sentences=2,
-        max_chars=220,
+        max_chars=_DISPLAY_FLOW_MAX,
     )
     return {
         "seq": step.get("seq") or step.get("step_idx") or 0,
@@ -2357,6 +2709,7 @@ def _hidden_details(
                     _nested_get(package, "analysis", "confidence"),
                     _nested_get(package, "implication", "confidence"),
                 ),
+                "basis_at": card.get("basis_at") or _first_source_published_at(sources),
                 "evidence_text": _evidence_texts(package),
                 "analysis_package": package,
             }
@@ -2539,11 +2892,11 @@ def _interpretation_step_reasoning_trace(
         "output_items": [
             {
                 "seq": item.get("seq"),
-                "title": _brief_sentence(item.get("title"), max_chars=120),
+                "title": _brief_sentence(item.get("title"), max_chars=_DISPLAY_TITLE_MAX),
                 "description": _brief_sentences(
                     item.get("description"),
                     max_sentences=2,
-                    max_chars=220,
+                    max_chars=_DISPLAY_FLOW_MAX,
                 ),
                 "evidence_card_ids": _json_list(item.get("evidence_card_ids")),
             }
@@ -2570,7 +2923,7 @@ def _reasoning_source_inputs(
                 "evidence": _brief_sentences(
                     evidence_text,
                     max_sentences=2,
-                    max_chars=220,
+                    max_chars=_DISPLAY_FLOW_MAX,
                 ),
                 "source_names": _json_list(entry.get("source_names"))[:3],
             }
@@ -2827,8 +3180,8 @@ def _front_step_item(
     evidence_card_ids: list[Any],
 ) -> dict[str, Any]:
     return {
-        "title": _brief_sentence(title, max_chars=100),
-        "description": _brief_sentences(description, max_sentences=3, max_chars=240),
+        "title": _brief_sentence(title, max_chars=_DISPLAY_TITLE_MAX),
+        "description": _brief_sentences(description, max_sentences=3, max_chars=_DISPLAY_FLOW_MAX),
         "evidence_card_ids": [str(item) for item in evidence_card_ids if str(item).strip()],
     }
 
@@ -2969,17 +3322,8 @@ def _grounded_front_briefing_lead(result: dict[str, Any]) -> str:
     if not entries:
         return ""
     clauses = _front_join_company_signal_clauses(entries)
-    has_robot_signal = _has_token_entry(entries, _ROBOT_OPS_TOKENS)
-    has_private_ai_signal = _has_token_entry(entries, _PRIVATE_AI_TOKENS)
-    if not (has_robot_signal or has_private_ai_signal):
-        return (
-            f"오늘 수집된 경쟁사 신호에서는 {_front_primary_signal_summary(entries)} {clauses}"
-        ).strip()
-    return (
-        "오늘 수집된 경쟁사 신호는 AX 평가 기준이 기술 도입 자체보다 "
-        "운영 기반과 데이터 통제 쪽으로 이동하고 있음을 보여줍니다. "
-        f"{clauses}"
-    )
+    summary = _front_primary_signal_summary(entries)
+    return f"오늘 수집된 경쟁사 신호에서는 {summary} {clauses}".strip()
 
 
 def _front_evidence_entries(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -3021,6 +3365,7 @@ def _front_evidence_entries(result: dict[str, Any]) -> list[dict[str, Any]]:
                 "sk_why": _first_text(skax.get("why_important")),
                 "sk_impact": _first_text(skax.get("potential_impact")),
                 "recommended_actions": _json_list(skax.get("recommended_actions")),
+                "basis_at": _first_text(detail.get("basis_at")),
                 "source_names": _dedupe_keep_order(
                     [
                         _source_name(source)
@@ -3039,7 +3384,7 @@ def _front_business_signals(integrated: dict[str, Any]) -> list[dict[str, str]]:
         if not isinstance(item, dict):
             continue
         signal = _brief_noun_phrase(item.get("signal"), max_chars=56)
-        description = _brief_sentence(item.get("description"), max_chars=100)
+        description = _brief_sentence(item.get("description"), max_chars=_DISPLAY_BODY_MAX)
         if signal or description:
             signals.append({"signal": signal, "description": description})
     return signals
@@ -3081,11 +3426,6 @@ def _entry_has_tokens(entry: dict[str, Any], tokens: tuple[str, ...]) -> bool:
         [
             str(entry.get("main_issue") or ""),
             str(entry.get("integrated_text") or ""),
-            str(entry.get("analysis_summary") or ""),
-            str(entry.get("market_signal") or ""),
-            str(entry.get("impact_reason") or ""),
-            str(entry.get("peer_meaning") or ""),
-            str(entry.get("capability_change") or ""),
             " ".join(
                 f"{signal.get('signal', '')} {signal.get('description', '')}"
                 for signal in _json_list(entry.get("business_signals"))
@@ -3109,14 +3449,25 @@ def _front_signal_name(
                 return _brief_noun_phrase(item.get("signal"), max_chars=48)
     if signals:
         return _brief_noun_phrase(signals[0].get("signal"), max_chars=48)
+    issue = _front_issue_name(entry)
+    if issue:
+        return issue
     return _brief_noun_phrase(
         _first_text(
             entry.get("market_signal"),
             entry.get("analysis_summary"),
-            entry.get("main_issue"),
         ),
         max_chars=48,
     )
+
+
+def _front_issue_name(entry: dict[str, Any], *, max_chars: int = 76) -> str:
+    company = _first_text(entry.get("company"))
+    issue = _first_text(entry.get("main_issue"), entry.get("integrated_text"))
+    if company and issue.startswith(company):
+        issue = _strip_leading_company_prefix(issue, company)
+    issue = _brief_noun_phrase(issue, max_chars=max_chars)
+    return re.sub(r"\s+", " ", issue).strip(" ,，;:/·ㆍ-")
 
 
 def _front_signal_clause(entry: dict[str, Any], *, tokens: tuple[str, ...] = ()) -> str:
@@ -3145,8 +3496,8 @@ def _front_signal_description(
     for item in signals:
         text = f"{item.get('signal', '')} {item.get('description', '')}"
         if not tokens or any(token in text for token in tokens):
-            return _brief_sentence(item.get("description"), max_chars=110)
-    return _brief_sentence(entry.get("analysis_summary"), max_chars=110)
+            return _brief_sentence(item.get("description"), max_chars=_DISPLAY_BODY_MAX)
+    return _brief_sentence(entry.get("analysis_summary"), max_chars=_DISPLAY_BODY_MAX)
 
 
 def _front_market_change_title(entries: list[dict[str, Any]]) -> str:
@@ -3154,10 +3505,14 @@ def _front_market_change_title(entries: list[dict[str, Any]]) -> str:
     private_entry = _front_entry_by_tokens(entries, _PRIVATE_AI_TOKENS)
     if robot_entry and private_entry and robot_entry is not private_entry:
         return "AX 경쟁의 초점이 운영 인프라와 데이터 통제 중심으로 이동하고 있습니다."
+    issue_names = _front_issue_names(entries)
+    if issue_names:
+        joined = _join_korean(issue_names[:2])
+        return f"{joined}{_subject_particle(joined)} 이번 기간 판단 근거로 확인됩니다."
     market_signal = _first_text(*[entry.get("market_signal") for entry in entries])
     return _brief_sentence(
         market_signal or "기간 내 수요 변화가 운영 기반 중심으로 구체화되고 있습니다.",
-        max_chars=100,
+        max_chars=_DISPLAY_BODY_MAX,
     )
 
 
@@ -3204,7 +3559,7 @@ def _front_market_overview_description(
 
 
 def _front_primary_signal_summary(entries: list[dict[str, Any]]) -> str:
-    signals = _front_primary_signal_names(entries)
+    signals = _front_issue_names(entries) or _front_primary_signal_names(entries)
     if len(signals) >= 2:
         joined = _join_korean(signals[:2])
         return f"{joined}{_subject_particle(joined)} 함께 확인됩니다."
@@ -3217,6 +3572,14 @@ def _front_market_change_description(
     result: dict[str, Any],
     entries: list[dict[str, Any]],
 ) -> str:
+    issue_names = _front_issue_names(entries)
+    if issue_names:
+        joined = _join_korean(issue_names[:3])
+        return (
+            f"{_period_scope_phrase(result)}에서 {joined}{_subject_particle(joined)} 확인됩니다. "
+            "이 근거를 함께 보면 해당 기간 고객 수요, 경쟁 방식, 평가 기준 중 "
+            "무엇이 실제 기사 단위에서 움직였는지 구분할 수 있습니다."
+        )
     robot_entry = _front_entry_by_tokens(entries, _ROBOT_OPS_TOKENS)
     private_entry = _front_entry_by_tokens(entries, _PRIVATE_AI_TOKENS)
     clauses = _dedupe_keep_order(
@@ -3232,7 +3595,10 @@ def _front_market_change_description(
             "함께 확인됩니다. 이는 시장의 관심이 단일 기술 도입보다 운영 기반, "
             "데이터 통제, 성과 검증 가능성으로 이동하고 있음을 보여줍니다."
         )
-    return _brief_sentence(_block_text(result.get("common_pattern"), "rationale"), max_chars=180)
+    return _brief_sentence(
+        _block_text(result.get("common_pattern"), "rationale"),
+        max_chars=_DISPLAY_BODY_MAX,
+    )
 
 
 def _front_generic_market_items(
@@ -3266,7 +3632,7 @@ def _front_generic_market_title(entry: dict[str, Any]) -> str:
         return f"{signal}{_subject_particle(signal)} 시장 판단 근거로 부각됩니다."
     return _brief_sentence(
         _first_text(entry.get("market_signal"), entry.get("main_issue")),
-        max_chars=90,
+        max_chars=_DISPLAY_TITLE_MAX,
     )
 
 
@@ -3275,7 +3641,7 @@ def _front_generic_market_description(entry: dict[str, Any]) -> str:
     signal = _front_signal_name(entry)
     impact = _brief_sentence(
         _first_text(entry.get("impact_reason"), entry.get("analysis_summary")),
-        max_chars=120,
+        max_chars=_DISPLAY_BODY_MAX,
     )
     first = (
         f"{company}에서 {signal}{_subject_particle(signal)} 확인됩니다."
@@ -3298,8 +3664,12 @@ def _front_market_change_importance(entries: list[dict[str, Any]]) -> str:
 
 
 def _front_competitor_move_title(entries: list[dict[str, Any]]) -> str:
+    companies = _entry_company_labels(entries)
     if len(entries) >= 2:
-        return "경쟁사들은 기술 신호를 운영 패키지와 성장 논리로 묶고 있습니다."
+        if companies:
+            joined = _join_korean(companies[:3])
+            return f"{joined}의 경쟁 메시지가 서로 다른 실행 축으로 갈라지고 있습니다."
+        return "경쟁사별 사업 메시지가 고객 적용 범위와 구축 방식으로 나뉘고 있습니다."
     return "경쟁사는 감지된 수요 변화에 맞춰 사업 메시지를 조정하고 있습니다."
 
 
@@ -3312,24 +3682,40 @@ def _front_competitor_move_description(entries: list[dict[str, Any]]) -> str:
     if clauses:
         joined = " ".join(clauses[:2])
         return (
-            f"{joined} 이 움직임은 경쟁사들이 단일 기능보다 운영 역량, 구축 방식, "
-            "성과 전망을 함께 묶어 시장 메시지를 만들고 있음을 보여줍니다."
+            f"{joined} 따라서 단일 기술 발표보다 경쟁사별 고객 적용 범위, "
+            "구축 방식, 성과 근거의 차이를 비교해야 합니다."
         )
-    return "선택된 카드에서 경쟁사의 사업·기술 메시지 변화가 확인됩니다."
+    return "경쟁사의 사업·기술 메시지 변화가 확인됩니다."
 
 
 def _front_peer_move_sentence(entry: dict[str, Any]) -> str:
     company = _first_text(entry.get("company"))
     peer_meaning = _brief_sentence(
         _first_text(entry.get("peer_meaning"), entry.get("analysis_summary")),
-        max_chars=110,
+        max_chars=_DISPLAY_BODY_MAX,
     )
+    if _is_profile_linkage_display_text(peer_meaning):
+        issue = _front_issue_name(entry)
+        peer_meaning = f"{issue}{_subject_particle(issue)} 확인됩니다." if issue else ""
     if company and peer_meaning.startswith(company):
-        peer_meaning = peer_meaning.removeprefix(company).lstrip("은 는 이 가 의")
+        peer_meaning = _strip_leading_company_prefix(peer_meaning, company)
     peer_meaning = _front_polite_sentence(peer_meaning)
     if company and peer_meaning:
         return f"{company}는 {peer_meaning}"
     return peer_meaning
+
+
+def _is_profile_linkage_display_text(value: str) -> bool:
+    text = str(value or "")
+    markers = (
+        "경쟁사 기존 사업 정보",
+        "기존 사업 정보",
+        "에이엑스씽크",
+        "자체 로봇 학습 플랫폼",
+        "연결되는 배경",
+        "연결되는 신호",
+    )
+    return any(marker in text for marker in markers)
 
 
 def _front_polite_sentence(value: str) -> str:
@@ -3350,6 +3736,17 @@ def _front_polite_sentence(value: str) -> str:
     if text.endswith("된다"):
         return f"{text.removesuffix('된다')}됩니다."
     return f"{text}."
+
+
+def _strip_leading_company_prefix(value: str, company: str) -> str:
+    text = str(value or "").strip()
+    company_text = str(company or "").strip()
+    if company_text and text.startswith(company_text):
+        text = text[len(company_text) :]
+    text = re.sub(r"^[\s,，·ㆍ:;/'\"-]+", "", text)
+    text = re.sub(r"^(은|는|이|가|의|와|과)\s*", "", text)
+    text = re.sub(r"^[\s,，·ㆍ:;/'\"-]+", "", text)
+    return text.strip()
 
 
 def _front_competitor_move_importance(entries: list[dict[str, Any]]) -> str:
@@ -3404,7 +3801,7 @@ def _is_program_artifact_action(value: object) -> bool:
 
 
 def _front_action_title(action: object) -> str:
-    title = _brief_sentence(action, max_chars=90)
+    title = _brief_sentence(action, max_chars=_DISPLAY_TITLE_MAX)
     if not title:
         return ""
     if title.endswith(("합니다.", "해야 합니다.", "필요가 있습니다.")):
@@ -3555,18 +3952,40 @@ def _front_private_ai_skax_description(entry: dict[str, Any]) -> str:
 
 
 def _front_reference_skax_description(entries: list[dict[str, Any]]) -> str:
-    clauses = _front_join_company_signal_clauses(entries)
+    clauses = _front_reference_signal_summary(entries)
+    prefix = f"대표 근거는 {clauses}입니다. " if clauses else ""
     return (
-        f"{clauses} 이 근거들을 레퍼런스로 보여줄 때는 무엇을 구축했는지보다 "
+        f"{prefix}이 근거들을 레퍼런스로 보여줄 때는 무엇을 구축했는지보다 "
         "어떤 운영 문제가 줄었고, 어떤 지표로 안정화됐으며, 어디까지 확산됐는지를 "
         "먼저 정리해야 신뢰 가능한 운영 실적으로 읽힙니다."
     )
+
+
+def _front_reference_signal_summary(entries: list[dict[str, Any]]) -> str:
+    phrases: list[str] = []
+    for entry in _representative_entries_for_period(entries, {"briefing_type": "monthly"}, limit=3):
+        company = _first_text(entry.get("company"))
+        signal = _period_signal_phrase(entry)
+        phrase = _front_company_signal_phrase(company, signal)
+        phrase = _readable_briefing_phrase(phrase, max_chars=90)
+        if phrase:
+            phrases.append(phrase)
+    return _join_korean(_dedupe_keep_order(phrases[:3]))
 
 
 def _front_primary_signal_names(entries: list[dict[str, Any]]) -> list[str]:
     names = []
     for entry in entries[:3]:
         name = _front_signal_name(entry)
+        if name:
+            names.append(name)
+    return _dedupe_keep_order(names)
+
+
+def _front_issue_names(entries: list[dict[str, Any]]) -> list[str]:
+    names = []
+    for entry in entries[:3]:
+        name = _front_issue_name(entry)
         if name:
             names.append(name)
     return _dedupe_keep_order(names)
@@ -3998,6 +4417,189 @@ def _period_scope_phrase(result: dict[str, Any]) -> str:
     return "선택한 기간에 수집된 근거"
 
 
+def _period_perspective_tail(result: dict[str, Any], insight_type: str) -> str:
+    briefing_type = str(result.get("briefing_type") or "").strip()
+    if briefing_type == "weekly":
+        if insight_type == "competitor_move":
+            return (
+                "주간 관점에서는 같은 방향의 메시지가 며칠 간격으로 반복되는지와 "
+                "후속 수주·고객 사례로 이어지는지를 함께 봐야 합니다."
+            )
+        return (
+            "주간 관점에서는 이번 주 안에서 반복된 신호와 새로 강해진 평가 기준을 "
+            "분리해 보는 것이 중요합니다."
+        )
+    if briefing_type == "monthly":
+        if insight_type == "competitor_move":
+            return (
+                "월간 관점에서는 개별 발표보다 한 달 동안 누적된 경쟁사별 실행 축과 "
+                "고객 설득 방식의 차이를 비교해야 합니다."
+            )
+        return (
+            "월간 관점에서는 단발 이벤트보다 한 달 동안 누적된 수요 변화와 "
+            "고객 평가 기준의 이동을 봐야 합니다."
+        )
+    return ""
+
+
+def _period_key_change_description(
+    result: dict[str, Any],
+    insight_type: str,
+    entries: list[dict[str, Any]],
+) -> str:
+    briefing_type = str(result.get("briefing_type") or "").strip()
+    if briefing_type not in {"weekly", "monthly"} or not entries:
+        return ""
+    if insight_type == "market_signal":
+        return _period_market_signal_description(result, entries)
+    if insight_type == "competitor_move":
+        return _period_competitor_move_description(result, entries)
+    return ""
+
+
+def _period_market_signal_description(
+    result: dict[str, Any],
+    entries: list[dict[str, Any]],
+) -> str:
+    briefing_type = str(result.get("briefing_type") or "").strip()
+    signal_text = _join_korean(_period_signal_names(entries, result)[:3])
+    if not signal_text:
+        return ""
+    if briefing_type == "monthly":
+        return (
+            f"{signal_text}{_subject_particle(signal_text)} 함께 확인됩니다. "
+            "월간 관점에서는 단발 이벤트보다 한 달 동안 반복된 수요 변화와 "
+            "고객 평가 기준의 이동을 봐야 합니다."
+        )
+    return (
+        f"{signal_text}{_subject_particle(signal_text)} 반복 확인됩니다. "
+        "주간 관점에서는 이번 주 안에서 새로 강해진 신호와 "
+        "후속 확인이 필요한 신호를 분리해 봐야 합니다."
+    )
+
+
+def _period_competitor_move_description(
+    result: dict[str, Any],
+    entries: list[dict[str, Any]],
+) -> str:
+    briefing_type = str(result.get("briefing_type") or "").strip()
+    representative_entries = _representative_entries_for_period(entries, result, limit=3)
+    clauses = _company_issue_clauses(representative_entries)
+    if not clauses:
+        return ""
+    joined = " ".join(clauses[:2])
+    if briefing_type == "monthly":
+        return (
+            f"{joined} 따라서 개별 발표보다 한 달 동안 누적된 경쟁사별 실행 축과 "
+            "고객 설득 방식의 차이를 비교해야 합니다."
+        )
+    return (
+        f"{joined} 따라서 같은 방향의 메시지가 며칠 간격으로 반복되는지와 "
+        "후속 수주·고객 사례로 이어지는지를 함께 봐야 합니다."
+    )
+
+
+def _period_signal_names(
+    entries: list[dict[str, Any]],
+    result: dict[str, Any],
+) -> list[str]:
+    names: list[str] = []
+    for entry in _representative_entries_for_period(entries, result, limit=4):
+        signal = _period_signal_phrase(entry)
+        if signal:
+            names.append(signal)
+    return _dedupe_keep_order(names)
+
+
+def _representative_entries_for_period(
+    entries: list[dict[str, Any]],
+    result: dict[str, Any],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if not entries:
+        return []
+    briefing_type = str(result.get("briefing_type") or "").strip()
+    sorted_entries = sorted(entries, key=_entry_basis_sort_key)
+    if briefing_type == "monthly" and len(sorted_entries) >= 3:
+        indexes = [0, len(sorted_entries) // 2, len(sorted_entries) - 1]
+        seeds = [sorted_entries[index] for index in indexes]
+        candidates = [*seeds, *sorted_entries]
+    elif briefing_type == "weekly":
+        candidates = [*reversed(sorted_entries)]
+    else:
+        candidates = entries
+
+    selected: list[dict[str, Any]] = []
+    seen_companies: set[str] = set()
+    seen_signals: set[str] = set()
+    for entry in candidates:
+        company = str(entry.get("company") or "").strip()
+        signal = _front_signal_name(entry)
+        signal_key = _normalize_similarity_text(signal)
+        if company and company in seen_companies and signal_key in seen_signals:
+            continue
+        selected.append(entry)
+        if company:
+            seen_companies.add(company)
+        if signal_key:
+            seen_signals.add(signal_key)
+        if len(selected) >= limit:
+            break
+    return selected or entries[:limit]
+
+
+def _entry_basis_sort_key(entry: dict[str, Any]) -> str:
+    return str(entry.get("basis_at") or entry.get("published_at") or "")
+
+
+def _period_signal_phrase(entry: dict[str, Any]) -> str:
+    company = _first_text(entry.get("company"))
+    candidates = [
+        entry.get("main_issue"),
+        entry.get("market_signal"),
+        _front_signal_name(entry),
+        entry.get("analysis_summary"),
+    ]
+    for candidate in candidates:
+        phrase = _readable_briefing_phrase(candidate, company=company, max_chars=76)
+        if phrase:
+            return phrase
+    return ""
+
+
+def _readable_briefing_phrase(
+    value: object,
+    *,
+    company: str = "",
+    max_chars: int,
+) -> str:
+    text = _sanitize_internal_display_terms(
+        str(_strip_visual_ellipsis_from_payload(str(value or "")) or "")
+    )
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text or _looks_like_mostly_english(text):
+        return ""
+    company_text = str(company or "").strip()
+    if company_text:
+        text = re.sub(rf"^{re.escape(company_text)}\s*[,，]\s*", f"{company_text}의 ", text)
+    text = _brief_noun_phrase(text, max_chars=max_chars)
+    text = re.sub(r"\s+", " ", text).strip(" ,，;:/·ㆍ-")
+    if text.endswith(("보인", "나타낸", "보여주는", "가리키는")):
+        return ""
+    return text
+
+
+def _looks_like_mostly_english(value: str) -> bool:
+    text = str(value or "")
+    letters = re.findall(r"[A-Za-z가-힣]", text)
+    if not letters:
+        return False
+    english = re.findall(r"[A-Za-z]", text)
+    korean = re.findall(r"[가-힣]", text)
+    return len(english) > len(korean)
+
+
 def _display_date_ko(value: str) -> str:
     try:
         parsed = date.fromisoformat(value)
@@ -4052,29 +4654,34 @@ def _grounded_key_change_description(
     result: dict[str, Any],
 ) -> str:
     scope = _period_scope_phrase(result)
+    period_tail = _period_perspective_tail(result, insight_type)
     signals = _basis_signal_phrases_from_result(result)
     signal_text = _join_korean(signals[:2]) if signals else ""
     company_basis = _company_issue_sentence_from_result(result)
     if insight_type == "market_signal":
         if signal_text:
-            return (
+            return _join_display_sentences(
                 f"{scope}에서 {signal_text}{_subject_particle(signal_text)} 함께 확인됩니다. "
                 "이 조합은 개별 기업 이벤트보다 시장의 수요와 평가 기준이 "
-                "운영 기반 중심으로 움직이고 있음을 보여줍니다."
+                "운영 기반 중심으로 움직이고 있음을 보여줍니다.",
+                period_tail,
             )
         return company_basis
     if insight_type == "competitor_move":
         if company_basis:
-            return (
+            return _join_display_sentences(
                 f"{company_basis} 이 움직임은 경쟁사들이 단일 기술 설명보다 "
-                "운영 역량, 구축 방식, 고객 설득 근거를 사업 메시지로 묶고 있음을 보여줍니다."
+                "운영 역량과 구축 방식을 사업 메시지로 묶고 있음을 보여줍니다.",
+                period_tail,
             )
         if signal_text:
-            return (
+            return _join_display_sentences(
                 f"{scope}에서 {signal_text}{_subject_particle(signal_text)} 확인됩니다. "
-                "이는 경쟁사들이 감지된 수요 변화에 맞춰 사업 방향을 구체화하고 있음을 뜻합니다."
+                "이는 경쟁사들이 시장 신호를 고객 적용 범위와 구축 방식으로 "
+                "해석하고 있음을 뜻합니다.",
+                period_tail,
             )
-    return _brief_sentence(title, max_chars=180)
+    return _brief_sentence(title, max_chars=_DISPLAY_TITLE_MAX)
 
 
 def _grounded_why_important(value: str, result: dict[str, Any]) -> str:

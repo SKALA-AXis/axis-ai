@@ -117,8 +117,9 @@ def _month_anchors(start: date, end: date) -> list[date]:
     anchors: list[date] = []
     current = start.replace(day=1)
     while current <= end:
-        anchors.append(current)
-        current = (current.replace(day=28) + timedelta(days=4)).replace(day=1)
+        next_month = (current.replace(day=28) + timedelta(days=4)).replace(day=1)
+        anchors.append(min(next_month - timedelta(days=1), end))
+        current = next_month
     return anchors
 
 
