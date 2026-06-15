@@ -4831,7 +4831,7 @@ def _industry_evidence_sentence(
         )
     return (
         f"{actor_context} {primary}가 반복적으로 제시되어, 해당 논의가 "
-        "참여 주체와 적용 조건을 함께 봐야 하는 흐름임을 보여준다."
+        "참여 주체와 적용 조건이 함께 묶이는 흐름임을 보여준다."
     )
 
 
@@ -4850,17 +4850,19 @@ def _industry_action_sentence(
     role_axis = _industry_action_role_axis(decision_criteria, anchors)
     if role_axis:
         role_object = _with_korean_object_particle(role_axis)
-        return f"SK AX는 이 흐름에서 {role_object} 중심에 두고 사업 방향을 잡아야 한다."
+        return f"SK AX의 후속 사업은 이 흐름에서 {role_object} 중심으로 전개될 수 있다."
     action_reading = _industry_dynamic_action_reading_from_anchors(
         anchors,
         decision_criteria=decision_criteria,
     ) or _industry_action_reading_phrase(decision_criteria)
     if action_reading:
         action_object = _with_korean_object_particle(action_reading)
-        return f"SK AX는 {anchor_phrase} 흐름에서 {action_object} 중심으로 사업 방향을 잡아야 한다."
+        return (
+            f"SK AX의 후속 사업은 {anchor_phrase} 흐름에서 {action_object} 중심으로 전개될 수 있다."
+        )
     return (
-        f"SK AX는 {anchor_phrase} 흐름을 볼 때 드러난 참여 구조와 "
-        "적용 조건을 함께 고려해 사업 방향을 잡아야 한다."
+        f"SK AX의 후속 사업은 {anchor_phrase} 흐름에서 드러난 참여 구조와 "
+        "적용 조건을 함께 반영하는 쪽으로 전개될 수 있다."
     )
 
 
@@ -4899,11 +4901,11 @@ def _industry_action_evidence_sentence(
                 role_object = _with_korean_object_particle(role_axis)
                 return (
                     f"{fact_clause} {anchor_phrase} 흐름에서는 SK AX도 {role_object} "
-                    "중심에 둔 사업 접근이 필요해진다."
+                    "중심의 사업 접근으로 이어질 수 있다."
                 )
             return (
                 f"{fact_clause} {anchor_phrase} 흐름에서는 SK AX도 적용 대상과 "
-                "실행 단계가 구체화되는 속도에 맞춰 사업 관점을 조정하게 된다."
+                "실행 단계가 구체화되는 속도에 맞춰 사업 관점이 조정될 수 있다."
             )
         fallback_role_reading = "참여 주체의 역량이 적용 단계에서 맞물리는 방식이 중요해질 수 있다."
         return (
@@ -4918,7 +4920,7 @@ def _industry_action_evidence_sentence(
         )
     return (
         f"{anchor_phrase}가 제시된 만큼, SK AX는 직접 사업화를 단정하기보다 "
-        "참여 주체와 적용 조건이 맞물리는 방향을 중심으로 후속 사업 관점을 세워야 한다."
+        "참여 주체와 적용 조건이 맞물리는 흐름을 후속 사업 관점에 반영할 수 있다."
     )
 
 
@@ -6637,7 +6639,7 @@ def _frontend_ready_action_weak_review_phrase_violation(sentence: Any) -> str:
     if not re.search(action_terms, value):
         return (
             "대응방향이 검토/점검/확인에 머물렀습니다. "
-            "SK AX가 앞으로 어떤 사업 방향으로 봐야 하는지까지 써야 합니다."
+            "SK AX의 후속 움직임이 어떤 형태로 전개되는지까지 써야 합니다."
         )
     return ""
 
@@ -10719,8 +10721,8 @@ def _event_based_strategic_meaning_candidates(integrated_issue: dict[str, Any]) 
         candidates.append(fact)
     if subject:
         candidates.append(
-            f"{subject}이 기사에서 확인된 만큼, 이 이슈는 단순 기능 도입보다 "
-            "대상 시스템의 전환 범위, 업무 영향도, 운영 안정성 기준을 함께 봐야 하는 사건입니다."
+            f"{subject}이 기사에서 확인된 만큼, 이 이슈는 대상 시스템의 전환 범위, "
+            "업무 영향도, 운영 안정성 기준이 함께 드러난 사건입니다."
         )
         candidates.append(
             f"유사 사업에서는 {subject}의 기능 구현 여부만이 아니라 기존 시스템과의 "
@@ -10746,7 +10748,7 @@ def _event_based_strategic_meaning_candidates(integrated_issue: dict[str, Any]) 
     if _main_company_is_customer_or_buyer(integrated_issue) and target:
         candidates.append(
             f"{target}는 계약 상대방으로 확인되지만, 최종 발주자 여부나 수행 범위는 "
-            "기사에서 확인된 계약 범위와 별도 기준으로 분리해 봐야 합니다."
+            "기사에서 확인된 계약 범위와 별도 기준으로 분리해 해석할 수 있습니다."
         )
     return [item for item in candidates if item]
 
@@ -11792,7 +11794,7 @@ def _fallback_skax_implication(
         "potential_impact": (
             f"유사 사업에서는 {subject}에서 확인된 범위와 검증 기준이 "
             f"사업 판단의 참고점이 될 수 있으므로 SK AX는 {profile_comparison}을 "
-            "바탕으로 준비 방향을 잡아야 합니다."
+            "바탕으로 준비 범위를 정교화할 수 있습니다."
         ),
         "opportunities": [],
         "threats": [],
@@ -11831,12 +11833,12 @@ def _fallback_internal_actions(
         (
             f"SK AX는 {_with_particle(issue_term, '과', '와')} 유사한 사업에서 "
             f"{profile_comparison}을 참고해 "
-            "입력 사건에서 확인된 변화가 어떤 준비 방향을 남기는지 봐야 합니다."
+            "입력 사건에서 확인된 변화를 후속 준비 범위에 반영할 수 있습니다."
         ),
         (
             f"SK AX는 {issue_term} 대응 시 "
             f"{_with_particle(checkpoint_hint, '을', '를')} 단순 확인 항목이 아니라 "
-            "사업 방향을 정하는 기준으로 다뤄야 합니다."
+            "후속 사업 범위를 정교화하는 기준으로 활용할 수 있습니다."
         ),
     ]
 
