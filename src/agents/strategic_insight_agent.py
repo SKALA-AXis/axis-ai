@@ -3293,14 +3293,20 @@ def _is_valid_integrated_issue(integrated_issue: dict[str, Any]) -> bool:
 
 
 def _has_integrated_text_candidate_signal(integrated_issue: dict[str, Any]) -> bool:
-    if not isinstance(integrated_issue, dict) or not integrated_issue.get("integrated_text"):
+    if not isinstance(integrated_issue, dict):
         return False
-    if _is_weak_surface_integrated_issue(integrated_issue):
+    if _is_weak_surface_integrated_issue(integrated_issue) and not _has_sizable_tech_event_signal(
+        integrated_issue
+    ):
         return False
     lines = _integrated_text_anchor_lines(integrated_issue, max_items=8)
     if len(lines) < 2:
+        lines = _dedupe_keep_order([*lines, *_issue_fact_lines(integrated_issue)])
+    if len(lines) < 2:
         return False
     grounding = " ".join(lines)
+    if _has_sizable_tech_event_signal(integrated_issue):
+        return True
     anchors = _specific_event_anchors_for_frontend(integrated_issue)
     return bool(
         len(anchors) >= 2
@@ -3465,6 +3471,8 @@ def _industry_signal_scope(
     if _has_market_infra_signal(grounding):
         return "market_infra_signal"
     if event_type in {"industry_trend", "market_trend", "policy", "regulation"}:
+        return "industry_signal"
+    if _has_sizable_tech_event_signal(integrated_issue):
         return "industry_signal"
     if re.search(r"산업\s*구조|시장\s*구조|경쟁\s*기준|시장\s*전망|업계\s*전망", grounding):
         return "industry_signal"
@@ -3824,8 +3832,38 @@ def _is_weak_surface_integrated_issue(integrated_issue: dict[str, Any]) -> bool:
     )
     return not (
         _has_business_structure_fact(grounding, integrated_issue)
+        or _has_sizable_tech_event_signal(integrated_issue)
         or re.search(non_event_execution_pattern, grounding, flags=re.IGNORECASE)
     )
+
+
+def _has_sizable_tech_event_signal(integrated_issue: dict[str, Any]) -> bool:
+    grounding = _integrated_grounding_text(integrated_issue)
+    if not grounding.strip():
+        return False
+    has_event = bool(
+        re.search(
+            r"행사|전시|박람회|컨퍼런스|포럼|엑스포|코엑스|스마트테크\s*코리아|STK",
+            grounding,
+            flags=re.IGNORECASE,
+        )
+    )
+    has_scale = bool(
+        re.search(
+            r"\d+\s*개국|\d+\s*개사|\d+\s*개\s*기업|\d+\s*개\s*부스|"
+            r"참가(?:사|기업)?|관람객|방문객|참석자",
+            grounding,
+            flags=re.IGNORECASE,
+        )
+    )
+    has_tech_theme = bool(
+        re.search(
+            r"AI|인공지능|자동화|로봇|스마트테크|디지털|데이터|클라우드|산업\s*전\s*과정",
+            grounding,
+            flags=re.IGNORECASE,
+        )
+    )
+    return has_event and has_scale and has_tech_theme
 
 
 def _has_business_structure_fact(text: str, integrated_issue: dict[str, Any]) -> bool:
@@ -4009,6 +4047,54 @@ def _industry_frontend_axes(integrated_issue: dict[str, Any]) -> list[dict[str, 
         return []
     fact_lines = _issue_fact_lines(integrated_issue)
     axes: list[dict[str, Any]] = []
+    tech_event_anchors = _ordered_anchor_matches(
+        grounding,
+        (
+            r"스마트테크\s*코리아\s*2026",
+            r"STK\s*2026",
+            r"코엑스",
+            r"\d+\s*개국",
+            r"\d+\s*개사",
+            r"AI",
+            r"인공지능",
+            r"자동화",
+            r"로봇",
+            r"스마트\s*제조",
+            r"디지털\s*유통·물류",
+            r"스마트테크",
+            r"산업\s*전\s*과정",
+        ),
+    )
+    if _has_sizable_tech_event_signal(integrated_issue) and len(tech_event_anchors) >= 2:
+        anchors = tech_event_anchors[:6]
+        evidence_lines = _industry_lines_with_anchors(fact_lines, anchors)
+        domain_lines = [
+            line
+            for line in fact_lines
+            if re.search(
+                r"AI|인공지능|로봇|스마트\s*제조|디지털\s*유통·물류|물류|자동화",
+                line,
+                flags=re.IGNORECASE,
+            )
+        ]
+        domain_lines = sorted(
+            domain_lines,
+            key=_technology_event_domain_line_score,
+            reverse=True,
+        )
+        evidence_lines = _dedupe_keep_order([*domain_lines[:2], *evidence_lines])[:2]
+        axes.append(
+            {
+                "strategic_axis": "technology_event_adoption_signal",
+                "event_anchor_terms": anchors,
+                "decision_criteria": _industry_decision_criteria_from_issue(
+                    _industry_axis_context_text(evidence_lines, grounding=grounding),
+                    anchors=anchors,
+                    axis_key="technology_event_adoption_signal",
+                ),
+                "evidence_lines": evidence_lines,
+            }
+        )
     infra_anchors = _ordered_anchor_matches(
         grounding,
         (
@@ -4125,15 +4211,21 @@ def _industry_frontend_item(
             axis_key=str(axis.get("strategic_axis") or ""),
         )
     evidence_lines = _string_list(axis.get("evidence_lines"), max_items=2)
+    axis_key = str(axis.get("strategic_axis") or "")
     evidence_text = _industry_evidence_sentence(
         evidence_lines,
+        axis_key=axis_key,
         anchors=anchors,
         decision_criteria=decision_criteria,
         primary_actor_type=str(skip_decision.get("primary_actor_type") or ""),
     )
-    action_sentence = _industry_action_sentence(anchors, decision_criteria=decision_criteria)
+    action_sentence = _industry_action_sentence(
+        anchors,
+        axis_key=axis_key,
+        decision_criteria=decision_criteria,
+    )
     action_evidence = _industry_action_evidence_sentence(
-        axis_key=str(axis.get("strategic_axis") or ""),
+        axis_key=axis_key,
         anchors=anchors,
         decision_criteria=decision_criteria,
         evidence_lines=evidence_lines,
@@ -4417,12 +4509,12 @@ def _industry_criteria_flags(
     has_customer_or_system = bool(
         {
             _anchor_norm("고객 적용 가능성"),
-            _anchor_norm("고객 제안 단위"),
+            _anchor_norm("고객 적용 방식"),
             _anchor_norm("기존 시스템 접점"),
         }
         & normalized
     ) or bool(re.search(r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I))
-    has_operation = bool({_anchor_norm("운영 책임")} & normalized)
+    has_operation = bool({_anchor_norm("실행 조건")} & normalized)
     has_investment = bool(
         {
             _anchor_norm("투자 조건"),
@@ -4456,7 +4548,7 @@ def _industry_role_structure_subject(
     if flags["actor_or_partner"] and (flags["customer_or_system"] or flags["operation"]):
         return "여러 참여 주체와 실행 단계가 함께 드러난 논의"
     if flags["customer_or_system"] and flags["operation"]:
-        return "고객 적용 범위와 운영 책임이 함께 드러난 논의"
+        return "고객 적용 범위와 실행 조건이 함께 드러난 논의"
     if flags["investment"] and flags["infra_or_supply"]:
         return "투자 조건과 기술 준비가 함께 드러난 논의"
     return ""
@@ -4473,7 +4565,7 @@ def _industry_role_structure_change_clause(
         and (flags["customer_or_system"] or flags["operation"])
     ):
         return (
-            "기술 확보 자체보다 적용 기업, 구축 범위, 운영 지원 책임을 나눠 보는 "
+            "기술 확보 자체보다 적용 기업과 실행 범위를 나눠 보는 "
             "경쟁 기준으로 이어질 수 있음을 보여준다."
         )
     if flags["infra_or_supply"] and (flags["customer_or_system"] or flags["operation"]):
@@ -4482,9 +4574,9 @@ def _industry_role_structure_change_clause(
             "확장될 수 있음을 보여준다."
         )
     if flags["actor_or_partner"] and (flags["customer_or_system"] or flags["operation"]):
-        return "협력 여부보다 참여 주체별 역할과 실행 이후 책임 구분이 중요해질 수 있음을 보여준다."
+        return "협력 여부보다 참여 주체별 역할 구분이 중요해질 수 있음을 보여준다."
     if flags["customer_or_system"] and flags["operation"]:
-        return "기능 제공보다 고객 업무에 닿는 적용 범위와 운영 책임을 함께 보는 흐름을 보여준다."
+        return "기능 제공보다 고객 업무에 닿는 적용 범위를 함께 보는 흐름을 보여준다."
     if flags["investment"] and flags["infra_or_supply"]:
         return "투자 규모보다 실제 적용 조건과 후속 운영 가능성을 함께 따지는 흐름을 보여준다."
     return ""
@@ -4500,18 +4592,89 @@ def _industry_action_role_axis(
         and flags["infra_or_supply"]
         and (flags["customer_or_system"] or flags["operation"])
     ):
-        return "기술 제공, 고객 적용, 구축 이후 운영 지원 중 어떤 역할을 맡을 수 있는지"
+        return "기술 제공과 고객 적용 중 어떤 역할을 맡을 수 있는지"
     if flags["infra_or_supply"] and flags["customer_or_system"]:
-        return "기술·인프라 준비 조건과 고객 적용 단계, 운영 지원 범위"
+        return "기술·인프라 준비 조건과 고객 적용 단계"
     if flags["actor_or_partner"] and flags["operation"]:
-        return "참여 주체별 역할과 구축 이후 운영 책임 구간"
+        return "참여 주체별 역할 구분"
     if flags["actor_or_partner"]:
-        return "참여 주체별 역할과 외부 협력이 필요한 구간"
+        return "참여 주체별 역할 구분"
     if flags["customer_or_system"] and flags["operation"]:
-        return "고객 업무 적용 범위와 운영 책임 구간"
+        return "고객 업무 적용 범위"
     if flags["investment"] and flags["infra_or_supply"]:
         return "투자 부담, 준비 조건, 후속 적용 가능성"
     return ""
+
+
+def _is_technology_event_adoption_axis(axis_key: str, anchors: Sequence[str] | None = None) -> bool:
+    if str(axis_key or "") == "technology_event_adoption_signal":
+        return True
+    anchor_text = " ".join(str(anchor or "") for anchor in anchors or ())
+    return bool(
+        re.search(
+            r"스마트테크\s*코리아|STK\s*2026|코엑스|개국|개사",
+            anchor_text,
+            flags=re.IGNORECASE,
+        )
+        and re.search(r"AI|인공지능|로봇|스마트\s*제조|물류|자동화", anchor_text, flags=re.I)
+    )
+
+
+def _technology_event_scale_phrase(values: Sequence[str]) -> str:
+    text = " ".join(str(value or "") for value in values)
+    country = re.search(r"\d+\s*개국", text)
+    company = re.search(r"\d+\s*개사", text)
+    if country and company:
+        return f"{country.group(0)} {company.group(0)}"
+    if company:
+        return company.group(0)
+    if country:
+        return country.group(0)
+    return "여러 국가와 기업"
+
+
+def _technology_event_domain_phrase(values: Sequence[str]) -> str:
+    text = " ".join(str(value or "") for value in values)
+    domains: list[str] = []
+    for label, pattern in (
+        ("AI", r"AI|인공지능"),
+        ("로봇", r"로봇"),
+        ("스마트제조", r"스마트\s*제조"),
+        ("디지털 유통·물류", r"디지털\s*유통·물류|물류"),
+        ("자동화", r"자동화"),
+    ):
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            domains.append(label)
+    domains = _dedupe_keep_order(domains)
+    if len(domains) >= 3:
+        return "·".join(domains[:4])
+    if domains:
+        return "·".join(domains)
+    return "산업별 기술 적용 분야"
+
+
+def _technology_event_domain_line_score(value: Any) -> int:
+    text = str(value or "")
+    score = 0
+    for pattern in (
+        r"AI|인공지능",
+        r"로봇",
+        r"스마트\s*제조",
+        r"디지털\s*유통·물류|물류",
+        r"자동화",
+        r"\d+\s*개국",
+        r"\d+\s*개사",
+    ):
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            score += 1
+    return score
+
+
+def _technology_event_name_phrase(values: Sequence[str]) -> str:
+    text = " ".join(str(value or "") for value in values)
+    if re.search(r"스마트테크\s*코리아\s*2026|STK\s*2026", text, flags=re.IGNORECASE):
+        return "스마트테크 코리아 2026"
+    return "이번 기술 전시"
 
 
 def _industry_implication_sentence(
@@ -4521,7 +4684,12 @@ def _industry_implication_sentence(
     decision_criteria: Sequence[str],
     anchors: Sequence[str] | None = None,
 ) -> str:
-    del axis_key
+    if _is_technology_event_adoption_axis(axis_key, anchors or ()):
+        return (
+            "대규모 기술 전시의 경쟁 포인트가 개별 제품 소개보다 "
+            "AI·로봇·스마트제조·물류처럼 실제 산업 적용 분야를 함께 보여주는 쪽으로 "
+            "넓어지고 있다."
+        )
     role_subject = _industry_role_structure_subject(decision_criteria, anchors or ())
     role_change = _industry_role_structure_change_clause(decision_criteria, anchors or ())
     if role_subject and role_change:
@@ -4562,7 +4730,7 @@ def _industry_decision_criteria_from_issue(
     criteria_patterns: tuple[tuple[str, str], ...] = (
         ("투자 조건", r"투자|예산|사업비|규모|조원|억원|자금|CAPEX"),
         ("비용 부담", r"비용|부담|원가|가격"),
-        ("운영 책임", r"운영|관제|책임|관리|유지|서비스\s*개시"),
+        ("실행 조건", r"운영|관제|책임|관리|유지|서비스\s*개시"),
         ("기술 공급 구조", r"공급|벤더|기술|GPU|그래픽처리장치|반도체|클라우드|플랫폼|모델|장비"),
         ("고객 적용 가능성", r"고객|적용|도입|사용|서비스|업무|기업\s*AI"),
         ("기존 시스템 접점", r"기존\s*시스템|시스템\s*연계|연계|ERP|전환|업무\s*시스템"),
@@ -4574,7 +4742,7 @@ def _industry_decision_criteria_from_issue(
             "데이터/인프라 준비 수준",
             r"데이터|인프라|데이터\s*센터|데이터센터|AI\s*팩토리|컴퓨팅|GPU",
         ),
-        ("고객 제안 단위", r"제안|고객|서비스|패키지|솔루션"),
+        ("고객 적용 방식", r"제안|고객|서비스|패키지|솔루션"),
         ("내부 관리 지표", r"지표|성과|매출|비중|수익|모니터링"),
     )
     matched: list[str] = []
@@ -4608,10 +4776,19 @@ def _industry_lines_with_anchors(lines: Sequence[str], anchors: Sequence[str]) -
 def _industry_evidence_sentence(
     evidence_lines: Sequence[str],
     *,
+    axis_key: str = "",
     anchors: Sequence[str],
     decision_criteria: Sequence[str],
     primary_actor_type: str,
 ) -> str:
+    if _is_technology_event_adoption_axis(axis_key, anchors):
+        scale = _technology_event_scale_phrase([*anchors, *evidence_lines])
+        domains = _technology_event_domain_phrase([*anchors, *evidence_lines])
+        event_name = _technology_event_name_phrase([*anchors, *evidence_lines])
+        return (
+            f"{event_name}에는 {scale}가 참가했고 {domains}가 함께 소개돼, "
+            "전시의 무게가 개최 사실보다 산업별 적용 장면을 확인하는 쪽에 놓여 있다."
+        )
     primary = _anchor_phrase(anchors, max_items=2)
     line = str(
         next(
@@ -4650,13 +4827,19 @@ def _industry_evidence_sentence(
 def _industry_action_sentence(
     anchors: Sequence[str],
     *,
+    axis_key: str = "",
     decision_criteria: Sequence[str],
 ) -> str:
+    if _is_technology_event_adoption_axis(axis_key, anchors):
+        return (
+            "SK AX는 대규모 기술 전시에서 확인된 AI 적용 분야 중 제조·물류·업무 자동화 "
+            "수요가 먼저 구체화되는 영역을 추적해야 한다."
+        )
     anchor_phrase = _anchor_phrase(anchors, max_items=3)
     role_axis = _industry_action_role_axis(decision_criteria, anchors)
     if role_axis:
         role_object = _with_korean_object_particle(role_axis)
-        return f"SK AX는 이 흐름에서 {role_object} 나눠 검토해야 한다."
+        return f"SK AX는 이 흐름에서 {role_object} 우선 확인해야 한다."
     action_reading = _industry_dynamic_action_reading_from_anchors(
         anchors,
         decision_criteria=decision_criteria,
@@ -4679,7 +4862,14 @@ def _industry_action_evidence_sentence(
     decision_criteria: Sequence[str],
     evidence_lines: Sequence[str] = (),
 ) -> str:
-    del axis_key
+    if _is_technology_event_adoption_axis(axis_key, anchors):
+        scale = _technology_event_scale_phrase([*anchors, *evidence_lines])
+        domains = _technology_event_domain_phrase([*anchors, *evidence_lines])
+        return (
+            f"{scale}가 참가한 행사에서 {domains}가 함께 제시된 만큼, SK AX도 "
+            "단순 AI 관심도보다 제조·물류·업무 자동화 가운데 실제 도입 논의가 "
+            "앞서 움직이는 영역을 우선 확인해야 한다."
+        )
     anchor_phrase = _anchor_phrase(anchors, max_items=2)
     result_phrase = _industry_action_result_phrase(decision_criteria)
     evidence_reading = _industry_action_evidence_reading_phrase(decision_criteria)
@@ -4699,10 +4889,13 @@ def _industry_action_evidence_sentence(
             if role_axis:
                 role_object = _with_korean_object_particle(role_axis)
                 return (
-                    f"{fact_clause} {anchor_phrase} 흐름은 SK AX가 {role_object} "
-                    "내부 판단 기준으로 나눠 봐야 하는 근거가 된다."
+                    f"{fact_clause} {anchor_phrase} 흐름에서는 SK AX도 {role_object} "
+                    "우선 확인할 필요가 있다."
                 )
-            return f"{fact_clause} {anchor_phrase} 흐름은 SK AX의 내부 판단 기준으로 이어진다."
+            return (
+                f"{fact_clause} {anchor_phrase} 흐름에서는 SK AX도 적용 대상과 "
+                "실행 단계의 구체화 속도를 확인하게 된다."
+            )
         return (
             f"{anchor_phrase} 흐름에서 {dynamic_reading}이 부각되므로, "
             f"{role_reading or '참여 주체와 적용 단계의 역할 구분이 중요해질 수 있다.'}"
@@ -4711,7 +4904,7 @@ def _industry_action_evidence_sentence(
         result_object = _with_korean_object_particle(result_phrase)
         return (
             f"{anchor_phrase}와 함께 {evidence_reading}이 드러난 만큼, SK AX도 "
-            f"{result_object} 중심으로 고객 적용 가능성과 협력 필요성을 나눠 볼 수 있다."
+            f"{result_object} 중심으로 고객 적용 가능성과 협력 필요성을 확인할 수 있다."
         )
     return (
         f"{anchor_phrase}가 제시된 만큼, SK AX는 직접 사업화를 단정하기보다 "
@@ -4735,15 +4928,9 @@ def _industry_action_role_reading_phrase(
 ) -> str:
     flags = _industry_criteria_flags(decision_criteria, anchors)
     if flags["actor_or_partner"] and flags["infra_or_supply"]:
-        return (
-            "기술을 제공하는 주체와 이를 적용하는 기업, 이후 운영을 맡는 주체의 "
-            "역할 구분이 중요해질 수 있다."
-        )
+        return "기술을 제공하는 주체와 이를 적용하는 기업의 역할 구분이 중요해질 수 있다."
     if flags["actor_or_partner"] and (flags["operation"] or flags["customer_or_system"]):
-        return (
-            "서비스 제공자와 적용 조직, 운영 책임을 맡는 주체가 나뉠 수 있어 "
-            "검토 기준도 실행 단계별로 달라질 수 있다."
-        )
+        return "서비스 제공자와 적용 조직이 나뉠 수 있어 검토 기준도 실행 단계별로 달라질 수 있다."
     if flags["infra_or_supply"]:
         return (
             "기술·인프라 확보 여부만이 아니라 실제 적용 이후의 운영 조건까지 "
@@ -4756,7 +4943,7 @@ def _industry_action_role_reading_phrase(
         )
     if flags["operation"] or flags["customer_or_system"]:
         return (
-            "고객 업무에 닿는 적용 범위와 운영 책임이 함께 제시될수록 검토 기준도 "
+            "고객 업무에 닿는 적용 범위가 제시될수록 검토 기준도 "
             "시스템 접점과 실행 단계로 나뉠 수 있다."
         )
     return ""
@@ -4773,10 +4960,10 @@ def _industry_market_reading_phrase(criteria: Sequence[str]) -> str:
         parts.append("기술을 실제로 운영할 기반과 공급 구조")
     if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
         parts.append("여러 주체가 역할을 나누는 협력 구조")
-    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 제안 단위")} & normalized:
+    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 적용 방식")} & normalized:
         parts.append("고객 업무에 적용되는 방식")
-    if {_anchor_norm("운영 책임"), _anchor_norm("기존 시스템 접점")} & normalized:
-        parts.append("운영 책임과 기존 시스템 연결 방식")
+    if {_anchor_norm("실행 조건"), _anchor_norm("기존 시스템 접점")} & normalized:
+        parts.append("기존 시스템 연결 방식")
     if {_anchor_norm("투자 조건"), _anchor_norm("비용 부담")} & normalized:
         parts.append("투자 부담과 실행 가능성")
     if {_anchor_norm("후속 사업화 조건"), _anchor_norm("규제/정책 대응 조건")} & normalized:
@@ -4793,9 +4980,9 @@ def _industry_evidence_reading_phrase(criteria: Sequence[str]) -> str:
         parts.append("참여 주체 간 협력 관계")
     if {_anchor_norm("데이터/인프라 준비 수준"), _anchor_norm("기술 공급 구조")} & normalized:
         parts.append("기술·인프라를 갖추는 방식")
-    if {_anchor_norm("운영 책임"), _anchor_norm("기존 시스템 접점")} & normalized:
-        parts.append("운영과 시스템 연결 조건")
-    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 제안 단위")} & normalized:
+    if {_anchor_norm("실행 조건"), _anchor_norm("기존 시스템 접점")} & normalized:
+        parts.append("시스템 연결 조건")
+    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 적용 방식")} & normalized:
         parts.append("고객 적용 가능성")
     if {_anchor_norm("투자 조건"), _anchor_norm("비용 부담")} & normalized:
         parts.append("투자와 비용 부담")
@@ -4809,12 +4996,12 @@ def _industry_evidence_reading_phrase(criteria: Sequence[str]) -> str:
 def _industry_action_reading_phrase(criteria: Sequence[str]) -> str:
     normalized = {_anchor_norm(item) for item in criteria}
     parts: list[str] = []
-    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 제안 단위")} & normalized:
+    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 적용 방식")} & normalized:
         parts.append("고객 적용 가능성이 있는 접점")
-    if {_anchor_norm("운영 책임"), _anchor_norm("기존 시스템 접점")} & normalized:
-        parts.append("운영 지원이나 기존 시스템과 맞닿는 범위")
+    if {_anchor_norm("실행 조건"), _anchor_norm("기존 시스템 접점")} & normalized:
+        parts.append("기존 시스템과 맞닿는 범위")
     if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
-        parts.append("외부 협력이 필요한 구간")
+        parts.append("참여 주체별 역할 구분")
     if {_anchor_norm("기술 공급 구조"), _anchor_norm("데이터/인프라 준비 수준")} & normalized:
         parts.append("기술·인프라 준비를 직접 맡을 수 있는 범위")
     if {_anchor_norm("투자 조건"), _anchor_norm("비용 부담")} & normalized:
@@ -4831,9 +5018,9 @@ def _industry_action_evidence_reading_phrase(criteria: Sequence[str]) -> str:
     parts: list[str] = []
     if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
         parts.append("참여 구조")
-    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 제안 단위")} & normalized:
+    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 적용 방식")} & normalized:
         parts.append("고객 적용 방향")
-    if {_anchor_norm("운영 책임"), _anchor_norm("기존 시스템 접점")} & normalized:
+    if {_anchor_norm("실행 조건"), _anchor_norm("기존 시스템 접점")} & normalized:
         parts.append("운영·시스템 연결 조건")
     if {_anchor_norm("기술 공급 구조"), _anchor_norm("데이터/인프라 준비 수준")} & normalized:
         parts.append("기술·인프라 준비 방식")
@@ -5012,11 +5199,11 @@ def _action_structure_axis_phrase(integrated_issue: dict[str, Any]) -> str:
     if re.search(r"로봇|물류|관제|학습|센터|현장", target_text):
         axes.extend(["적용 업무", "운영 역할"])
     if re.search(r"보안|취약점|탐지|사고|모니터링|대응", target_text):
-        axes.extend(["보안 책임 구간", "외부 협력 필요성"])
+        axes.extend(["보안 대응 범위", "보완 필요 항목"])
     if re.search(r"GPU|데이터센터|인프라|AI\s*팩토리|컴퓨팅", target_text, flags=re.IGNORECASE):
         axes.extend(["고객 적용 단계", "운영 지원 범위"])
     if re.search(r"계약|수주|공급|운영|DevOps|장애", target_text, flags=re.IGNORECASE):
-        axes.extend(["운영 책임 구간", "후속 지원 범위"])
+        axes.extend(["실행 범위", "후속 확인 범위"])
     if not axes:
         axes.extend(["적용 업무", "대상 시스템", "운영 역할"])
     return "·".join(_dedupe_keep_order(axes)[:2])
@@ -5061,7 +5248,7 @@ def _industry_dynamic_action_reading_from_anchors(
         value,
         flags=re.I,
     ):
-        return "실행 범위와 후속 운영 책임이 생기는 구간"
+        return "실행 범위와 후속 확인이 필요한 구간"
     if flags["financial"] and re.search(r"매출|비중|수익|거래|성과|지표", value, flags=re.I):
         return "성과와 거래 구조를 설명할 수 있는 관리 기준"
     return ""
@@ -5082,8 +5269,8 @@ def _industry_anchor_market_reading(
         and re.search(r"데이터\s*센터|데이터센터|GPU|AI\s*팩토리|컴퓨팅|인프라", value, flags=re.I)
     ):
         return (
-            "기술 확보 자체보다 적용 기업, 구축 범위, 운영 지원 책임을 "
-            "나눠 보는 경쟁 기준으로 이어질 수 있음을 보여준다."
+            "기술 확보 자체보다 적용 기업과 구축 범위를 나눠 보는 "
+            "경쟁 기준으로 이어질 수 있음을 보여준다."
         )
     if flags["customer_or_system"] and re.search(
         r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I
@@ -5097,10 +5284,7 @@ def _industry_anchor_market_reading(
         value,
         flags=re.I,
     ):
-        return (
-            "시장 평가가 단일 발표보다 실행 범위와 후속 운영 책임을 "
-            "함께 보는 방향으로 옮겨갈 수 있음을 보여준다."
-        )
+        return "시장 평가가 단일 발표보다 실행 범위를 함께 보는 방향으로 옮겨갈 수 있음을 보여준다."
     if flags["actor_or_partner"] and re.search(
         r"협력|제휴|파트너|컨소시엄|그룹|기업|정부|기관|참여",
         value,
@@ -5140,9 +5324,9 @@ def _industry_action_result_phrase(criteria: Sequence[str]) -> str:
     result: list[str] = []
     if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
         result.append("협력 필요성")
-    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 제안 단위")} & normalized:
+    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 적용 방식")} & normalized:
         result.append("고객 접점")
-    if {_anchor_norm("운영 책임"), _anchor_norm("기존 시스템 접점")} & normalized:
+    if {_anchor_norm("실행 조건"), _anchor_norm("기존 시스템 접점")} & normalized:
         result.append("운영·시스템 연계 조건")
     if {
         _anchor_norm("투자 조건"),
@@ -5402,12 +5586,9 @@ def _role_mode_instructions(integrated_issue: dict[str, Any]) -> str:
             "타깃 피어의 역량/성과/전략 근거가 아닙니다.",
             "- SK AX 대응방향은 유사 고객군/유사 사업 관점을 유지하되, "
             "외부 고객 제안 문장이 아니라 SK AX 내부 전략 점검으로 쓰세요.",
-            "- SK AX 대응방향은 '피어 신호 → 유사 고객군/유사 사업 → 피어사 사업군/역량과 "
-            "SK AX 사업군/역량의 겹침/차이 → 대응 가능 범위와 역량 공백 → "
-            "보완할 사업/역량/운영/영업 전략 → 후속 모니터링' 순서로 2~3문장 작성하세요.",
-            "- 대응방향은 넓은 실행 장면명이 아니라 적용 범위, 역할 분담, 운영 책임, "
-            "일정 조건, 장애 대응 기준, 보안·권한 기준, 전환 리스크, 성능/용량 검증 기준, "
-            "후속 모니터링 항목처럼 내부적으로 확인할 기준을 중심으로 쓰세요.",
+            "- SK AX 대응방향은 피어 신호와 SK AX의 접점/차이를 구분한 뒤, "
+            "입력 사건에서 확인된 비교·점검 대상으로 작성하세요.",
+            "- 대응방향은 넓은 실행 장면명이 아니라 입력 사건에서 확인된 기준을 중심으로 쓰세요.",
         ]
     )
 
@@ -6180,6 +6361,9 @@ def _frontend_ready_required_violations(
                 str(block.get("evidence_sentence") or ""),
             ]
         )
+        malformed_copy_violation = _frontend_ready_malformed_display_sentence_violation(text)
+        if malformed_copy_violation:
+            violations.append(f"frontend_ready.{section_key}: {malformed_copy_violation}")
         internal_copy_violation = _frontend_ready_internal_copy_term_violation(text)
         if internal_copy_violation:
             violations.append(f"frontend_ready.{section_key}: {internal_copy_violation}")
@@ -6365,6 +6549,62 @@ def _frontend_ready_internal_copy_term_violation(text: Any) -> str:
     return ""
 
 
+def _frontend_ready_malformed_display_sentence_violation(text: Any) -> str:
+    value = re.sub(r"\s+", " ", str(text or "").strip())
+    if not value:
+        return ""
+    malformed_patterns: tuple[tuple[str, str], ...] = (
+        (
+            r"인접\s*수요|현장\s*자동화\s*범위",
+            "대응방향이 너무 넓은 표현으로 뭉개졌습니다.",
+        ),
+        (
+            r"제안\s*단위와\s*운영\s*책임\s*구간을\s*나눠\s*설명하게\s*만든다",
+            "대응방향 근거가 구체 판단 축 없이 일반 결론으로 끝났습니다.",
+        ),
+        (
+            r"어떤\s*축에서.{0,40}비교할지\s*기준을\s*나눠|"
+            r"기준을\s*나눠\s*볼\s*필요|"
+            r"하나로\s*묶을지.{0,50}(?:나눌지|분리할지).{0,20}비교|"
+            r"통합\s*제안할지\s*분리\s*제안할지|"
+            r"(?:나눌지|분리할지)부터\s*비교|"
+            r"범위를\s*나눠\s*설명할\s*필요|"
+            r"구조를\s*나눠\s*비교|"
+            r"사례와.{0,40}구조를\s*나눠\s*비교",
+            "대응방향이 내부 메모식 비교 문장으로 작성됐습니다.",
+        ),
+        (
+            r"범위으로|체계으로|구조으로|기준으로으로",
+            "조사 오류가 있는 문장은 화면 문장으로 사용할 수 없습니다.",
+        ),
+        (
+            r"(접점|범위|기준|대상|구간|책임)\s+업무\s*범위처럼",
+            "내부 판단 축이 비문 형태로 결합됐습니다.",
+        ),
+        (
+            r"범위\s+업무\s*(?:도구|범위|처리)",
+            "업무 범위 표현이 비문 형태로 결합됐습니다.",
+        ),
+        (
+            r"([가-힣A-Za-z0-9]+(?:·[가-힣A-Za-z0-9]+)+)"
+            r"\s*(?:가|이|은|는|을|를|으로|로)?\s+\1",
+            "같은 명사 묶음이 문장 안에서 반복됐습니다.",
+        ),
+        (
+            r"[가-힣A-Za-z0-9]+(?:·[가-힣A-Za-z0-9]+){1,}\s+[가-힣A-Za-z0-9\s]{0,12}처럼",
+            "명사 나열을 비유처럼 붙인 문장은 화면 문장으로 사용할 수 없습니다.",
+        ),
+        (
+            r"([가-힣A-Za-z0-9]{2,}(?:\s+[가-힣A-Za-z0-9]{2,}){0,3})\s+\1",
+            "같은 표현이 문장 안에서 반복됐습니다.",
+        ),
+    )
+    for pattern, message in malformed_patterns:
+        if re.search(pattern, value):
+            return message
+    return ""
+
+
 def _frontend_ready_key_sentence_direction_violation(
     sentence: Any,
     *,
@@ -6441,6 +6681,11 @@ def _frontend_ready_key_business_depth_violation(
             _workflow_execution_business_terms(grounding)
         ):
             return ""
+        if _frontend_ready_actionable_signal_level(integrated_issue) == "strong" and (
+            _high_signal_issue_overlap_count(value, integrated_issue) >= 1
+            or _has_integrated_issue_candidate_anchor_signal(integrated_issue)
+        ):
+            return ""
         signal_level = _frontend_ready_actionable_signal_level(integrated_issue)
         if signal_level == "moderate" and (
             _high_signal_issue_overlap_count(value, integrated_issue) >= 1
@@ -6450,8 +6695,7 @@ def _frontend_ready_key_business_depth_violation(
         if _business_context_terms(grounding):
             return (
                 "핵심 시사점이 경쟁 기준 변화만 말하고 비즈니스 실익을 충분히 "
-                "해석하지 못했습니다. 입력 근거에서 설명 가능한 고객 접점, 대외 매출, "
-                "운영 책임, 플랫폼/서비스 구조, 레퍼런스 같은 사업적 판단 축을 "
+                "해석하지 못했습니다. 입력 근거에서 설명 가능한 사업적 판단 축을 "
                 "함께 담아야 합니다."
             )
     return ""
@@ -6748,8 +6992,7 @@ def _frontend_ready_action_depth_violation(
         )
     return (
         "대응방향에 실행 결과 관점이 부족합니다. 대응 대상과 판단 기준뿐 아니라 "
-        "대외 설명, 고객 제안, 운영 책임, 매출 구조, 자체/외부 협력, "
-        "검증 기준 중 입력 사건에 맞는 실행 관점이 필요합니다."
+        "입력 사건에 맞는 실행 관점이 필요합니다."
     )
 
 
@@ -6780,13 +7023,11 @@ def _frontend_ready_action_choice_violation(block: dict[str, Any]) -> str:
     if re.search(shallow_end_pattern, sentence.strip()):
         return (
             "대응방향이 관찰자 톤의 점검 문장으로 끝났습니다. SK AX가 비교할 선택지"
-            "(자체/외부 협력, 고객군, 레퍼런스, 매출·성과 지표, 제안 단위, "
-            "운영 책임, 수요 검증 등)를 입력 근거 안에서 제시해야 합니다."
+            "를 입력 근거 안에서 제시해야 합니다."
         )
     return (
         "대응방향에 SK AX의 선택지가 부족합니다. 대응 대상과 판단 기준을 넘어서 "
-        "자체 수행/외부 협력, 고객군, 레퍼런스, 성과 지표, 제안 단위, "
-        "운영 책임, 수요 검증 중 입력 사건에 맞는 선택 축을 포함해야 합니다."
+        "입력 사건에 맞는 선택 축을 포함해야 합니다."
     )
 
 
@@ -6813,8 +7054,7 @@ def _frontend_ready_action_auxiliary_scale_overreach_violation(block: dict[str, 
     if re.search(scale_basis_pattern, sentence) and not has_execution_structure:
         return (
             "고객 규모·거점 수·시장 규모 같은 보조 정보를 SK AX 대응 결론의 "
-            "직접 기준으로 사용했습니다. 대응 결론은 적용 업무, 운영 책임, "
-            "플랫폼 확보 방식, 현장 시스템 연계처럼 실행 구조에서 가져와야 합니다."
+            "직접 기준으로 사용했습니다. 대응 결론은 입력 사건의 실행 구조에서 가져와야 합니다."
         )
     if not re.search(scale_basis_pattern, text):
         return ""
@@ -6826,8 +7066,7 @@ def _frontend_ready_action_auxiliary_scale_overreach_violation(block: dict[str, 
         if re.search(direct_basis_pattern, window) and not has_execution_structure:
             return (
                 "고객 규모·거점 수·시장 규모 같은 보조 정보를 SK AX 대응 기준으로 "
-                "직접 연결했습니다. 대응 기준은 적용 업무, 운영 책임, 플랫폼 확보 방식, "
-                "학습/관제 역할, 현장 시스템 연계처럼 현재 사건의 실행 구조에서 가져와야 합니다."
+                "직접 연결했습니다. 대응 기준은 현재 사건의 실행 구조에서 가져와야 합니다."
             )
     return ""
 
@@ -6950,18 +7189,19 @@ def _frontend_ready_peer_product_as_skax_basis_violation(
     matched_in_evidence = [
         term for term in peer_only_terms if _text_has_anchor_term(evidence, [term])
     ]
-    action_basis_pattern = (
+    sentence_basis_pattern = (
         r"처럼|같은\s*제품|동일한\s*제품|비교\s*기준|"
         r"내부\s*비교|판단\s*기준|삼아야|직접\s*(기준|비교)"
     )
-    if matched_in_sentence and re.search(action_basis_pattern, sentence):
+    evidence_basis_pattern = r"같은\s*제품|동일한\s*제품|내부\s*비교|삼아야|직접\s*(기준|비교)"
+    if matched_in_sentence and re.search(sentence_basis_pattern, sentence):
         return (
             "피어사 고유 제품명을 SK AX 대응방향의 직접 기준처럼 사용했습니다. "
             "SK AX 프로필에 같은 제품/역량 근거가 없으면 제품명 대신 해당 제품이 맡는 "
             "기능, 적용 업무, 대상 시스템, 운영 역할, 기존 시스템 접점 같은 "
             "구조 표현으로 낮춰야 합니다."
         )
-    if matched_in_evidence and re.search(action_basis_pattern, evidence):
+    if matched_in_evidence and re.search(evidence_basis_pattern, evidence):
         return (
             "피어사 고유 제품명을 SK AX 내부 판단 근거처럼 사용했습니다. "
             "대응방향 근거에서는 피어 제품명보다 현재 사건의 기능·업무 범위와 "
@@ -6972,7 +7212,7 @@ def _frontend_ready_peer_product_as_skax_basis_violation(
         r"(?:모듈|라인업|제품\s*구조|서비스\s*라인업)\s*(?:기반|형|구조|제안)"
     )
     if re.search(peer_structure_pattern, sentence) and re.search(
-        action_basis_pattern + r"|기준|비교|구분|나눠",
+        sentence_basis_pattern + r"|기준|비교|구분|나눠",
         sentence,
     ):
         return (
@@ -8557,7 +8797,7 @@ def _recommended_action_quality_violation(
         if not evidence_has_tech and not profile_support:
             return (
                 "현재 사건 근거 또는 SK AX 프로필 접점 없이 기술명을 대응방향에 사용했습니다. "
-                "대상 시스템, 전환 범위, 업무 영향도, 운영 책임, 검증 기준 중심으로 낮춰야 합니다."
+                "입력 사건에서 확인된 대상과 검증 기준 중심으로 낮춰야 합니다."
             )
     if re.search(r"성공|수주에\s*영향|신뢰성", text) and not _profile_has_execution_case(
         profile_context,
@@ -8574,14 +8814,12 @@ def _recommended_action_quality_violation(
     ):
         return (
             "대응방향이 근거 없는 솔루션 표현에 머물렀습니다. "
-            "현재 사건의 전환 범위, 업무 영향도, 운영 책임, 검증 기준처럼 "
-            "SK AX가 내부적으로 점검할 기준으로 낮춰야 합니다."
+            "현재 사건에서 확인된 기준으로 낮춰야 합니다."
         )
     if re.search(r"성능.{0,12}(강조|입증)|검증된\s*성능", text):
         return (
             "대응방향이 성능 강조 같은 일반 표현에 머물렀습니다. "
-            "현재 사건의 전환 범위, 업무 영향도, 운영 책임, 성능/용량 검증 기준처럼 "
-            "SK AX가 내부적으로 점검할 기준으로 낮춰야 합니다."
+            "현재 사건에서 확인된 기준으로 낮춰야 합니다."
         )
     off_topic_product_violation = _off_topic_application_product_violation(
         text,
@@ -8723,7 +8961,7 @@ def _evidence_scoped_business_claim_violation(
     ):
         return (
             "SK AX 영향/대응을 일반 솔루션 표현으로 썼습니다. 현재 사건에서 확인된 "
-            "전환 범위, 업무 영향도, 운영 책임, 검증 기준 중심으로 낮춰야 합니다."
+            "전환 범위, 업무 영향도, 검증 기준 중심으로 낮춰야 합니다."
         )
     solution_scope_violation = _solution_term_scope_violation(
         text_value,
@@ -10470,8 +10708,8 @@ def _event_based_strategic_meaning_candidates(integrated_issue: dict[str, Any]) 
         )
     if _main_company_is_customer_or_buyer(integrated_issue) and target:
         candidates.append(
-            f"{target}는 계약 상대방으로 확인되지만, 최종 발주자 여부나 수행·운영 책임은 "
-            "원문만으로 단정하기 어렵습니다."
+            f"{target}는 계약 상대방으로 확인되지만, 최종 발주자 여부나 수행 범위는 "
+            "기사에서 확인된 계약 범위와 별도 기준으로 분리해 봐야 합니다."
         )
     return [item for item in candidates if item]
 
@@ -10762,9 +11000,9 @@ def _event_based_peer_meaning(
     if _main_company_is_customer_or_buyer(integrated_issue):
         return (
             f"{fact} {peer_name}는 원문상 계약 상대방으로 확인되지만, 최종 발주자 "
-            "여부나 수행·운영 책임 범위까지는 단정하기 어렵습니다. 따라서 피어사 "
-            "관점에서는 역할 확장으로 단정하지 않고, 금융권 핵심 시스템 전환 과제와 "
-            "연결된 관찰 신호로 해석하는 것이 안전합니다."
+            "여부와 수행 범위는 별도 확인 축으로 남습니다. 따라서 피어사 "
+            "관점에서는 역할 확장보다 금융권 핵심 시스템 전환 과제와 연결된 관찰 "
+            "신호로 해석하는 것이 적절합니다."
         )
     return (
         f"{fact} 현재 사건과 직접 맞는 피어 프로필 접점이 충분하지 않아, "
@@ -11515,7 +11753,7 @@ def _fallback_skax_implication(
             "함께 비교해야 하는 사건입니다."
         ),
         "potential_impact": (
-            f"유사 사업에서는 {subject}의 구축 범위, 운영 책임, 일정 조건, 검증 기준이 "
+            f"유사 사업에서는 {subject}의 확인된 범위와 검증 기준이 "
             f"함께 비교될 수 있으므로 SK AX는 {profile_comparison}을 기준으로 내부 "
             "대응 범위와 보완 항목을 점검해야 합니다."
         ),
@@ -11556,7 +11794,7 @@ def _fallback_internal_actions(
         (
             f"SK AX는 {_with_particle(issue_term, '과', '와')} 유사한 사업에서 "
             f"{profile_comparison}을 비교하고, "
-            "직접 수행할 범위와 외부 보완이 필요한 범위를 운영 책임 기준으로 점검해야 합니다."
+            "입력 사건에서 확인된 범위와 보완이 필요한 항목을 점검해야 합니다."
         ),
         (
             f"SK AX는 {issue_term} 대응 시 "
@@ -11587,7 +11825,7 @@ def _fallback_watch_points(integrated_issue: dict[str, Any]) -> list[str]:
     subject = _issue_subject_phrase(integrated_issue) or "현재 사업"
     return [
         f"{subject}의 후속 협약, 구축 완료, 서비스 개시 일정이 구체화되는지 확인합니다.",
-        "피어사의 수행 범위, 운영 책임, 추가 참여 구조가 원문 근거로 확인되는지 모니터링합니다.",
+        "피어사의 수행 범위와 추가 참여 구조가 원문 근거로 확인되는지 모니터링합니다.",
     ]
 
 

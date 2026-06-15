@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
 
 from src.config.env_loader import load_profile  # noqa: E402
 from src.db.article_store import save_card_news, sync_card_sources_for_cluster  # noqa: E402
-from src.db.postgres import SessionLocal  # noqa: E402
+from src.db.postgres import SessionLocal, reconfigure_from_env  # noqa: E402
 from src.pipeline.analysis_pipeline import AnalysisPipelineRunner  # noqa: E402
 from src.preprocessing.preprocessing import PreprocessingService  # noqa: E402
 
@@ -102,6 +102,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     profile = load_profile(args.env)
+    reconfigure_from_env()
     include_existing = bool(
         args.replace_existing
         or args.update_existing_in_place
@@ -201,7 +202,12 @@ def main() -> None:
                 )
                 validation_pass = bool(card.get("validation_pass", validation.get("pass", False)))
                 title = str(card.get("title") or "")
-                if not validation_pass and _is_problematic_generated_title(title):
+                has_displayable_implication = _has_displayable_implication(card)
+                if (
+                    not validation_pass
+                    and _is_problematic_generated_title(title)
+                    and not has_displayable_implication
+                ):
                     transient_card_id = str(card.get("id") or "")
                     deleted = _mark_card_deleted(transient_card_id) if transient_card_id else 0
                     skipped += 1
@@ -218,7 +224,11 @@ def main() -> None:
                         deleted,
                     )
                     continue
-                if not args.include_financial_like and _is_problematic_generated_title(title):
+                if (
+                    not args.include_financial_like
+                    and _is_problematic_generated_title(title)
+                    and not has_displayable_implication
+                ):
                     transient_card_id = str(card.get("id") or "")
                     deleted = _mark_card_deleted(transient_card_id) if transient_card_id else 0
                     if args.update_existing_in_place and existing_card_id:
@@ -245,7 +255,12 @@ def main() -> None:
                         saved_card_id = save_card_news(card)
                         if saved_card_id:
                             sync_card_sources_for_cluster(cluster_id)
-                        if transient_card_id and transient_card_id != existing_card_id:
+                            _mark_other_active_cards_deleted(cluster_id, keep_card_id=saved_card_id)
+                        if (
+                            transient_card_id
+                            and transient_card_id != existing_card_id
+                            and transient_card_id != saved_card_id
+                        ):
                             _mark_card_deleted(transient_card_id)
                         if saved_card_id:
                             created += 1
@@ -560,7 +575,7 @@ def _load_targets(
                           FROM card_news cn
                           WHERE cn.status = 'ACTIVE'
                             AND cn.cluster_id = cluster_rows.cluster_id
-                          ORDER BY cn.created_at DESC
+                          ORDER BY cn.created_at ASC
                           LIMIT 1
                        ) AS existing_card_id
                 FROM cluster_rows
@@ -631,6 +646,41 @@ def _is_problematic_generated_title(title: str) -> bool:
     return _is_financial_like_text(stripped)
 
 
+def _card_id_date_key(card_id: str) -> str:
+    match = re.match(r"^CN-(\d{8})-", str(card_id or ""))
+    return match.group(1) if match else ""
+
+
+def _has_displayable_implication(card: dict[str, Any]) -> bool:
+    implication = card.get("implication")
+    if not isinstance(implication, dict):
+        return False
+    frontend = implication.get("frontend")
+    if not isinstance(frontend, dict):
+        return False
+    key_items = _display_item_list(frontend.get("key_implication_items")) or _display_item_list(
+        frontend.get("key_implication_blocks")
+    )
+    action_items = _display_item_list(frontend.get("suggested_action_items")) or _display_item_list(
+        frontend.get("response_direction_blocks")
+    )
+    return bool(key_items and action_items)
+
+
+def _display_item_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        main = str(item.get("main") or "").strip()
+        detail = str(item.get("detail") or "").strip()
+        if main and main != "데이터 없음" and detail and detail != "데이터 없음":
+            result.append(item)
+    return result
+
+
 def _mark_existing_cards_deleted(cluster_id: int) -> int:
     with SessionLocal() as db:
         result = db.execute(
@@ -655,6 +705,22 @@ def _mark_card_deleted(card_id: str) -> int:
                 WHERE id = :card_id
             """),
             {"card_id": card_id},
+        )
+        db.commit()
+        return int(getattr(result, "rowcount", 0) or 0)
+
+
+def _mark_other_active_cards_deleted(cluster_id: int, *, keep_card_id: str) -> int:
+    with SessionLocal() as db:
+        result = db.execute(
+            text("""
+                UPDATE card_news
+                SET status = 'DELETED'
+                WHERE status = 'ACTIVE'
+                  AND cluster_id = :cluster_id
+                  AND id <> :keep_card_id
+            """),
+            {"cluster_id": cluster_id, "keep_card_id": keep_card_id},
         )
         db.commit()
         return int(getattr(result, "rowcount", 0) or 0)

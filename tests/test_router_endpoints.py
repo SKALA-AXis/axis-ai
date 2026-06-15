@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi.testclient import TestClient
 
 from src.api import router as router_module
@@ -156,6 +158,37 @@ def test_list_today_cards_wraps_api_response(monkeypatch):
     body = response.json()
     assert body["success"] is True
     assert body["data"]["total"] == 0
+
+
+def test_saved_card_news_item_uses_stored_created_at_as_card_date():
+    item = router_module._saved_card_news_item_from_row(
+        {
+            "id": "CN-20260612-48480",
+            "company": "lg_cns",
+            "peer_company_id": "lg_cns",
+            "cluster_id": 48480,
+            "title": "LG CNS, AI 에이전트 및 로봇 플랫폼 통합 추진",
+            "summary_lines": ["요약"],
+            "event_type": "tech",
+            "importance": "medium",
+            "importance_score": 0.7,
+            "implication": {
+                "frontend": {"why_important": "시사점", "recommended_actions": ["대응"]}
+            },
+            "sources": [],
+            "validation_pass": True,
+            "validation_sc_score": 0.8,
+            "primary_keyword_category": "ax",
+            "source_raw_article_ids": [48480],
+            "source_articles": [],
+            "image_assets": [],
+            "created_at": datetime(2026, 6, 12, 6, 11, 37, tzinfo=UTC),
+        }
+    )
+
+    assert item["published_date"] == "2026-06-12"
+    assert item["created_at"] == "2026-06-12T06:11:37+00:00"
+    assert item["display_sections"][1]["items"] == ["시사점"]
 
 
 # ------------------------------------------------------------------- search

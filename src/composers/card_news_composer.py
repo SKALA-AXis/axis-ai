@@ -193,6 +193,12 @@ class CardNewsComposer:
             (articles[0] or {}).get("title") if articles else "",
             "피어사 주요 뉴스",
         )
+        title = _compact_card_title(
+            title,
+            summary=summary,
+            classification=classification,
+            articles=articles,
+        )
         summary_lines = _plain_summary_lines(summary, use_llm=True)
         if not summary_lines:
             summary_lines = _article_title_summary_lines(articles)
@@ -573,8 +579,12 @@ def _card_from_summary(
         classification.get("title"),
         articles[0].get("title"),
     )
-    if _looks_like_sentence_title(title):
-        title = _first_non_empty(classification.get("title"), articles[0].get("title"), title)
+    title = _compact_card_title(
+        title,
+        summary=summary,
+        classification=classification,
+        articles=articles,
+    )
     title = _business_context_title(
         title,
         summary=summary,
@@ -590,6 +600,7 @@ def _card_from_summary(
         "cluster_id": cluster_id,
         "representative_id": representative_id,
         "published_date": published_date,
+        "created_at": created_at,
         "title": title[:100],
         "summary_lines": summary_lines,
         "event_type": classification.get("event_type", "tech"),
@@ -709,6 +720,35 @@ def _looks_like_sentence_title(title: str) -> bool:
     if len(value) > 60 and value.endswith(("다", "다.", "했다", "했다.", "됐다", "됐다.")):
         return True
     return bool(re.search(r"(했다|공개했다|체결했다|진출했다|선보였다|밝혔다)[.]?$", value))
+
+
+def _compact_card_title(
+    title: str,
+    *,
+    summary: dict[str, Any],
+    classification: dict[str, Any],
+    articles: list[dict[str, Any]],
+) -> str:
+    value = _clean_source_headline(title)
+    if not _looks_like_sentence_title(value) and len(value) <= 52:
+        return value
+    candidates = [
+        classification.get("title"),
+        summary.get("display_headline"),
+        summary.get("headline"),
+    ]
+    candidates.extend(article.get("title") for article in articles if isinstance(article, dict))
+    for candidate in candidates:
+        compact = _clean_source_headline(candidate)
+        if compact and compact != value and len(compact) <= 52:
+            return compact
+    return value[:52].rstrip(" ,·…")
+
+
+def _clean_source_headline(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    text = re.sub(r"^\[[^\]]{1,12}\]\s*", "", text)
+    return text.strip(" -")
 
 
 def _is_financial_only_title(title: str) -> bool:
@@ -3284,10 +3324,6 @@ def _source_article_ids(summary: dict[str, Any], articles: list[dict[str, Any]])
 
 
 def _published_date(articles: list[dict[str, Any]], created_at: str) -> str:
-    for article in articles:
-        value = _string_or_none(article.get("published_at"))
-        if value:
-            return value[:10]
     return created_at[:10]
 
 

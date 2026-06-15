@@ -160,6 +160,80 @@ def test_supervisor_graph_happy_path_writes_card():
     assert "samsung_sds" in (profile_call.kwargs.get("companies") or [])
 
 
+def test_supervisor_graph_does_not_write_card_for_invalid_summary():
+    deps = _stub_deps()
+    deps.issue_integrator.integrate_input_bundle.return_value = {
+        "is_valid_summary": False,
+        "main_company": "samsung_sds",
+        "integrated_text": "스마트테크 코리아 2026이 열렸다.",
+        "fact_summary": ["스마트테크 코리아 2026이 열렸다."],
+        "reason": "행사 개최 사실만 확인됨",
+    }
+    graph = build_supervisor_graph(deps)
+
+    with (
+        patch(
+            "src.pipeline.analysis_flow_graph.save_integrated_issue",
+            return_value="11111111-1111-1111-1111-111111111111",
+        ),
+        patch(
+            "src.pipeline.analysis_flow_graph.save_card_news",
+            return_value="CN-SHOULD-NOT",
+        ) as save_card,
+        patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
+    ):
+        result = graph.invoke(
+            {
+                "input_bundle": _stub_bundle(),
+                "classification": {"sector": "ax", "event_type": "tech_release"},
+                "errors": [],
+                "human_review_flags": [],
+            }
+        )
+
+    assert result.get("card_news_id") is None
+    assert result.get("card_news_payload") == {}
+    save_card.assert_not_called()
+
+
+def test_supervisor_graph_writes_card_for_invalid_summary_with_sizable_tech_event_signal():
+    deps = _stub_deps()
+    deps.issue_integrator.integrate_input_bundle.return_value = {
+        "is_valid_summary": False,
+        "main_company": "samsung_sds",
+        "integrated_text": (
+            "스마트테크 코리아 2026이 서울 코엑스에서 열렸다. "
+            "16개국 620개사가 참가했고 AI와 자동화 기술이 산업 전 과정에 적용되는 흐름이 제시됐다."
+        ),
+        "fact_summary": [
+            "스마트테크 코리아 2026은 서울 코엑스에서 열렸다.",
+            "16개국 620개사가 참가했고 AI와 자동화 기술이 주요 주제로 제시됐다.",
+        ],
+        "reason": "행사 개최 사실 중심",
+    }
+    graph = build_supervisor_graph(deps)
+
+    with (
+        patch(
+            "src.pipeline.analysis_flow_graph.save_integrated_issue",
+            return_value="11111111-1111-1111-1111-111111111111",
+        ),
+        patch("src.pipeline.analysis_flow_graph.save_card_news", return_value="CN-OK") as save_card,
+        patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
+    ):
+        result = graph.invoke(
+            {
+                "input_bundle": _stub_bundle(),
+                "classification": {"sector": "ax", "event_type": "event"},
+                "errors": [],
+                "human_review_flags": [],
+            }
+        )
+
+    assert result.get("card_news_id") == "CN-OK"
+    save_card.assert_called_once()
+
+
 def test_supervisor_graph_uses_injected_profile_context():
     deps = _stub_deps()
     graph = build_supervisor_graph(deps)

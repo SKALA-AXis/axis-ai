@@ -237,6 +237,7 @@ def _load_env_file_for_integration() -> None:
 _load_env_file_for_integration()
 
 import src.agents.strategic_insight_agent as strategic_insight_module  # noqa: E402
+from src.agents.strategic_insight import prompts as strategic_insight_prompts  # noqa: E402
 from src.agents.strategic_insight_agent import StrategicInsightAgent  # noqa: E402
 
 
@@ -934,7 +935,7 @@ def test_invalid_market_infra_signal_preserves_industry_signal_diagnostics():
     assert diagnostics["direct_peer_action"] is False
     assert result["implication"]["industry_signal"]["signal_scope"] == "market_infra_signal"
     assert "display_label" not in result["implication"]["industry_frontend_ready"]
-    assert "invalid_summary_preserved_as_watch_only_signal" in diagnostics["phase_decisions"]
+    assert "watch_only_industry_signal" in diagnostics["phase_decisions"]
     assert llm.invoke.call_count == 0
 
 
@@ -1966,6 +1967,129 @@ def _frontend_ready_result(
     }
 
 
+def test_frontend_ready_rejects_malformed_action_basis_copy():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 기업용 AI 에이전트 출시",
+        fact_summary=[
+            "대상기업은 업무 포털·그룹웨어와 문서 작성 어시스턴트를 묶은 AI 에이전트를 출시했다.",
+            "해당 서비스는 기존 업무 시스템 접점과 실제 업무 처리 범위를 함께 제시했다.",
+        ],
+        event_type="tech_release",
+    )
+    result = _frontend_ready_result(
+        key_sentence="기업용 AI 에이전트 제안은 기능 출시보다 업무 적용 범위 제시로 이동하고 있다.",
+        key_evidence=(
+            "업무 포털·그룹웨어와 문서 작성 어시스턴트가 함께 제시되어 "
+            "기존 업무 시스템 접점과 실제 업무 처리 범위가 드러났다."
+        ),
+        action_sentence=(
+            "SK AX는 기업용 AI 에이전트 제안을 기존 업무 시스템 접점·실제 업무 처리 "
+            "범위 업무 범위처럼 자체 수행 범위와 외부 협력 필요성으로 나눠 점검해야 한다."
+        ),
+        action_evidence=(
+            "업무 포털·그룹웨어와 문서 작성 어시스턴트가 한 라인업으로 묶인 만큼 "
+            "제안 단위와 운영 책임 구간을 기능별로 분리해 설명할 필요가 있다."
+        ),
+        key_event_terms=["AI 에이전트", "업무 포털"],
+        action_event_terms=["AI 에이전트", "업무 포털", "업무 처리 범위"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any("비문" in violation or "명사 나열" in violation for violation in violations)
+
+
+def test_frontend_ready_rejects_vague_mixed_peer_action_sentence():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업들, 물류 사업 고도화 추진",
+        fact_summary=[
+            "삼성SDS는 첼로 스퀘어에 에이전틱 AI 공급망을 도입했다.",
+            "LG CNS는 피지컬웍스로 로봇 학습·운영을 제시했다.",
+        ],
+        event_type="business_update",
+    )
+    result = _frontend_ready_result(
+        key_sentence="물류 플랫폼 경쟁은 서비스 적용 범위와 로봇 운영 구조로 넓어질 수 있다.",
+        key_evidence=(
+            "삼성SDS의 첼로 스퀘어와 LG CNS의 피지컬웍스가 각각 "
+            "공급망 자동화와 로봇 학습·운영 사례로 제시됐다."
+        ),
+        action_sentence=(
+            "SK AX는 물류·스마트팩토리 인접 수요를 볼 때 자체 대응 범위와 "
+            "외부 협력이 필요한 현장 자동화 범위를 구분해야 한다."
+        ),
+        action_evidence=(
+            "이번 사례는 삼성SDS의 첼로 스퀘어가 견적 조회·예약·실시간 화물 추적·정산까지 "
+            "다루고 LG CNS가 피지컬웍스로 로봇 학습·운영을 제시한 만큼, "
+            "고객 제안 단위와 운영 책임 구간을 나눠 설명하게 만든다."
+        ),
+        key_event_terms=["첼로 스퀘어", "피지컬웍스"],
+        action_event_terms=["물류", "피지컬웍스"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "none"},
+        },
+    )
+
+    assert any(
+        "너무 넓은 표현" in violation or "일반 결론" in violation
+        for violation in violations
+    )
+
+
+def test_frontend_ready_rejects_internal_memo_style_comparison_action():
+    integrated_issue = _synthetic_integrated_issue(
+        headline="대상기업, 에이전틱 AI와 로봇 플랫폼 공개",
+        fact_summary=[
+            "대상기업은 11개 모듈 업무 자동화 서비스를 공개했다.",
+            "피지컬웍스는 제조·물류 현장 로봇 플랫폼으로 제시됐다.",
+        ],
+        event_type="tech_release",
+    )
+    result = _frontend_ready_result(
+        key_sentence=(
+            "에이전틱 AI 경쟁은 업무 자동화와 현장 로봇 적용을 함께 "
+            "보여주는 쪽으로 넓어지고 있다."
+        ),
+        key_evidence="11개 모듈 업무 자동화와 제조·물류 현장 로봇 플랫폼이 함께 제시됐다.",
+        action_sentence=(
+            "SK AX는 IT 운영 자동화와 제조·물류 현장 적용을 하나로 묶을지, "
+            "별도 제안 축으로 나눌지부터 비교해야 한다."
+        ),
+        action_evidence=(
+            "11개 모듈 업무 자동화와 제조·물류 현장 로봇 플랫폼 연계가 함께 제시됐다."
+        ),
+        key_event_terms=["11개 모듈", "피지컬웍스"],
+        action_event_terms=["11개 모듈", "피지컬웍스"],
+    )
+
+    violations = strategic_insight_module._frontend_ready_required_violations(
+        result,
+        integrated_issue=integrated_issue,
+        profile_context={},
+        profile_linkage_evaluation={
+            "peer_linkages": [{"linkage_level": "low"}],
+            "skax_linkage": {"linkage_level": "low"},
+        },
+    )
+
+    assert any("내부 메모식 비교 문장" in violation for violation in violations)
+
+
 def test_event_based_frontend_ready_requires_dynamic_issue_anchor():
     integrated_issue = _synthetic_integrated_issue(
         headline="대상기업, 실행형 업무 플랫폼 출시",
@@ -2155,7 +2279,7 @@ def test_moderate_actionable_signal_with_business_structure_and_service_change_c
         action_evidence=(
             "첼로 스퀘어에 에이전틱 AI 공급망을 도입한 사실은 단순 구축보다 "
             "운영형 서비스 변화가 매출 구조와 맞물릴 수 있어 고객 제안 범위와 "
-            "운영 책임을 구분할 근거가 됩니다."
+            "서비스 적용 범위를 함께 보게 만듭니다."
         ),
         key_event_terms=["물류 매출", "첼로 스퀘어"],
         action_event_terms=["물류", "첼로 스퀘어"],
@@ -2296,7 +2420,7 @@ def test_security_execution_flow_action_axis_can_display_without_customer_contra
         ),
         action_evidence=(
             "취약점 탐지와 보완 조치, 보안사고 대응이 한 흐름으로 제시되면 "
-            "고객 제안 범위와 운영 책임을 기능별로 구분할 근거가 된다."
+            "고객 적용 범위와 보안 운영 단계를 기능별로 나눠 보게 된다."
         ),
         key_event_terms=["취약점 탐지", "보안사고 대응"],
         action_event_terms=["탐지", "보완 조치", "보안사고 대응"],
@@ -2548,7 +2672,7 @@ def test_action_copy_must_not_use_customer_scale_as_direct_response_basis():
     assert any("고객 규모·거점 수·시장 규모" in violation for violation in violations)
 
 
-def test_key_implication_requires_business_interpretation_when_business_context_exists():
+def test_key_implication_allows_grounded_direction_when_business_context_exists():
     integrated_issue = _synthetic_integrated_issue(
         headline="대상기업, 운영 플랫폼 협약 체결",
         fact_summary=[
@@ -2563,12 +2687,12 @@ def test_key_implication_requires_business_interpretation_when_business_context_
             "고객 업무 시스템 적용과 운영 데이터 연계 범위가 협약에 포함됐습니다."
         ),
         action_sentence=(
-            "SK AX는 유사 운영 플랫폼 사업에서 시스템 연계 범위와 운영 책임을 "
-            "고객 제안 단위로 나눠야 합니다."
+            "SK AX는 유사 운영 플랫폼 사업에서 시스템 연계 범위와 "
+            "데이터 연결 조건을 나눠야 합니다."
         ),
         action_evidence=(
-            "이 구분이 있어야 SK AX가 직접 책임질 운영 범위와 외부 확인이 필요한 "
-            "범위를 설명할 수 있습니다."
+            "이 구분이 있어야 SK AX가 직접 확인할 시스템 범위와 "
+            "외부 확인이 필요한 범위를 설명할 수 있습니다."
         ),
         key_event_terms=["운영 플랫폼", "고객 업무 시스템"],
         action_event_terms=["운영 플랫폼", "고객 업무 시스템"],
@@ -2584,7 +2708,7 @@ def test_key_implication_requires_business_interpretation_when_business_context_
         },
     )
 
-    assert any("비즈니스 실익" in violation for violation in violations)
+    assert not any("비즈니스 실익" in violation for violation in violations)
 
 
 def test_product_launch_business_mechanism_allows_workflow_execution_scope():
@@ -2922,6 +3046,48 @@ def test_action_evidence_must_not_repeat_insight_evidence_without_internal_axis(
     assert any("role_separation" in violation for violation in violations)
 
 
+def test_peer_comparison_prompt_uses_structured_facts_without_issue_specific_copy():
+    prompt_text = "\n".join(
+        [
+            strategic_insight_prompts.USER_PROMPT_TEMPLATE,
+            strategic_insight_prompts.FRONTEND_READY_REPAIR_USER_PROMPT_TEMPLATE,
+        ]
+    )
+
+    assert "issue_frame이 peer_comparison 성격" in prompt_text
+    assert "comparison_facts" in prompt_text
+    assert "risk_facts" in prompt_text
+    assert "market_structure_facts" in prompt_text
+    assert "strategic_evidence_inventory" in prompt_text
+    assert "supporting_facts" in prompt_text
+    assert "background_facts" in prompt_text
+    assert "cause_or_driver_facts" in prompt_text
+    assert "uncertainty_or_limitation_facts" in prompt_text
+    assert "strategic_tensions" in prompt_text
+    assert "actionable_questions" in prompt_text
+    assert "핵심 사건을 직접 만들지 않는 보조 사실" in prompt_text
+    assert "단순 비교 결과만 쓰지 말고 적어도 하나의 층위" in prompt_text
+    assert "무엇을 별도로 설명하거나" in prompt_text
+    assert "상충 관계가 의사결정 기준" in prompt_text
+    assert "외부 검증 가능하게 만들지까지" in prompt_text
+    assert "comparison_axis가 무엇을 비교하는 축인지 입력 fact 안에서 정의" in prompt_text
+    assert "metric/value/evidence_text가 보여주는 차이와 방향" in prompt_text
+    assert "평가 기준, 설명 책임, 운영 판단, 리스크 관리" in prompt_text
+    assert "각 metric이 나타내는 사업 구조" in prompt_text
+    assert "key_implication은 피어/시장 평가 기준의 변화를" in prompt_text
+    assert "suggested_action은 SK AX가 내부적으로 확인할 관리 기준" in prompt_text
+    assert "수치가 낮거나 높다는 이유만으로 경쟁력 우위나 성과를 단정하지 말고" in prompt_text
+    assert "47.1%" not in prompt_text
+    assert "79.2%" not in prompt_text
+    assert "94.6%" not in prompt_text
+    assert "96.4%" not in prompt_text
+    assert "internal_transaction_ratio이면" not in prompt_text
+    assert "내부거래 비중 피어 비교" not in prompt_text
+    assert "어렵다" not in prompt_text
+    assert "보기 어렵다" not in prompt_text
+    assert "설명하기 어렵다" not in prompt_text
+
+
 def test_action_copy_requires_basis_in_display_sentence_not_only_evidence():
     integrated_issue = _synthetic_integrated_issue(
         headline="대상기업, 실행형 업무 플랫폼 출시",
@@ -3120,7 +3286,7 @@ def test_displayable_generate_result_skips_self_review_and_schema_repair():
                     ),
                     "evidence_sentence": (
                         "입력에는 토큰증권 기능분석 컨설팅과 테스트베드 플랫폼 구축이 "
-                        "함께 제시되어 실행 범위가 비교 기준이 됩니다."
+                        "함께 제시되어 컨설팅 범위와 구축 범위가 동시에 드러납니다."
                     ),
                 },
                 "suggested_action": {
