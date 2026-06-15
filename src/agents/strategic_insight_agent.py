@@ -4573,7 +4573,7 @@ def _industry_role_structure_change_clause(
         and (flags["customer_or_system"] or flags["operation"])
     ):
         return (
-            "기술 확보 자체보다 적용 기업과 실행 범위를 나눠 보는 "
+            "기술 확보 자체보다 적용 기업의 업무 변화와 실행 가능성을 함께 보는 "
             "경쟁 기준으로 이어질 수 있음을 보여준다."
         )
     if flags["infra_or_supply"] and (flags["customer_or_system"] or flags["operation"]):
@@ -4582,7 +4582,10 @@ def _industry_role_structure_change_clause(
             "확장될 수 있음을 보여준다."
         )
     if flags["actor_or_partner"] and (flags["customer_or_system"] or flags["operation"]):
-        return "협력 여부보다 참여 주체별 역할 구분이 중요해질 수 있음을 보여준다."
+        return (
+            "협력 여부보다 각 주체의 역량이 실제 적용 단계에서 "
+            "어떻게 맞물리는지가 중요해질 수 있음을 보여준다."
+        )
     if flags["customer_or_system"] and flags["operation"]:
         return "기능 제공보다 고객 업무에 닿는 적용 범위를 함께 보는 흐름을 보여준다."
     if flags["investment"] and flags["infra_or_supply"]:
@@ -4600,13 +4603,13 @@ def _industry_action_role_axis(
         and flags["infra_or_supply"]
         and (flags["customer_or_system"] or flags["operation"])
     ):
-        return "기술 제공과 고객 적용 중 어떤 역할을 맡을 수 있는지"
+        return "기술 역량과 고객 적용 경험을 함께 사업화하는 방식"
     if flags["infra_or_supply"] and flags["customer_or_system"]:
         return "기술·인프라 준비 조건과 고객 적용 단계"
     if flags["actor_or_partner"] and flags["operation"]:
-        return "참여 주체별 역할 구분"
+        return "협력 역량을 실제 운영으로 연결하는 방식"
     if flags["actor_or_partner"]:
-        return "참여 주체별 역할 구분"
+        return "협력 역량을 사업 기회로 연결하는 방식"
     if flags["customer_or_system"] and flags["operation"]:
         return "고객 업무 적용 범위"
     if flags["investment"] and flags["infra_or_supply"]:
@@ -4828,7 +4831,7 @@ def _industry_evidence_sentence(
         )
     return (
         f"{actor_context} {primary}가 반복적으로 제시되어, 해당 논의가 "
-        "참여 주체와 적용 조건을 함께 봐야 하는 흐름임을 보여준다."
+        "참여 주체와 적용 조건이 함께 묶이는 흐름임을 보여준다."
     )
 
 
@@ -4847,7 +4850,7 @@ def _industry_action_sentence(
     role_axis = _industry_action_role_axis(decision_criteria, anchors)
     if role_axis:
         role_object = _with_korean_object_particle(role_axis)
-        return f"SK AX는 이 흐름에서 {role_object} 우선 확인해야 한다."
+        return f"SK AX의 후속 사업은 이 흐름에서 {role_object} 중심으로 전개될 수 있다."
     action_reading = _industry_dynamic_action_reading_from_anchors(
         anchors,
         decision_criteria=decision_criteria,
@@ -4855,11 +4858,11 @@ def _industry_action_sentence(
     if action_reading:
         action_object = _with_korean_object_particle(action_reading)
         return (
-            f"SK AX는 {anchor_phrase} 흐름에서 {action_object} 기준으로 검토 범위를 구분해야 한다."
+            f"SK AX의 후속 사업은 {anchor_phrase} 흐름에서 {action_object} 중심으로 전개될 수 있다."
         )
     return (
-        f"SK AX는 {anchor_phrase} 흐름을 볼 때 드러난 참여 구조와 "
-        "적용 조건을 기준으로 검토 범위를 구분해야 한다."
+        f"SK AX의 후속 사업은 {anchor_phrase} 흐름에서 드러난 참여 구조와 "
+        "적용 조건을 함께 반영하는 쪽으로 전개될 수 있다."
     )
 
 
@@ -4898,15 +4901,16 @@ def _industry_action_evidence_sentence(
                 role_object = _with_korean_object_particle(role_axis)
                 return (
                     f"{fact_clause} {anchor_phrase} 흐름에서는 SK AX도 {role_object} "
-                    "우선 확인할 필요가 있다."
+                    "중심의 사업 접근으로 이어질 수 있다."
                 )
             return (
                 f"{fact_clause} {anchor_phrase} 흐름에서는 SK AX도 적용 대상과 "
-                "실행 단계의 구체화 속도를 확인하게 된다."
+                "실행 단계가 구체화되는 속도에 맞춰 사업 관점이 조정될 수 있다."
             )
+        fallback_role_reading = "참여 주체의 역량이 적용 단계에서 맞물리는 방식이 중요해질 수 있다."
         return (
             f"{anchor_phrase} 흐름에서 {dynamic_reading}이 부각되므로, "
-            f"{role_reading or '참여 주체와 적용 단계의 역할 구분이 중요해질 수 있다.'}"
+            f"{role_reading or fallback_role_reading}"
         )
     if evidence_reading and result_phrase:
         result_object = _with_korean_object_particle(result_phrase)
@@ -4916,7 +4920,7 @@ def _industry_action_evidence_sentence(
         )
     return (
         f"{anchor_phrase}가 제시된 만큼, SK AX는 직접 사업화를 단정하기보다 "
-        "참여 주체와 적용 조건을 기준으로 후속 판단 범위를 좁혀야 한다."
+        "참여 주체와 적용 조건이 맞물리는 흐름을 후속 사업 관점에 반영할 수 있다."
     )
 
 
@@ -4936,9 +4940,9 @@ def _industry_action_role_reading_phrase(
 ) -> str:
     flags = _industry_criteria_flags(decision_criteria, anchors)
     if flags["actor_or_partner"] and flags["infra_or_supply"]:
-        return "기술을 제공하는 주체와 이를 적용하는 기업의 역할 구분이 중요해질 수 있다."
+        return "기술을 제공하는 주체와 이를 적용하는 기업의 역량 결합이 중요해질 수 있다."
     if flags["actor_or_partner"] and (flags["operation"] or flags["customer_or_system"]):
-        return "서비스 제공자와 적용 조직이 나뉠 수 있어 검토 기준도 실행 단계별로 달라질 수 있다."
+        return "서비스 제공자와 적용 조직의 협업 방식이 실행 단계의 완성도를 좌우할 수 있다."
     if flags["infra_or_supply"]:
         return (
             "기술·인프라 확보 여부만이 아니라 실제 적용 이후의 운영 조건까지 "
@@ -4946,13 +4950,13 @@ def _industry_action_role_reading_phrase(
         )
     if flags["actor_or_partner"]:
         return (
-            "참여 주체가 여럿이면 협력 자체보다 각 주체가 맡는 역할과 후속 실행 "
-            "책임을 구분하는 것이 중요해질 수 있다."
+            "참여 주체가 여럿이면 협력 자체보다 각 주체의 역량이 후속 실행으로 "
+            "이어지는 방식이 중요해질 수 있다."
         )
     if flags["operation"] or flags["customer_or_system"]:
         return (
-            "고객 업무에 닿는 적용 범위가 제시될수록 검토 기준도 "
-            "시스템 접점과 실행 단계로 나뉠 수 있다."
+            "고객 업무에 닿는 적용 범위가 제시될수록 시스템 접점과 실행 단계가 "
+            "사업 방향의 핵심 조건이 될 수 있다."
         )
     return ""
 
@@ -5009,7 +5013,7 @@ def _industry_action_reading_phrase(criteria: Sequence[str]) -> str:
     if {_anchor_norm("실행 조건"), _anchor_norm("기존 시스템 접점")} & normalized:
         parts.append("기존 시스템과 맞닿는 범위")
     if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
-        parts.append("참여 주체별 역할 구분")
+        parts.append("파트너 역량을 사업 실행으로 연결하는 방식")
     if {_anchor_norm("기술 공급 구조"), _anchor_norm("데이터/인프라 준비 수준")} & normalized:
         parts.append("기술·인프라 준비를 직접 맡을 수 있는 범위")
     if {_anchor_norm("투자 조건"), _anchor_norm("비용 부담")} & normalized:
@@ -5154,37 +5158,7 @@ def _generalize_peer_structure_in_action_sentence(
     text = _strip_article_style_lead(sentence)
     if not text:
         return ""
-    replacement = _action_structure_axis_phrase(integrated_issue)
-    peer_terms = _peer_only_issue_product_terms(
-        integrated_issue,
-        profile_linkage_evaluation=profile_linkage_evaluation,
-    )
-    for term in peer_terms:
-        if not term or not _text_has_anchor_term(text, [term]):
-            continue
-        text = re.sub(
-            rf"{re.escape(str(term))}(?:\s*(?:처럼|같이|기반(?:의)?|중심(?:의)?|구조|라인업|제안))?",
-            replacement,
-            text,
-            flags=re.IGNORECASE,
-        )
-    if re.search(r"기준|비교|구분|분리|나눠|검토|점검|판단", text):
-        text = re.sub(
-            r"\d+\s*개\s*(?:모듈|라인업|서비스|제품|솔루션)(?:형|의| 기반| 중심| 라인업| 제안)?",
-            replacement,
-            text,
-        )
-        text = re.sub(
-            r"(?:모듈|라인업|제품\s*구조|서비스\s*라인업)\s*(?:기반|형|구조|제안)",
-            replacement,
-            text,
-        )
     text = re.sub(r"\s+", " ", text).strip()
-    text = re.sub(
-        rf"(?:{re.escape(replacement)})(?:\s*(?:와|과)\s*){re.escape(replacement)}",
-        replacement,
-        text,
-    )
     return text
 
 
@@ -5203,17 +5177,17 @@ def _action_structure_axis_phrase(integrated_issue: dict[str, Any]) -> str:
     )
     axes: list[str] = []
     if re.search(r"ERP|메일|문서|데이터베이스|업무\s*시스템|사용자\s*PC|자연어", target_text):
-        axes.extend(["기존 업무 시스템 접점", "실제 업무 처리 범위"])
+        axes.extend(["업무 자동화 방향", "운영 시스템 연계"])
     if re.search(r"로봇|물류|관제|학습|센터|현장", target_text):
         axes.extend(["적용 업무", "운영 역할"])
     if re.search(r"보안|취약점|탐지|사고|모니터링|대응", target_text):
-        axes.extend(["보안 대응 범위", "보완 필요 항목"])
+        axes.extend(["보안 운영 방향", "위험 대응 체계"])
     if re.search(r"GPU|데이터센터|인프라|AI\s*팩토리|컴퓨팅", target_text, flags=re.IGNORECASE):
         axes.extend(["고객 적용 단계", "운영 지원 범위"])
     if re.search(r"계약|수주|공급|운영|DevOps|장애", target_text, flags=re.IGNORECASE):
-        axes.extend(["실행 범위", "후속 확인 범위"])
+        axes.extend(["사업 추진 방향", "운영 전환 관점"])
     if not axes:
-        axes.extend(["적용 업무", "대상 시스템", "운영 역할"])
+        axes.extend(["적용 업무", "운영 방향", "대상 시스템"])
     return "·".join(_dedupe_keep_order(axes)[:2])
 
 
@@ -5619,10 +5593,11 @@ def _role_mode_instructions(integrated_issue: dict[str, Any]) -> str:
             "- 공급사 매출 비율은 요약의 계약 규모 근거일 뿐, "
             "타깃 피어의 역량/성과/전략 근거가 아닙니다.",
             "- SK AX 대응방향은 유사 고객군/유사 사업 관점을 유지하되, "
-            "외부 고객 제안 문장이 아니라 SK AX 내부 전략 점검으로 쓰세요.",
-            "- SK AX 대응방향은 피어 신호와 SK AX의 접점/차이를 구분한 뒤, "
-            "입력 사건에서 확인된 비교·점검 대상으로 작성하세요.",
-            "- 대응방향은 넓은 실행 장면명이 아니라 입력 사건에서 확인된 기준을 중심으로 쓰세요.",
+            "외부 고객에게 무엇을 제시하라는 문장이 아니라 SK AX가 가져갈 사업 방향으로 쓰세요.",
+            "- SK AX 대응방향은 피어 신호와 SK AX의 접점/차이를 참고하되, "
+            "입력 사건이 남기는 사업 판단 관점으로 작성하세요.",
+            "- 대응방향은 넓은 실행 장면명이 아니라 입력 사건에서 확인된 "
+            "변화의 의미를 중심으로 쓰세요.",
         ]
     )
 
@@ -6664,7 +6639,7 @@ def _frontend_ready_action_weak_review_phrase_violation(sentence: Any) -> str:
     if not re.search(action_terms, value):
         return (
             "대응방향이 검토/점검/확인에 머물렀습니다. "
-            "무엇을 설계·확보·연결·제안할지까지 써야 합니다."
+            "SK AX의 후속 움직임이 어떤 형태로 전개되는지까지 써야 합니다."
         )
     return ""
 
@@ -10746,8 +10721,8 @@ def _event_based_strategic_meaning_candidates(integrated_issue: dict[str, Any]) 
         candidates.append(fact)
     if subject:
         candidates.append(
-            f"{subject}이 기사에서 확인된 만큼, 이 이슈는 단순 기능 도입보다 "
-            "대상 시스템의 전환 범위, 업무 영향도, 운영 안정성 기준을 함께 봐야 하는 사건입니다."
+            f"{subject}이 기사에서 확인된 만큼, 이 이슈는 대상 시스템의 전환 범위, "
+            "업무 영향도, 운영 안정성 기준이 함께 드러난 사건입니다."
         )
         candidates.append(
             f"유사 사업에서는 {subject}의 기능 구현 여부만이 아니라 기존 시스템과의 "
@@ -10773,7 +10748,7 @@ def _event_based_strategic_meaning_candidates(integrated_issue: dict[str, Any]) 
     if _main_company_is_customer_or_buyer(integrated_issue) and target:
         candidates.append(
             f"{target}는 계약 상대방으로 확인되지만, 최종 발주자 여부나 수행 범위는 "
-            "기사에서 확인된 계약 범위와 별도 기준으로 분리해 봐야 합니다."
+            "기사에서 확인된 계약 범위와 별도 기준으로 분리해 해석할 수 있습니다."
         )
     return [item for item in candidates if item]
 
@@ -11733,7 +11708,7 @@ def _fallback_recommended_focus(
 ) -> list[str]:
     level = _choice(linkage.get("linkage_level"), {"high", "medium", "low", "none"}, "none")
     if focus_terms and level in {"high", "medium"}:
-        return [f"{term}와 연결된 직접 수행 범위와 보완 필요 영역" for term in focus_terms[:3]]
+        return [f"{term}와 연결된 사업 적용 방향과 협력 필요 조건" for term in focus_terms[:3]]
     if focus_terms:
         return [f"{term} 관련 후속 근거 확인과 보수적 대응 범위 점검" for term in focus_terms[:3]]
     return ["후속 근거 확인과 대응 범위 점검"]
@@ -11813,13 +11788,13 @@ def _fallback_skax_implication(
     return {
         "why_important": (
             f"{_with_particle(subject, '은', '는')} 유사 고객군/유사 사업에서 "
-            "피어 신호와 SK AX의 대응 가능 범위를 "
-            "함께 비교해야 하는 사건입니다."
+            "피어 신호가 SK AX의 사업 방향에 어떤 의미를 갖는지 "
+            "살펴볼 만한 사건입니다."
         ),
         "potential_impact": (
-            f"유사 사업에서는 {subject}의 확인된 범위와 검증 기준이 "
-            f"함께 비교될 수 있으므로 SK AX는 {profile_comparison}을 기준으로 내부 "
-            "대응 범위와 보완 항목을 점검해야 합니다."
+            f"유사 사업에서는 {subject}에서 확인된 범위와 검증 기준이 "
+            f"사업 판단의 참고점이 될 수 있으므로 SK AX는 {profile_comparison}을 "
+            "바탕으로 준비 범위를 정교화할 수 있습니다."
         ),
         "opportunities": [],
         "threats": [],
@@ -11857,13 +11832,13 @@ def _fallback_internal_actions(
     return [
         (
             f"SK AX는 {_with_particle(issue_term, '과', '와')} 유사한 사업에서 "
-            f"{profile_comparison}을 비교하고, "
-            "입력 사건에서 확인된 범위와 보완이 필요한 항목을 점검해야 합니다."
+            f"{profile_comparison}을 참고해 "
+            "입력 사건에서 확인된 변화를 후속 준비 범위에 반영할 수 있습니다."
         ),
         (
             f"SK AX는 {issue_term} 대응 시 "
-            f"{_with_particle(checkpoint_hint, '을', '를')} 내부 확인 기준으로 구조화하고, "
-            "후속 사업자 선정·협약·서비스 개시 신호를 모니터링해야 합니다."
+            f"{_with_particle(checkpoint_hint, '을', '를')} 단순 확인 항목이 아니라 "
+            "후속 사업 범위를 정교화하는 기준으로 활용할 수 있습니다."
         ),
     ]
 

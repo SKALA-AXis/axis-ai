@@ -3075,7 +3075,8 @@ def test_peer_comparison_prompt_uses_structured_facts_without_issue_specific_cop
     assert "평가 기준, 설명 책임, 운영 판단, 리스크 관리" in prompt_text
     assert "각 metric이 나타내는 사업 구조" in prompt_text
     assert "key_implication은 피어/시장 평가 기준의 변화를" in prompt_text
-    assert "현재 사건의 사실이 SK AX의 다음 판단에 주는" in prompt_text
+    assert "현재 사건의 사실이 SK AX의 다음 판단에 주는" not in prompt_text
+    assert "SK AX의 후속 판단에" in prompt_text
     assert "수치가 낮거나 높다는 이유만으로 경쟁력 우위나 성과를 단정하지 말고" in prompt_text
     assert "47.1%" not in prompt_text
     assert "79.2%" not in prompt_text
