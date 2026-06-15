@@ -2537,7 +2537,9 @@ def _prefer_primary_topic_summary(
     if not primary_article_ids:
         return result
     all_article_ids = {
-        _safe_int(fact.get("article_id")) for fact in extracted_facts if _safe_int(fact.get("article_id"))
+        _safe_int(fact.get("article_id"))
+        for fact in extracted_facts
+        if _safe_int(fact.get("article_id"))
     }
     if primary_article_ids >= all_article_ids:
         return result
@@ -2564,7 +2566,9 @@ def _prefer_primary_topic_summary(
             kept.append({**item, "fact_ids": fact_ids})
 
     if len(kept) < _SUMMARY_LINE_MIN:
-        primary_facts = [fact for fact in extracted_facts if str(fact.get("fact_id")) in primary_fact_ids]
+        primary_facts = [
+            fact for fact in extracted_facts if str(fact.get("fact_id")) in primary_fact_ids
+        ]
         selected = _select_fact_ids_for_summary_lines(
             extracted_facts=primary_facts,
             cluster_event_type=str(result.get("cluster_event_type") or "general_update"),
@@ -2572,7 +2576,9 @@ def _prefer_primary_topic_summary(
         )
         kept = []
         for index in range(1, _SUMMARY_LINE_MAX + 1):
-            fact_ids = [fact_id for fact_id in selected.get(str(index), []) if fact_id in fact_by_id]
+            fact_ids = [
+                fact_id for fact_id in selected.get(str(index), []) if fact_id in fact_by_id
+            ]
             if not fact_ids:
                 continue
             facts = [fact_by_id[fact_id] for fact_id in fact_ids]
@@ -2596,7 +2602,9 @@ def _prefer_primary_topic_summary(
     updated = {**result}
     updated["summary_lines_with_fact_ids"] = normalized_items
     updated["fact_summary"] = [str(item.get("text") or "").strip() for item in normalized_items]
-    updated["fact_basis"] = _fact_basis_from_summary_line_fact_ids(normalized_items, extracted_facts)
+    updated["fact_basis"] = _fact_basis_from_summary_line_fact_ids(
+        normalized_items, extracted_facts
+    )
     if updated["fact_summary"]:
         updated["headline"] = str(updated.get("headline") or updated["fact_summary"][0]).strip()
         updated["one_line_summary"] = str(

@@ -477,7 +477,6 @@ class CardNewsComposer:
         prompt = _ISSUE_CARD_PROMPT.replace("{articles_text}", articles_text)
         generated_at = _now_iso()
         published_date = _published_date(articles, generated_at)
-        created_at = _published_datetime(articles, generated_at)
 
         try:
             from src.observability import tracing_config
@@ -736,7 +735,9 @@ def _source_title_for_product_event(
     if not re.search(r"플랫폼\s*확장|AI\s*전환\s*추진|통합으로|혁신|시장\s*공략", value):
         return value
     for article in articles:
-        candidate = _clean_source_headline(article.get("title") if isinstance(article, dict) else "")
+        candidate = _clean_source_headline(
+            article.get("title") if isinstance(article, dict) else ""
+        )
         if (
             candidate
             and len(candidate) <= 52

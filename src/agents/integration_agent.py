@@ -455,11 +455,8 @@ def _strategic_evidence_inventory(
     existing = integrated_issue.get("strategic_evidence_inventory")
     existing_inventory = existing if isinstance(existing, dict) else {}
 
-    cluster = (
-        integrated_issue.get("cluster_fact_intelligence")
-        if isinstance(integrated_issue.get("cluster_fact_intelligence"), dict)
-        else {}
-    )
+    cluster_value = integrated_issue.get("cluster_fact_intelligence")
+    cluster: dict[str, Any] = cluster_value if isinstance(cluster_value, dict) else {}
     facts = _fact_rows_for_inventory(cluster, consolidated_facts, fact_basis)
     generated = {
         "core_event_facts": _inventory_texts(
@@ -558,7 +555,9 @@ def _inventory_texts(
         )
         if not text:
             continue
-        role_values = set(_normalize_string_list(fact.get("summary_roles") or fact.get("summary_role")))
+        role_values = set(
+            _normalize_string_list(fact.get("summary_roles") or fact.get("summary_role"))
+        )
         type_values = set(_normalize_string_list(fact.get("fact_types") or fact.get("fact_type")))
         if roles and not (role_values & roles):
             continue
