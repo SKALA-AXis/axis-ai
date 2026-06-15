@@ -116,7 +116,8 @@ class _FakeLLM:
     def __init__(self) -> None:
         self.called = False
 
-    def invoke(self, prompt: str) -> _FakeMessage:
+    def invoke(self, prompt: str, config: object | None = None, **_: object) -> _FakeMessage:
+        # 실제 ChatOpenAI.invoke 처럼 config(LangChain RunnableConfig·Langfuse tracing) 수용.
         self.called = True
         assert "evidence_pack" in prompt
         return _FakeMessage()
