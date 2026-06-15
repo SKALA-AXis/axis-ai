@@ -1848,9 +1848,7 @@ class StrategicInsightAgent:
             phase="frontend_ready_repair_compact_facts",
         )
         data = _parse_json_loose(content)
-        frontend_ready = _json_dict(
-            data.get("frontend_ready") if isinstance(data, dict) else {}
-        )
+        frontend_ready = _json_dict(data.get("frontend_ready") if isinstance(data, dict) else {})
         if (
             not frontend_ready
             and isinstance(data, dict)
@@ -4469,8 +4467,10 @@ def _industry_role_structure_change_clause(
     anchors: Sequence[str] | None = None,
 ) -> str:
     flags = _industry_criteria_flags(criteria, anchors)
-    if flags["actor_or_partner"] and flags["infra_or_supply"] and (
-        flags["customer_or_system"] or flags["operation"]
+    if (
+        flags["actor_or_partner"]
+        and flags["infra_or_supply"]
+        and (flags["customer_or_system"] or flags["operation"])
     ):
         return (
             "기술 확보 자체보다 적용 기업, 구축 범위, 운영 지원 책임을 나눠 보는 "
@@ -4495,8 +4495,10 @@ def _industry_action_role_axis(
     anchors: Sequence[str] | None = None,
 ) -> str:
     flags = _industry_criteria_flags(criteria, anchors)
-    if flags["actor_or_partner"] and flags["infra_or_supply"] and (
-        flags["customer_or_system"] or flags["operation"]
+    if (
+        flags["actor_or_partner"]
+        and flags["infra_or_supply"]
+        and (flags["customer_or_system"] or flags["operation"])
     ):
         return "기술 제공, 고객 적용, 구축 이후 운영 지원 중 어떤 역할을 맡을 수 있는지"
     if flags["infra_or_supply"] and flags["customer_or_system"]:
@@ -4662,8 +4664,7 @@ def _industry_action_sentence(
     if action_reading:
         action_object = _with_korean_object_particle(action_reading)
         return (
-            f"SK AX는 {anchor_phrase} 흐름에서 {action_object} 기준으로 "
-            "검토 범위를 구분해야 한다."
+            f"SK AX는 {anchor_phrase} 흐름에서 {action_object} 기준으로 검토 범위를 구분해야 한다."
         )
     return (
         f"SK AX는 {anchor_phrase} 흐름을 볼 때 드러난 참여 구조와 "
@@ -5039,9 +5040,8 @@ def _industry_dynamic_action_reading_from_anchors(
     if not value.strip():
         return ""
     flags = _industry_criteria_flags(decision_criteria or (), anchors)
-    if (
-        flags["customer_or_system"]
-        and re.search(r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I)
+    if flags["customer_or_system"] and re.search(
+        r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I
     ):
         return "고객 업무에 실제로 연결될 수 있는 처리 범위와 기존 시스템 접점"
     if (
@@ -5085,9 +5085,8 @@ def _industry_anchor_market_reading(
             "기술 확보 자체보다 적용 기업, 구축 범위, 운영 지원 책임을 "
             "나눠 보는 경쟁 기준으로 이어질 수 있음을 보여준다."
         )
-    if (
-        flags["customer_or_system"]
-        and re.search(r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I)
+    if flags["customer_or_system"] and re.search(
+        r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I
     ):
         return (
             "기업 도입 기준이 기능 소개보다 실제 업무 적용 범위와 "
@@ -6135,10 +6134,9 @@ def _frontend_ready_required_violations(
             "frontend_ready.source: llm_direct 또는 frontend_repair_direct "
             "결과만 화면에 노출할 수 있습니다."
         )
-    if (
-        _frontend_ready_actionable_signal_level(integrated_issue) == "weak"
-        and _is_weak_surface_integrated_issue(integrated_issue)
-    ):
+    if _frontend_ready_actionable_signal_level(
+        integrated_issue
+    ) == "weak" and _is_weak_surface_integrated_issue(integrated_issue):
         violations.append(
             "frontend_ready: 단순 행사/웨비나/홍보성 이슈는 통합 fact만으로 "
             "SK AX 판단 축을 만들기 어려워 화면 노출하지 않습니다."
@@ -7684,10 +7682,9 @@ def _can_attempt_frontend_ready_repair_for_issue(
     del result
     if not isinstance(integrated_issue, dict) or not integrated_issue:
         return False
-    if (
-        integrated_issue.get("is_valid_summary") is False
-        and not _has_integrated_text_candidate_signal(integrated_issue)
-    ):
+    if integrated_issue.get(
+        "is_valid_summary"
+    ) is False and not _has_integrated_text_candidate_signal(integrated_issue):
         return False
     return bool(
         integrated_issue.get("integrated_text")
