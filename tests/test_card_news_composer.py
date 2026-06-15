@@ -4,6 +4,7 @@ from src.composers.card_news_composer import (
     CardNewsComposer,
     _card_from_summary,
     _plain_summary_lines,
+    _sanitize_public_anchor_text,
 )
 
 
@@ -447,3 +448,21 @@ def test_summary_fallback_uses_article_title_and_image_for_sentence_headline():
         card["db_record"]["image_assets"][0]["url"]
         == "https://cdn.example.com/news/posco-agent.jpg"
     )
+
+
+def test_public_anchor_cleanup_replaces_single_token_event_anchor():
+    title = "엔비디아와 LG그룹, AI 팩토리 구축 협력"
+
+    insight = _sanitize_public_anchor_text(
+        "핵심 시사점: 이번 Isaac은 LG CNS의 클라우드&AI 사업 기반과 연결됩니다.",
+        card_title=title,
+    )
+    action = _sanitize_public_anchor_text(
+        "핵심 대응: SK AX는 Isaac와 유사한 사업을 검토할 때 운영 책임을 구분해야 합니다.",
+        card_title=title,
+    )
+
+    assert "Isaac" not in insight
+    assert "Isaac" not in action
+    assert "이번 엔비디아와 LG그룹, AI 팩토리 구축 협력은" in insight
+    assert "엔비디아와 LG그룹, AI 팩토리 구축 협력과 유사한 사업" in action

@@ -370,6 +370,7 @@ class CardNewsComposer:
             sentence_grounding=sentence_grounding,
             sources=card.get("sources") or [],
             summary_lines=literal_summary_lines or _list_string(card.get("summary_lines")),
+            card_title=str(card.get("title") or ""),
         )
         card["frontend_implication"] = _sync_frontend_implication_from_display_sections(
             card.get("frontend_implication"),
@@ -1378,6 +1379,7 @@ def _display_sections_from_strategy_result(
     sentence_grounding: dict[str, Any] | None,
     sources: list[dict[str, Any]],
     summary_lines: list[str] | None = None,
+    card_title: str = "",
 ) -> list[dict[str, Any]]:
     del sources
     summary_items = _literal_summary_lines(summary, fallback=summary_lines)
@@ -1423,11 +1425,60 @@ def _display_sections_from_strategy_result(
         preferred=2,
         section_type="action",
     )
-    return [
+    sections = [
         {"type": "summary", "title": "요약", "items": summary_items},
         {"type": "insight", "title": "시사점", "items": insight_items},
         {"type": "action", "title": "대응방안", "items": action_items},
     ]
+    return _sanitize_display_section_event_anchors(sections, card_title=card_title)
+
+
+def _sanitize_display_section_event_anchors(
+    sections: list[dict[str, Any]], *, card_title: str
+) -> list[dict[str, Any]]:
+    if not card_title:
+        return sections
+    sanitized: list[dict[str, Any]] = []
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        next_section = dict(section)
+        next_section["items"] = [
+            _sanitize_public_anchor_text(item, card_title=card_title)
+            for item in _list_string(section.get("items"))
+        ]
+        sanitized.append(next_section)
+    return sanitized
+
+
+def _sanitize_public_anchor_text(value: Any, *, card_title: str) -> str:
+    text = str(value or "")
+    event_label = _public_event_label_from_title(card_title)
+    if not text or not event_label:
+        return text
+
+    anchor = r"(?:Isaac|에이엑스씽크|AXThink|CLO|클로|[A-Za-z][A-Za-z0-9_-]{2,})"
+    text = re.sub(
+        rf"이번\s+({anchor})\s*(?:은|는)\b",
+        f"이번 {event_label}은",
+        text,
+    )
+    text = re.sub(
+        rf"(?<![A-Za-z가-힣])({anchor})\s*(?:와|과)\s+유사한\s+사업",
+        f"{event_label}과 유사한 사업",
+        text,
+    )
+    return text
+
+
+def _public_event_label_from_title(title: str) -> str:
+    value = _clean_card_editorial_text(str(title or ""))
+    value = re.sub(r"\s+", " ", value).strip(" .")
+    if not value:
+        return ""
+    if len(value) > 54:
+        value = value[:54].rstrip(" ,·…") + "..."
+    return value
 
 
 def _sync_frontend_implication_from_display_sections(
