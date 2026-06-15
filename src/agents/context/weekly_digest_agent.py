@@ -278,9 +278,14 @@ class WeeklyDigestAgent:
             prev_digest_json=json.dumps(prev_digest or {}, ensure_ascii=False, default=str),
             cards_json=json.dumps(cards, ensure_ascii=False, default=str),
         )
+        from src.observability import tracing_config
+
         messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_prompt)]
         try:
-            response = self._get_llm().invoke(messages)
+            response = self._get_llm().invoke(
+                messages,
+                config=tracing_config(agent="WeeklyDigestAgent", phase="digest", peer_id=peer_id),
+            )
             text = str(getattr(response, "content", "") or "")
         except Exception as exc:  # noqa: BLE001
             log.warning("weekly digest LLM failed | peer=%s error=%s", peer_id, exc)

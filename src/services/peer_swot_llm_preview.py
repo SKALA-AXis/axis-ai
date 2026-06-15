@@ -981,10 +981,15 @@ class PeerSwotAgent:
         return result
 
     def _invoke_json(self, prompt_template: str, prompt_pack: dict[str, Any]) -> dict[str, Any]:
+        from src.observability import tracing_config
+
         prompt = prompt_template.format(
             pack_json=json.dumps(prompt_pack, ensure_ascii=False, indent=2, default=str)
         )
-        response = self.llm.invoke(prompt)
+        response = self.llm.invoke(
+            prompt,
+            config=tracing_config(agent="PeerSwotLlmPreview", phase="invoke_json"),
+        )
         content = getattr(response, "content", response)
         if isinstance(content, list):
             content = "\n".join(str(item) for item in content)

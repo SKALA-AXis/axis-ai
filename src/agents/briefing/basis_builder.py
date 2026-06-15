@@ -509,12 +509,17 @@ def _refine_briefing_basis_with_llm(
         period=period,
         user_context=user_context,
     )
+    from src.observability import tracing_config
+
     messages = [
         ("system", _briefing_synthesis_system_prompt()),
         ("human", _briefing_synthesis_user_prompt(context)),
     ]
     try:
-        response = (llm or _get_llm()).invoke(messages)
+        response = (llm or _get_llm()).invoke(
+            messages,
+            config=tracing_config(agent="BriefingBasisBuilder", phase="synthesis"),
+        )
     except Exception as exc:  # pragma: no cover - external API safety net
         log.warning("Briefing basis synthesis failed | error=%s", exc)
         return briefing_basis
@@ -529,7 +534,10 @@ def _refine_briefing_basis_with_llm(
             ("human", _briefing_synthesis_revision_prompt(context, parsed, issues)),
         ]
         try:
-            revision_response = (llm or _get_llm()).invoke(revision_messages)
+            revision_response = (llm or _get_llm()).invoke(
+                revision_messages,
+                config=tracing_config(agent="BriefingBasisBuilder", phase="synthesis_revision"),
+            )
         except Exception as exc:  # pragma: no cover - external API safety net
             log.warning("Briefing basis synthesis revision failed | error=%s", exc)
         else:

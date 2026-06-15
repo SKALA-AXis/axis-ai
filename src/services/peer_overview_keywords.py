@@ -890,6 +890,8 @@ class PeerOverviewKeywordAgent:
         self._llm: Any | None = None
 
     def generate(self, evidence_pack: dict[str, Any]) -> dict[str, Any]:
+        from src.observability import tracing_config
+
         prompt = self._build_prompt(evidence_pack)
         validation_error: ValueError | None = None
         for attempt in range(3):
@@ -903,7 +905,10 @@ class PeerOverviewKeywordAgent:
                 [
                     ("system", SYSTEM_PROMPT),
                     ("human", request_prompt),
-                ]
+                ],
+                config=tracing_config(
+                    agent="PeerOverviewKeywords", phase="generate", attempt=attempt
+                ),
             )
             content = (
                 response.content if isinstance(response.content, str) else str(response.content)

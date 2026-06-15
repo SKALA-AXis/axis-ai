@@ -769,12 +769,17 @@ def _refine_display_copy_with_llm(
         return report
 
     context = _display_copy_context(report, selected_cards)
+    from src.observability import tracing_config
+
     messages = [
         ("system", _display_copy_system_prompt()),
         ("human", _display_copy_user_prompt(context)),
     ]
     try:
-        response = (llm or _get_llm()).invoke(messages)
+        response = (llm or _get_llm()).invoke(
+            messages,
+            config=tracing_config(agent="BriefingGenerationAgent", phase="refine_display_copy"),
+        )
     except Exception as exc:  # pragma: no cover - external API safety net
         log.warning("Briefing display copy refinement failed | error=%s", exc)
         return report
@@ -789,7 +794,12 @@ def _refine_display_copy_with_llm(
             ("human", _display_copy_revision_prompt(context, parsed, issues)),
         ]
         try:
-            revision_response = (llm or _get_llm()).invoke(revision_messages)
+            revision_response = (llm or _get_llm()).invoke(
+                revision_messages,
+                config=tracing_config(
+                    agent="BriefingGenerationAgent", phase="refine_display_copy_revision"
+                ),
+            )
         except Exception as exc:  # pragma: no cover - external API safety net
             log.warning("Briefing display copy revision failed | error=%s", exc)
         else:
