@@ -180,8 +180,9 @@ class CardNewsComposer:
         )
         trust_score = _trust_score(articles)
         source_article_ids = _source_article_ids(summary, articles)
-        created_at = _now_iso()
-        published_date = _published_date(articles, created_at)
+        generated_at = _now_iso()
+        published_date = _published_date(articles, generated_at)
+        created_at = _published_datetime(articles, generated_at)
 
         title = _first_non_empty(
             summary.get("display_headline"),
@@ -209,6 +210,7 @@ class CardNewsComposer:
         card_text = _card_text(title, summary_lines, summary, articles)
         event_type = _infer_event_type(summary, classification, card_text)
         title = _business_context_title(title, summary=summary, event_type=event_type)
+        title = _source_title_for_product_event(title, event_type=event_type, articles=articles)
         card_text = _card_text(title, summary_lines, summary, articles)
         sectors = _infer_sectors(classification, card_text)
         sector = sectors[0] if sectors else "other"
@@ -473,8 +475,9 @@ class CardNewsComposer:
 
         articles_text = _format_articles(articles)
         prompt = _ISSUE_CARD_PROMPT.replace("{articles_text}", articles_text)
-        created_at = _now_iso()
-        published_date = _published_date(articles, created_at)
+        generated_at = _now_iso()
+        published_date = _published_date(articles, generated_at)
+        created_at = _published_datetime(articles, generated_at)
 
         try:
             from src.observability import tracing_config
@@ -590,8 +593,9 @@ def _card_from_summary(
         summary=summary,
         event_type=str(classification.get("event_type") or summary.get("cluster_event_type") or ""),
     )
-    created_at = _now_iso()
-    published_date = _published_date(articles, created_at)
+    generated_at = _now_iso()
+    published_date = _published_date(articles, generated_at)
+    created_at = _published_datetime(articles, generated_at)
     media_assets = _media_assets(articles)
 
     card = {
@@ -715,6 +719,34 @@ def _business_context_title(title: str, *, summary: dict[str, Any], event_type: 
     return value
 
 
+def _source_title_for_product_event(
+    title: str,
+    *,
+    event_type: str,
+    articles: list[dict[str, Any]],
+) -> str:
+    value = _clean_source_headline(title)
+    if str(event_type or "").casefold() not in {
+        "launch",
+        "tech_release",
+        "technology_update",
+        "general_update",
+    }:
+        return value
+    if not re.search(r"플랫폼\s*확장|AI\s*전환\s*추진|통합으로|혁신|시장\s*공략", value):
+        return value
+    for article in articles:
+        candidate = _clean_source_headline(article.get("title") if isinstance(article, dict) else "")
+        if (
+            candidate
+            and len(candidate) <= 52
+            and re.search(r"출시|공개|선보|론칭|협력|체결", candidate)
+            and not _looks_like_sentence_title(candidate)
+        ):
+            return candidate
+    return value
+
+
 def _looks_like_sentence_title(title: str) -> bool:
     value = re.sub(r"\s+", " ", str(title or "")).strip()
     if len(value) > 60 and value.endswith(("다", "다.", "했다", "했다.", "됐다", "됐다.")):
@@ -733,11 +765,11 @@ def _compact_card_title(
     if not _looks_like_sentence_title(value) and len(value) <= 52:
         return value
     candidates = [
-        classification.get("title"),
         summary.get("display_headline"),
         summary.get("headline"),
     ]
     candidates.extend(article.get("title") for article in articles if isinstance(article, dict))
+    candidates.append(classification.get("title"))
     for candidate in candidates:
         compact = _clean_source_headline(candidate)
         if compact and compact != value and len(compact) <= 52:
@@ -3324,7 +3356,18 @@ def _source_article_ids(summary: dict[str, Any], articles: list[dict[str, Any]])
 
 
 def _published_date(articles: list[dict[str, Any]], created_at: str) -> str:
-    return created_at[:10]
+    return _published_datetime(articles, created_at)[:10]
+
+
+def _published_datetime(articles: list[dict[str, Any]], fallback: str) -> str:
+    values = [
+        value
+        for value in (_string_or_none(article.get("published_at")) for article in articles)
+        if value
+    ]
+    if not values:
+        return fallback
+    return sorted(values)[0]
 
 
 def _subtitle(analysis: dict[str, Any], classification: dict[str, Any]) -> str:

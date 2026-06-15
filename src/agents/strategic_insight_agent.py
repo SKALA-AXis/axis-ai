@@ -5396,11 +5396,14 @@ def _integrated_issue_for_prompt(integrated_issue: dict[str, Any]) -> dict[str, 
         "one_line_summary": integrated_issue.get("one_line_summary", ""),
         "integrated_text": integrated_issue.get("integrated_text", ""),
         "fact_summary": integrated_issue.get("fact_summary", []),
-        "consolidated_facts": (integrated_issue.get("consolidated_facts") or [])[:10],
+        "consolidated_facts": (integrated_issue.get("consolidated_facts") or [])[:20],
         "key_numbers": integrated_issue.get("key_numbers", []),
         "business_signals": (integrated_issue.get("business_signals") or [])[:8],
         "representative_sources": integrated_issue.get("representative_sources", []),
-        "fact_basis": (integrated_issue.get("fact_basis") or [])[:10],
+        "fact_basis": (integrated_issue.get("fact_basis") or [])[:16],
+        "strategic_evidence_inventory": _strategic_evidence_inventory_for_prompt(
+            integrated_issue.get("strategic_evidence_inventory") or {}
+        ),
         "cluster_fact_intelligence": _cluster_fact_intelligence_for_prompt(
             integrated_issue.get("cluster_fact_intelligence") or {}
         ),
@@ -5423,7 +5426,7 @@ def _strategic_evidence_pack_for_prompt(
     """
 
     fact_basis = []
-    for item in _jsonish_list(integrated_issue.get("fact_basis"))[:12]:
+    for item in _jsonish_list(integrated_issue.get("fact_basis"))[:16]:
         if not isinstance(item, dict):
             continue
         evidence_texts = [
@@ -5446,7 +5449,7 @@ def _strategic_evidence_pack_for_prompt(
         )
 
     consolidated_facts = []
-    for item in _jsonish_list(integrated_issue.get("consolidated_facts"))[:12]:
+    for item in _jsonish_list(integrated_issue.get("consolidated_facts"))[:20]:
         fact_text = _fact_like_text(item)
         if not fact_text:
             continue
@@ -5502,6 +5505,9 @@ def _strategic_evidence_pack_for_prompt(
         },
         "fact_basis": fact_basis,
         "consolidated_facts": consolidated_facts,
+        "strategic_evidence_inventory": _strategic_evidence_inventory_for_prompt(
+            integrated_issue.get("strategic_evidence_inventory") or {}
+        ),
         "representative_sources": representative_sources,
         "bundle_evidence_snippets": bundle_evidence_snippets,
         "cluster_fact_intelligence": _cluster_fact_intelligence_for_prompt(
@@ -5509,6 +5515,26 @@ def _strategic_evidence_pack_for_prompt(
         ),
         "missing_or_uncertain_points": integrated_issue.get("missing_or_uncertain_points", []),
     }
+
+
+def _strategic_evidence_inventory_for_prompt(value: Any) -> dict[str, Any]:
+    data = _json_dict(value)
+    if not data:
+        return {}
+    out: dict[str, Any] = {}
+    for key, limit in (
+        ("core_event_facts", 6),
+        ("product_or_service_facts", 8),
+        ("application_scope_facts", 8),
+        ("numbers_and_scale_facts", 6),
+        ("roadmap_or_plan_facts", 6),
+        ("quote_or_position_facts", 4),
+        ("all_preserved_facts", 20),
+    ):
+        values = _string_list(data.get(key), max_items=limit)
+        if values:
+            out[key] = values
+    return out
 
 
 def _role_interpretation_hints(integrated_issue: dict[str, Any]) -> dict[str, Any]:
@@ -6449,6 +6475,28 @@ def _frontend_ready_required_violations(
         ):
             violations.append("frontend_ready.suggested_action: SK AX 행동 관점이 없습니다.")
         if section_key == "suggested_action":
+            mechanical_split_violation = _frontend_ready_action_mechanical_split_violation(
+                block.get("sentence")
+            )
+            if mechanical_split_violation:
+                violations.append(
+                    f"frontend_ready.suggested_action.sentence: {mechanical_split_violation}"
+                )
+            mechanical_split_evidence_violation = _frontend_ready_action_mechanical_split_violation(
+                block.get("evidence_sentence")
+            )
+            if mechanical_split_evidence_violation:
+                violations.append(
+                    "frontend_ready.suggested_action.evidence_sentence: "
+                    f"{mechanical_split_evidence_violation}"
+                )
+            weak_review_violation = _frontend_ready_action_weak_review_phrase_violation(
+                block.get("sentence")
+            )
+            if weak_review_violation:
+                violations.append(
+                    f"frontend_ready.suggested_action.sentence: {weak_review_violation}"
+                )
             action_violation = _frontend_ready_action_specificity_violation(
                 block,
                 integrated_issue=integrated_issue,
@@ -6602,6 +6650,54 @@ def _frontend_ready_malformed_display_sentence_violation(text: Any) -> str:
     for pattern, message in malformed_patterns:
         if re.search(pattern, value):
             return message
+    return ""
+
+
+def _frontend_ready_action_mechanical_split_violation(sentence: Any) -> str:
+    value = re.sub(r"\s+", " ", str(sentence or "").strip())
+    if not value:
+        return ""
+    mechanical_patterns = (
+        r"(?:인지|할지|할지부터|여부).{0,40}나눠\s*(?:비교|점검|확인|검토|설명|정리)",
+        r"나눠\s*[,，]",
+        r"나눠\s*(?:비교|점검|확인|검토|설명|정리)(?:해야\s*한다|할\s*필요가\s*있다)",
+        r"분리해\s*(?:비교|점검|확인|검토|설명|정리)(?:해야\s*한다|할\s*필요가\s*있다)",
+        r"나눠\s*볼\s*필요가\s*있다",
+        r"우선\s*비교할지\s*나눠",
+        r"(?:적용\s*범위|운영\s*책임|수행\s*범위|검증\s*기준|고객\s*제안\s*단위)"
+        r".{0,35}(?:나눠|분리해|구분해)\s*(?:비교|점검|확인|검토|설명|정리)",
+    )
+    if any(re.search(pattern, value) for pattern in mechanical_patterns):
+        return (
+            "선택지를 나열한 뒤 나눠/분리해 비교·점검으로 끝나는 대응방향은 "
+            "화면 문장으로 사용할 수 없습니다."
+        )
+    return ""
+
+
+def _frontend_ready_action_weak_review_phrase_violation(sentence: Any) -> str:
+    value = re.sub(r"\s+", " ", str(sentence or "").strip())
+    if not value:
+        return ""
+    if re.search(r"자체\s*AI\s*역량만\s*앞세우기보다", value):
+        return "SK AX의 현재 접근을 평가절하하는 표현은 대응방향에 쓰지 않습니다."
+    weak_patterns = (
+        r"검토할\s*때",
+        r"(?:검토|점검|확인)해야\s*한다\.?$",
+        r"(?:검토|점검|확인)할\s*필요가\s*있다\.?$",
+    )
+    has_weak_review = any(re.search(pattern, value) for pattern in weak_patterns)
+    if not has_weak_review:
+        return ""
+    action_terms = (
+        r"설계|확보|연결|구성|제안|구축|운영|검증\s*환경|현장\s*데이터|"
+        r"파트너|사업화|실행\s*조건|고객\s*제안"
+    )
+    if not re.search(action_terms, value):
+        return (
+            "대응방향이 검토/점검/확인에 머물렀습니다. "
+            "무엇을 설계·확보·연결·제안할지까지 써야 합니다."
+        )
     return ""
 
 
