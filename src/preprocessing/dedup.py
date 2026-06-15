@@ -1044,7 +1044,11 @@ def _invoke_cluster_llm_judge(
     }
 
     try:
-        from openai import OpenAI
+        # langfuse.openai 드롭인 래퍼로 LLM judge 호출을 자동 추적 (없으면 원시 openai 폴백).
+        try:
+            from langfuse.openai import OpenAI
+        except Exception:
+            from openai import OpenAI
 
         response = OpenAI().chat.completions.create(
             model=_CLUSTER_LLM_MODEL,
