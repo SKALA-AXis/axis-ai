@@ -243,6 +243,7 @@ def test_chat_pdf_rejects_invalid_base64():
         json={"request": {"message": "분석해줘"}, "file_name": "a.pdf", "pdf_base64": "!!!"},
     )
     assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "ASSISTANT_PDF_INVALID_BASE64"
 
 
 # ----------------------------------------------------------------- insights

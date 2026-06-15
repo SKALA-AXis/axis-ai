@@ -905,12 +905,30 @@ async def chat_pdf(request: ChatPdfRequest) -> ChatTurnResponse:
     try:
         pdf_bytes = base64.b64decode(request.pdf_base64, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="pdf_base64 is not valid base64") from exc
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "ASSISTANT_PDF_INVALID_BASE64",
+                "message": "pdf_base64 is not valid base64",
+            },
+        ) from exc
 
     if len(pdf_bytes) > _CHAT_PDF_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="PDF file is too large")
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "code": "ASSISTANT_PDF_FILE_TOO_LARGE",
+                "message": "PDF file is too large",
+            },
+        )
     if not _looks_like_pdf(request.file_name, request.content_type, pdf_bytes):
-        raise HTTPException(status_code=400, detail="Only PDF attachments are supported")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "ASSISTANT_PDF_UNSUPPORTED_TYPE",
+                "message": "Only PDF attachments are supported",
+            },
+        )
 
     from src.crawler.parsers.pdf_payload import extract_pdf_payload
 

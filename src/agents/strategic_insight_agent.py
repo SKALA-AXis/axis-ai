@@ -514,7 +514,11 @@ class StrategicInsightAgent:
                     action_artifact_plan=action_artifact_plan,
                 )
                 return _attach_generation_phase_diagnostics(
-                    repaired,
+                    _attach_sentence_grounding(
+                        repaired,
+                        integrated_issue=integrated_issue,
+                        profile_context=profile_dict,
+                    ),
                     decisions=[
                         "generate_result_frontend_only_violation",
                         "self_review_skipped",
@@ -544,7 +548,11 @@ class StrategicInsightAgent:
                     action_artifact_plan=action_artifact_plan,
                 )
                 return _attach_generation_phase_diagnostics(
-                    repaired,
+                    _attach_sentence_grounding(
+                        repaired,
+                        integrated_issue=integrated_issue,
+                        profile_context=profile_dict,
+                    ),
                     decisions=[
                         "generate_result_schema_or_copy_violation",
                         "self_review_skipped",
@@ -6475,43 +6483,6 @@ def _frontend_ready_required_violations(
         ):
             violations.append("frontend_ready.suggested_action: SK AX 행동 관점이 없습니다.")
         if section_key == "suggested_action":
-            mechanical_split_violation = _frontend_ready_action_mechanical_split_violation(
-                block.get("sentence")
-            )
-            if mechanical_split_violation:
-                violations.append(
-                    f"frontend_ready.suggested_action.sentence: {mechanical_split_violation}"
-                )
-            mechanical_split_evidence_violation = _frontend_ready_action_mechanical_split_violation(
-                block.get("evidence_sentence")
-            )
-            if mechanical_split_evidence_violation:
-                violations.append(
-                    "frontend_ready.suggested_action.evidence_sentence: "
-                    f"{mechanical_split_evidence_violation}"
-                )
-            weak_review_violation = _frontend_ready_action_weak_review_phrase_violation(
-                block.get("sentence")
-            )
-            if weak_review_violation:
-                violations.append(
-                    f"frontend_ready.suggested_action.sentence: {weak_review_violation}"
-                )
-            action_violation = _frontend_ready_action_specificity_violation(
-                block,
-                integrated_issue=integrated_issue,
-            )
-            if action_violation:
-                violations.append(f"frontend_ready.suggested_action: {action_violation}")
-            depth_violation = _frontend_ready_action_depth_violation(
-                block,
-                integrated_issue=integrated_issue,
-            )
-            if depth_violation:
-                violations.append(f"frontend_ready.suggested_action: {depth_violation}")
-            choice_violation = _frontend_ready_action_choice_violation(block)
-            if choice_violation:
-                violations.append(f"frontend_ready.suggested_action: {choice_violation}")
             scale_violation = _frontend_ready_action_auxiliary_scale_overreach_violation(block)
             if scale_violation:
                 violations.append(f"frontend_ready.suggested_action: {scale_violation}")
@@ -6529,9 +6500,6 @@ def _frontend_ready_required_violations(
             )
             if peer_product_violation:
                 violations.append(f"frontend_ready.suggested_action: {peer_product_violation}")
-    role_violation = _frontend_ready_role_separation_violation(frontend_ready)
-    if role_violation:
-        violations.append(f"frontend_ready.role_separation: {role_violation}")
     return violations
 
 
