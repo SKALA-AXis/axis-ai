@@ -210,7 +210,6 @@ class CardNewsComposer:
         card_text = _card_text(title, summary_lines, summary, articles)
         event_type = _infer_event_type(summary, classification, card_text)
         title = _business_context_title(title, summary=summary, event_type=event_type)
-        title = _source_title_for_product_event(title, event_type=event_type, articles=articles)
         card_text = _card_text(title, summary_lines, summary, articles)
         sectors = _infer_sectors(classification, card_text)
         sector = sectors[0] if sectors else "other"
@@ -718,36 +717,6 @@ def _business_context_title(title: str, *, summary: dict[str, Any], event_type: 
     return value
 
 
-def _source_title_for_product_event(
-    title: str,
-    *,
-    event_type: str,
-    articles: list[dict[str, Any]],
-) -> str:
-    value = _clean_source_headline(title)
-    if str(event_type or "").casefold() not in {
-        "launch",
-        "tech_release",
-        "technology_update",
-        "general_update",
-    }:
-        return value
-    if not re.search(r"플랫폼\s*확장|AI\s*전환\s*추진|통합으로|혁신|시장\s*공략", value):
-        return value
-    for article in articles:
-        candidate = _clean_source_headline(
-            article.get("title") if isinstance(article, dict) else ""
-        )
-        if (
-            candidate
-            and len(candidate) <= 52
-            and re.search(r"출시|공개|선보|론칭|협력|체결", candidate)
-            and not _looks_like_sentence_title(candidate)
-        ):
-            return candidate
-    return value
-
-
 def _looks_like_sentence_title(title: str) -> bool:
     value = re.sub(r"\s+", " ", str(title or "")).strip()
     if len(value) > 60 and value.endswith(("다", "다.", "했다", "했다.", "됐다", "됐다.")):
@@ -766,11 +735,11 @@ def _compact_card_title(
     if not _looks_like_sentence_title(value) and len(value) <= 52:
         return value
     candidates = [
+        classification.get("title"),
         summary.get("display_headline"),
         summary.get("headline"),
     ]
     candidates.extend(article.get("title") for article in articles if isinstance(article, dict))
-    candidates.append(classification.get("title"))
     for candidate in candidates:
         compact = _clean_source_headline(candidate)
         if compact and compact != value and len(compact) <= 52:
