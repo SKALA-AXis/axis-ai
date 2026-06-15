@@ -788,7 +788,12 @@ AXIS Generative Search 답변을 작성합니다.
                 reasoning_effort=None,
             )
         )
-        result = llm.invoke(prompt)
+        from src.observability.langfuse_client import tracing_config
+
+        result = llm.invoke(
+            prompt,
+            config=tracing_config(agent="GenSearch", phase="answer_compose"),
+        )
         parsed = json.loads(str(getattr(result, "content", result) or "{}"))
         answer = str(parsed.get("answer") or "").strip()
         return answer
