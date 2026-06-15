@@ -67,3 +67,33 @@ def test_result_shape_has_required_fields():
         assert key in r
     assert isinstance(r["sectors"], list)
     assert r["signals"]["cluster_size"] == 1
+
+
+def test_llm_fallback_path_no_keyerror(monkeypatch):
+    """규칙 미매칭 → GPT-4o 폴백(_format_articles) 에서 source_name KeyError 안 나는지 회귀 가드.
+
+    rule 을 강제로 미매칭시키고 LLM 을 스텁으로 갈아끼워, 합성 article 이 LLM 경로를
+    통과(_format_articles 가 a["title"]·a["source_name"] bracket 접근)하는지 확인한다.
+    """
+    import src.observability
+    import src.preprocessing.classification as clf
+
+    class _Resp:
+        content = '{"event_type": "financial", "reasoning": "stub"}'
+
+    class _FakeLLM:
+        def invoke(self, *args, **kwargs):
+            return _Resp()
+
+    monkeypatch.setattr(clf, "_classify_event_type_rule_based", lambda **kw: (None, ""))
+    monkeypatch.setattr(clf, "openai_calls_enabled", lambda: True)
+    monkeypatch.setattr(clf, "_get_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(src.observability, "tracing_config", lambda **kw: None)
+
+    r = clf.classify_article_text(
+        "삼성SDS 관련 동향",  # 규칙 키워드 없음(게다가 강제 미매칭) → LLM 폴백
+        "본문 내용입니다.",
+        company="samsung_sds",
+        enable_llm=True,
+    )
+    assert r["event_type"] == "financial"
