@@ -382,6 +382,9 @@ def classify_article_text(
         "content": content or "",
         "company": company or "",
         "source_type": source_type or "",
+        # GPT-4o 폴백 경로(_format_articles)가 a["source_name"] 을 bracket 접근하므로
+        # 합성 article 에도 키가 있어야 KeyError 가 안 난다(규칙 미매칭 기사 분류 시).
+        "source_name": "",
     }
     matched_sectors = _matched_sectors(rep, title=rep["title"], content=rep["content"])
     exposure = compute_exposure([rep], company)
