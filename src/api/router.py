@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 
 from src.api.briefing_schemas import BriefingGenerateRequest, BriefingGenerateResponse
 from src.api.chat_schemas import ChatPdfRequest, ChatTurnRequest, ChatTurnResponse
+from src.api.classify_schemas import ClassifyRequest, ClassifyResponse
 from src.api.global_trends_schemas import GlobalTrendsRequest, GlobalTrendsResponse
 from src.api.insight_schemas import InsightGenerateRequest, InsightGenerateResponse
 from src.api.link_verification_schemas import LinkVerificationRequest, LinkVerificationResponse
@@ -321,6 +322,25 @@ async def run_delivery(req: BriefingRequest) -> BriefingContent:
         text=state["text"],
         recipients=[],
     )
+
+
+@app.post("/classify", response_model=ClassifyResponse)
+async def classify_article(request: ClassifyRequest) -> ClassifyResponse:
+    """단일 기사 텍스트 분류 — 운영 수집 파이프라인과 동일 판정(event_type·중요도).
+
+    backend 데모(``/api/demo/publish``)가 호출한다. rule 우선 → GPT-4o fallback 이라
+    동기 LLM 호출이 event-loop 를 막지 않도록 ``to_thread`` 로 격리한다.
+    """
+    from src.preprocessing.classification import classify_article_text
+
+    result = await asyncio.to_thread(
+        classify_article_text,
+        request.title,
+        request.content,
+        request.company,
+        source_type=request.source_type,
+    )
+    return ClassifyResponse(**result)
 
 
 @app.post("/briefing/generate", response_model=BriefingGenerateResponse)
