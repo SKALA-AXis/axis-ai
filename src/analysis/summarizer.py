@@ -47,8 +47,8 @@ def _env_float(name: str, default: float) -> float:
 _LLM_MODEL = os.getenv("OPENAI_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o"
 _PROMPT_VERSION = "summary-v4.0"
 _FACT_EXTRACTION_BATCH_SIZE = 10
-_FACT_EXTRACTION_MAX_TOKENS = _env_int("FACT_EXTRACTION_MAX_TOKENS", 3600)
-_SUMMARY_MAX_TOKENS = _env_int("SUMMARY_MAX_TOKENS", 1800)
+_FACT_EXTRACTION_MAX_TOKENS = _env_int("FACT_EXTRACTION_MAX_TOKENS", 3000)
+_SUMMARY_MAX_TOKENS = _env_int("SUMMARY_MAX_TOKENS", 1500)
 _VALIDATION_MAX_TOKENS = _env_int("VALIDATION_MAX_TOKENS", 1200)
 _SUMMARY_LINE_MIN = 3
 _SUMMARY_LINE_MAX = 5
@@ -61,7 +61,7 @@ _MAJORITY_THRESHOLD = _env_float("NEWS_SUMMARY_MAJORITY_THRESHOLD", 0.70)
 _MIXED_THRESHOLD = _env_float("NEWS_SUMMARY_MIXED_THRESHOLD", 0.50)
 _SUPPORTING_ARTICLE_CONTENT_CHARS = _env_int("NEWS_SUMMARY_SUPPORTING_ARTICLE_CONTENT_CHARS", 0)
 _NEAR_DUPLICATE_SIMILARITY = _env_float("NEWS_SUMMARY_NEAR_DUPLICATE_SIMILARITY", 0.86)
-_SNIPPETS_PER_ARTICLE = _env_int("NEWS_SUMMARY_SNIPPETS_PER_ARTICLE", 6)
+_SNIPPETS_PER_ARTICLE = _env_int("NEWS_SUMMARY_SNIPPETS_PER_ARTICLE", 4)
 _SNIPPET_CANDIDATE_SENTENCES = _env_int("NEWS_SUMMARY_SNIPPET_CANDIDATE_SENTENCES", 80)
 _SNIPPET_DEDUP_SIMILARITY = _env_float("NEWS_SUMMARY_SNIPPET_DEDUP_SIMILARITY", 0.88)
 _EVENT_TYPES = (
@@ -176,21 +176,18 @@ _ARTICLE_FACT_EXTRACTION_PROMPT = """\
    "웹단말 공급"처럼 단순 납품으로 축약하지 마세요.
 4. 피어사의 일반적 정체성, 기존 포지셔닝, 누구나 알 수 있는 배경 설명은 핵심 사실로 쓰지 마세요.
    기사에서 새로 확인되는 역할, 사건, 범위, 수치, 일정, 시설, 고객, 적용 업무를 우선하세요.
-5. 한 기사 안에서 중심 사건 외에 제품 기능, 적용 업무, 고객/산업, 수치 효과, 후속 계획,
-   경영진 발언, 한계/불확실성이 각각 별도 의미를 가지면 서로 다른 fact로 보존하세요.
-   통합 단계에서 줄일 수 있으므로, 추출 단계에서 중요한 세부 내용을 먼저 버리지 마세요.
-6. 여러 기사에 반복되는 문장이라도 각 기사에서 확인한 사실로 기록하세요.
-7. 본문에 없는 수치, 제품명, 회사명은 만들지 마세요.
-8. activity_type은 반드시 아래 값 중 하나로 분류하세요.
+5. 여러 기사에 반복되는 문장이라도 각 기사에서 확인한 사실로 기록하세요.
+6. 본문에 없는 수치, 제품명, 회사명은 만들지 마세요.
+7. activity_type은 반드시 아래 값 중 하나로 분류하세요.
    {event_types}
-9. fact_type과 summary_role은 기사 속 의미를 기준으로 분류하세요.
+8. fact_type과 summary_role은 기사 속 의미를 기준으로 분류하세요.
    fact_type 허용값:
    launch_fact|platform_definition_fact|application_fact|numeric_fact|market_fact|risk_fact|uncertain_fact|general_fact
    summary_role 허용값:
    main_event|product_definition|service_function|application_case|numeric_effect|market_reaction|risk_detail|uncertainty_detail
-10. 날짜가 포함되어 있어도 수치 자체가 핵심이 아니면 numeric_fact로 분류하지 마세요.
-11. 출시/공개/선보임, 제품 정의, 적용 사례, 수치 효과, 시장 반응, 리스크, 불확실성을 서로 구분하세요.
-12. 제3자 회사·서비스·고객 사례는 피어사와 직접 계약/협약/도입/수주/공급/공동개발 관계로
+9. 날짜가 포함되어 있어도 수치 자체가 핵심이 아니면 numeric_fact로 분류하지 마세요.
+10. 출시/공개/선보임, 제품 정의, 적용 사례, 수치 효과, 시장 반응, 리스크, 불확실성을 서로 구분하세요.
+11. 제3자 회사·서비스·고객 사례는 피어사와 직접 계약/협약/도입/수주/공급/공동개발 관계로
     연결된 경우에만 핵심 사실로 추출하세요. 기사 배경이나 시장 예시로만 언급된 제3자 사례는
     application_fact/main_event 후보에서 제외하세요.
 
@@ -249,8 +246,6 @@ _FACT_ID_SUMMARY_PROMPT = """\
 
 공통 규칙:
 1. summary_lines는 최소 3개, 최대 5개입니다. 입력 근거가 충분할 때만 4~5번째 문장을 추가하세요.
-   여러 기사 묶음에 서로 다른 제품·행사·협력 축이 섞여 있으면, 카드 제목과 대표 기사군에 직접 붙는 사실만
-   summary_lines에 쓰고 다른 축의 중요한 사실은 요약문으로 승격하지 마세요.
 2. 각 문장은 반드시 fact_ids를 1개 이상 포함해야 합니다.
 3. fact_ids는 입력 selected_facts_by_line에 있는 값만 사용하세요.
 4. summary line은 연결된 fact_ids의 normalized_fact/evidence_text에서 확인되는 사실만 사용하세요.
@@ -262,9 +257,6 @@ _FACT_ID_SUMMARY_PROMPT = """\
 10. 같은 회사명으로 시작하는 문장은 최대 1개만 두세요. 이후 문장은 의미가 분명하면 제품명/플랫폼명/서비스명/해당 기술 등으로 이어가세요.
     "기사에서는", "사실이 확인됐다" 같은 보고서체 표현은 쓰지 마세요.
 11. fact에 구체 수치·개수·기간·범위·장소·현장이 있으면 3~5문장에 우선 반영하되, 연결된 fact evidence_text에서 검증되는 경우에만 쓰세요.
-    제품/서비스 출시 요약은 제품명만 쓰지 말고, 기능·처리 업무·연동 시스템·적용 대상 중
-    확인된 항목을 최소 2개 이상 반영하세요.
-    협약/계약 요약은 상대방·목적·적용 현장 또는 기술 역할 중 확인된 항목을 함께 남기세요.
 12. 주어와 서술어의 의미 관계를 맞추세요. 회사/기관 주어는 행동·발표·공개를, 제품/서비스/플랫폼/기술 주어는 기능·역할·적용 범위를, 기사/보도/자료 주어는 소개·설명·언급처럼 전달 행위를 서술하세요.
 13. 계약/수주 요약에서는 정확한 사업명·프로젝트명과 계약 금액을 가능하면 1문장에 보존하세요.
     2문장은 단순 공급 여부보다 고객 업무/시스템 전환 범위를 보존하세요.
@@ -275,13 +267,11 @@ _FACT_ID_SUMMARY_PROMPT = """\
 15. 제3자 회사·서비스·고객 사례는 피어사와 직접 계약/협약/도입/수주/공급/공동개발 관계로 연결된
     fact_id가 있을 때만 summary_lines에 넣으세요. 본문 배경이나 시장 사례로만 나온 제3자 서비스는
     핵심 변화 3줄 요약에 넣지 말고, 피어사의 발표·제품·계약·고객 업무 범위로 문장을 구성하세요.
-16. 같은 클러스터 안의 보조 로드맵, 별도 제품군, 별도 협력 발표는 중요한 사실이어도 대표 제목의 중심 사건과
-    직접 연결되지 않으면 summary_lines가 아니라 all_available_facts에 남겨두는 보존 사실로 취급하세요.
 
 문장별 역할:
 - 1문장: 핵심 사건·상태·평가
 - 2문장: 연결된 제품·서비스·플랫폼·기술·업무·고객·산업 영역
-- 3문장: 기능·적용 업무·연동 시스템·수치·범위·일정·후속 단계 중 가장 구체적인 사실
+- 3문장: 시연·적용 사례·수치·범위·일정·후속 단계·시장 반응·불확실성 중 가장 구체적인 사실
 - 4문장: 별도 근거가 있을 때만 추가되는 보강 사실·고객/산업 범위·운영 단계
 - 5문장: 별도 근거가 있을 때만 추가되는 수치·기간·후속 단계·불확실성
 
@@ -456,14 +446,9 @@ class SourceSummarizer:
             articles=articles_for_analysis,
             cluster_event_type=cluster_event_type,
         )
-        primary_article_ids = _primary_topic_article_ids(
-            articles=articles_for_analysis,
-            representative_id=representative_id,
-        )
         selected_fact_ids = _select_fact_ids_for_summary_lines(
             extracted_facts=extracted_facts,
             cluster_event_type=cluster_event_type,
-            primary_article_ids=primary_article_ids,
         )
 
         try:
@@ -479,11 +464,6 @@ class SourceSummarizer:
                 extracted_facts=extracted_facts,
                 source_article_ids=source_article_ids,
                 main_company=result.get("main_company", ""),
-            )
-            result = _prefer_primary_topic_summary(
-                result=result,
-                extracted_facts=extracted_facts,
-                primary_article_ids=primary_article_ids,
             )
         except Exception as exc:
             log.error("피어사 뉴스 요약 실패 | cluster=%s error=%s", cluster_id, exc)
@@ -508,7 +488,6 @@ class SourceSummarizer:
             "cluster_fact_intelligence": cluster_fact_intelligence,
             "extracted_facts": extracted_facts,
             "selected_fact_ids": selected_fact_ids,
-            "primary_article_ids": sorted(primary_article_ids),
             "coverage": coverage,
             "model": _LLM_MODEL,
             **result,
@@ -620,40 +599,6 @@ def _analysis_article_limit(total: int) -> int:
     min_limit = min(max_limit, max(1, _MIN_ANALYZED_ARTICLES))
     dynamic = int(math.ceil(math.sqrt(total) * 2.5))
     return min(total, max_limit, max(min_limit, dynamic))
-
-
-def _primary_topic_article_ids(
-    *,
-    articles: list[dict[str, Any]],
-    representative_id: int,
-) -> set[int]:
-    """Return the representative title group for display summaries.
-
-    Extraction still reads all selected articles. This only decides which article
-    group is allowed to drive the card's visible 3~5 factual summary lines.
-    """
-    article_ids = set(_article_ids(articles))
-    if len(article_ids) <= 1:
-        return article_ids
-    groups = _same_event_title_groups(articles)
-    if not groups:
-        return article_ids
-    representative_group = next(
-        (
-            group
-            for group in groups
-            if any(_article_numeric_id(article) == representative_id for article in group)
-        ),
-        None,
-    )
-    primary = representative_group or max(groups, key=len)
-    primary_ids = set(_article_ids(primary))
-    if len(primary_ids) < _SUMMARY_LINE_MIN:
-        majority = max(groups, key=len)
-        majority_ids = set(_article_ids(majority))
-        if len(majority_ids) >= _SUMMARY_LINE_MIN:
-            return majority_ids
-    return primary_ids or article_ids
 
 
 def _same_event_title_groups(articles: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -1099,9 +1044,8 @@ def _extract_article_fact_notes(
         if compact_retry:
             prompt_text += (
                 "\n\n추가 지시: 이전 응답이 length limit에 걸렸습니다. "
-                "각 article_id마다 core_facts는 최대 5개로 제한하고, evidence_text는 한 문장으로 짧게 유지하세요. "
-                "제품/서비스/플랫폼 공개 fact, 정의/기능 fact, 적용 업무/연동 시스템 fact, "
-                "시연/수치/후속 계획 fact는 각각의 의미가 남도록 별도 fact로 보존하세요."
+                "각 article_id마다 core_facts는 최대 3개로 제한하고, evidence_text는 한 문장으로 짧게 유지하세요. "
+                "그래도 제품/서비스/플랫폼 공개 fact, 정의/기능 fact, 시연/적용/수치 fact는 우선 보존하세요."
             )
         return prompt_text
 
@@ -2143,35 +2087,21 @@ def _select_fact_ids_for_summary_lines(
     *,
     extracted_facts: list[dict[str, Any]],
     cluster_event_type: str,
-    primary_article_ids: set[int] | None = None,
 ) -> dict[str, list[str]]:
     available = [fact for fact in extracted_facts if fact.get("fact_id")]
-    primary_ids = {article_id for article_id in (primary_article_ids or set()) if article_id}
-    primary_available = [
-        fact for fact in available if _safe_int(fact.get("article_id")) in primary_ids
-    ]
-    summary_pool = primary_available if len(primary_available) >= _SUMMARY_LINE_MIN else available
     used: set[str] = set()
     selected_facts: list[dict[str, Any]] = []
 
     def choose(index: int, preferred_roles: tuple[str, ...]) -> list[str]:
         candidates = [
             fact
-            for fact in summary_pool
+            for fact in available
             if fact.get("fact_id") not in used and fact.get("summary_role") in preferred_roles
         ]
         if not candidates:
-            candidates = [fact for fact in summary_pool if fact.get("fact_id") not in used]
-        if not candidates and len(summary_pool) < _SUMMARY_LINE_MIN:
-            candidates = [
-                fact
-                for fact in available
-                if fact.get("fact_id") not in used and fact.get("summary_role") in preferred_roles
-            ]
-        if not candidates:
             candidates = [fact for fact in available if fact.get("fact_id") not in used]
         if not candidates:
-            candidates = summary_pool or available
+            candidates = available
         if not candidates:
             return []
         selected = sorted(
@@ -2187,7 +2117,7 @@ def _select_fact_ids_for_summary_lines(
         return [fact_id]
 
     preferences = _line_summary_role_preferences(cluster_event_type)
-    desired_count = min(_SUMMARY_LINE_MAX, max(_SUMMARY_LINE_MIN, len(summary_pool)))
+    desired_count = min(_SUMMARY_LINE_MAX, max(_SUMMARY_LINE_MIN, len(available)))
     return {
         str(index): choose(index, preferences[min(index - 1, len(preferences) - 1)])
         for index in range(1, desired_count + 1)
@@ -2526,92 +2456,6 @@ def _normalize_fact_id_summary_result(
     }
     result["fact_basis"] = _fact_basis_from_summary_line_fact_ids(line_items, extracted_facts)
     return result
-
-
-def _prefer_primary_topic_summary(
-    *,
-    result: dict[str, Any],
-    extracted_facts: list[dict[str, Any]],
-    primary_article_ids: set[int],
-) -> dict[str, Any]:
-    if not primary_article_ids:
-        return result
-    all_article_ids = {
-        _safe_int(fact.get("article_id"))
-        for fact in extracted_facts
-        if _safe_int(fact.get("article_id"))
-    }
-    if primary_article_ids >= all_article_ids:
-        return result
-
-    fact_by_id = {str(fact.get("fact_id")): fact for fact in extracted_facts}
-    primary_fact_ids = {
-        str(fact.get("fact_id"))
-        for fact in extracted_facts
-        if str(fact.get("fact_id") or "")
-        and _safe_int(fact.get("article_id")) in primary_article_ids
-    }
-    if len(primary_fact_ids) < _SUMMARY_LINE_MIN:
-        return result
-
-    current_items = _normalize_summary_line_items(result.get("summary_lines_with_fact_ids"))
-    kept: list[dict[str, Any]] = []
-    for item in current_items:
-        fact_ids = [
-            fact_id
-            for fact_id in _normalize_string_list(item.get("fact_ids"))
-            if fact_id in fact_by_id
-        ]
-        if fact_ids and any(fact_id in primary_fact_ids for fact_id in fact_ids):
-            kept.append({**item, "fact_ids": fact_ids})
-
-    if len(kept) < _SUMMARY_LINE_MIN:
-        primary_facts = [
-            fact for fact in extracted_facts if str(fact.get("fact_id")) in primary_fact_ids
-        ]
-        selected = _select_fact_ids_for_summary_lines(
-            extracted_facts=primary_facts,
-            cluster_event_type=str(result.get("cluster_event_type") or "general_update"),
-            primary_article_ids=primary_article_ids,
-        )
-        kept = []
-        for index in range(1, _SUMMARY_LINE_MAX + 1):
-            fact_ids = [
-                fact_id for fact_id in selected.get(str(index), []) if fact_id in fact_by_id
-            ]
-            if not fact_ids:
-                continue
-            facts = [fact_by_id[fact_id] for fact_id in fact_ids]
-            kept.append(
-                {
-                    "line_index": index,
-                    "text": _compose_fallback_line(index=index, facts=facts),
-                    "fact_ids": fact_ids,
-                }
-            )
-            if len(kept) >= min(_SUMMARY_LINE_MAX, max(_SUMMARY_LINE_MIN, len(primary_fact_ids))):
-                break
-
-    if len(kept) < _SUMMARY_LINE_MIN:
-        return result
-
-    normalized_items = [
-        {**item, "line_index": index}
-        for index, item in enumerate(kept[:_SUMMARY_LINE_MAX], start=1)
-    ]
-    updated = {**result}
-    updated["summary_lines_with_fact_ids"] = normalized_items
-    updated["fact_summary"] = [str(item.get("text") or "").strip() for item in normalized_items]
-    updated["fact_basis"] = _fact_basis_from_summary_line_fact_ids(
-        normalized_items, extracted_facts
-    )
-    if updated["fact_summary"]:
-        updated["headline"] = str(updated.get("headline") or updated["fact_summary"][0]).strip()
-        updated["one_line_summary"] = str(
-            updated.get("one_line_summary") or updated["fact_summary"][0]
-        ).strip()
-        updated["main_event"] = str(updated.get("main_event") or updated["fact_summary"][0]).strip()
-    return updated
 
 
 def _normalize_summary_line_items(value: Any) -> list[dict[str, Any]]:
@@ -3792,7 +3636,7 @@ def _actionable_questions_from_inventory(
     if comparison_facts:
         axis = _comparison_axis_from_facts(comparison_facts)
         questions.append(
-            f"SK AX는 {axis} 차이를 매출 구조와 고객 기반 지표로 어떻게 설명할 수 있는가?"
+            f"SK AX는 {axis} 비교축을 내부 관리 지표로 어떻게 분리해 설명할 수 있는가?"
         )
     if cause_or_driver_facts:
         questions.append(
@@ -4090,16 +3934,7 @@ def _fact_key(value: str) -> str:
 
 
 def _has_unique_fact_importance(text: str) -> bool:
-    return bool(
-        re.search(r"\d", text)
-        or re.search(
-            r"제품|서비스|플랫폼|솔루션|모듈|기능|업무|시스템|연동|자동화|"
-            r"운영|관리|장애|보고|매뉴얼|문서|회의|보안|출입|번역|챗봇|"
-            r"고객|산업|현장|공장|물류|제조|PoC|실증|검증|향후|계획|예정|확장",
-            text,
-            re.IGNORECASE,
-        )
-    )
+    return bool(re.search(r"\d", text))
 
 
 def _detect_conflict_notes(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:

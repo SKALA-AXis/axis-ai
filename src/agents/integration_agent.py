@@ -375,11 +375,6 @@ def _tag_integrated_issue(
         source_article_ids=source_article_ids,
         representative_sources=representative_sources,
     )
-    strategic_evidence_inventory = _strategic_evidence_inventory(
-        integrated_issue,
-        consolidated_facts=consolidated_facts,
-        fact_basis=fact_basis,
-    )
     payload = {
         **integrated_issue,
         "integration_schema_version": INTEGRATED_ISSUE_SCHEMA_VERSION,
@@ -406,7 +401,6 @@ def _tag_integrated_issue(
         "business_signals": integrated_issue.get("business_signals", []),
         "representative_sources": representative_sources,
         "fact_basis": fact_basis,
-        "strategic_evidence_inventory": strategic_evidence_inventory,
         "missing_or_uncertain_points": missing_or_uncertain_points,
         "source_article_ids": source_article_ids,
         "cluster_article_ids": _dedupe_ints(
@@ -428,11 +422,6 @@ def _tag_integrated_issue(
             "source_type": input_bundle.source_type,
             "source_count": len(input_bundle.sources),
         },
-        "analysis_ready_inputs": {
-            "fact_summary": fact_summary,
-            "fact_basis": fact_basis[:12],
-            "strategic_evidence_inventory": strategic_evidence_inventory,
-        },
         "input_contract_validation": input_contract_validation,
         "preprocessing_outputs": _compact_preprocessing_outputs(preprocessing_outputs),
         "downstream_usage": {
@@ -443,140 +432,6 @@ def _tag_integrated_issue(
     }
     payload["integration_validation"] = _integration_validation(payload)
     return payload
-
-
-def _strategic_evidence_inventory(
-    integrated_issue: dict[str, Any],
-    *,
-    consolidated_facts: list[dict[str, Any]],
-    fact_basis: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Preserve analysis-useful fact layers that are too detailed for 3-line summaries."""
-    existing = integrated_issue.get("strategic_evidence_inventory")
-    existing_inventory = existing if isinstance(existing, dict) else {}
-
-    cluster_value = integrated_issue.get("cluster_fact_intelligence")
-    cluster: dict[str, Any] = cluster_value if isinstance(cluster_value, dict) else {}
-    facts = _fact_rows_for_inventory(cluster, consolidated_facts, fact_basis)
-    generated = {
-        "core_event_facts": _inventory_texts(
-            facts,
-            roles={"main_event"},
-            fact_types={"launch_fact", "contract_fact", "partnership_fact", "general_fact"},
-            limit=8,
-        ),
-        "product_or_service_facts": _inventory_texts(
-            facts,
-            roles={"product_definition", "service_function"},
-            fact_types={"platform_definition_fact", "service_function", "application_fact"},
-            limit=12,
-        ),
-        "application_scope_facts": _inventory_texts(
-            facts,
-            roles={"application_case"},
-            fact_types={"application_fact", "reported_fact"},
-            keywords=("업무", "시스템", "운영", "자동화", "모듈", "서비스", "플랫폼"),
-            limit=12,
-        ),
-        "numbers_and_scale_facts": _inventory_texts(
-            facts,
-            roles={"numeric_effect"},
-            fact_types={"numeric_fact"},
-            require_numbers=True,
-            limit=6,
-        ),
-        "roadmap_or_plan_facts": _inventory_texts(
-            facts,
-            roles={"uncertainty_detail"},
-            fact_types={"uncertain_fact"},
-            keywords=("향후", "계획", "예정", "지원", "확장", "연결"),
-            limit=8,
-        ),
-        "quote_or_position_facts": _inventory_texts(
-            facts,
-            keywords=("말했다", "밝혔다", "설명했다", "강조했다"),
-            limit=4,
-        ),
-        "all_preserved_facts": _inventory_texts(facts, limit=40),
-    }
-    return {**existing_inventory, **{key: value for key, value in generated.items() if value}}
-
-
-def _fact_rows_for_inventory(
-    cluster: dict[str, Any],
-    consolidated_facts: list[dict[str, Any]],
-    fact_basis: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for key in ("common_facts", "unique_facts", "uncertain_facts"):
-        for item in cluster.get(key) or []:
-            if isinstance(item, dict):
-                rows.append(item)
-    rows.extend(item for item in consolidated_facts if isinstance(item, dict))
-    for item in fact_basis:
-        if not isinstance(item, dict):
-            continue
-        evidence_text = _first_non_empty(
-            item.get("evidence_text"),
-            *(_normalize_string_list(item.get("evidence_texts"))[:1]),
-            item.get("fact"),
-        )
-        if evidence_text:
-            rows.append(
-                {
-                    "fact": evidence_text,
-                    "evidence_texts": _normalize_string_list(item.get("evidence_texts"))
-                    or [evidence_text],
-                    "fact_types": _normalize_string_list(item.get("evidence_type")),
-                    "summary_roles": [],
-                    "numbers_and_dates": [],
-                    "source_article_ids": _normalize_string_list(item.get("source_article_ids")),
-                }
-            )
-    return rows
-
-
-def _inventory_texts(
-    facts: list[dict[str, Any]],
-    *,
-    roles: set[str] | None = None,
-    fact_types: set[str] | None = None,
-    keywords: tuple[str, ...] = (),
-    require_numbers: bool = False,
-    limit: int,
-) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for fact in facts:
-        text = _first_non_empty(
-            fact.get("fact"),
-            *(_normalize_string_list(fact.get("evidence_texts"))[:1]),
-            fact.get("evidence_text"),
-        )
-        if not text:
-            continue
-        role_values = set(
-            _normalize_string_list(fact.get("summary_roles") or fact.get("summary_role"))
-        )
-        type_values = set(_normalize_string_list(fact.get("fact_types") or fact.get("fact_type")))
-        if roles and not (role_values & roles):
-            continue
-        if fact_types and not (type_values & fact_types):
-            continue
-        if keywords and not any(keyword in text for keyword in keywords):
-            continue
-        if require_numbers and not (
-            _normalize_string_list(fact.get("numbers_and_dates")) or re.search(r"\d", text)
-        ):
-            continue
-        key = re.sub(r"\s+", " ", text).strip().casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(text)
-        if len(out) >= limit:
-            break
-    return out
 
 
 def _integrated_article_from_issue(

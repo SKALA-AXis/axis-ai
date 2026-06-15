@@ -193,7 +193,7 @@ def main() -> None:
                 representative_id=representative_id,
                 cluster_article_ids=article_ids,
                 classification=classified[0],
-                save_card=True,
+                save_card=not args.update_existing_in_place,
             )
             card = result.get("card_news") or {}
             if card:
