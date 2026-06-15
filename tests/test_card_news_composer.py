@@ -239,8 +239,8 @@ def test_card_news_from_analysis_package_adds_grounded_display_sections(monkeypa
     card = CardNewsComposer().generate_from_analysis_package(package)
     sections = {section["type"]: section for section in card["display_sections"]}
 
-    assert card["id"] == "CN-20260615-0001"
-    assert card["published_date"] == "2026-06-15"
+    assert card["id"] == "CN-20260610-0001"
+    assert card["published_date"] == "2026-06-10"
     assert list(sections) == ["summary", "insight", "action"]
     assert len(sections["summary"]["items"]) == 3
     assert sections["insight"]["items"] == []
@@ -704,7 +704,7 @@ def test_card_news_action_section_filters_actions_without_issue_grounding() -> N
     assert card["needs_review"] is True
 
 
-def test_card_news_from_cluster_summary_uses_card_created_date(monkeypatch):
+def test_card_news_from_cluster_summary_uses_source_published_date(monkeypatch):
     import src.composers.card_news_composer as composer_module
 
     monkeypatch.setattr(composer_module, "_now_iso", lambda: "2026-06-15T09:30:00+09:00")
@@ -736,9 +736,9 @@ def test_card_news_from_cluster_summary_uses_card_created_date(monkeypatch):
         },
     )
 
-    assert card["id"] == "CN-20260615-25771"
-    assert card["published_date"] == "2026-06-15"
-    assert card["created_at"] == "2026-06-15T09:30:00+09:00"
+    assert card["id"] == "CN-20260304-25771"
+    assert card["published_date"] == "2026-03-04"
+    assert card["created_at"] == "2026-03-04T09:00:00+09:00"
 
 
 def test_card_news_compacts_sentence_like_cover_title(monkeypatch):
@@ -774,7 +774,7 @@ def test_card_news_compacts_sentence_like_cover_title(monkeypatch):
     assert len(card["title"]) <= 52
 
 
-def test_card_news_from_cluster_summary_does_not_use_earliest_source_date(monkeypatch):
+def test_card_news_from_cluster_summary_uses_earliest_source_date(monkeypatch):
     import src.composers.card_news_composer as composer_module
 
     monkeypatch.setattr(composer_module, "_now_iso", lambda: "2026-06-16T09:30:00+09:00")
@@ -815,9 +815,9 @@ def test_card_news_from_cluster_summary_does_not_use_earliest_source_date(monkey
         },
     )
 
-    assert card["id"] == "CN-20260616-48480"
-    assert card["published_date"] == "2026-06-16"
-    assert card["created_at"] == "2026-06-16T09:30:00+09:00"
+    assert card["id"] == "CN-20260612-48480"
+    assert card["published_date"] == "2026-06-12"
+    assert card["created_at"] == "2026-06-12T09:00:00+09:00"
 
 
 def test_financial_only_card_title_adds_business_context():

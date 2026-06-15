@@ -2489,7 +2489,7 @@ def test_partnership_signal_uses_counterparty_target_system_and_execution_scope(
     assert violations == []
 
 
-def test_action_copy_requires_check_target_and_evaluation_basis():
+def test_action_copy_does_not_force_check_target_and_evaluation_basis():
     integrated_issue = _synthetic_integrated_issue(
         headline="대상기업, 실행형 업무 플랫폼 출시",
         fact_summary=[
@@ -2517,10 +2517,10 @@ def test_action_copy_requires_check_target_and_evaluation_basis():
         },
     )
 
-    assert any("점검 대상과 판단 기준" in violation for violation in violations)
+    assert not any("점검 대상과 판단 기준" in violation for violation in violations)
 
 
-def test_action_copy_requires_internal_judgement_axis():
+def test_action_copy_does_not_force_internal_judgement_axis():
     integrated_issue = _synthetic_integrated_issue(
         headline="대상기업, 클라우드 보안 협력 체결",
         fact_summary=[
@@ -2548,7 +2548,7 @@ def test_action_copy_requires_internal_judgement_axis():
         },
     )
 
-    assert any("내부 판단 축" in violation for violation in violations)
+    assert not any("내부 판단 축" in violation for violation in violations)
 
 
 def test_key_implication_evidence_must_not_use_action_directive_language():
@@ -2980,7 +2980,7 @@ def test_adjacent_skax_linkage_must_not_use_strong_packaging_action():
     assert any("인접 접점 수준" in violation for violation in violations)
 
 
-def test_action_copy_must_not_paraphrase_key_implication_noun_phrases():
+def test_action_copy_allows_natural_overlap_without_role_separation_gate():
     integrated_issue = _synthetic_integrated_issue(
         headline="대상기업, AI 보안 협력 체결",
         fact_summary=[
@@ -3008,10 +3008,10 @@ def test_action_copy_must_not_paraphrase_key_implication_noun_phrases():
         },
     )
 
-    assert any("role_separation" in violation for violation in violations)
+    assert not any("role_separation" in violation for violation in violations)
 
 
-def test_action_evidence_must_not_repeat_insight_evidence_without_internal_axis():
+def test_action_evidence_overlap_is_not_blocked_by_role_separation_gate():
     integrated_issue = _synthetic_integrated_issue(
         headline="대상기업, 거래 구조 지표 변화 공시",
         fact_summary=[
@@ -3043,7 +3043,7 @@ def test_action_evidence_must_not_repeat_insight_evidence_without_internal_axis(
         },
     )
 
-    assert any("role_separation" in violation for violation in violations)
+    assert not any("role_separation" in violation for violation in violations)
 
 
 def test_peer_comparison_prompt_uses_structured_facts_without_issue_specific_copy():
@@ -3075,7 +3075,7 @@ def test_peer_comparison_prompt_uses_structured_facts_without_issue_specific_cop
     assert "평가 기준, 설명 책임, 운영 판단, 리스크 관리" in prompt_text
     assert "각 metric이 나타내는 사업 구조" in prompt_text
     assert "key_implication은 피어/시장 평가 기준의 변화를" in prompt_text
-    assert "suggested_action은 SK AX가 내부적으로 확인할 관리 기준" in prompt_text
+    assert "현재 사건의 사실이 SK AX의 다음 판단에 주는" in prompt_text
     assert "수치가 낮거나 높다는 이유만으로 경쟁력 우위나 성과를 단정하지 말고" in prompt_text
     assert "47.1%" not in prompt_text
     assert "79.2%" not in prompt_text
@@ -3088,7 +3088,7 @@ def test_peer_comparison_prompt_uses_structured_facts_without_issue_specific_cop
     assert "설명하기 어렵다" not in prompt_text
 
 
-def test_action_copy_requires_basis_in_display_sentence_not_only_evidence():
+def test_action_copy_does_not_force_basis_into_display_sentence():
     integrated_issue = _synthetic_integrated_issue(
         headline="대상기업, 실행형 업무 플랫폼 출시",
         fact_summary=[
@@ -3116,7 +3116,7 @@ def test_action_copy_requires_basis_in_display_sentence_not_only_evidence():
         },
     )
 
-    assert any("점검 대상과 판단 기준" in violation for violation in violations)
+    assert not any("점검 대상과 판단 기준" in violation for violation in violations)
 
 
 def test_frontend_ready_evidence_sentence_must_not_repeat_summary_only():

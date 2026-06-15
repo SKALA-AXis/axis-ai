@@ -1398,7 +1398,8 @@ _INSERT_CARD_NEWS_V2 = text("""
         card_schema_version = EXCLUDED.card_schema_version,
         evaluation_payload =
             COALESCE(card_news.evaluation_payload, '{}'::jsonb)
-            || COALESCE(EXCLUDED.evaluation_payload, '{}'::jsonb)
+            || COALESCE(EXCLUDED.evaluation_payload, '{}'::jsonb),
+        created_at = EXCLUDED.created_at
     RETURNING id
 """)
 
@@ -1448,7 +1449,8 @@ _INSERT_CARD_NEWS_V2_WITHOUT_INTEGRATED_ISSUE = text("""
         card_schema_version = EXCLUDED.card_schema_version,
         evaluation_payload =
             COALESCE(card_news.evaluation_payload, '{}'::jsonb)
-            || COALESCE(EXCLUDED.evaluation_payload, '{}'::jsonb)
+            || COALESCE(EXCLUDED.evaluation_payload, '{}'::jsonb),
+        created_at = EXCLUDED.created_at
     RETURNING id
 """)
 
@@ -1994,23 +1996,23 @@ def _merge_implication_payload(card: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(value, dict) and value:
                     payload[key] = value
                     break
-    frontend = card.get("frontend_implication")
-    if isinstance(frontend, dict) and frontend:
-        payload["frontend"] = dict(frontend)
-        if frontend.get("suggested_actions"):
-            payload.setdefault("recommended_actions", frontend.get("suggested_actions"))
+    ready_frontend = _frontend_implication_from_frontend_ready(payload.get("frontend_ready"))
+    if ready_frontend:
+        payload["frontend"] = ready_frontend
+        if ready_frontend.get("suggested_actions"):
+            payload.setdefault("recommended_actions", ready_frontend["suggested_actions"])
             skax = payload.get("skax_implication")
             if isinstance(skax, dict):
-                skax.setdefault("recommended_actions", frontend.get("suggested_actions"))
+                skax.setdefault("recommended_actions", ready_frontend["suggested_actions"])
     if not _frontend_has_display_items(payload.get("frontend")):
-        ready_frontend = _frontend_implication_from_frontend_ready(payload.get("frontend_ready"))
-        if ready_frontend:
-            payload["frontend"] = ready_frontend
-            if ready_frontend.get("suggested_actions"):
-                payload.setdefault("recommended_actions", ready_frontend["suggested_actions"])
+        frontend = card.get("frontend_implication")
+        if isinstance(frontend, dict) and frontend:
+            payload["frontend"] = dict(frontend)
+            if frontend.get("suggested_actions"):
+                payload.setdefault("recommended_actions", frontend.get("suggested_actions"))
                 skax = payload.get("skax_implication")
                 if isinstance(skax, dict):
-                    skax.setdefault("recommended_actions", ready_frontend["suggested_actions"])
+                    skax.setdefault("recommended_actions", frontend.get("suggested_actions"))
     if not _frontend_has_display_items(payload.get("frontend")):
         display_frontend = _frontend_implication_from_display_sections(card.get("display_sections"))
         if display_frontend:
