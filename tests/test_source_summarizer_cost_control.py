@@ -105,6 +105,83 @@ def test_candidate_peer_companies_uses_preprocessing_targets_not_body_mentions()
     assert summarizer._candidate_peer_companies(articles) == ["samsung_sds"]
 
 
+def test_candidate_peer_companies_preserves_explicit_peer_comparison_mentions() -> None:
+    articles = [
+        {
+            "id": 48524,
+            "company": ["lg_cns"],
+            "matched_companies": ["lg_cns"],
+            "title": "SI업계 엇갈린 내부거래 의존...포스코DX↑·LG CNS↓",
+            "content": (
+                "LG CNS는 내부거래 비중을 47.1%까지 낮췄고 삼성SDS는 79.2%를 기록했다. "
+                "반면 포스코DX는 96.4%, 현대오토에버는 94.6%로 대조를 이뤘다."
+            ),
+        }
+    ]
+
+    assert summarizer._candidate_peer_companies(articles) == [
+        "lg_cns",
+        "samsung_sds",
+        "hyundai_autoever",
+        "posco_dx",
+    ]
+
+
+def test_peer_comparison_enrichment_keeps_structural_facts() -> None:
+    articles = [
+        {
+            "id": 48524,
+            "company": ["lg_cns"],
+            "matched_companies": ["lg_cns"],
+            "title": "SI업계 엇갈린 내부거래 의존...포스코DX↑·LG CNS↓",
+            "content": (
+                "LG CNS는 올해 1분기 전체 매출 중 내부거래 비중을 47.1%까지 낮췄다. "
+                "삼성SDS는 79.2%에 달하지만 전년 동기 대비 감소했다. "
+                "포스코DX의 특수관계자 거래 매출은 전체 매출의 96.4%를 차지했다. "
+                "현대오토에버 역시 내부거래액이 전체 매출의 94.6%를 기록했다. "
+                "공정위는 SI 업종을 지속적으로 감시해야 할 분야라고 지적했다. "
+                "AI와 클라우드 사업을 강화한 전략이 주효했다는 평가다. "
+                "그룹 신사업과 밀접하게 연관되어 내부거래 비중이 높다는 분석도 있다. "
+                "신규 사업이 계열사 중심으로 전개되면 외부 고객 확보가 제한될 수 있다. "
+                "클라우드&AI 부문의 매출을 분리하지 않아 AI 성과를 검증하기 어렵다."
+            ),
+        }
+    ]
+    summary = {
+        "main_company": "lg_cns",
+        "mentioned_peer_companies": ["lg_cns"],
+        "target_peer_companies": ["lg_cns"],
+        "headline": "LG CNS, 내부거래 비중 47.1%로 최저 기록",
+        "one_line_summary": "LG CNS는 내부거래 비중을 47.1%까지 낮췄다.",
+        "fact_summary": ["LG CNS는 내부거래 비중을 47.1%까지 낮췄다."],
+    }
+
+    enriched = summarizer._enrich_peer_comparison_issue(
+        summary,
+        articles=articles,
+        target_companies=summarizer._candidate_peer_companies(articles),
+    )
+
+    assert enriched["issue_frame"]["frame_type"] == "peer_comparison"
+    assert enriched["issue_frame"]["comparison_axis"] == "internal_transaction_ratio"
+    assert "posco_dx" in enriched["mentioned_peer_companies"]
+    assert "hyundai_autoever" in enriched["mentioned_peer_companies"]
+    assert any(fact["value"] == "96.4%" for fact in enriched["comparison_facts"])
+    assert enriched["risk_facts"]
+    assert enriched["market_structure_facts"]
+    inventory = enriched["strategic_evidence_inventory"]
+    assert inventory["core_facts"]
+    assert inventory["supporting_facts"]
+    assert inventory["background_facts"]
+    assert inventory["cause_or_driver_facts"]
+    assert inventory["risk_facts"]
+    assert inventory["uncertainty_or_limitation_facts"]
+    assert inventory["strategic_tensions"]
+    assert inventory["actionable_questions"]
+    assert any("외부 고객 확보" in fact for fact in inventory["supporting_facts"])
+    assert any("검증하기 어렵" in fact for fact in inventory["uncertainty_or_limitation_facts"])
+
+
 def test_contract_summary_prefers_business_scope_over_numeric_only_facts() -> None:
     facts = [
         {
