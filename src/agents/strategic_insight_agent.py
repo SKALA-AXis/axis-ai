@@ -1143,11 +1143,18 @@ class StrategicInsightAgent:
                         before=frontend_ready_before,
                         after=frontend_ready_after,
                     )
-                    return _mark_quality_gate_failed(
-                        current,
-                        current_violations,
-                        preserve_frontend_ready=True,
-                    )
+                    non_frontend = [
+                        violation
+                        for violation in current_violations
+                        if not str(violation or "").startswith("frontend_ready")
+                    ]
+                    if non_frontend:
+                        return _mark_quality_gate_failed(
+                            current,
+                            non_frontend,
+                            preserve_frontend_ready=True,
+                        )
+                    return _restore_valid_flags_if_structurally_safe(current)
             current = _attach_frontend_ready_diagnostics(
                 current,
                 before=frontend_ready_before,
@@ -1216,7 +1223,7 @@ class StrategicInsightAgent:
                         remaining,
                         preserve_frontend_ready=True,
                     )
-                return current
+                return _restore_valid_flags_if_structurally_safe(current)
         elif not _can_attempt_frontend_ready_repair_for_issue(
             current,
             integrated_issue=integrated_issue,
@@ -1718,6 +1725,166 @@ class StrategicInsightAgent:
                 "응답에서 sentence/evidence_sentence를 포함한 key_implication 및 "
                 "suggested_action 구조를 찾지 못했습니다."
             )
+        compact_repaired = self._repair_frontend_ready_from_compact_issue_facts(
+            result,
+            violations=[*violations, *retry_notes],
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+            bundle_id=bundle_id,
+        )
+        if compact_repaired is not None:
+            return compact_repaired
+        return repaired
+
+    def _repair_frontend_ready_from_compact_issue_facts(
+        self,
+        result: dict[str, Any],
+        *,
+        violations: list[str],
+        integrated_issue: dict[str, Any],
+        profile_context: dict[str, Any],
+        profile_linkage_evaluation: dict[str, Any],
+        bundle_id: str,
+    ) -> dict[str, Any] | None:
+        """Last frontend-only repair path using compact IntegratedIssue facts.
+
+        This path does not generate template copy. It only gives the repair LLM
+        a smaller, fact-focused input when the ordinary frontend_ready repair
+        failed to return a displayable JSON block.
+        """
+        if _is_weak_surface_integrated_issue(integrated_issue):
+            return None
+        if not _has_integrated_issue_candidate_anchor_signal(integrated_issue):
+            return None
+        fact_lines = _issue_fact_lines(integrated_issue)[:12]
+        if not fact_lines:
+            return None
+        prompt = "\n".join(
+            [
+                "## Task",
+                "frontend_ready JSON 객체 하나만 반환합니다.",
+                (
+                    "기존 analysis/implication 문장을 복사하지 말고, "
+                    "아래 IntegratedIssue fact만 사용합니다."
+                ),
+                "",
+                "## IntegratedIssue core",
+                _json_dumps(
+                    {
+                        "headline": integrated_issue.get("headline", ""),
+                        "main_company": integrated_issue.get("main_company", ""),
+                        "event_type": integrated_issue.get("event_type")
+                        or integrated_issue.get("cluster_event_type"),
+                        "fact_lines": fact_lines,
+                        "specific_event_anchors": _specific_event_anchors_for_frontend(
+                            integrated_issue
+                        )[:10],
+                    }
+                ),
+                "",
+                "## Profile linkage",
+                _json_dumps(profile_linkage_evaluation),
+                "",
+                "## Previous violations",
+                _json_dumps(violations[:12]),
+                "",
+                "## Required JSON shape",
+                _json_dumps(
+                    {
+                        "frontend_ready": {
+                            "source": "frontend_repair_direct",
+                            "key_implication": {
+                                "source": "frontend_repair_direct",
+                                "frame": "string",
+                                "claim_type": "event_based_signal",
+                                "claim_strength": "cautious",
+                                "evidence_mode": "event_based",
+                                "event_anchor_terms": ["현재 사건 fact에서 실제 사용한 표현"],
+                                "profile_anchor_terms": [],
+                                "unsupported_claims_removed": [],
+                                "sentence": "짧은 핵심 시사점 1문장",
+                                "evidence_sentence": "fact_lines의 구체 표현으로 뒷받침하는 1문장",
+                            },
+                            "suggested_action": {
+                                "source": "frontend_repair_direct",
+                                "frame": "string",
+                                "claim_type": "internal_strategy_check",
+                                "claim_strength": "cautious",
+                                "evidence_mode": "generic_monitoring",
+                                "event_anchor_terms": ["현재 사건 fact에서 실제 사용한 표현"],
+                                "skax_anchor_terms": [],
+                                "unsupported_claims_removed": [],
+                                "sentence": "SK AX는 ... 기준을 나눠 볼 필요가 있다는 1문장",
+                                "evidence_sentence": (
+                                    "fact_lines의 구체 표현이 왜 그 판단 기준으로 "
+                                    "이어지는지 설명하는 1문장"
+                                ),
+                            },
+                        }
+                    }
+                ),
+                "",
+                "## Rules",
+                "- source와 block.source는 모두 frontend_repair_direct로 씁니다.",
+                "- profile linkage가 low/none이면 profile_based를 쓰지 않습니다.",
+                "- SK AX 대응방안은 직접 구축/확보/진출/성과 입증을 단정하지 않습니다.",
+                "- sentence에는 결론만 짧게 쓰고, 구체 fact는 evidence_sentence에 둡니다.",
+                (
+                    "- evidence_sentence에는 fact_lines에 있는 수치, 제품/서비스, 기능, "
+                    "적용 대상, 평가 방식 중 하나 이상을 그대로 연결합니다."
+                ),
+                (
+                    "- 피어 제품명/서비스명은 SK AX가 따라야 할 기준처럼 쓰지 말고, "
+                    "근거 설명에만 둡니다."
+                ),
+                "- JSON 외 텍스트는 출력하지 않습니다.",
+            ]
+        )
+        content = self._invoke_llm(
+            system_prompt=FRONTEND_READY_REPAIR_SYSTEM_PROMPT,
+            user_prompt=prompt,
+            bundle_id=bundle_id,
+            phase="frontend_ready_repair_compact_facts",
+        )
+        data = _parse_json_loose(content)
+        frontend_ready = _json_dict(data.get("frontend_ready") if isinstance(data, dict) else {})
+        if (
+            not frontend_ready
+            and isinstance(data, dict)
+            and ("key_implication" in data or "suggested_action" in data)
+        ):
+            frontend_ready = _json_dict(data)
+        if not frontend_ready:
+            return None
+        repaired = _merge_frontend_ready_payload(
+            result,
+            frontend_ready=frontend_ready,
+            source="frontend_repair_direct",
+            integrated_issue=integrated_issue,
+        )
+        repaired = _polish_frontend_ready_screen_copy(
+            repaired,
+            integrated_issue=integrated_issue,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
+        required_violations = _frontend_ready_required_violations(
+            repaired,
+            integrated_issue=integrated_issue,
+            profile_context=profile_context,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
+        anchor_violations = _frontend_ready_specific_anchor_violations(
+            repaired,
+            integrated_issue=integrated_issue,
+        )
+        claim_violations = _frontend_ready_claim_violations(
+            repaired,
+            integrated_issue=integrated_issue,
+            profile_linkage_evaluation=profile_linkage_evaluation,
+        )
+        if required_violations or anchor_violations or claim_violations:
+            return None
         return repaired
 
     def _repair_missing_recommended_actions(
@@ -3108,15 +3275,41 @@ def _empty_strategic_insight(
 
 
 def _is_valid_integrated_issue(integrated_issue: dict[str, Any]) -> bool:
-    return bool(
+    has_source = bool(
         integrated_issue
-        and integrated_issue.get("is_valid_summary", True)
         and (
             integrated_issue.get("integrated_text")
             or integrated_issue.get("fact_summary")
             or integrated_issue.get("consolidated_facts")
             or integrated_issue.get("one_line_summary")
             or integrated_issue.get("headline")
+        )
+    )
+    if not has_source:
+        return False
+    if integrated_issue.get("is_valid_summary", True):
+        return True
+    return _has_integrated_text_candidate_signal(integrated_issue)
+
+
+def _has_integrated_text_candidate_signal(integrated_issue: dict[str, Any]) -> bool:
+    if not isinstance(integrated_issue, dict) or not integrated_issue.get("integrated_text"):
+        return False
+    if _is_weak_surface_integrated_issue(integrated_issue):
+        return False
+    lines = _integrated_text_anchor_lines(integrated_issue, max_items=8)
+    if len(lines) < 2:
+        return False
+    grounding = " ".join(lines)
+    anchors = _specific_event_anchors_for_frontend(integrated_issue)
+    return bool(
+        len(anchors) >= 2
+        and re.search(
+            r"변화|확대|고도화|전환|도입|출시|구축|운영|매출|비중|계약|협력|"
+            r"시스템|플랫폼|서비스|솔루션|기능|적용|처리|분석|대응|관제|자동화|"
+            r"평가|지표|데이터|모델|업무|보안|공급망",
+            grounding,
+            flags=re.IGNORECASE,
         )
     )
 
@@ -3468,6 +3661,7 @@ def _watch_only_evidence_summary(
 def _issue_fact_lines(integrated_issue: dict[str, Any]) -> list[str]:
     lines: list[str] = []
     lines.extend(_string_list(integrated_issue.get("fact_summary"), max_items=12))
+    lines.extend(_integrated_text_anchor_lines(integrated_issue, max_items=10))
     for _, fact_text in _fact_texts(integrated_issue):
         if fact_text:
             lines.append(fact_text)
@@ -3484,6 +3678,229 @@ def _issue_fact_lines(integrated_issue: dict[str, Any]) -> list[str]:
         seen.add(normalized)
         result.append(line)
     return result
+
+
+def _integrated_text_anchor_lines(
+    integrated_issue: dict[str, Any],
+    *,
+    max_items: int = 8,
+) -> list[str]:
+    """Expose useful integrated_text facts to gates without trusting it as a template."""
+    text = str(integrated_issue.get("integrated_text") or "").strip()
+    if not text:
+        return []
+    normalized = re.sub(r"\s+", " ", text.replace("■", "\n")).strip()
+    raw_parts = re.split(r"\n+|(?<=[.!?。！？])\s+", normalized)
+    if len(raw_parts) <= 1:
+        raw_parts = re.split(r"(?<=다\.)\s+|(?<=다)\s+(?=[가-힣A-Z0-9])", normalized)
+    result: list[str] = []
+    seen: set[str] = set()
+    for part in raw_parts:
+        value = re.sub(r"\s+", " ", str(part or "")).strip(" -•·,.;:")
+        if len(value) < 12:
+            continue
+        if len(value) > 260:
+            value = value[:260].rsplit(" ", 1)[0].strip() or value[:260].strip()
+        norm = _anchor_norm(value)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        result.append(value)
+        if len(result) >= max_items:
+            break
+    return result
+
+
+def _frontend_ready_actionable_signal_level(integrated_issue: dict[str, Any]) -> str:
+    """Classify whether issue facts can support frontend_ready copy.
+
+    This is intentionally evidence-shape based, not company/card/type based:
+    strong signals have direct execution facts; moderate signals have enough
+    concrete business/service facts for cautious strategy copy; weak signals
+    should remain review/watch-only unless an LLM can ground them cleanly.
+    """
+    if _has_moderate_actionable_issue_signal(integrated_issue):
+        if not _has_strong_actionable_issue_signal(integrated_issue):
+            return "moderate"
+        if _strong_signal_is_only_generic_execution_word(integrated_issue):
+            return "moderate"
+    if _has_strong_actionable_issue_signal(integrated_issue):
+        return "strong"
+    if _has_moderate_actionable_issue_signal(integrated_issue):
+        return "moderate"
+    if _has_integrated_issue_candidate_anchor_signal(integrated_issue):
+        return "moderate"
+    return "weak"
+
+
+def _has_strong_actionable_issue_signal(integrated_issue: dict[str, Any]) -> bool:
+    grounding = _integrated_grounding_text(integrated_issue)
+    if not grounding.strip():
+        return False
+    strong_patterns = (
+        r"계약\s*체결|공급\s*계약|추가\s*수주|수주|업무협약|실시협약|주주간\s*계약|"
+        r"\bMOU\b|협약|제휴|파트너십|공동\s*추진|"
+        r"출시|공개|실증|PoC|검증|현장\s*적용|특정\s*현장\s*적용|"
+        r"고객\s*(적용|도입|확보)|운영\s*책임|공급\s*범위|도입\s*범위|"
+        r"(?:구축|도입|공급|운영).{0,18}(?:계약|협약|제휴|파트너십|고객|현장|센터|시스템)|"
+        r"(?:물류센터|데이터센터|센터).{0,24}(?:구축|운영|도입|적용)"
+    )
+    return bool(re.search(strong_patterns, grounding, flags=re.IGNORECASE))
+
+
+def _strong_signal_is_only_generic_execution_word(integrated_issue: dict[str, Any]) -> bool:
+    grounding = _integrated_grounding_text(integrated_issue)
+    if not grounding.strip():
+        return False
+    direct_pattern = (
+        r"계약\s*체결|공급\s*계약|추가\s*수주|수주|업무협약|실시협약|주주간\s*계약|"
+        r"\bMOU\b|협약|제휴|파트너십|공동\s*추진|출시|공개|실증|PoC|"
+        r"현장\s*적용|특정\s*현장\s*적용|고객\s*(적용|도입|확보)|"
+        r"운영\s*책임|공급\s*범위|도입\s*범위"
+    )
+    if re.search(direct_pattern, grounding, flags=re.IGNORECASE):
+        return False
+    return bool(re.search(r"구축|도입|공급|운영", grounding, flags=re.IGNORECASE))
+
+
+def _has_moderate_actionable_issue_signal(integrated_issue: dict[str, Any]) -> bool:
+    grounding = _integrated_grounding_text(integrated_issue)
+    if not grounding.strip():
+        return False
+    signal_count = sum(
+        bool(check(grounding, integrated_issue))
+        for check in (
+            _has_business_structure_fact,
+            _has_service_advancement_fact,
+            _has_execution_or_operation_fact,
+            _has_clear_business_domain_fact,
+        )
+    )
+    if _has_business_structure_fact(grounding, integrated_issue) and (
+        _has_service_advancement_fact(grounding, integrated_issue)
+        or _has_execution_or_operation_fact(grounding, integrated_issue)
+    ):
+        return True
+    return signal_count >= 3 and len(_specific_event_anchors_for_frontend(integrated_issue)) >= 2
+
+
+def _has_integrated_issue_candidate_anchor_signal(integrated_issue: dict[str, Any]) -> bool:
+    if not isinstance(integrated_issue, dict):
+        return False
+    if integrated_issue.get("is_valid_summary") is False:
+        return _has_integrated_text_candidate_signal(integrated_issue)
+    grounding = _integrated_grounding_text(integrated_issue)
+    if not grounding.strip() or _is_weak_surface_integrated_issue(integrated_issue):
+        return False
+    anchors = _specific_event_anchors_for_frontend(integrated_issue)
+    if len(anchors) >= 2:
+        return True
+    fact_lines = _issue_fact_lines(integrated_issue)
+    if len(fact_lines) < 2:
+        return False
+    return bool(
+        re.search(
+            r"변화|확대|고도화|전환|도입|출시|구축|운영|매출|비중|계약|협력|"
+            r"시스템|플랫폼|서비스|솔루션|기능|적용|처리|분석|대응|관제|자동화",
+            grounding,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _is_weak_surface_integrated_issue(integrated_issue: dict[str, Any]) -> bool:
+    grounding = _integrated_grounding_text(integrated_issue)
+    if not grounding.strip():
+        return True
+    weak_surface_pattern = r"웨비나|세미나|컨퍼런스|포럼|행사|경진대회|공모전|캠페인|홍보"
+    if not re.search(weak_surface_pattern, grounding, flags=re.IGNORECASE):
+        return False
+    non_event_execution_pattern = (
+        r"계약\s*체결|수주|업무협약|실시협약|공급\s*계약|고객\s*(적용|도입)|"
+        r"제품\s*출시|서비스\s*출시|솔루션\s*출시|플랫폼\s*출시|"
+        r"도입해\s*서비스\s*고도화|서비스\s*고도화|자동화|업무\s*처리|"
+        r"취약점\s*탐지|보완\s*조치|보안사고\s*대응|운영\s*책임|"
+        r"현장\s*적용|특정\s*현장\s*적용"
+    )
+    return not (
+        _has_business_structure_fact(grounding, integrated_issue)
+        or re.search(non_event_execution_pattern, grounding, flags=re.IGNORECASE)
+    )
+
+
+def _has_business_structure_fact(text: str, integrated_issue: dict[str, Any]) -> bool:
+    del integrated_issue
+    value = str(text or "")
+    has_number = bool(_numeric_token_keys(value))
+    structure_pattern = (
+        r"매출(?:액|은|이|의|을|를)?|매출\s*(비중|구성|구조)|전체\s*매출|"
+        r"사업\s*비중|수익\s*구조|성장률|성장|영업\s*이익|내부\s*거래|내부거래|"
+        r"대외\s*(매출|거래|고객)|외부\s*(매출|거래|고객)"
+    )
+    return has_number and bool(re.search(structure_pattern, value, flags=re.IGNORECASE))
+
+
+def _has_service_advancement_fact(text: str, integrated_issue: dict[str, Any]) -> bool:
+    del integrated_issue
+    value = str(text or "")
+    service_pattern = r"서비스|플랫폼|솔루션|시스템|제품|라인업|모듈|에이전트|Agent|AI"
+    change_pattern = (
+        r"고도화|개선|확대|확장|출시|공개|도입|적용|탑재|연동|전환|자동화|"
+        r"활용|처리|지원|제공|분석"
+    )
+    return bool(
+        re.search(service_pattern, value, flags=re.IGNORECASE)
+        and re.search(change_pattern, value, flags=re.IGNORECASE)
+    )
+
+
+def _has_execution_or_operation_fact(text: str, integrated_issue: dict[str, Any]) -> bool:
+    del integrated_issue
+    value = str(text or "")
+    return bool(
+        re.search(
+            r"기능|적용\s*(방식|대상|범위|업무)|운영\s*(방식|범위|책임|구조)|"
+            r"자동화|데이터\s*(활용|분석|연계)|업무\s*(처리|자동화|시스템)|"
+            r"공급망|관제|취약점\s*탐지|탐지|보완\s*조치|"
+            r"보안\s*(모니터링|사고|대응|조치|운영)|관리형\s*보안|"
+            r"ERP|메일|문서|기존\s*시스템|연동|디지털\s*서비스|서비스형",
+            value,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _has_clear_business_domain_fact(text: str, integrated_issue: dict[str, Any]) -> bool:
+    del integrated_issue
+    value = str(text or "")
+    return bool(
+        re.search(
+            r"물류|공급망|제조|스마트\s*팩토리|보안|클라우드|AI|AX|DevOps|"
+            r"업무\s*자동화|사내\s*업무|금융|공공|데이터센터|인프라|운영",
+            value,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _has_moderate_action_decision_axis(text: Any) -> bool:
+    value = str(text or "")
+    if not value.strip():
+        return False
+    return bool(
+        re.search(
+            r"고객\s*(수요|적용|제안|범위)|서비스\s*(적용|범위|제안|구조)|"
+            r"운영\s*(책임|구간|범위|방식)|기존\s*시스템\s*(접점|연계|연동)|"
+            r"서비스형\s*제안|자체\s*(수행|제공|담당)|외부\s*(협력|연계|보완)|"
+            r"파트너십\s*필요성|매출\s*(기여도|구성|분류|구조)|"
+            r"단순\s*구축|지속\s*운영형|고객\s*제안\s*범위|내부\s*대응\s*우선순위|"
+            r"관리\s*지표|적용\s*가능성|수요\s*검증|접점\s*확인|모니터링|"
+            r"탐지|보완\s*조치|사고\s*대응|보안\s*운영|보안\s*관제|"
+            r"공급망\s*(운영|관리|서비스|적용)|물류\s*(운영|서비스|적용)",
+            value,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _attach_strategy_skip_diagnostics(
@@ -3507,6 +3924,7 @@ def _attach_strategy_skip_diagnostics(
         "evidence": skip_decision.get("evidence") or {},
         "model_config": _llm_model_config_diagnostics(),
         "issue_execution_slots": _issue_execution_slot_diagnostics(integrated_issue),
+        "actionable_signal_level": _frontend_ready_actionable_signal_level(integrated_issue),
         "profile_based_downgrade": _profile_based_downgrade_diagnostics(
             {},
             profile_linkage_evaluation=profile_linkage_evaluation,
@@ -3974,6 +4392,128 @@ def _industry_item_action_result_terms(item: dict[str, Any]) -> set[str]:
     return _frontend_ready_role_terms(result_phrase)
 
 
+def _industry_criteria_flags(
+    criteria: Sequence[str],
+    anchors: Sequence[str] | None = None,
+) -> dict[str, bool]:
+    normalized = {_anchor_norm(item) for item in criteria}
+    value = " ".join(str(anchor or "") for anchor in anchors or ())
+    has_actor_or_partner = bool(
+        {
+            _anchor_norm("참여 주체"),
+            _anchor_norm("파트너십 필요성"),
+        }
+        & normalized
+    ) or bool(re.search(r"협력|제휴|파트너|컨소시엄|그룹|기업|정부|기관|참여", value, flags=re.I))
+    has_infra_or_supply = bool(
+        {
+            _anchor_norm("기술 공급 구조"),
+            _anchor_norm("데이터/인프라 준비 수준"),
+        }
+        & normalized
+    ) or bool(
+        re.search(r"데이터\s*센터|데이터센터|GPU|AI\s*팩토리|컴퓨팅|인프라", value, flags=re.I)
+    )
+    has_customer_or_system = bool(
+        {
+            _anchor_norm("고객 적용 가능성"),
+            _anchor_norm("고객 제안 단위"),
+            _anchor_norm("기존 시스템 접점"),
+        }
+        & normalized
+    ) or bool(re.search(r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I))
+    has_operation = bool({_anchor_norm("운영 책임")} & normalized)
+    has_investment = bool(
+        {
+            _anchor_norm("투자 조건"),
+            _anchor_norm("비용 부담"),
+            _anchor_norm("후속 사업화 조건"),
+        }
+        & normalized
+    )
+    has_policy = bool({_anchor_norm("규제/정책 대응 조건")} & normalized)
+    has_financial = bool({_anchor_norm("내부 관리 지표")} & normalized)
+    return {
+        "actor_or_partner": has_actor_or_partner,
+        "infra_or_supply": has_infra_or_supply,
+        "customer_or_system": has_customer_or_system,
+        "operation": has_operation,
+        "investment": has_investment,
+        "policy": has_policy,
+        "financial": has_financial,
+    }
+
+
+def _industry_role_structure_subject(
+    criteria: Sequence[str],
+    anchors: Sequence[str] | None = None,
+) -> str:
+    flags = _industry_criteria_flags(criteria, anchors)
+    if flags["actor_or_partner"] and flags["infra_or_supply"]:
+        return "기술 제공자와 적용 기업이 함께 드러난 논의"
+    if flags["infra_or_supply"] and (flags["customer_or_system"] or flags["operation"]):
+        return "기술·인프라 준비와 적용 조건이 함께 드러난 논의"
+    if flags["actor_or_partner"] and (flags["customer_or_system"] or flags["operation"]):
+        return "여러 참여 주체와 실행 단계가 함께 드러난 논의"
+    if flags["customer_or_system"] and flags["operation"]:
+        return "고객 적용 범위와 운영 책임이 함께 드러난 논의"
+    if flags["investment"] and flags["infra_or_supply"]:
+        return "투자 조건과 기술 준비가 함께 드러난 논의"
+    return ""
+
+
+def _industry_role_structure_change_clause(
+    criteria: Sequence[str],
+    anchors: Sequence[str] | None = None,
+) -> str:
+    flags = _industry_criteria_flags(criteria, anchors)
+    if (
+        flags["actor_or_partner"]
+        and flags["infra_or_supply"]
+        and (flags["customer_or_system"] or flags["operation"])
+    ):
+        return (
+            "기술 확보 자체보다 적용 기업, 구축 범위, 운영 지원 책임을 나눠 보는 "
+            "경쟁 기준으로 이어질 수 있음을 보여준다."
+        )
+    if flags["infra_or_supply"] and (flags["customer_or_system"] or flags["operation"]):
+        return (
+            "기술 준비 수준을 고객 적용 단계와 운영 조건까지 함께 보는 흐름으로 "
+            "확장될 수 있음을 보여준다."
+        )
+    if flags["actor_or_partner"] and (flags["customer_or_system"] or flags["operation"]):
+        return "협력 여부보다 참여 주체별 역할과 실행 이후 책임 구분이 중요해질 수 있음을 보여준다."
+    if flags["customer_or_system"] and flags["operation"]:
+        return "기능 제공보다 고객 업무에 닿는 적용 범위와 운영 책임을 함께 보는 흐름을 보여준다."
+    if flags["investment"] and flags["infra_or_supply"]:
+        return "투자 규모보다 실제 적용 조건과 후속 운영 가능성을 함께 따지는 흐름을 보여준다."
+    return ""
+
+
+def _industry_action_role_axis(
+    criteria: Sequence[str],
+    anchors: Sequence[str] | None = None,
+) -> str:
+    flags = _industry_criteria_flags(criteria, anchors)
+    if (
+        flags["actor_or_partner"]
+        and flags["infra_or_supply"]
+        and (flags["customer_or_system"] or flags["operation"])
+    ):
+        return "기술 제공, 고객 적용, 구축 이후 운영 지원 중 어떤 역할을 맡을 수 있는지"
+    if flags["infra_or_supply"] and flags["customer_or_system"]:
+        return "기술·인프라 준비 조건과 고객 적용 단계, 운영 지원 범위"
+    if flags["actor_or_partner"] and flags["operation"]:
+        return "참여 주체별 역할과 구축 이후 운영 책임 구간"
+    if flags["actor_or_partner"]:
+        return "참여 주체별 역할과 외부 협력이 필요한 구간"
+    if flags["customer_or_system"] and flags["operation"]:
+        return "고객 업무 적용 범위와 운영 책임 구간"
+    if flags["investment"] and flags["infra_or_supply"]:
+        return "투자 부담, 준비 조건, 후속 적용 가능성"
+    return ""
+
+
 def _industry_implication_sentence(
     axis_key: str,
     anchor_phrase: str,
@@ -3982,18 +4522,25 @@ def _industry_implication_sentence(
     anchors: Sequence[str] | None = None,
 ) -> str:
     del axis_key
-    anchor_reading = _industry_anchor_market_reading(anchors or ())
+    role_subject = _industry_role_structure_subject(decision_criteria, anchors or ())
+    role_change = _industry_role_structure_change_clause(decision_criteria, anchors or ())
+    if role_subject and role_change:
+        return f"{role_subject}는 {role_change}"
+    anchor_reading = _industry_anchor_market_reading(
+        anchors or (),
+        decision_criteria=decision_criteria,
+    )
     if anchor_reading:
-        return f"{anchor_phrase} 논의는 {anchor_reading}"
+        return f"이번 시장 신호는 {anchor_reading}"
     market_reading = _industry_market_reading_phrase(decision_criteria)
     if market_reading:
         return (
-            f"{anchor_phrase} 논의는 시장의 관심이 개별 기술 발표보다 "
-            f"{market_reading} 쪽으로 넓어질 수 있음을 보여줍니다."
+            "이번 시장 신호는 시장의 관심이 개별 기술 발표보다 "
+            f"{market_reading} 쪽으로 넓어질 수 있음을 보여준다."
         )
     return (
-        f"{anchor_phrase} 논의는 특정 실행 주체보다 참여 구조와 적용 조건을 함께 "
-        "읽어야 하는 시장 신호로 볼 수 있습니다."
+        "이번 시장 신호는 특정 실행 주체보다 참여 구조와 적용 조건을 함께 "
+        "읽어야 하는 시장 신호로 볼 수 있다."
     )
 
 
@@ -4083,20 +4630,20 @@ def _industry_evidence_sentence(
         if evidence_reading:
             return (
                 f"{actor_context} {fact_clause} {evidence_reading}이 함께 드러나 "
-                f"{primary} 논의가 실제 적용 조건과 연결됩니다."
+                f"{primary} 논의가 실제 적용 조건과 연결된다."
             )
         return (
             f"{actor_context} {fact_clause} {primary} 논의가 단순 발표보다 "
-            "참여 구조와 적용 조건을 함께 포함하는 흐름으로 이어집니다."
+            "참여 구조와 적용 조건을 함께 포함하는 흐름으로 이어진다."
         )
     if evidence_reading:
         return (
             f"{actor_context} {primary}와 {evidence_reading}이 함께 언급되어 "
-            "시장 변화가 기술 발표보다 실행 구조와 맞물려 있음을 보여줍니다."
+            "시장 변화가 기술 발표보다 실행 구조와 맞물려 있음을 보여준다."
         )
     return (
         f"{actor_context} {primary}가 반복적으로 제시되어, 해당 논의가 "
-        "참여 주체와 적용 조건을 함께 봐야 하는 흐름임을 보여줍니다."
+        "참여 주체와 적용 조건을 함께 봐야 하는 흐름임을 보여준다."
     )
 
 
@@ -4106,18 +4653,22 @@ def _industry_action_sentence(
     decision_criteria: Sequence[str],
 ) -> str:
     anchor_phrase = _anchor_phrase(anchors, max_items=3)
+    role_axis = _industry_action_role_axis(decision_criteria, anchors)
+    if role_axis:
+        role_object = _with_korean_object_particle(role_axis)
+        return f"SK AX는 이 흐름에서 {role_object} 나눠 검토해야 한다."
     action_reading = _industry_dynamic_action_reading_from_anchors(
-        anchors
+        anchors,
+        decision_criteria=decision_criteria,
     ) or _industry_action_reading_phrase(decision_criteria)
     if action_reading:
         action_object = _with_korean_object_particle(action_reading)
         return (
-            f"SK AX는 {anchor_phrase} 흐름에서 {action_object} 기준으로 "
-            "검토 범위를 구분해야 합니다."
+            f"SK AX는 {anchor_phrase} 흐름에서 {action_object} 기준으로 검토 범위를 구분해야 한다."
         )
     return (
         f"SK AX는 {anchor_phrase} 흐름을 볼 때 드러난 참여 구조와 "
-        "적용 조건을 기준으로 검토 범위를 구분해야 합니다."
+        "적용 조건을 기준으로 검토 범위를 구분해야 한다."
     )
 
 
@@ -4132,28 +4683,39 @@ def _industry_action_evidence_sentence(
     anchor_phrase = _anchor_phrase(anchors, max_items=2)
     result_phrase = _industry_action_result_phrase(decision_criteria)
     evidence_reading = _industry_action_evidence_reading_phrase(decision_criteria)
-    dynamic_reading = _industry_dynamic_action_reading_from_anchors(anchors)
+    dynamic_reading = _industry_dynamic_action_reading_from_anchors(
+        anchors,
+        decision_criteria=decision_criteria,
+    )
     if dynamic_reading:
         fact_line = _industry_primary_action_evidence_line(evidence_lines)
         role_reading = _industry_action_role_reading_phrase(
             anchors,
             decision_criteria=decision_criteria,
         )
+        role_axis = _industry_action_role_axis(decision_criteria, anchors)
         if fact_line and role_reading:
-            return f"{_short_fact_clause(fact_line, max_chars=118)} {role_reading}"
+            fact_clause = _short_fact_clause(fact_line, max_chars=118)
+            if role_axis:
+                role_object = _with_korean_object_particle(role_axis)
+                return (
+                    f"{fact_clause} {anchor_phrase} 흐름은 SK AX가 {role_object} "
+                    "내부 판단 기준으로 나눠 봐야 하는 근거가 된다."
+                )
+            return f"{fact_clause} {anchor_phrase} 흐름은 SK AX의 내부 판단 기준으로 이어진다."
         return (
             f"{anchor_phrase} 흐름에서 {dynamic_reading}이 부각되므로, "
-            f"{role_reading or '참여 주체와 적용 단계의 역할 구분이 중요해질 수 있습니다.'}"
+            f"{role_reading or '참여 주체와 적용 단계의 역할 구분이 중요해질 수 있다.'}"
         )
     if evidence_reading and result_phrase:
         result_object = _with_korean_object_particle(result_phrase)
         return (
             f"{anchor_phrase}와 함께 {evidence_reading}이 드러난 만큼, SK AX도 "
-            f"{result_object} 중심으로 고객 적용 가능성과 협력 필요성을 나눠 볼 수 있습니다."
+            f"{result_object} 중심으로 고객 적용 가능성과 협력 필요성을 나눠 볼 수 있다."
         )
     return (
         f"{anchor_phrase}가 제시된 만큼, SK AX는 직접 사업화를 단정하기보다 "
-        "참여 주체와 적용 조건을 기준으로 후속 판단 범위를 좁혀야 합니다."
+        "참여 주체와 적용 조건을 기준으로 후속 판단 범위를 좁혀야 한다."
     )
 
 
@@ -4171,57 +4733,31 @@ def _industry_action_role_reading_phrase(
     *,
     decision_criteria: Sequence[str],
 ) -> str:
-    value = " ".join(str(anchor or "") for anchor in anchors)
-    normalized = {_anchor_norm(item) for item in decision_criteria}
-    has_actor_or_partner = bool(
-        {
-            _anchor_norm("참여 주체"),
-            _anchor_norm("파트너십 필요성"),
-        }
-        & normalized
-    ) or bool(re.search(r"협력|제휴|파트너|컨소시엄|그룹|기업|정부|기관|참여", value, flags=re.I))
-    has_infra_or_supply = bool(
-        {
-            _anchor_norm("기술 공급 구조"),
-            _anchor_norm("데이터/인프라 준비 수준"),
-        }
-        & normalized
-    ) or bool(
-        re.search(r"데이터\s*센터|데이터센터|GPU|AI\s*팩토리|컴퓨팅|인프라", value, flags=re.I)
-    )
-    has_operation_or_system = bool(
-        {
-            _anchor_norm("운영 책임"),
-            _anchor_norm("기존 시스템 접점"),
-            _anchor_norm("고객 적용 가능성"),
-            _anchor_norm("고객 제안 단위"),
-        }
-        & normalized
-    ) or bool(re.search(r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I))
-    if has_actor_or_partner and has_infra_or_supply:
+    flags = _industry_criteria_flags(decision_criteria, anchors)
+    if flags["actor_or_partner"] and flags["infra_or_supply"]:
         return (
             "기술을 제공하는 주체와 이를 적용하는 기업, 이후 운영을 맡는 주체의 "
-            "역할 구분이 중요해질 수 있습니다."
+            "역할 구분이 중요해질 수 있다."
         )
-    if has_actor_or_partner and has_operation_or_system:
+    if flags["actor_or_partner"] and (flags["operation"] or flags["customer_or_system"]):
         return (
             "서비스 제공자와 적용 조직, 운영 책임을 맡는 주체가 나뉠 수 있어 "
-            "검토 기준도 실행 단계별로 달라질 수 있습니다."
+            "검토 기준도 실행 단계별로 달라질 수 있다."
         )
-    if has_infra_or_supply:
+    if flags["infra_or_supply"]:
         return (
             "기술·인프라 확보 여부만이 아니라 실제 적용 이후의 운영 조건까지 "
-            "함께 비교해야 하는 흐름으로 이어질 수 있습니다."
+            "함께 비교해야 하는 흐름으로 이어질 수 있다."
         )
-    if has_actor_or_partner:
+    if flags["actor_or_partner"]:
         return (
             "참여 주체가 여럿이면 협력 자체보다 각 주체가 맡는 역할과 후속 실행 "
-            "책임을 구분하는 것이 중요해질 수 있습니다."
+            "책임을 구분하는 것이 중요해질 수 있다."
         )
-    if has_operation_or_system:
+    if flags["operation"] or flags["customer_or_system"]:
         return (
             "고객 업무에 닿는 적용 범위와 운영 책임이 함께 제시될수록 검토 기준도 "
-            "시스템 접점과 실행 단계로 나뉠 수 있습니다."
+            "시스템 접점과 실행 단계로 나뉠 수 있다."
         )
     return ""
 
@@ -4370,6 +4906,8 @@ def _polish_frontend_ready_screen_copy(
                     integrated_issue=integrated_issue,
                     profile_linkage_evaluation=profile_linkage_evaluation,
                 )
+            sentence = _polish_repeated_frontend_phrase(sentence)
+            evidence_sentence = _polish_repeated_frontend_phrase(evidence_sentence)
             block["sentence"] = sentence
             block["evidence_sentence"] = evidence_sentence
     industry_ready = implication.get("industry_frontend_ready")
@@ -4389,9 +4927,27 @@ def _polish_frontend_ready_screen_copy(
                         integrated_issue=integrated_issue,
                         profile_linkage_evaluation=profile_linkage_evaluation,
                     )
+                sentence = _polish_repeated_frontend_phrase(sentence)
+                evidence_sentence = _polish_repeated_frontend_phrase(evidence_sentence)
                 block["sentence"] = sentence
                 block["evidence_sentence"] = evidence_sentence
     return result
+
+
+def _polish_repeated_frontend_phrase(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    previous = None
+    repeated_pair_pattern = re.compile(
+        r"([가-힣A-Za-z0-9]+(?:\s+[가-힣A-Za-z0-9]+)?·"
+        r"[가-힣A-Za-z0-9]+(?:\s+[가-힣A-Za-z0-9]+)?)(?:·\1)+"
+    )
+    while previous != text:
+        previous = text
+        text = repeated_pair_pattern.sub(r"\1", text)
+    text = re.sub(r"\s+([,.!?])", r"\1", text)
+    return text.strip()
 
 
 def _generalize_peer_structure_in_action_sentence(
@@ -4475,51 +5031,89 @@ def _is_substantive_industry_evidence_line(value: Any) -> bool:
     return bool(re.search(r"발표|강조|구축|투자|협력|참여|운영|도입|확장|필요|진행|논의", text))
 
 
-def _industry_dynamic_action_reading_from_anchors(anchors: Sequence[str]) -> str:
+def _industry_dynamic_action_reading_from_anchors(
+    anchors: Sequence[str],
+    *,
+    decision_criteria: Sequence[str] | None = None,
+) -> str:
     value = " ".join(str(anchor or "") for anchor in anchors)
     if not value.strip():
         return ""
-    if re.search(r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I):
+    flags = _industry_criteria_flags(decision_criteria or (), anchors)
+    if flags["customer_or_system"] and re.search(
+        r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I
+    ):
         return "고객 업무에 실제로 연결될 수 있는 처리 범위와 기존 시스템 접점"
-    if re.search(r"데이터\s*센터|데이터센터|GPU|AI\s*팩토리|컴퓨팅|인프라", value, flags=re.I):
-        return "고객 적용과 운영 지원으로 이어질 수 있는 인프라 접점"
-    if re.search(r"협력|제휴|파트너|컨소시엄|그룹|기업|정부|기관|참여", value, flags=re.I):
+    if (
+        flags["infra_or_supply"]
+        and (flags["operation"] or flags["customer_or_system"] or flags["actor_or_partner"])
+        and re.search(r"데이터\s*센터|데이터센터|GPU|AI\s*팩토리|컴퓨팅|인프라", value, flags=re.I)
+    ):
+        return "기술 준비, 고객 적용, 운영 지원으로 나뉘는 역할 구조"
+    if flags["actor_or_partner"] and re.search(
+        r"협력|제휴|파트너|컨소시엄|그룹|기업|정부|기관|참여",
+        value,
+        flags=re.I,
+    ):
         return "참여 주체별 역할과 협력 필요성이 생기는 구간"
-    if re.search(r"계약|수주|공급|구축|운영|운용|실증|도입", value, flags=re.I):
+    if (flags["operation"] or flags["customer_or_system"]) and re.search(
+        r"계약|수주|공급|구축|운영|운용|실증|도입",
+        value,
+        flags=re.I,
+    ):
         return "실행 범위와 후속 운영 책임이 생기는 구간"
-    if re.search(r"매출|비중|수익|거래|성과|지표", value, flags=re.I):
+    if flags["financial"] and re.search(r"매출|비중|수익|거래|성과|지표", value, flags=re.I):
         return "성과와 거래 구조를 설명할 수 있는 관리 기준"
     return ""
 
 
-def _industry_anchor_market_reading(anchors: Sequence[str]) -> str:
+def _industry_anchor_market_reading(
+    anchors: Sequence[str],
+    *,
+    decision_criteria: Sequence[str] | None = None,
+) -> str:
     value = " ".join(str(anchor or "") for anchor in anchors)
     if not value.strip():
         return ""
-    if re.search(r"데이터\s*센터|데이터센터|GPU|AI\s*팩토리|컴퓨팅|인프라", value, flags=re.I):
+    flags = _industry_criteria_flags(decision_criteria or (), anchors)
+    if (
+        flags["infra_or_supply"]
+        and (flags["operation"] or flags["customer_or_system"] or flags["actor_or_partner"])
+        and re.search(r"데이터\s*센터|데이터센터|GPU|AI\s*팩토리|컴퓨팅|인프라", value, flags=re.I)
+    ):
         return (
-            "AI 경쟁이 개별 모델·서비스 출시보다 인프라 구축 조건과 "
-            "운영 기반 중심으로 전개될 수 있음을 보여줍니다."
+            "기술 확보 자체보다 적용 기업, 구축 범위, 운영 지원 책임을 "
+            "나눠 보는 경쟁 기준으로 이어질 수 있음을 보여준다."
         )
-    if re.search(r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I):
+    if flags["customer_or_system"] and re.search(
+        r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I
+    ):
         return (
             "기업 도입 기준이 기능 소개보다 실제 업무 적용 범위와 "
-            "시스템 연결성으로 이동할 수 있음을 보여줍니다."
+            "시스템 연결성으로 이동할 수 있음을 보여준다."
         )
-    if re.search(r"계약|수주|공급|구축|운영|운용|실증|도입", value, flags=re.I):
+    if (flags["operation"] or flags["customer_or_system"]) and re.search(
+        r"계약|수주|공급|구축|운영|운용|실증|도입",
+        value,
+        flags=re.I,
+    ):
         return (
             "시장 평가가 단일 발표보다 실행 범위와 후속 운영 책임을 "
-            "함께 보는 방향으로 옮겨갈 수 있음을 보여줍니다."
+            "함께 보는 방향으로 옮겨갈 수 있음을 보여준다."
         )
-    if re.search(r"협력|제휴|파트너|컨소시엄|그룹|기업|정부|기관|참여", value, flags=re.I):
+    if flags["actor_or_partner"] and re.search(
+        r"협력|제휴|파트너|컨소시엄|그룹|기업|정부|기관|참여",
+        value,
+        flags=re.I,
+    ):
         return (
             "개별 기업의 단독 움직임보다 참여 주체 간 역할과 협력 구조가 "
-            "더 중요한 판단 축으로 부각될 수 있음을 보여줍니다."
+            "더 중요한 판단 축으로 부각될 수 있음을 보여준다."
         )
-    if re.search(r"매출|비중|수익|거래|성과|지표", value, flags=re.I):
+    if flags["financial"] and re.search(r"매출|비중|수익|거래|성과|지표", value, flags=re.I):
         return (
             "시장 평가가 규모 자체보다 성과와 거래 구조를 설명할 수 있는 "
-            "기준으로 이동할 수 있음을 보여줍니다."
+            "기준으로 이동할 수 있음을 보여준다."
         )
     return ""
 
@@ -5540,6 +6134,13 @@ def _frontend_ready_required_violations(
             "frontend_ready.source: llm_direct 또는 frontend_repair_direct "
             "결과만 화면에 노출할 수 있습니다."
         )
+    if _frontend_ready_actionable_signal_level(
+        integrated_issue
+    ) == "weak" and _is_weak_surface_integrated_issue(integrated_issue):
+        violations.append(
+            "frontend_ready: 단순 행사/웨비나/홍보성 이슈는 통합 fact만으로 "
+            "SK AX 판단 축을 만들기 어려워 화면 노출하지 않습니다."
+        )
     for section_key, label in (
         ("key_implication", "피어사 시사점"),
         ("suggested_action", "SK AX 대응방향"),
@@ -5840,6 +6441,12 @@ def _frontend_ready_key_business_depth_violation(
             _workflow_execution_business_terms(grounding)
         ):
             return ""
+        signal_level = _frontend_ready_actionable_signal_level(integrated_issue)
+        if signal_level == "moderate" and (
+            _high_signal_issue_overlap_count(value, integrated_issue) >= 1
+            or _has_moderate_actionable_issue_signal(integrated_issue)
+        ):
+            return ""
         if _business_context_terms(grounding):
             return (
                 "핵심 시사점이 경쟁 기준 변화만 말하고 비즈니스 실익을 충분히 "
@@ -6114,14 +6721,23 @@ def _frontend_ready_action_depth_violation(
         depth_pattern = (
             r"증명|검증|설명\s*가능|비교\s*가능|분류\s*기준|산정\s*기준|관리\s*지표|"
             r"대외\s*(성과|고객|설명)|고객\s*(제안|레퍼런스|수요|확인)|"
+            r"고객\s*적용\s*범위|서비스\s*적용\s*범위|서비스형\s*제안|"
             r"레퍼런스|운영\s*(책임|구간|범위|조건)|책임\s*(구간|범위|분담|구조)|"
             r"자체\s*(수행|제공|담당)|외부\s*(협력|파트너|보완|연계)|파트너십|"
             r"수행\s*(범위|책임)|적용\s*가능성|기존\s*시스템\s*접점|"
             r"시스템\s*(연계|연동)|연동\s*범위|현장\s*시스템|"
             r"처리\s*업무\s*기준|업무\s*처리\s*범위|사업성\s*기준|"
-            r"후속\s*확인\s*기준|전환\s*가능성|리스크\s*(관리|기준|부담)|시장\s*모니터링"
+            r"후속\s*확인\s*기준|전환\s*가능성|리스크\s*(관리|기준|부담)|"
+            r"시장\s*모니터링|매출\s*기여도|단순\s*구축|지속\s*운영형|"
+            r"고객\s*제안\s*범위|내부\s*대응\s*우선순위"
         )
     if re.search(depth_pattern, text, flags=re.IGNORECASE):
+        return ""
+    if (
+        _frontend_ready_actionable_signal_level(integrated_issue) in {"strong", "moderate"}
+        and _has_moderate_action_decision_axis(text)
+        and bool(re.search(r"구분|나눠|비교|검토|확인|판단|분리", text))
+    ):
         return ""
     shallow_action_pattern = r"(점검|검토|정리|확인|모니터링)(해야|할\s*필요|할\s*수|합니다|한다)"
     if re.search(shallow_action_pattern, sentence):
@@ -6149,8 +6765,11 @@ def _frontend_ready_action_choice_violation(block: dict[str, Any]) -> str:
         r"고객\s*(군|수요|제안|접점|확인)|제안\s*(단위|구조|범위)|"
         r"매출\s*(구성|분류|구조)|성과\s*(지표|관리|추적)|관리\s*지표|추적|"
         r"운영\s*(책임|구간|범위|조건)|책임\s*(구간|범위|분담|구조)|"
-        r"서비스\s*(범위|구조)|기존\s*시스템\s*접점|시스템\s*(연계|연동)|"
-        r"수요\s*검증|적용\s*가능성|모니터링|분리|구분|나눠|비교"
+        r"서비스\s*(범위|구조|적용|제안)|고객\s*적용\s*범위|"
+        r"기존\s*시스템\s*접점|시스템\s*(연계|연동)|"
+        r"수요\s*검증|적용\s*가능성|모니터링|분리|구분|나눠|비교|"
+        r"탐지|보완\s*조치|사고\s*대응|보안\s*운영|보안\s*관제|"
+        r"공급망\s*(운영|관리|서비스|적용)|물류\s*(운영|서비스|적용)"
     )
     if re.search(choice_pattern, text, flags=re.IGNORECASE):
         return ""
@@ -6443,11 +7062,15 @@ def _has_action_execution_perspective(text: str) -> bool:
         r"자체\s*(수행|제공|담당|역량)|내부\s*(수행|점검|검토|기준|역량|책임)|"
         r"외부\s*(협력|파트너|보완|연계)|파트너십|협력\s*(필요|구간|구조|범위)|"
         r"고객\s*(제안|대상|군|요구|확인)|제안\s*(단위|구조|범위)|"
+        r"고객\s*적용\s*범위|서비스\s*적용\s*범위|서비스형\s*제안|"
         r"운영\s*(책임|범위|구간|조건|데이터|체계)|책임\s*(구간|범위|분담|구조)|"
         r"연동\s*(범위|구조|방식)|시스템\s*연동|처리\s*업무\s*기준|업무\s*처리\s*범위|"
         r"매출\s*(구성|분류|구조)|거래\s*(비중|구조|의존도)|대외\s*(매출|고객)|"
         r"리스크\s*(관리|기준|부담)|시장\s*모니터링|수행\s*(범위|책임)|"
         r"역할\s*(분담|구조)|검증\s*(기준|항목|범위)|비교\s*(기준|항목|해야)|"
+        r"매출\s*기여도|내부\s*대응\s*우선순위|관리\s*지표|"
+        r"탐지|보완\s*조치|사고\s*대응|보안\s*(운영|관제|책임)|"
+        r"공급망\s*(운영|관리|서비스|적용)|물류\s*(운영|서비스|적용)|"
         r"분리|구분|나눠"
     )
     return bool(re.search(perspective_groups, value, flags=re.IGNORECASE))
@@ -6646,6 +7269,7 @@ def _specific_event_anchors_for_frontend(integrated_issue: dict[str, Any]) -> li
     texts.extend(
         str(item or "") for item in _string_list(integrated_issue.get("fact_summary"), max_items=8)
     )
+    texts.extend(_integrated_text_anchor_lines(integrated_issue, max_items=8))
     for _, fact_text in _fact_texts(integrated_issue):
         texts.append(fact_text)
     for key in ("headline", "main_event", "one_line_summary"):
@@ -6666,7 +7290,8 @@ def _specific_event_anchors_for_frontend(integrated_issue: dict[str, Any]) -> li
             "",
             token.strip(),
         )
-        if len(_anchor_norm(normalized)) >= 4:
+        norm = _anchor_norm(normalized)
+        if len(norm) >= 4 or (len(norm) >= 3 and not _is_low_signal_content_token(normalized)):
             candidates.append(normalized)
     generic_norms = {
         _anchor_norm(item)
@@ -6766,11 +7391,19 @@ def _frontend_ready_diagnostics_snapshot(
         "claim_violations": claim_violations,
         "model_config": _llm_model_config_diagnostics(),
         "issue_execution_slots": execution_slots,
+        "actionable_signal_level": _frontend_ready_actionable_signal_level(integrated_issue),
+        "integrated_issue_candidate_anchors": _specific_event_anchors_for_frontend(
+            integrated_issue
+        )[:12],
+        "has_integrated_issue_candidate_anchor_signal": (
+            _has_integrated_issue_candidate_anchor_signal(integrated_issue)
+        ),
+        "weak_surface_signal": _is_weak_surface_integrated_issue(integrated_issue),
         "profile_based_downgrade": _profile_based_downgrade_diagnostics(
             frontend_ready,
             profile_linkage_evaluation=profile_linkage_evaluation or {},
         ),
-        "displayable": not required_violations,
+        "displayable": not required_violations and not claim_violations,
     }
 
 
@@ -7049,7 +7682,9 @@ def _can_attempt_frontend_ready_repair_for_issue(
     del result
     if not isinstance(integrated_issue, dict) or not integrated_issue:
         return False
-    if integrated_issue.get("is_valid_summary") is False:
+    if integrated_issue.get(
+        "is_valid_summary"
+    ) is False and not _has_integrated_text_candidate_signal(integrated_issue):
         return False
     return bool(
         integrated_issue.get("integrated_text")
@@ -7478,11 +8113,47 @@ def _action_text_has_issue_signal(text: str, issue_terms: set[str]) -> bool:
     output_terms = _content_tokens(text)
     if output_terms & issue_terms:
         return True
+    output_axis_terms = {
+        term
+        for term in _raw_normalized_terms(text)
+        if len(term) >= 2
+        and not _is_low_signal_content_token(term)
+        and not _is_generic_business_term(term)
+    }
+    issue_axis_terms: set[str] = set()
+    for issue_term in issue_terms:
+        issue_axis_terms.update(
+            term
+            for term in _raw_normalized_terms(issue_term)
+            if len(term) >= 2
+            and not _is_low_signal_content_token(term)
+            and not _is_generic_business_term(term)
+        )
+    if output_axis_terms & issue_axis_terms:
+        return True
     return any(
         _tokens_semantically_close(output_term, issue_term)
         for output_term in output_terms
         for issue_term in issue_terms
     )
+
+
+def _action_text_has_grounding_axis_signal(text: str, grounding: str) -> bool:
+    output_axis_terms = {
+        term
+        for term in _raw_normalized_terms(text)
+        if len(term) >= 2
+        and not _is_low_signal_content_token(term)
+        and not _is_generic_business_term(term)
+    }
+    grounding_axis_terms = {
+        term
+        for term in _raw_normalized_terms(grounding)
+        if len(term) >= 2
+        and not _is_low_signal_content_token(term)
+        and not _is_generic_business_term(term)
+    }
+    return bool(output_axis_terms & grounding_axis_terms)
 
 
 def _skax_external_customer_facing_violation(text: str) -> str:
@@ -7856,7 +8527,11 @@ def _recommended_action_quality_violation(
         return ""
     evidence_text = _integrated_grounding_text(integrated_issue or {})
     specific_anchors = set(_specific_event_anchors_for_frontend(integrated_issue or {}))
-    if specific_anchors and not _action_text_has_issue_signal(text, specific_anchors):
+    if (
+        specific_anchors
+        and not _action_text_has_issue_signal(text, specific_anchors)
+        and not _action_text_has_grounding_axis_signal(text, evidence_text)
+    ):
         return (
             "대응방향에 현재 사건의 구체 anchor가 연결되지 않았습니다. "
             "현재 사건의 대상 사업·시스템·서비스·수치·고객군 중 최소 하나를 "
@@ -8598,7 +9273,13 @@ def _mark_quality_gate_failed(
     *,
     preserve_frontend_ready: bool = False,
 ) -> dict[str, Any]:
-    out = _scrub_failed_output(json.loads(json.dumps(result, ensure_ascii=False, default=str)))
+    raw_out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+    preserved_frontend_ready = None
+    if preserve_frontend_ready:
+        raw_implication = raw_out.get("implication") or {}
+        if isinstance(raw_implication, dict):
+            preserved_frontend_ready = raw_implication.get("frontend_ready")
+    out = _scrub_failed_output(raw_out)
     out["is_valid_strategic_insight"] = False
     analysis = out.get("analysis") or {}
     implication = out.get("implication") or {}
@@ -8617,6 +9298,8 @@ def _mark_quality_gate_failed(
     implication["evidence_label"] = "insufficient"
     if not preserve_frontend_ready:
         implication.pop("frontend_ready", None)
+    elif isinstance(preserved_frontend_ready, dict):
+        implication["frontend_ready"] = preserved_frontend_ready
     out["analysis"] = analysis
     out["implication"] = implication
     return out
@@ -8650,8 +9333,12 @@ def _contains_high_risk_unsupported_claim(text: str) -> bool:
 
 def _restore_valid_flags_if_structurally_safe(result: dict[str, Any]) -> dict[str, Any]:
     out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+    has_clean_frontend_ready = _has_clean_displayable_frontend_ready_diagnostics(out)
     if "quality_gate_failed" in _json_dumps(out):
-        return out
+        if not has_clean_frontend_ready:
+            return out
+        out = _clear_quality_gate_failed_marker(out)
+        has_clean_frontend_ready = _has_clean_displayable_frontend_ready_diagnostics(out)
     analysis = out.get("analysis") or {}
     implication = out.get("implication") or {}
     peer = implication.get("peer_implication") or {}
@@ -8663,6 +9350,7 @@ def _restore_valid_flags_if_structurally_safe(result: dict[str, Any]) -> dict[st
         and _string_list(analysis.get("strategic_meaning"), max_items=3)
     ):
         analysis["is_valid_analysis"] = True
+        analysis["confidence"] = max(_clamp_float(analysis.get("confidence"), 0.0), 0.62)
 
     if (peer.get("peer_meaning") or skax.get("why_important")) and (
         _string_list(skax.get("recommended_actions"), max_items=3)
@@ -8670,11 +9358,50 @@ def _restore_valid_flags_if_structurally_safe(result: dict[str, Any]) -> dict[st
         or skax.get("potential_impact")
     ):
         implication["is_valid_implication"] = True
+        implication["confidence"] = max(_clamp_float(implication.get("confidence"), 0.0), 0.62)
+        if implication.get("evidence_label") == "insufficient":
+            implication["evidence_label"] = "moderate"
+    elif has_clean_frontend_ready:
+        implication["is_valid_implication"] = True
+        implication["confidence"] = max(_clamp_float(implication.get("confidence"), 0.0), 0.62)
+        if implication.get("evidence_label") == "insufficient":
+            implication["evidence_label"] = "moderate"
 
     out["analysis"] = analysis
     implication["peer_implication"] = peer
     implication["skax_implication"] = skax
     out["implication"] = implication
+    return out
+
+
+def _has_clean_displayable_frontend_ready_diagnostics(result: dict[str, Any]) -> bool:
+    implication = result.get("implication") or {}
+    if not isinstance(implication, dict):
+        return False
+    frontend_ready = implication.get("frontend_ready") or {}
+    if not isinstance(frontend_ready, dict) or not frontend_ready:
+        return False
+    source = str(frontend_ready.get("source") or "").strip()
+    if source not in _FRONTEND_READY_DISPLAY_SOURCES:
+        return False
+    diagnostics = implication.get("frontend_ready_diagnostics") or {}
+    if not isinstance(diagnostics, dict):
+        return False
+    return bool(diagnostics.get("displayable")) and not (
+        _string_list(diagnostics.get("required_violations"), max_items=20)
+        or _string_list(diagnostics.get("claim_violations"), max_items=20)
+    )
+
+
+def _clear_quality_gate_failed_marker(result: dict[str, Any]) -> dict[str, Any]:
+    out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+    analysis = out.get("analysis") or {}
+    reason = str(analysis.get("reason") or "").strip()
+    if "quality_gate_failed" in reason:
+        reason = re.sub(r"\s*\|\s*quality_gate_failed:.*$", "", reason).strip()
+        reason = "" if reason.startswith("quality_gate_failed:") else reason
+        analysis["reason"] = reason
+    out["analysis"] = analysis
     return out
 
 

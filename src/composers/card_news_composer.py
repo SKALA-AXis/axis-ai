@@ -1524,7 +1524,13 @@ def _display_sections_missing_frontend_ready(display_sections: list[dict[str, An
             ),
             {},
         )
-        if not _list_string(section.get("items") if isinstance(section, dict) else []):
+        items = _list_string(section.get("items") if isinstance(section, dict) else [])
+        structured_items = (
+            _clean_structured_blocks(section.get("structured_items"))
+            if isinstance(section, dict)
+            else []
+        )
+        if not items and not structured_items:
             missing.append(label)
     return missing
 
@@ -2465,7 +2471,50 @@ def _clean_frontend_ready_text(text: Any) -> str:
     out = _normalize_company_surface_names(out)
     out = _strip_public_section_prefixes(out)
     out = _polish_frontend_ready_internal_terms(out)
+    out = _normalize_card_news_statement_style(out)
     out = re.sub(r"[!！]+$", "", out).strip()
+    return out
+
+
+def _normalize_card_news_statement_style(text: str) -> str:
+    """Keep card-news frontend copy in plain declarative Korean style."""
+
+    out = str(text or "").strip()
+    replacements = (
+        (r"보여줍니다", "보여준다"),
+        (r"드러납니다", "드러난다"),
+        (r"이어집니다", "이어진다"),
+        (r"연결됩니다", "연결된다"),
+        (r"중요해질\s*수\s*있습니다", "중요해질 수 있다"),
+        (r"필요해질\s*수\s*있습니다", "필요해질 수 있다"),
+        (r"볼\s*수\s*있습니다", "볼 수 있다"),
+        (r"할\s*수\s*있습니다", "할 수 있다"),
+        (r"될\s*수\s*있습니다", "될 수 있다"),
+        (r"구분해야\s*합니다", "구분해야 한다"),
+        (r"검토해야\s*합니다", "검토해야 한다"),
+        (r"확인해야\s*합니다", "확인해야 한다"),
+        (r"점검해야\s*합니다", "점검해야 한다"),
+        (r"마련해야\s*합니다", "마련해야 한다"),
+        (r"좁혀야\s*합니다", "좁혀야 한다"),
+        (r"낮춰야\s*합니다", "낮춰야 한다"),
+        (r"나눠야\s*합니다", "나눠야 한다"),
+        (r"해야\s*합니다", "해야 한다"),
+        (r"필요합니다", "필요하다"),
+        (r"어렵습니다", "어렵다"),
+        (r"가능합니다", "가능하다"),
+        (r"제시됩니다", "제시된다"),
+        (r"확인됩니다", "확인된다"),
+        (r"포함됩니다", "포함된다"),
+        (r"나타납니다", "나타난다"),
+        (r"설명됩니다", "설명된다"),
+        (r"평가됩니다", "평가된다"),
+        (r"됩니다", "된다"),
+        (r"있습니다", "있다"),
+        (r"없습니다", "없다"),
+        (r"합니다", "한다"),
+    )
+    for pattern, replacement in replacements:
+        out = re.sub(pattern, replacement, out)
     return out
 
 
