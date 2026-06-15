@@ -250,6 +250,19 @@ def main() -> None:
                 saved_card_id = str(result.get("saved_card_id") or "")
                 if args.update_existing_in_place:
                     if existing_card_id:
+                        if not _has_direct_frontend_ready(card):
+                            skipped += 1
+                            log.warning(
+                                (
+                                    "card_news backfill skip in-place update | %d/%d "
+                                    "cluster_id=%s card_id=%s reason=no_direct_frontend_ready"
+                                ),
+                                index,
+                                len(targets),
+                                cluster_id,
+                                existing_card_id,
+                            )
+                            continue
                         transient_card_id = str(card.get("id") or "")
                         card["id"] = existing_card_id
                         saved_card_id = save_card_news(card)
@@ -665,6 +678,27 @@ def _has_displayable_implication(card: dict[str, Any]) -> bool:
         frontend.get("response_direction_blocks")
     )
     return bool(key_items and action_items)
+
+
+def _has_direct_frontend_ready(card: dict[str, Any]) -> bool:
+    implication = card.get("implication")
+    if not isinstance(implication, dict):
+        return False
+    ready = implication.get("frontend_ready")
+    if not isinstance(ready, dict):
+        return False
+    source = str(ready.get("source") or "").strip()
+    if source not in {"llm_direct", "frontend_repair_direct"}:
+        return False
+    key = ready.get("key_implication")
+    action = ready.get("suggested_action")
+    if not isinstance(key, dict) or not isinstance(action, dict):
+        return False
+    return all(
+        str(block.get(field) or "").strip()
+        for block in (key, action)
+        for field in ("sentence", "evidence_sentence")
+    )
 
 
 def _display_item_list(value: Any) -> list[dict[str, Any]]:
