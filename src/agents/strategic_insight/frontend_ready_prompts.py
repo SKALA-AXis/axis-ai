@@ -82,6 +82,13 @@ FRONTEND_READY_REPAIR_USER_PROMPT_TEMPLATE_LEGACY = """\
    SK AX의 사업, 운영 모델, 협력 방식, 고객 대응 방식 중 실제 근거와 연결되는
    한 축을 골라 구체적으로 작성합니다.
    대응방향은 지시문이나 체크리스트가 아니라 전략적 해석 문장입니다.
+   ProfileContext.skax_profile.user_strategy_overlays가 있으면 사용자별 SK AX 보강 프로필입니다.
+   현재 사건 fact와 직접 관련되는 의미 단위만 사용해 공통 대응방향을 더 구체화합니다.
+   관련이 없으면 overlay를 사용하지 않습니다.
+   관련 있더라도 overlay 문장을 그대로 반복하지 말고,
+   현재 사건에서 드러난 업무·시스템·운영 구조와 연결해 SK AX식 대응 관점으로 재해석합니다.
+   overlay에 있는 내부 initiative, 현재 범위, 목표 방향, 운영 조건은 현재 사건과 겹칠 때만
+   suggested_action의 구체화 근거로 사용하고, key_implication에는 넣지 않습니다.
    특히 협력/MOU/공동개발 이슈에서는 각 참여자가 보유한 역량이 어떻게 맞물리는지
    먼저 읽습니다. 기사에 한쪽의 현장·시스템·운영 역량과 다른 쪽의 AI 모델·기술
    역량이 함께 나오면, 두 역량이 어떤 적용 단계에서 맞물리는지 해석하고,
