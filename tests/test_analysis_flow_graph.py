@@ -14,6 +14,7 @@ from src.pipeline.analysis_flow_graph import (
     SupervisorDeps,
     _hard_validate,
     build_supervisor_graph,
+    run_supervisor,
 )
 
 
@@ -290,14 +291,12 @@ def test_supervisor_graph_threads_as_of_to_context_and_card_created_at():
         patch("src.pipeline.analysis_flow_graph.save_card_news", return_value="CN-OK") as save_card,
         patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
     ):
-        graph.invoke(
-            {
-                "input_bundle": _stub_bundle(),
-                "classification": {"sector": "ax", "event_type": "partnership"},
-                "as_of": as_of,
-                "errors": [],
-                "human_review_flags": [],
-            }
+        # run_supervisor(as_of=) 가 initial state 로 forwarding 하는지까지 함께 검증.
+        run_supervisor(
+            input_bundle=_stub_bundle(),
+            classification={"sector": "ax", "event_type": "partnership"},
+            as_of=as_of,
+            graph=graph,
         )
 
     # (1) 빌더가 as_of 를 받았는가 (point-in-time 컨텍스트 클램프)

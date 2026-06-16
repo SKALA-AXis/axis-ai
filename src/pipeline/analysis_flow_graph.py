@@ -947,6 +947,7 @@ def run_supervisor(
     input_bundle: AnalysisInputBundle,
     classification: dict[str, Any] | None = None,
     profile_context: ProfileContext | None = None,
+    as_of: date | None = None,
     graph: Any | None = None,
 ) -> SupervisorState:
     """단일 cluster 처리 진입점.
@@ -964,6 +965,7 @@ def run_supervisor(
             "input_bundle": input_bundle,
             "classification": classification or {},
             "profile_context": profile_context,
+            "as_of": as_of,
             "errors": [],
             "human_review_flags": [],
         },
