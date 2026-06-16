@@ -24,8 +24,17 @@ class ProfileSnapshotSummarizer:
     def summarize(self, evidence_pack: dict[str, Any]) -> dict[str, Any]:
         if self._llm is None:
             return _fallback_snapshot(evidence_pack)
+        from src.observability import tracing_config
+
         prompt = _build_prompt(evidence_pack)
-        result = self._llm.invoke(prompt)
+        result = self._llm.invoke(
+            prompt,
+            config=tracing_config(
+                agent="ProfileSnapshotSummarizer",
+                phase="summarize",
+                prompt_version=PROFILE_SNAPSHOT_SCHEMA_VERSION,
+            ),
+        )
         content = getattr(result, "content", result)
         snapshot = _parse_json(str(content))
         return _finalize_snapshot(snapshot, evidence_pack)

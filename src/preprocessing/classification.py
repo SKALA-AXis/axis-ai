@@ -353,6 +353,67 @@ class ClusterClassifier:
             return "company", ""
 
 
+def classify_article_text(
+    title: str,
+    content: str,
+    company: str = "",
+    *,
+    source_type: str = "",
+    enable_llm: bool = True,
+) -> dict[str, Any]:
+    """단일 기사 텍스트를 운영과 동일한 로직으로 분류한다 (DB 미접근).
+
+    ``ClusterClassifier.classify`` 의 텍스트 전용 버전 — 데모/외부 단발 분류용.
+    rule 우선 → GPT-4o fallback(enable_llm) 으로 event_type 판정, exposure/impact 산식
+    동일. 단일 기사이므로 cluster_size=1 (exposure 는 낮고, 큰 사건은 impact 로 보정됨).
+
+    Args:
+        title: 기사 제목
+        content: 기사 본문
+        company: peer id (회사 직접 언급 카운트용, 선택)
+        source_type: 출처 유형(dart/ir/official 등, impact 보정용, 선택)
+        enable_llm: 규칙 미매칭 시 GPT-4o fallback 사용 여부
+
+    Returns:
+        event_type / sector(s) / exposure·impact·importance score+band / reasoning / signals
+    """
+    rep: dict[str, Any] = {
+        "title": title or "",
+        "content": content or "",
+        "company": company or "",
+        "source_type": source_type or "",
+        # GPT-4o 폴백 경로(_format_articles)가 a["source_name"] 을 bracket 접근하므로
+        # 합성 article 에도 키가 있어야 KeyError 가 안 난다(규칙 미매칭 기사 분류 시).
+        "source_name": "",
+    }
+    matched_sectors = _matched_sectors(rep, title=rep["title"], content=rep["content"])
+    exposure = compute_exposure([rep], company)
+    event_type, reasoning = ClusterClassifier(enable_llm=enable_llm)._classify_event_type(
+        rep, exposure
+    )
+    impact = compute_article_impact(rep, event_type)
+    importance_score = max(exposure["exposure_score"], impact["impact_score"])
+
+    return {
+        "title": rep["title"],
+        "sector": matched_sectors[0],
+        "sectors": matched_sectors,
+        "event_type": event_type,
+        "reasoning": reasoning,
+        "exposure_score": exposure["exposure_score"],
+        "exposure_band": exposure["exposure_band"],
+        "impact_score": impact["impact_score"],
+        "impact_band": impact["impact_band"],
+        "importance_score": importance_score,
+        "importance": _to_band(importance_score),
+        "signals": {
+            "cluster_size": exposure["cluster_size"],
+            "company_mention_count": exposure["company_mention_count"],
+            "impact_signals": impact["impact_signals"],
+        },
+    }
+
+
 def _get_llm() -> ChatOpenAI:
     global _llm
     if _llm is None:

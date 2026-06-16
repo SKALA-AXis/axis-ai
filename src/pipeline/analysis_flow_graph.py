@@ -29,7 +29,7 @@ import operator
 import re
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, Any, Callable, TypedDict, cast
 
 from langgraph.graph import END, StateGraph
@@ -38,7 +38,7 @@ from langgraph.types import RetryPolicy
 from src.agents.implication_agent import ImplicationAgent
 from src.agents.integration_agent import IntegrationAgent
 from src.agents.strategic_analyzer import StrategicAnalyzer
-from src.agents.strategic_insight_agent import StrategicInsightAgent
+from src.agents.strategic_insight_agent import StrategicInsightAgent, _is_valid_integrated_issue
 from src.analysis.implication import ImplicationGenerator
 from src.analysis.models import (
     AnalysisContext,
@@ -79,6 +79,8 @@ class SupervisorState(TypedDict, total=False):
     # inputs
     input_bundle: AnalysisInputBundle
     classification: dict[str, Any]
+    # 백필/재생성 point-in-time 기준일(=기사 발행일). 없으면 live(=오늘) 동작.
+    as_of: date | None
     # intermediate
     profile_context: ProfileContext | None
     analysis_context: AnalysisContext | None
@@ -268,6 +270,7 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
                 companies=companies,
                 sectors=sectors,
                 event_type=bundle.event_type,
+                as_of=state.get("as_of"),
             )
             return cast(SupervisorState, {**state, "profile_context": ctx})
         except Exception as exc:  # noqa: BLE001
@@ -288,6 +291,7 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
             input_bundle=bundle,
             profile_context=profile_context,
             integrated_issue=integrated,
+            as_of=state.get("as_of"),
         )
         return cast(SupervisorState, {**state, "analysis_context": ctx})
 
@@ -407,6 +411,15 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         pkg = state.get("analysis_package")
         if pkg is None:
             return cast(SupervisorState, {**state, "card_news_id": None})
+        integrated = state.get("integrated_issue") or {}
+        if integrated.get("is_valid_summary") is False and not _is_valid_integrated_issue(
+            integrated
+        ):
+            log.info(
+                "card_writer skip | bundle=%s reason=invalid_summary",
+                state["input_bundle"].bundle_id,
+            )
+            return cast(SupervisorState, {**state, "card_news_id": None, "card_news_payload": {}})
         card = deps.card_news_composer.generate_from_analysis_package(
             pkg,
             classification=state.get("classification") or {},
@@ -418,7 +431,6 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         # 채우도록 보강. 카드 생성 단계의 책임을 명확히 한다.
         card.setdefault("card_schema_version", "v2")
         bundle = state["input_bundle"]
-        integrated = state.get("integrated_issue") or {}
         # peer_company_id FK — main_company (integrated) > input_bundle.companies[0].
         if not card.get("peer_company_id"):
             main_company = str(integrated.get("main_company") or "").strip()
@@ -472,6 +484,13 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
                 existing_eval = {}
             existing_eval["rule_based"] = validation.metrics.to_dict()
             card["evaluation_payload"] = existing_eval
+
+        # 백필/재생성 point-in-time 모드: 카드 생성 시각이 아니라 기사 발행일(as_of)을
+        # created_at 으로 박아 프론트 정렬·타임라인이 실제 뉴스 날짜를 따르게 한다.
+        # (live 파이프라인은 as_of 없음 → save_card_news 가 NOW() 사용.)
+        as_of = state.get("as_of")
+        if as_of is not None and not card.get("created_at"):
+            card["created_at"] = as_of.isoformat()
 
         card_id = save_card_news(card)
         return cast(
@@ -929,6 +948,7 @@ def run_supervisor(
     input_bundle: AnalysisInputBundle,
     classification: dict[str, Any] | None = None,
     profile_context: ProfileContext | None = None,
+    as_of: date | None = None,
     graph: Any | None = None,
 ) -> SupervisorState:
     """단일 cluster 처리 진입점.
@@ -946,6 +966,7 @@ def run_supervisor(
             "input_bundle": input_bundle,
             "classification": classification or {},
             "profile_context": profile_context,
+            "as_of": as_of,
             "errors": [],
             "human_review_flags": [],
         },

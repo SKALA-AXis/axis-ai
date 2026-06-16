@@ -142,6 +142,9 @@ def test_card_summary_ignores_display_llm_selection_and_keeps_integrated_summary
 
 def test_card_news_from_analysis_package_adds_grounded_display_sections(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    import src.composers.card_news_composer as composer_module
+
+    monkeypatch.setattr(composer_module, "_now_iso", lambda: "2026-06-15T09:30:00+09:00")
     package = {
         "bundle_id": "news:1",
         "input_bundle": {
@@ -704,6 +707,7 @@ def test_card_news_action_section_filters_actions_without_issue_grounding() -> N
 def test_card_news_from_cluster_summary_uses_source_published_date(monkeypatch):
     import src.composers.card_news_composer as composer_module
 
+    monkeypatch.setattr(composer_module, "_now_iso", lambda: "2026-06-15T09:30:00+09:00")
     monkeypatch.setattr(
         composer_module,
         "get_articles_by_ids",
@@ -734,6 +738,86 @@ def test_card_news_from_cluster_summary_uses_source_published_date(monkeypatch):
 
     assert card["id"] == "CN-20260304-25771"
     assert card["published_date"] == "2026-03-04"
+    assert card["created_at"] == "2026-03-04T09:00:00+09:00"
+
+
+def test_card_news_compacts_sentence_like_cover_title(monkeypatch):
+    import src.composers.card_news_composer as composer_module
+
+    monkeypatch.setattr(composer_module, "_now_iso", lambda: "2026-06-15T12:00:00+09:00")
+    card = CardNewsComposer().generate(
+        {
+            "cluster_id": 49206,
+            "main_company": "samsung_sds",
+            "headline": (
+                "스마트테크 코리아 2026은 16개국의 620개사가 참가하여 AI와 로봇, "
+                "스마트제조, 디지털 유통·물류 등 미래 산업에 쓰이는 기술을 소개했다"
+            ),
+            "fact_summary": [
+                "스마트테크 코리아 2026은 16개국 620개사가 참가했다.",
+                "AI와 로봇, 스마트제조, 디지털 유통·물류 기술이 소개됐다.",
+                "행사는 서울 코엑스에서 열렸다.",
+            ],
+        },
+        classification={"company": "samsung_sds", "title": ""},
+        articles=[
+            {
+                "id": 49206,
+                "title": "[현장] 막 내린 ‘스마트테크 코리아 2026’, AI로 달라진 미래 선보여",
+                "url": "https://example.com/article",
+                "published_at": "2026-06-15T02:36:00+00:00",
+            }
+        ],
+    )
+
+    assert card["title"] == "막 내린 ‘스마트테크 코리아 2026’, AI로 달라진 미래 선보여"
+    assert len(card["title"]) <= 52
+
+
+def test_card_news_from_cluster_summary_uses_earliest_source_date(monkeypatch):
+    import src.composers.card_news_composer as composer_module
+
+    monkeypatch.setattr(composer_module, "_now_iso", lambda: "2026-06-16T09:30:00+09:00")
+    monkeypatch.setattr(
+        composer_module,
+        "get_articles_by_ids",
+        lambda article_ids: [
+            {
+                "id": 2,
+                "title": "후속 기사",
+                "content": "후속 기사",
+                "source_name": "naver_news",
+                "url": "https://example.com/2",
+                "published_at": "2026-06-15T09:00:00+09:00",
+            },
+            {
+                "id": 1,
+                "title": "최초 기사",
+                "content": "최초 기사",
+                "source_name": "naver_news",
+                "url": "https://example.com/1",
+                "published_at": "2026-06-12T09:00:00+09:00",
+            },
+        ],
+    )
+
+    card = CardNewsComposer().generate_from_cluster(
+        cluster_id=48480,
+        representative_id=2,
+        cluster_article_ids=[2, 1],
+        company="lg_cns",
+        classification={"event_type": "tech_release", "sector": "ax"},
+        summary={
+            "is_valid_summary": True,
+            "main_company": "lg_cns",
+            "headline": "LG CNS, 서비스 출시",
+            "fact_summary": ["LG CNS가 서비스를 출시했다."],
+        },
+    )
+
+    assert card["id"] == "CN-20260612-48480"
+    assert card["published_date"] == "2026-06-12"
+    assert card["created_at"] == "2026-06-12T09:00:00+09:00"
 
 
 def test_financial_only_card_title_adds_business_context():

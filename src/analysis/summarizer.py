@@ -492,6 +492,11 @@ class SourceSummarizer:
             "model": _LLM_MODEL,
             **result,
         }
+        summary = _enrich_peer_comparison_issue(
+            summary,
+            articles=articles_for_analysis,
+            target_companies=target_companies,
+        )
         if fact_extraction_warnings:
             summary["validation_warnings"] = _dedupe_keep_order(
                 [
@@ -3248,20 +3253,487 @@ def normalize_korean_spacing(value: Any) -> str:
 def _candidate_peer_companies(articles: list[dict[str, Any]]) -> list[str]:
     """Return the actual target companies for this cluster.
 
-    Use preprocessing outputs only. Article body alias matches are too broad for
-    target selection because market/theme articles often mention peer companies
-    as context, not as the cluster subject.
+    Use preprocessing outputs by default. When the cluster itself is an explicit
+    peer-comparison issue, preserve the peer aliases in the article body so the
+    IntegratedIssue does not collapse to a single representative company.
     """
     candidates: list[str] = []
     for article in articles:
         candidates.extend(_company_list(article))
         candidates.extend(_matched_companies(article))
+    if _is_peer_comparison_issue(articles):
+        candidates.extend(_body_peer_companies(articles))
 
     return [
         company_id
         for company_id in _dedupe_keep_order(candidates)
         if company_id in _PEER_ALIASES and company_tier(company_id) != "self"
     ]
+
+
+def _body_peer_companies(articles: list[dict[str, Any]]) -> list[str]:
+    text = _articles_text(articles)
+    mentioned: list[str] = []
+    for company_id, aliases in _PEER_ALIASES.items():
+        if company_tier(company_id) == "self":
+            continue
+        if any(
+            alias and re.search(re.escape(str(alias)), text, re.IGNORECASE) for alias in aliases
+        ):
+            mentioned.append(company_id)
+    return mentioned
+
+
+def _is_peer_comparison_issue(articles: list[dict[str, Any]]) -> bool:
+    text = _articles_text(articles)
+    if not text:
+        return False
+    mentioned_count = len(_body_peer_companies(articles))
+    if mentioned_count < 2:
+        return False
+    comparison_signal = re.search(
+        r"비교|대조|엇갈|반면|내부거래|의존도|비중|증가|감소|상승|하락",
+        text,
+    )
+    metric_signal = len(_number_tokens(text)) >= 2
+    return bool(comparison_signal and metric_signal)
+
+
+def _articles_text(articles: list[dict[str, Any]]) -> str:
+    return " ".join(
+        normalize_korean_spacing(f"{article.get('title') or ''}. {article.get('content') or ''}")
+        for article in articles
+    )
+
+
+def _enrich_peer_comparison_issue(
+    summary: dict[str, Any],
+    *,
+    articles: list[dict[str, Any]],
+    target_companies: list[str],
+) -> dict[str, Any]:
+    if not _is_peer_comparison_issue(articles):
+        return summary
+    out = dict(summary)
+    mentioned = _dedupe_keep_order([*target_companies, *_body_peer_companies(articles)])
+    comparison_facts = _peer_metric_comparison_facts(articles, mentioned)
+    risk_facts = _risk_facts_from_articles(articles)
+    market_structure_facts = _market_structure_facts_from_articles(articles)
+    evidence_inventory = _strategic_evidence_inventory_from_articles(
+        articles,
+        comparison_facts=comparison_facts,
+    )
+    if (
+        not comparison_facts
+        and not risk_facts
+        and not market_structure_facts
+        and not any(evidence_inventory.values())
+    ):
+        return out
+
+    out["mentioned_peer_companies"] = mentioned or out.get("mentioned_peer_companies")
+    out["target_peer_companies"] = mentioned or out.get("target_peer_companies")
+    out["issue_frame"] = {
+        "frame_type": "peer_comparison",
+        "comparison_axis": _comparison_axis_from_facts(comparison_facts),
+        "main_company": out.get("main_company"),
+        "mentioned_peer_companies": mentioned,
+    }
+    out["comparison_facts"] = comparison_facts
+    out["risk_facts"] = risk_facts
+    out["market_structure_facts"] = market_structure_facts
+    out["strategic_evidence_inventory"] = evidence_inventory
+    out["supporting_facts"] = evidence_inventory.get("supporting_facts", [])
+    out["background_facts"] = evidence_inventory.get("background_facts", [])
+    out["cause_or_driver_facts"] = evidence_inventory.get("cause_or_driver_facts", [])
+    out["uncertainty_or_limitation_facts"] = evidence_inventory.get(
+        "uncertainty_or_limitation_facts",
+        [],
+    )
+    out["strategic_tensions"] = evidence_inventory.get("strategic_tensions", [])
+    out["actionable_questions"] = evidence_inventory.get("actionable_questions", [])
+
+    existing_lines = _normalize_string_list(out.get("fact_summary"))
+    added_lines = _comparison_summary_lines(
+        comparison_facts=comparison_facts,
+        risk_facts=risk_facts,
+        market_structure_facts=market_structure_facts,
+    )
+    out["fact_summary"] = _dedupe_keep_order([*existing_lines, *added_lines])[:_SUMMARY_LINE_MAX]
+    if comparison_facts:
+        out["headline"] = _peer_comparison_headline(comparison_facts) or out.get("headline")
+        out["one_line_summary"] = _peer_comparison_one_liner(comparison_facts) or out.get(
+            "one_line_summary"
+        )
+    out["integrated_text"] = " ".join(
+        [
+            str(out.get("one_line_summary") or ""),
+            " ".join(out["fact_summary"]),
+            " ".join(risk_facts),
+            " ".join(market_structure_facts),
+            " ".join(evidence_inventory.get("background_facts", [])),
+            " ".join(evidence_inventory.get("cause_or_driver_facts", [])),
+            " ".join(evidence_inventory.get("uncertainty_or_limitation_facts", [])),
+            " ".join(evidence_inventory.get("strategic_tensions", [])),
+        ]
+    ).strip()
+    out["reason"] = _append_reason(
+        out.get("reason"),
+        "peer_comparison_enriched: 본문에 등장한 비교 피어와 구조적 리스크를 보존함",
+    )
+    return out
+
+
+def _peer_metric_comparison_facts(
+    articles: list[dict[str, Any]],
+    company_ids: list[str],
+) -> list[dict[str, Any]]:
+    sentences = _split_evidence_sentences(_articles_text(articles), limit=80)
+    facts: list[dict[str, Any]] = []
+    for company_id in company_ids:
+        aliases = _PEER_ALIASES.get(company_id, [company_id])
+        candidates: list[dict[str, Any]] = []
+        for sentence_index, sentence in enumerate(sentences):
+            matched_alias = next(
+                (
+                    str(alias)
+                    for alias in aliases
+                    if alias and re.search(re.escape(str(alias)), sentence, re.IGNORECASE)
+                ),
+                "",
+            )
+            if not matched_alias:
+                continue
+            if not _nearby_percentage(sentence, matched_alias) and sentence_index + 1 < len(
+                sentences
+            ):
+                sentence = f"{sentence} {sentences[sentence_index + 1]}"
+            if not re.search(r"내부거래|특수관계자|전체\s*매출|매출", sentence):
+                continue
+            values = _number_tokens(sentence)
+            percentages = [value for value in values if "%" in value or "％" in value]
+            nearby_percentage = _nearby_percentage(sentence, matched_alias)
+            if not values or (percentages and not nearby_percentage):
+                continue
+            candidates.append(
+                {
+                    "company_id": company_id,
+                    "metric": (
+                        "internal_transaction_ratio"
+                        if re.search(r"내부거래|특수관계자", sentence)
+                        else "financial_metric"
+                    ),
+                    "value": nearby_percentage or (percentages[0] if percentages else values[0]),
+                    "numbers": values[:6],
+                    "evidence_text": sentence,
+                    "_score": _peer_metric_sentence_score(sentence, matched_alias),
+                }
+            )
+        if candidates:
+            selected = sorted(candidates, key=lambda item: item.get("_score", 0), reverse=True)[0]
+            selected.pop("_score", None)
+            facts.append(selected)
+    return facts
+
+
+def _nearby_percentage(sentence: str, alias: str) -> str:
+    for match in re.finditer(re.escape(alias), sentence, re.IGNORECASE):
+        windows = [
+            sentence[match.start() : min(len(sentence), match.end() + 55)],
+            sentence[max(0, match.start() - 35) : min(len(sentence), match.end() + 45)],
+        ]
+        for window in windows:
+            percentage_match = re.search(r"\d+(?:\.\d+)?\s*[%％]", window)
+            if percentage_match:
+                return percentage_match.group(0).replace("％", "%").strip()
+    return ""
+
+
+def _peer_metric_sentence_score(sentence: str, alias: str) -> int:
+    score = 0
+    matches = list(re.finditer(re.escape(alias), sentence, re.IGNORECASE))
+    if not matches:
+        return score
+    after_alias = max((sentence[match.end() :] for match in matches), key=len)
+    if re.search(r"내부거래|특수관계자|전체\s*매출|매출", after_alias[:80]):
+        score += 4
+    if re.search(r"\d+(?:\.\d+)?\s*[%％]", after_alias[:80]):
+        score += 4
+    if re.search(r"\d+\.\d+\s*[%％]", after_alias[:80]):
+        score += 2
+    if re.search(r"↑|↓|증가|감소|상승|하락", sentence):
+        score += 1
+    if re.search(rf"^\s*{re.escape(alias)}\s*(?:은|는|이|가|의|역시)", sentence, re.IGNORECASE):
+        score += 6
+    if re.search(r"^\s*[^.]{0,8}" + re.escape(alias), sentence, re.IGNORECASE):
+        score += 1
+    if (
+        not re.search(
+            rf"^\s*{re.escape(alias)}\s*(?:은|는|이|가|의|역시)",
+            sentence,
+            re.IGNORECASE,
+        )
+        and len(_mentioned_peer_ids_in_text(sentence)) >= 2
+    ):
+        score -= 6
+    return score
+
+
+def _mentioned_peer_ids_in_text(text: str) -> list[str]:
+    mentioned: list[str] = []
+    for company_id, aliases in _PEER_ALIASES.items():
+        if any(
+            alias and re.search(re.escape(str(alias)), text, re.IGNORECASE) for alias in aliases
+        ):
+            mentioned.append(company_id)
+    return mentioned
+
+
+def _risk_facts_from_articles(articles: list[dict[str, Any]]) -> list[str]:
+    patterns = (r"공정위|공정거래위원회", r"사법\s*리스크|과징금|규제|감시")
+    return _sentences_matching_any(articles, patterns, limit=3)
+
+
+def _market_structure_facts_from_articles(articles: list[dict[str, Any]]) -> list[str]:
+    patterns = (
+        r"외부\s*경쟁력|외부\s*고객|대외\s*사업|홀로서기",
+        r"클라우드&AI|AI\s*성과|재무제표|분리|검증",
+        r"그룹\s*일감|계열사\s*일감|내부거래",
+    )
+    return _sentences_matching_any(articles, patterns, limit=4)
+
+
+def _strategic_evidence_inventory_from_articles(
+    articles: list[dict[str, Any]],
+    *,
+    comparison_facts: list[dict[str, Any]],
+) -> dict[str, list[str]]:
+    background_facts = _sentences_matching_any(
+        articles,
+        (
+            r"업종|시장|업계|구조|태생적|특성상|최근\s*\d+\s*년|평균|상위권",
+            r"공정위|공정거래위원회|규제|감시|공시대상기업집단",
+        ),
+        limit=5,
+    )
+    cause_or_driver_facts = _sentences_matching_any(
+        articles,
+        (
+            r"주효|영향|결과|풀이|때문|연관|연결|배경|전략|확장|강화|전념|주도|전담",
+            r"선정|공공사업|정부|그룹\s*차원|신사업|플랫폼|자동화|인프라",
+        ),
+        limit=6,
+    )
+    risk_facts = _sentences_matching_any(
+        articles,
+        (
+            r"리스크|위험|한계|문제|족쇄|악화|제한|비판|규제|과징금|소송|감시",
+            r"자유로울\s*수\s*없|검증하기\s*어렵|분리하지\s*않",
+        ),
+        limit=6,
+    )
+    uncertainty_or_limitation_facts = _sentences_matching_any(
+        articles,
+        (
+            r"검증하기\s*어렵|확인하기\s*어렵|분리하지\s*않|투명하게\s*분리|한계",
+            r"목소리가\s*높|따로\s*떼어내|공시|재무제표",
+        ),
+        limit=4,
+    )
+    market_structure_facts = _sentences_matching_any(
+        articles,
+        (
+            r"외부\s*고객|외부\s*시장|대외\s*사업|대외\s*성과|독자적인\s*가치",
+            r"계열사\s*일감|그룹\s*일감|모그룹|내부거래|거래\s*구조|고착",
+        ),
+        limit=6,
+    )
+    strategic_tensions = _strategic_tension_facts(
+        background_facts=background_facts,
+        market_structure_facts=market_structure_facts,
+        risk_facts=risk_facts,
+        uncertainty_facts=uncertainty_or_limitation_facts,
+    )
+    supporting_facts = _dedupe_keep_order(
+        [
+            *market_structure_facts,
+            *cause_or_driver_facts,
+            *risk_facts,
+            *uncertainty_or_limitation_facts,
+        ]
+    )[:8]
+    return {
+        "core_facts": _comparison_core_fact_lines(comparison_facts),
+        "supporting_facts": supporting_facts,
+        "background_facts": background_facts,
+        "cause_or_driver_facts": cause_or_driver_facts,
+        "risk_facts": risk_facts,
+        "uncertainty_or_limitation_facts": uncertainty_or_limitation_facts,
+        "market_structure_facts": market_structure_facts,
+        "strategic_tensions": strategic_tensions,
+        "actionable_questions": _actionable_questions_from_inventory(
+            comparison_facts=comparison_facts,
+            background_facts=background_facts,
+            cause_or_driver_facts=cause_or_driver_facts,
+            risk_facts=risk_facts,
+            uncertainty_facts=uncertainty_or_limitation_facts,
+        ),
+    }
+
+
+def _comparison_core_fact_lines(comparison_facts: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for fact in comparison_facts[:8]:
+        company = _company_display_name(fact.get("company_id"))
+        value = str(fact.get("value") or "").strip()
+        evidence = str(fact.get("evidence_text") or "").strip()
+        if company and value and evidence:
+            lines.append(f"{company} {value}: {evidence}")
+        elif evidence:
+            lines.append(evidence)
+    return _dedupe_keep_order(lines)
+
+
+def _strategic_tension_facts(
+    *,
+    background_facts: list[str],
+    market_structure_facts: list[str],
+    risk_facts: list[str],
+    uncertainty_facts: list[str],
+) -> list[str]:
+    tensions: list[str] = []
+    if background_facts and market_structure_facts:
+        background = background_facts[0]
+        market = next(
+            (
+                fact
+                for fact in market_structure_facts
+                if _inventory_fact_key(fact) != _inventory_fact_key(background)
+            ),
+            "",
+        )
+        tensions.append(f"{background} / {market}" if market else background)
+    if risk_facts:
+        tensions.append(risk_facts[0])
+    if uncertainty_facts:
+        tensions.append(uncertainty_facts[0])
+    return _dedupe_keep_order(tensions)[:4]
+
+
+def _inventory_fact_key(value: Any) -> str:
+    return re.sub(r"\W+", "", normalize_korean_spacing(value)).lower()
+
+
+def _actionable_questions_from_inventory(
+    *,
+    comparison_facts: list[dict[str, Any]],
+    background_facts: list[str],
+    cause_or_driver_facts: list[str],
+    risk_facts: list[str],
+    uncertainty_facts: list[str],
+) -> list[str]:
+    questions: list[str] = []
+    if comparison_facts:
+        axis = _comparison_axis_from_facts(comparison_facts)
+        questions.append(
+            f"SK AX는 {axis} 비교축을 내부 관리 지표로 어떻게 분리해 설명할 수 있는가?"
+        )
+    if cause_or_driver_facts:
+        questions.append(
+            "피어 간 차이가 사업 수행 방식, 고객 기반, 그룹 과제 중 어디에서 발생했는가?"
+        )
+    if risk_facts:
+        questions.append(
+            "해당 차이가 규제, 고객 확보, 재무 안정성, 운영 책임 중 어떤 리스크로 이어지는가?"
+        )
+    if background_facts or uncertainty_facts:
+        questions.append(
+            "외부에 설명 가능한 성과와 아직 검증하기 어려운 영역을 어떻게 구분할 것인가?"
+        )
+    return _dedupe_keep_order(questions)[:4]
+
+
+def _sentences_matching_any(
+    articles: list[dict[str, Any]],
+    patterns: tuple[str, ...],
+    *,
+    limit: int,
+) -> list[str]:
+    out: list[str] = []
+    for sentence in _split_evidence_sentences(_articles_text(articles), limit=100):
+        sentence = _clean_inventory_sentence(sentence)
+        if not sentence:
+            continue
+        if any(re.search(pattern, sentence, re.IGNORECASE) for pattern in patterns):
+            out.append(sentence)
+        if len(out) >= limit:
+            break
+    return _dedupe_keep_order(out)
+
+
+def _clean_inventory_sentence(sentence: str) -> str:
+    value = normalize_korean_spacing(sentence)
+    if not value:
+        return ""
+    if re.search(r"…|\.{3}|VS", value) and re.search(r"\d{1,2}일\s+업계에\s+따르면", value):
+        value = re.sub(r"^.*?(?=\d{1,2}일\s+업계에\s+따르면)", "", value).strip()
+    if re.search(r"…|\.{3}|↑|↓|VS", value) and len(value) < 120:
+        return ""
+    return value
+
+
+def _comparison_axis_from_facts(facts: list[dict[str, Any]]) -> str:
+    if any(fact.get("metric") == "internal_transaction_ratio" for fact in facts):
+        return "internal_transaction_ratio"
+    return "peer_metric_comparison"
+
+
+def _comparison_summary_lines(
+    *,
+    comparison_facts: list[dict[str, Any]],
+    risk_facts: list[str],
+    market_structure_facts: list[str],
+) -> list[str]:
+    lines: list[str] = []
+    if len(comparison_facts) >= 2:
+        values = [
+            f"{_company_display_name(fact.get('company_id'))} {fact.get('value')}"
+            for fact in comparison_facts
+            if fact.get("company_id") and fact.get("value")
+        ]
+        if values:
+            lines.append(
+                "SI 업계 내부거래 의존도 비교에서 " + ", ".join(values[:4]) + "가 제시됐다."
+            )
+    if risk_facts:
+        lines.append(risk_facts[0])
+    if market_structure_facts:
+        lines.append(market_structure_facts[-1])
+    return lines
+
+
+def _peer_comparison_headline(comparison_facts: list[dict[str, Any]]) -> str:
+    if any(fact.get("metric") == "internal_transaction_ratio" for fact in comparison_facts):
+        return "SI업계, 내부거래 의존도 격차 확대"
+    return ""
+
+
+def _peer_comparison_one_liner(comparison_facts: list[dict[str, Any]]) -> str:
+    if len(comparison_facts) < 2:
+        return ""
+    values = [
+        f"{_company_display_name(fact.get('company_id'))} {fact.get('value')}"
+        for fact in comparison_facts
+        if fact.get("company_id") and fact.get("value")
+    ]
+    if not values:
+        return ""
+    return "SI 업계에서 " + ", ".join(values[:4]) + " 등 내부거래 의존도 격차가 제시됐다."
+
+
+def _company_display_name(company_id: Any) -> str:
+    aliases = _PEER_ALIASES.get(str(company_id or ""), [])
+    return str(aliases[0] if aliases else company_id or "")
 
 
 def _company_list(article: dict[str, Any]) -> list[str]:

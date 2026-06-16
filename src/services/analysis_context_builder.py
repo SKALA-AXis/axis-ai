@@ -9,6 +9,7 @@ LLM 호출 X. DB query + Qdrant retrieve 만. token budget ≤ 4,000 으로 압�
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any
 
 from sqlalchemy import text
@@ -68,6 +69,7 @@ class AnalysisContextBuilder:
         input_bundle: AnalysisInputBundle,
         profile_context: ProfileContext | dict[str, Any] | None = None,
         integrated_issue: dict[str, Any] | None = None,
+        as_of: date | None = None,
     ) -> AnalysisContext:
         # IntegratedIssue 가 우선 — main_company / mentioned_peer_companies 가
         # 확정되면 그것을 peer 입력으로 쓴다. 없으면 input_bundle.companies fallback.
@@ -75,10 +77,13 @@ class AnalysisContextBuilder:
         sectors = list(dict.fromkeys(input_bundle.sectors or []))
         ctx = AnalysisContext()
         provenance = ContextProvenance()
+        # point-in-time 기준일 — None 이면 오늘(기존 now-relative 동작). 설정 시 모든
+        # 과거-맥락 쿼리가 anchor 이하로 클램프되어 백필 시 미래 데이터 누출(look-ahead) 방지.
+        anchor = as_of or date.today()
 
         # Layer 2-A timeline -----------------------------------------------
         timeline = self._query_timeline(
-            peers=peers, days=90, limit_per_peer=_TIMELINE_PER_PEER_MAX_DEFAULT
+            peers=peers, days=90, limit_per_peer=_TIMELINE_PER_PEER_MAX_DEFAULT, anchor=anchor
         )
         ctx.peer_event_timeline_recent = timeline
         provenance.timeline_card_ids = [e.card_id for e in timeline]
@@ -86,7 +91,9 @@ class AnalysisContextBuilder:
             provenance.used_layers.append("peer_event_timeline_recent")
 
         # Layer 2-B sector pulse -------------------------------------------
-        sector_pulse = self._query_sector_pulse(sectors=sectors, weeks=_SECTOR_PULSE_WEEKS_DEFAULT)
+        sector_pulse = self._query_sector_pulse(
+            sectors=sectors, weeks=_SECTOR_PULSE_WEEKS_DEFAULT, anchor=anchor
+        )
         ctx.sector_pulse_recent = sector_pulse
         if sector_pulse:
             provenance.used_layers.append("sector_pulse_recent")
@@ -97,6 +104,7 @@ class AnalysisContextBuilder:
             peers=peers,
             quarters=_FINANCIAL_QUARTERS_DEFAULT,
             top_metrics=_FINANCIAL_TOP_METRICS_DEFAULT,
+            anchor=anchor,
         )
         ctx.financial_trend = financial
         if financial:
@@ -117,6 +125,8 @@ class AnalysisContextBuilder:
             sectors=sectors,
             min_days_since=7,
             top_k=_PRECEDENT_TOP_K_DEFAULT,
+            anchor=anchor,
+            as_of=as_of,
         )
         ctx.event_chain_candidates = precedents
         if precedents:
@@ -124,7 +134,7 @@ class AnalysisContextBuilder:
         provenance.precedent_card_ids = [p.card_id for p in precedents]
 
         # Layer 3 RAG -----------------------------------------------------
-        rag = self._search_similar_cards(input_bundle, top_k=_RAG_TOP_K_DEFAULT)
+        rag = self._search_similar_cards(input_bundle, top_k=_RAG_TOP_K_DEFAULT, as_of=as_of)
         ctx.similar_cards_rag = rag
         if rag:
             provenance.used_layers.append("similar_cards_rag")
@@ -135,6 +145,7 @@ class AnalysisContextBuilder:
             peers=peers,
             timeline=timeline,
             financial=financial,
+            anchor=anchor,
         )
         ctx.evidence_density_per_peer = density
 
@@ -147,7 +158,7 @@ class AnalysisContextBuilder:
     # Queries
     # ──────────────────────────────────────────────────────────────────
     def _query_timeline(
-        self, *, peers: list[str], days: int, limit_per_peer: int
+        self, *, peers: list[str], days: int, limit_per_peer: int, anchor: date
     ) -> list[TimelineEntry]:
         if not peers:
             return []
@@ -162,12 +173,18 @@ class AnalysisContextBuilder:
                                    sector, headline, importance, importance_score
                               FROM peer_event_timeline
                              WHERE company_id = :peer_id
-                               AND event_date >= (CURRENT_DATE - :days::int)
+                               AND event_date >= (:anchor::date - :days::int)
+                               AND event_date <= :anchor::date
                              ORDER BY event_date DESC, importance_score DESC NULLS LAST
                              LIMIT :limit
                             """
                         ),
-                        {"peer_id": peer_id, "days": int(days), "limit": int(limit_per_peer)},
+                        {
+                            "peer_id": peer_id,
+                            "days": int(days),
+                            "limit": int(limit_per_peer),
+                            "anchor": anchor,
+                        },
                     ).fetchall()
                     for row in rows:
                         out.append(
@@ -189,7 +206,9 @@ class AnalysisContextBuilder:
             return []
         return out
 
-    def _query_sector_pulse(self, *, sectors: list[str], weeks: int) -> list[SectorPulseRow]:
+    def _query_sector_pulse(
+        self, *, sectors: list[str], weeks: int, anchor: date
+    ) -> list[SectorPulseRow]:
         if not sectors:
             return []
         try:
@@ -203,13 +222,14 @@ class AnalysisContextBuilder:
                           FROM sector_pulse
                          WHERE sector = ANY(:sectors)
                            AND week_start >= (
-                               DATE_TRUNC('week', CURRENT_DATE)
+                               DATE_TRUNC('week', :anchor::date)
                                - (:weeks * 7) * INTERVAL '1 day'
                            )::date
+                           AND week_start <= :anchor::date
                          ORDER BY week_start DESC
                         """
                     ),
-                    {"sectors": sectors, "weeks": int(weeks)},
+                    {"sectors": sectors, "weeks": int(weeks), "anchor": anchor},
                 ).fetchall()
         except Exception as exc:  # noqa: BLE001
             log.debug("query_sector_pulse fallback | error=%s", exc)
@@ -237,7 +257,7 @@ class AnalysisContextBuilder:
         return out
 
     def _query_financial_trend(
-        self, *, peers: list[str], quarters: int, top_metrics: int
+        self, *, peers: list[str], quarters: int, top_metrics: int, anchor: date
     ) -> dict[str, FinancialSeries]:
         if not peers:
             return {}
@@ -257,6 +277,13 @@ class AnalysisContextBuilder:
                                    evidence_article_id
                               FROM peer_financial_trend
                              WHERE company_id = :peer_id
+                               AND (
+                                   evidence_article_id IS NULL
+                                   OR evidence_article_id IN (
+                                       SELECT id FROM raw_articles
+                                        WHERE published_at < (:anchor::date + INTERVAL '1 day')
+                                   )
+                               )
                              ORDER BY period_year DESC NULLS LAST,
                                       period_quarter DESC NULLS LAST,
                                       confidence DESC NULLS LAST
@@ -266,6 +293,7 @@ class AnalysisContextBuilder:
                         {
                             "peer_id": peer_id,
                             "limit": int(quarters * top_metrics * 2),
+                            "anchor": anchor,
                         },
                     ).fetchall()
                     series_map: dict[str, list[FinancialSeriesPoint]] = {}
@@ -312,9 +340,15 @@ class AnalysisContextBuilder:
         sectors: list[str],
         min_days_since: int,
         top_k: int,
+        anchor: date,
+        as_of: date | None = None,
     ) -> list[PrecedentCandidate]:
-        """Qdrant embedding 우선, 없으면 DB-only (peer + event_type + 7일 이상) fallback."""
-        if self._qdrant is not None and hasattr(self._qdrant, "find_precedents"):
+        """Qdrant embedding 우선, 없으면 DB-only (peer + event_type + 7일 이상) fallback.
+
+        as_of 가 설정된 point-in-time(백필) 모드에선 Qdrant 경로(발행일 상한 미보장)를
+        건너뛰고 anchor 로 클램프된 DB fallback 만 쓴다 — look-ahead 방지.
+        """
+        if as_of is None and self._qdrant is not None and hasattr(self._qdrant, "find_precedents"):
             try:
                 return list(
                     self._qdrant.find_precedents(
@@ -340,7 +374,7 @@ class AnalysisContextBuilder:
                           FROM peer_event_timeline
                          WHERE company_id = ANY(:peers)
                            AND event_type = :event_type
-                           AND event_date <= (CURRENT_DATE - :min_days::int)
+                           AND event_date <= (:anchor::date - :min_days::int)
                          ORDER BY event_date DESC
                          LIMIT :limit
                         """
@@ -350,14 +384,13 @@ class AnalysisContextBuilder:
                         "event_type": event_type,
                         "min_days": int(min_days_since),
                         "limit": int(top_k),
+                        "anchor": anchor,
                     },
                 ).fetchall()
         except Exception as exc:  # noqa: BLE001
             log.debug("precedent fallback DB query failed | error=%s", exc)
             return []
-        from datetime import date
-
-        today = date.today()
+        today = anchor
         for row in rows:
             event_date_text = str(row._mapping.get("event_date") or "")
             days_since = _days_since(today=today, iso_date=event_date_text)
@@ -374,8 +407,12 @@ class AnalysisContextBuilder:
         return out
 
     def _search_similar_cards(
-        self, input_bundle: AnalysisInputBundle, *, top_k: int
+        self, input_bundle: AnalysisInputBundle, *, top_k: int, as_of: date | None = None
     ) -> list[RetrievedCard]:
+        # point-in-time(백필) 모드: Qdrant 가 발행일 상한 필터를 보장하지 못하므로
+        # as_of 이후 카드 누출(look-ahead) 방지를 위해 RAG 를 생략한다.
+        if as_of is not None:
+            return []
         if self._qdrant is not None and hasattr(self._qdrant, "search_by_bundle"):
             try:
                 return list(self._qdrant.search_by_bundle(input_bundle, top_k=top_k))[:top_k]
@@ -389,6 +426,7 @@ class AnalysisContextBuilder:
         peers: list[str],
         timeline: list[TimelineEntry],
         financial: dict[str, FinancialSeries],
+        anchor: date,
     ) -> dict[str, EvidenceDensity]:
         out: dict[str, EvidenceDensity] = {}
         timeline_by_peer: dict[str, int] = {}
@@ -406,15 +444,15 @@ class AnalysisContextBuilder:
                             SELECT
                                 (SELECT COUNT(*) FROM raw_article_business_signals
                                   WHERE peer_id = ANY(:aliases)
-                                    AND period_year >= EXTRACT(YEAR FROM CURRENT_DATE) - 1)
+                                    AND period_year >= EXTRACT(YEAR FROM :anchor::date) - 1)
                                 AS signal_count,
                                 (SELECT COUNT(*) FROM raw_article_financial_metrics
                                   WHERE peer_id = ANY(:aliases)
-                                    AND period_year >= EXTRACT(YEAR FROM CURRENT_DATE) - 1)
+                                    AND period_year >= EXTRACT(YEAR FROM :anchor::date) - 1)
                                 AS metric_count
                             """
                         ),
-                        {"aliases": aliases},
+                        {"aliases": aliases, "anchor": anchor},
                     ).fetchone()
                     if rows is None:
                         continue

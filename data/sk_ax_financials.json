@@ -1,12 +1,12 @@
 {
   "company_id": "sk_ax",
-  "company_name_ko": "SK주식회사 (지주) — 잠정 SK AX 비교 기준",
-  "_note": "현재 SK주식회사(corp_code 00181712, 지주사) 전체 매출이 들어있음. SK AX (구 SK C&C, ICT 부문)는 SK Inc 사업보고서의 사업부문별 공시(prose)에 분리 기재. 정확한 비교를 위해선 사업전략팀 내부 IT/AX 부문 매출로 교체 필요.",
-  "_source": "dart_v1_holding_proxy",
+  "company_name_ko": "SK AX",
+  "_note": "SK AX IR 기준 비교용 재무 기준. 지주사 전체 매출 프록시는 Peer 비교에서 제외.",
+  "_source": "sk_ax_ir",
   "_dart_corp_code": "00181712",
   "_fetched_at": "2026-04-27",
-  "_scope_warning": "SK 그룹 지주 전체 매출 (에너지·통신·소재 포함). SK AX 단독 부문 매출이 아님 — 비교 시 큰 격차는 스코프 차이임을 인지할 것.",
-  "_replace_with_real_data": true,
+  "_scope_warning": "SK AX IR 기준 회사/사업부 비교값.",
+  "_replace_with_real_data": false,
   "segments": {
     "ict": {
       "name_ko": "ICT/AX",
@@ -75,9 +75,23 @@
       "dart_rcept_no": "20260318001157",
       "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260318001157",
       "_dart_fs_div": "CFS",
-      "_derivation": "annual - (Q1+Q2+Q3)",
-      "revenue_total_krwbn": 302900,
-      "operating_profit_krwbn": 3917,
+      "_derivation": "SK AX IR",
+      "revenue_total_krwbn": 8500,
+      "operating_profit_krwbn": 680,
+      "operating_margin_pct": 8.0,
+      "segment_revenue_krwbn": null,
+      "ai_revenue_share_pct": null
+    },
+    {
+      "period": "2026Q1",
+      "report_date": "2026-04-30",
+      "dart_rcept_no": null,
+      "dart_url": null,
+      "_dart_fs_div": "CFS",
+      "_derivation": "SK AX IR",
+      "revenue_total_krwbn": 5300,
+      "operating_profit_krwbn": 310,
+      "operating_margin_pct": 5.85,
       "segment_revenue_krwbn": null,
       "ai_revenue_share_pct": null
     }

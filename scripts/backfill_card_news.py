@@ -11,6 +11,7 @@ import argparse
 import logging
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,7 @@ if str(ROOT) not in sys.path:
 
 from src.config.env_loader import load_profile  # noqa: E402
 from src.db.article_store import save_card_news, sync_card_sources_for_cluster  # noqa: E402
-from src.db.postgres import SessionLocal  # noqa: E402
+from src.db.postgres import SessionLocal, reconfigure_from_env  # noqa: E402
 from src.pipeline.analysis_pipeline import AnalysisPipelineRunner  # noqa: E402
 from src.preprocessing.preprocessing import PreprocessingService  # noqa: E402
 
@@ -102,6 +103,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     profile = load_profile(args.env)
+    reconfigure_from_env()
     include_existing = bool(
         args.replace_existing
         or args.update_existing_in_place
@@ -154,6 +156,10 @@ def main() -> None:
         article_ids = [int(value) for value in target["article_ids"]]
         representative_id = int(target["representative_id"])
         existing_card_id = str(target.get("existing_card_id") or "")
+        # point-in-time 백필: 클러스터 최초 발행일을 기준일로 — 과거맥락 클램프(룩어헤드 차단)
+        # + 카드 created_at 을 발행일로 박아 프론트 정렬·타임라인 정합.
+        _min_published = target.get("min_published")
+        as_of = _min_published.date() if isinstance(_min_published, datetime) else _min_published
         try:
             classified = service.classify_clusters(
                 representative_ids=[representative_id],
@@ -192,7 +198,8 @@ def main() -> None:
                 representative_id=representative_id,
                 cluster_article_ids=article_ids,
                 classification=classified[0],
-                save_card=True,
+                as_of=as_of,
+                save_card=not args.update_existing_in_place,
             )
             card = result.get("card_news") or {}
             if card:
@@ -201,7 +208,12 @@ def main() -> None:
                 )
                 validation_pass = bool(card.get("validation_pass", validation.get("pass", False)))
                 title = str(card.get("title") or "")
-                if not validation_pass and _is_problematic_generated_title(title):
+                has_displayable_implication = _has_displayable_implication(card)
+                if (
+                    not validation_pass
+                    and _is_problematic_generated_title(title)
+                    and not has_displayable_implication
+                ):
                     transient_card_id = str(card.get("id") or "")
                     deleted = _mark_card_deleted(transient_card_id) if transient_card_id else 0
                     skipped += 1
@@ -218,7 +230,11 @@ def main() -> None:
                         deleted,
                     )
                     continue
-                if not args.include_financial_like and _is_problematic_generated_title(title):
+                if (
+                    not args.include_financial_like
+                    and _is_problematic_generated_title(title)
+                    and not has_displayable_implication
+                ):
                     transient_card_id = str(card.get("id") or "")
                     deleted = _mark_card_deleted(transient_card_id) if transient_card_id else 0
                     if args.update_existing_in_place and existing_card_id:
@@ -240,12 +256,30 @@ def main() -> None:
                 saved_card_id = str(result.get("saved_card_id") or "")
                 if args.update_existing_in_place:
                     if existing_card_id:
+                        if not _has_direct_frontend_ready(card):
+                            skipped += 1
+                            log.warning(
+                                (
+                                    "card_news backfill skip in-place update | %d/%d "
+                                    "cluster_id=%s card_id=%s reason=no_direct_frontend_ready"
+                                ),
+                                index,
+                                len(targets),
+                                cluster_id,
+                                existing_card_id,
+                            )
+                            continue
                         transient_card_id = str(card.get("id") or "")
                         card["id"] = existing_card_id
                         saved_card_id = save_card_news(card)
                         if saved_card_id:
                             sync_card_sources_for_cluster(cluster_id)
-                        if transient_card_id and transient_card_id != existing_card_id:
+                            _mark_other_active_cards_deleted(cluster_id, keep_card_id=saved_card_id)
+                        if (
+                            transient_card_id
+                            and transient_card_id != existing_card_id
+                            and transient_card_id != saved_card_id
+                        ):
                             _mark_card_deleted(transient_card_id)
                         if saved_card_id:
                             created += 1
@@ -554,13 +588,13 @@ def _load_targets(
                       )
                     GROUP BY ra.cluster_id
                 )
-                SELECT cluster_id, article_ids, titles, representative_id
+                SELECT cluster_id, article_ids, titles, representative_id, min_published
                      , (
                           SELECT cn.id
                           FROM card_news cn
                           WHERE cn.status = 'ACTIVE'
                             AND cn.cluster_id = cluster_rows.cluster_id
-                          ORDER BY cn.created_at DESC
+                          ORDER BY cn.created_at ASC
                           LIMIT 1
                        ) AS existing_card_id
                 FROM cluster_rows
@@ -631,6 +665,62 @@ def _is_problematic_generated_title(title: str) -> bool:
     return _is_financial_like_text(stripped)
 
 
+def _card_id_date_key(card_id: str) -> str:
+    match = re.match(r"^CN-(\d{8})-", str(card_id or ""))
+    return match.group(1) if match else ""
+
+
+def _has_displayable_implication(card: dict[str, Any]) -> bool:
+    implication = card.get("implication")
+    if not isinstance(implication, dict):
+        return False
+    frontend = implication.get("frontend")
+    if not isinstance(frontend, dict):
+        return False
+    key_items = _display_item_list(frontend.get("key_implication_items")) or _display_item_list(
+        frontend.get("key_implication_blocks")
+    )
+    action_items = _display_item_list(frontend.get("suggested_action_items")) or _display_item_list(
+        frontend.get("response_direction_blocks")
+    )
+    return bool(key_items and action_items)
+
+
+def _has_direct_frontend_ready(card: dict[str, Any]) -> bool:
+    implication = card.get("implication")
+    if not isinstance(implication, dict):
+        return False
+    ready = implication.get("frontend_ready")
+    if not isinstance(ready, dict):
+        return False
+    source = str(ready.get("source") or "").strip()
+    if source not in {"llm_direct", "frontend_repair_direct"}:
+        return False
+    key = ready.get("key_implication")
+    action = ready.get("suggested_action")
+    if not isinstance(key, dict) or not isinstance(action, dict):
+        return False
+    return all(
+        str(block.get(field) or "").strip()
+        for block in (key, action)
+        for field in ("sentence", "evidence_sentence")
+    )
+
+
+def _display_item_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        main = str(item.get("main") or "").strip()
+        detail = str(item.get("detail") or "").strip()
+        if main and main != "데이터 없음" and detail and detail != "데이터 없음":
+            result.append(item)
+    return result
+
+
 def _mark_existing_cards_deleted(cluster_id: int) -> int:
     with SessionLocal() as db:
         result = db.execute(
@@ -655,6 +745,22 @@ def _mark_card_deleted(card_id: str) -> int:
                 WHERE id = :card_id
             """),
             {"card_id": card_id},
+        )
+        db.commit()
+        return int(getattr(result, "rowcount", 0) or 0)
+
+
+def _mark_other_active_cards_deleted(cluster_id: int, *, keep_card_id: str) -> int:
+    with SessionLocal() as db:
+        result = db.execute(
+            text("""
+                UPDATE card_news
+                SET status = 'DELETED'
+                WHERE status = 'ACTIVE'
+                  AND cluster_id = :cluster_id
+                  AND id <> :keep_card_id
+            """),
+            {"cluster_id": cluster_id, "keep_card_id": keep_card_id},
         )
         db.commit()
         return int(getattr(result, "rowcount", 0) or 0)

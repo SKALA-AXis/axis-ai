@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi.testclient import TestClient
 
 from src.api import router as router_module
@@ -158,6 +160,37 @@ def test_list_today_cards_wraps_api_response(monkeypatch):
     assert body["data"]["total"] == 0
 
 
+def test_saved_card_news_item_uses_stored_created_at_as_card_date():
+    item = router_module._saved_card_news_item_from_row(
+        {
+            "id": "CN-20260612-48480",
+            "company": "lg_cns",
+            "peer_company_id": "lg_cns",
+            "cluster_id": 48480,
+            "title": "LG CNS, AI 에이전트 및 로봇 플랫폼 통합 추진",
+            "summary_lines": ["요약"],
+            "event_type": "tech",
+            "importance": "medium",
+            "importance_score": 0.7,
+            "implication": {
+                "frontend": {"why_important": "시사점", "recommended_actions": ["대응"]}
+            },
+            "sources": [],
+            "validation_pass": True,
+            "validation_sc_score": 0.8,
+            "primary_keyword_category": "ax",
+            "source_raw_article_ids": [48480],
+            "source_articles": [],
+            "image_assets": [],
+            "created_at": datetime(2026, 6, 12, 6, 11, 37, tzinfo=UTC),
+        }
+    )
+
+    assert item["published_date"] == "2026-06-12"
+    assert item["created_at"] == "2026-06-12T06:11:37+00:00"
+    assert item["display_sections"][1]["items"] == ["시사점"]
+
+
 # ------------------------------------------------------------------- search
 
 
@@ -210,6 +243,7 @@ def test_chat_pdf_rejects_invalid_base64():
         json={"request": {"message": "분석해줘"}, "file_name": "a.pdf", "pdf_base64": "!!!"},
     )
     assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "ASSISTANT_PDF_INVALID_BASE64"
 
 
 # ----------------------------------------------------------------- insights
@@ -224,6 +258,54 @@ def test_today_insight_generate_happy_path(monkeypatch):
     response = client.post("/today-insight/generate", json={})
 
     assert response.status_code == 200
+
+
+def test_today_insight_status_placeholder_returns_200(monkeypatch):
+    """신호·카드가 없는 조용한 날의 status placeholder 는 502 가 아니라 200 으로 내린다.
+
+    대시보드가 "오늘 중요한 뉴스 없음" 을 표시하고 평일 사전생성 cron 도 죽지 않게 하는
+    근본 수정의 회귀 가드.
+    """
+    monkeypatch.setattr(
+        "src.agents.today_insight_agent.TodayInsightAgent",
+        _fake_async_agent(
+            "generate",
+            {
+                "provenance": {
+                    "mode": "deterministic_fallback",
+                    "result_kind": "no_current_signals",
+                    "is_status_placeholder": True,
+                },
+                "warning": "today insight source data unavailable",
+            },
+        ),
+    )
+
+    response = client.post("/today-insight/generate", json={})
+
+    assert response.status_code == 200
+
+
+def test_today_insight_llm_failure_still_maps_to_502(monkeypatch):
+    """LLM 실패(generated_fallback)는 placeholder 가 아니므로 502 가시성을 유지한다."""
+    monkeypatch.setattr(
+        "src.agents.today_insight_agent.TodayInsightAgent",
+        _fake_async_agent(
+            "generate",
+            {
+                "provenance": {
+                    "mode": "deterministic_fallback",
+                    "result_kind": "generated_fallback",
+                    "is_status_placeholder": False,
+                },
+                "warning": "LLM generation failed: RuntimeError",
+            },
+        ),
+    )
+
+    response = client.post("/today-insight/generate", json={})
+
+    assert response.status_code == 502
 
 
 def test_insight_generate_happy_path(monkeypatch):
