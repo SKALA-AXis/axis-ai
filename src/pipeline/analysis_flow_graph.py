@@ -38,7 +38,7 @@ from langgraph.types import RetryPolicy
 from src.agents.implication_agent import ImplicationAgent
 from src.agents.integration_agent import IntegrationAgent
 from src.agents.strategic_analyzer import StrategicAnalyzer
-from src.agents.strategic_insight_agent import StrategicInsightAgent
+from src.agents.strategic_insight_agent import StrategicInsightAgent, _is_valid_integrated_issue
 from src.analysis.implication import ImplicationGenerator
 from src.analysis.models import (
     AnalysisContext,
@@ -407,6 +407,15 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         pkg = state.get("analysis_package")
         if pkg is None:
             return cast(SupervisorState, {**state, "card_news_id": None})
+        integrated = state.get("integrated_issue") or {}
+        if integrated.get("is_valid_summary") is False and not _is_valid_integrated_issue(
+            integrated
+        ):
+            log.info(
+                "card_writer skip | bundle=%s reason=invalid_summary",
+                state["input_bundle"].bundle_id,
+            )
+            return cast(SupervisorState, {**state, "card_news_id": None, "card_news_payload": {}})
         card = deps.card_news_composer.generate_from_analysis_package(
             pkg,
             classification=state.get("classification") or {},
@@ -418,7 +427,6 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
         # 채우도록 보강. 카드 생성 단계의 책임을 명확히 한다.
         card.setdefault("card_schema_version", "v2")
         bundle = state["input_bundle"]
-        integrated = state.get("integrated_issue") or {}
         # peer_company_id FK — main_company (integrated) > input_bundle.companies[0].
         if not card.get("peer_company_id"):
             main_company = str(integrated.get("main_company") or "").strip()

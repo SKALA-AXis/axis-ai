@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Iterable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -931,12 +932,30 @@ async def chat_pdf(request: ChatPdfRequest) -> ChatTurnResponse:
     try:
         pdf_bytes = base64.b64decode(request.pdf_base64, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="pdf_base64 is not valid base64") from exc
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "ASSISTANT_PDF_INVALID_BASE64",
+                "message": "pdf_base64 is not valid base64",
+            },
+        ) from exc
 
     if len(pdf_bytes) > _CHAT_PDF_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="PDF file is too large")
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "code": "ASSISTANT_PDF_FILE_TOO_LARGE",
+                "message": "PDF file is too large",
+            },
+        )
     if not _looks_like_pdf(request.file_name, request.content_type, pdf_bytes):
-        raise HTTPException(status_code=400, detail="Only PDF attachments are supported")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "ASSISTANT_PDF_UNSUPPORTED_TYPE",
+                "message": "Only PDF attachments are supported",
+            },
+        )
 
     from src.crawler.parsers.pdf_payload import extract_pdf_payload
 
@@ -1719,7 +1738,11 @@ def _check_qdrant() -> bool:
 
 
 def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
-    """DB 대표 클러스터를 요약·분석·카드뉴스 composer 흐름으로 변환한다."""
+    """저장된 카드뉴스를 우선 반환하고, 없을 때만 즉석 생성 경로를 사용한다."""
+    saved_cards = _load_saved_card_news_items(limit=limit, today_only=today_only)
+    if saved_cards:
+        return saved_cards[:limit]
+
     from src.agents.analysis_graph_runner import AnalysisGraphRunner
     from src.composers.card_news_composer import CardNewsComposer
     from src.config.company_tiers import SELF_COMPANY_IDS
@@ -1782,6 +1805,235 @@ def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
             break
 
     return cards
+
+
+def _load_saved_card_news_items(limit: int, today_only: bool) -> list[dict[str, Any]]:
+    from sqlalchemy import text
+
+    from src.db.postgres import SessionLocal
+
+    today_clause = ""
+    params: dict[str, Any] = {"limit": max(1, limit)}
+    if today_only:
+        today_clause = "AND created_at >= :window_start"
+        params["window_start"] = datetime.now(UTC) - timedelta(hours=24)
+
+    query = text(f"""
+        WITH active_cards AS (
+            SELECT
+                id, company, peer_company_id, cluster_id, title, summary_lines,
+                event_type, importance, importance_score, implication, sources,
+                validation_pass, validation_sc_score, primary_keyword_category,
+                source_raw_article_ids, source_articles, image_assets, created_at,
+                ROW_NUMBER() OVER (
+                    PARTITION BY cluster_id
+                    ORDER BY created_at ASC, id ASC
+                ) AS rn
+            FROM card_news
+            WHERE COALESCE(status, 'ACTIVE') = 'ACTIVE'
+              {today_clause}
+        )
+        SELECT *
+        FROM active_cards
+        WHERE rn = 1
+        ORDER BY created_at DESC, id DESC
+        LIMIT :limit
+    """)
+    try:
+        with SessionLocal() as db:
+            rows = db.execute(query, params).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("저장 카드뉴스 조회 실패, 즉석 생성 경로로 대체 | error=%s", exc)
+        return []
+    return [_saved_card_news_item_from_row(dict(row)) for row in rows]
+
+
+def _saved_card_news_item_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    created_at = row.get("created_at")
+    published_date = _card_news_date_string(created_at)
+    sources = _json_list(row.get("sources"))
+    source_articles = _json_list(row.get("source_articles"))
+    image_assets = _json_list(row.get("image_assets"))
+    implication = _json_dict(row.get("implication"))
+    frontend = _json_dict(implication.get("frontend"))
+    summary_lines = _string_list(row.get("summary_lines"))
+    insight_items = _frontend_text_items(
+        frontend,
+        ("key_implications", "peer_implications"),
+        ("why_important", "potential_impact"),
+    )
+    action_items = _frontend_text_items(
+        frontend,
+        ("suggested_actions", "response_directions", "recommended_actions"),
+        ("opportunities",),
+    )
+    cover_image = _cover_image_url(image_assets, sources, source_articles)
+    peer_id = row.get("peer_company_id") or row.get("company")
+    return {
+        "id": row.get("id"),
+        "company": row.get("company"),
+        "peer_id": peer_id,
+        "cluster_id": row.get("cluster_id"),
+        "title": row.get("title"),
+        "summary_lines": summary_lines,
+        "event_type": row.get("event_type") or "tech",
+        "sector": row.get("primary_keyword_category") or "other",
+        "category_label": str(row.get("primary_keyword_category") or "AX").upper(),
+        "date": published_date,
+        "display_date": published_date,
+        "published_date": published_date,
+        "created_at": _iso_datetime(created_at),
+        "importance": row.get("importance") or "low",
+        "importance_score": row.get("importance_score") or 0.0,
+        "exposure_band": row.get("importance") or "low",
+        "exposure_score": row.get("importance_score") or 0.0,
+        "implication": implication,
+        "frontend_implication": frontend,
+        "sources": sources,
+        "source_articles": source_articles,
+        "source_raw_article_ids": list(row.get("source_raw_article_ids") or []),
+        "source_count": len(sources) or len(source_articles),
+        "image_assets": image_assets,
+        "display_sections": [
+            {"type": "summary", "title": "요약", "items": summary_lines},
+            {
+                "type": "insight",
+                "title": "시사점",
+                "items": insight_items,
+                "structured_items": _structured_display_items(insight_items),
+            },
+            {
+                "type": "action",
+                "title": "대응방안",
+                "items": action_items,
+                "structured_items": _structured_display_items(action_items),
+            },
+        ],
+        "display": {
+            "theme": "default",
+            "background_asset_url": cover_image,
+            "image_url": cover_image,
+        },
+        "is_human_reviewed": False,
+        "is_bookmarked": False,
+        "bookmark_count": 0,
+        "share_count": 0,
+        "validation_pass": bool(row.get("validation_pass")),
+        "validation_sc_score": row.get("validation_sc_score") or 0.0,
+    }
+
+
+def _card_news_date_string(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.astimezone(KST).date().isoformat()
+    text_value = str(value or "").strip()
+    if not text_value:
+        return datetime.now(KST).date().isoformat()
+    try:
+        normalized = text_value.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized).astimezone(KST).date().isoformat()
+    except ValueError:
+        return text_value[:10]
+
+
+def _iso_datetime(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat()
+    return str(value or "")
+
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, tuple):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _frontend_text_items(
+    frontend: Mapping[str, Any],
+    primary_keys: tuple[str, ...],
+    fallback_keys: tuple[str, ...],
+) -> list[str]:
+    for key in primary_keys:
+        items = _string_list(frontend.get(key))
+        if items:
+            return items
+    for key in fallback_keys:
+        items = _string_list(frontend.get(key))
+        if items:
+            return items
+    return []
+
+
+def _structured_display_items(items: list[str]) -> list[dict[str, str]]:
+    structured: list[dict[str, str]] = []
+    for item in items:
+        text = str(item).strip()
+        if not text:
+            continue
+        conclusion, evidence = _split_labeled_display_text(text)
+        structured.append({"main": conclusion or text, "detail": evidence})
+    return structured
+
+
+def _split_labeled_display_text(value: str) -> tuple[str, str]:
+    text_value = re.sub(r"\s+", " ", value).strip()
+    text_value = re.sub(r"^핵심\s*(시사점|대응)\s*[:：]\s*", "", text_value)
+    if "근거/설명:" in text_value:
+        main, detail = text_value.split("근거/설명:", 1)
+        return main.strip(), detail.strip()
+    return text_value, ""
+
+
+def _cover_image_url(
+    image_assets: list[Any],
+    sources: list[Any],
+    source_articles: list[Any],
+) -> str:
+    for collection in (image_assets, sources, source_articles):
+        for item in collection:
+            if not isinstance(item, Mapping):
+                continue
+            url = str(item.get("url") or "").strip()
+            if item.get("type") == "image" and url:
+                return url
+            image_url = str(item.get("image_url") or "").strip()
+            if image_url:
+                return image_url
+            image_urls = item.get("image_urls")
+            if isinstance(image_urls, list):
+                for candidate in image_urls:
+                    candidate_text = str(candidate or "").strip()
+                    if candidate_text:
+                        return candidate_text
+    return ""
 
 
 def _first_company(value: object) -> str:

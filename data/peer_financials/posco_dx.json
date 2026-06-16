@@ -96,10 +96,26 @@
       "dart_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260417000431",
       "_dart_fs_div": "CFS",
       "_derivation": "annual - (Q1+Q2+Q3)",
-      "revenue_total_krwbn": 2608,
-      "operating_profit_krwbn": -13,
+      "revenue_total_krwbn": 2608.15,
+      "operating_profit_krwbn": -12.17,
+      "operating_margin_pct": -0.5,
       "segment_revenue_krwbn": null,
       "_segment_note": "DART 정형 데이터에 부문별 매출 없음. 사업보고서 PDF 파싱 W5 작업.",
+      "ai_revenue_share_pct": null,
+      "_ai_share_note": "공식 공시 미존재 — IR 자료 또는 추정치 입력 필요."
+    },
+    {
+      "period": "2026Q1",
+      "report_date": "2026-04-27",
+      "dart_rcept_no": null,
+      "dart_url": null,
+      "_dart_fs_div": "CFS",
+      "_derivation": "public preliminary disclosure",
+      "revenue_total_krwbn": 2415.1,
+      "operating_profit_krwbn": 36.58,
+      "operating_margin_pct": 1.5,
+      "segment_revenue_krwbn": null,
+      "_segment_note": "공시 잠정치 기준 회사 전체 매출·영업이익.",
       "ai_revenue_share_pct": null,
       "_ai_share_note": "공식 공시 미존재 — IR 자료 또는 추정치 입력 필요."
     }
