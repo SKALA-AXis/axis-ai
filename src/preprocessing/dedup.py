@@ -708,10 +708,13 @@ def _should_merge_articles(
     similarity: float,
     threshold: float,
 ) -> bool:
-    same_cross_company_title_issue = _same_cross_company_title_issue(left, right)
     if not _within_cluster_time_window(left, right):
         return False
 
+    if not _cluster_scope_compatible(left, right):
+        return False
+
+    same_cross_company_title_issue = _same_cross_company_title_issue(left, right)
     title_llm_decision = _cluster_llm_same_event(left, right, similarity, "title_similarity")
     if title_llm_decision is True:
         return True
@@ -756,6 +759,23 @@ def _should_merge_articles(
 
     if similarity < threshold:
         return False
+
+    return True
+
+
+def _cluster_scope_compatible(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Keep peer-company news and industry-trend news in separate cluster_id scopes."""
+    left_industry_key = _industry_trend_signal_key(left)
+    right_industry_key = _industry_trend_signal_key(right)
+    if left_industry_key or right_industry_key:
+        return bool(left_industry_key and left_industry_key == right_industry_key)
+
+    left_companies = set(_company_key(left))
+    right_companies = set(_company_key(right))
+    if left_companies and right_companies:
+        return bool(left_companies & right_companies) or _same_cross_company_title_issue(
+            left, right
+        )
 
     return True
 

@@ -31,6 +31,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urlunparse
+from zoneinfo import ZoneInfo
 
 import requests
 from bs4 import BeautifulSoup
@@ -50,6 +51,7 @@ from src.crawler.base_crawler import BaseCrawler  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
+KST = ZoneInfo("Asia/Seoul")
 
 
 # =========================================================
@@ -220,7 +222,10 @@ def parse_date_to_datetime(text: str | None) -> datetime | None:
             raw = raw.replace("일", "")
             raw = raw.replace(".", "-")
 
-            return date_parser.parse(raw).astimezone()
+            parsed = date_parser.parse(raw)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=KST)
+            return parsed.astimezone(KST)
 
         except Exception:
             return None

@@ -60,8 +60,9 @@ def test_format_articles_uses_rule_based_snippets_and_dedupes_repeated_content(
     assert "content_policy: 원문 전체 content는 LLM에 넣지 않습니다" in text
     assert "article_role: evidence_snippets" in article_101
     assert "content:" not in article_101
-    assert 'evidence_snippets: ["삼성SDS, 생성형 AI 플랫폼 A 출시"]' in article_101
-    assert 'evidence_snippets: ["주요 기능은 업무 자동화다"]' in article_102
+    assert "삼성SDS, 생성형 AI 플랫폼 A 출시" in article_101
+    assert "주요 기능은 업무 자동화다" in article_101
+    assert "주요 기능은 업무 자동화다" not in article_102
     assert "article_role: evidence_snippets" in article_103
     assert "삼성SDS는 플랫폼 A를 금융권 고객 PoC에 적용" in article_103
 

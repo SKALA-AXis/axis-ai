@@ -12,6 +12,7 @@ import os
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
     from langchain_openai import ChatOpenAI
@@ -24,6 +25,7 @@ from src.db.article_store import get_articles_by_ids
 from src.llm import LLMSpec, build_chat_llm
 
 log = logging.getLogger(__name__)
+_DISPLAY_ZONE = ZoneInfo("Asia/Seoul")
 
 _llm: ChatOpenAI | None = None
 _PROMPT_VERSION = "card-news-v1.0"
@@ -3357,13 +3359,37 @@ def _published_date(articles: list[dict[str, Any]], created_at: str) -> str:
 
 def _published_datetime(articles: list[dict[str, Any]], fallback: str) -> str:
     values = [
-        value
-        for value in (_string_or_none(article.get("published_at")) for article in articles)
-        if value
+        parsed
+        for parsed in (
+            _parse_datetime_for_display(article.get("published_at")) for article in articles
+        )
+        if parsed is not None
     ]
     if not values:
-        return fallback
-    return sorted(values)[0]
+        fallback_dt = _parse_datetime_for_display(fallback)
+        return fallback_dt.astimezone(_DISPLAY_ZONE).isoformat() if fallback_dt else fallback
+    earliest = min(values, key=lambda value: value.astimezone(UTC))
+    return earliest.astimezone(_DISPLAY_ZONE).isoformat()
+
+
+def _parse_datetime_for_display(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            return datetime.fromisoformat(text).replace(tzinfo=_DISPLAY_ZONE)
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def _subtitle(analysis: dict[str, Any], classification: dict[str, Any]) -> str:

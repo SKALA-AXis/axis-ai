@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
+from src.config.companies import COMPANY_ALIASES
 from src.config.company_tiers import SELF_COMPANY_IDS, resolve_company_id
 from src.crawler.base import CrawlRunContext, RawArticle
 from src.db.postgres import SessionLocal
@@ -749,6 +750,63 @@ def _iso_or_none(value: Any) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
     return str(value) if value else None
+
+
+def _filter_articles_for_card_company(
+    articles: list[dict[str, Any]],
+    card: dict[str, Any],
+) -> list[dict[str, Any]]:
+    company_id = _card_company_filter_id(card)
+    if not company_id:
+        return articles
+    return [article for article in articles if _article_matches_company(article, company_id)]
+
+
+def _card_company_filter_id(card: dict[str, Any]) -> str:
+    for key in ("peer_company_id", "company", "peer_id"):
+        company_id = resolve_company_id(str(card.get(key) or ""))
+        if company_id and company_id != INDUSTRY_TREND_COMPANY:
+            return company_id
+    return ""
+
+
+def _article_matches_company(article: dict[str, Any], company_id: str) -> bool:
+    if not company_id:
+        return True
+    if company_id in _article_company_ids(article):
+        return True
+    haystack = _company_match_text(
+        f"{article.get('title') or ''} {(article.get('content') or '')[:3000]}"
+    )
+    return any(alias and alias in haystack for alias in _company_match_aliases(company_id))
+
+
+def _article_company_ids(article: dict[str, Any]) -> set[str]:
+    raw_values: list[Any] = []
+    for key in ("company", "matched_companies"):
+        value = _json_or_value(article.get(key), [])
+        if isinstance(value, list):
+            raw_values.extend(value)
+        elif isinstance(value, dict):
+            raw_values.extend(value.keys())
+            raw_values.extend(value.values())
+        elif value:
+            raw_values.append(value)
+    return {resolve_company_id(str(value)) for value in raw_values if str(value or "").strip()}
+
+
+def _company_match_aliases(company_id: str) -> list[str]:
+    values = [company_id, *COMPANY_ALIASES.get(company_id, [])]
+    aliases: list[str] = []
+    for value in values:
+        normalized = _company_match_text(value)
+        if normalized and normalized not in aliases:
+            aliases.append(normalized)
+    return aliases
+
+
+def _company_match_text(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "").lower())
 
 
 def list_card_news_cluster_candidates(
@@ -1753,6 +1811,95 @@ def sync_card_sources_for_cluster(cluster_id: Any) -> int:
         return 0
     try:
         with SessionLocal() as db:
+            cards = [
+                dict(row)
+                for row in db.execute(
+                    text(
+                        """
+                        SELECT id, peer_company_id, company
+                        FROM card_news
+                        WHERE status = 'ACTIVE'
+                          AND cluster_id = :cluster_id
+                        """
+                    ),
+                    {"cluster_id": normalized_cluster_id},
+                )
+                .mappings()
+                .all()
+            ]
+            if not cards:
+                return 0
+
+            articles = [
+                dict(row)
+                for row in db.execute(
+                    text(
+                        """
+                        SELECT id, title, content, url, source_name, publisher, published_at,
+                               collected_at, company, matched_companies
+                        FROM raw_articles
+                        WHERE cluster_id = :cluster_id
+                          AND source_type = 'news'
+                          AND processing_status = 'PROCESSED'
+                          AND relevance_label = 'relevant'
+                        ORDER BY published_at DESC NULLS LAST,
+                                 collected_at DESC NULLS LAST,
+                                 id DESC
+                        """
+                    ),
+                    {"cluster_id": normalized_cluster_id},
+                )
+                .mappings()
+                .all()
+            ]
+            updated = 0
+            for card in cards:
+                scoped_articles = _filter_articles_for_card_company(articles, card)
+                if not scoped_articles:
+                    continue
+                raw_ids = [int(article["id"]) for article in scoped_articles]
+                sources = [
+                    {**_source_dict_from_article(article), "index": idx}
+                    for idx, article in enumerate(scoped_articles, start=1)
+                ]
+                source_articles = [
+                    _source_article_dict_from_article(article) for article in scoped_articles
+                ]
+                result = db.execute(
+                    text(
+                        """
+                        UPDATE card_news
+                        SET source_raw_article_ids = CAST(:raw_ids AS bigint[]),
+                            sources = CAST(:sources AS jsonb),
+                            source_articles = CAST(:source_articles AS jsonb)
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        "id": card["id"],
+                        "raw_ids": raw_ids,
+                        "sources": json.dumps(sources, ensure_ascii=False, default=str),
+                        "source_articles": json.dumps(
+                            source_articles, ensure_ascii=False, default=str
+                        ),
+                    },
+                )
+                updated += int(getattr(result, "rowcount", 0) or 0)
+            db.commit()
+            return updated
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "card_news cluster source sync 실패 | cluster_id=%s error=%s",
+            cluster_id,
+            exc,
+        )
+        return 0
+
+
+def _legacy_sync_card_sources_for_cluster(cluster_id: int) -> int:
+    """Old cluster-wide sync retained for manual debugging, not used in write paths."""
+    try:
+        with SessionLocal() as db:
             result = db.execute(
                 text(
                     """
@@ -1831,16 +1978,12 @@ def sync_card_sources_for_cluster(cluster_id: Any) -> int:
                       AND cn.cluster_id = cs.cluster_id
                     """
                 ),
-                {"cluster_id": normalized_cluster_id},
+                {"cluster_id": cluster_id},
             )
             db.commit()
             return int(getattr(result, "rowcount", 0) or 0)
     except Exception as exc:  # noqa: BLE001
-        log.warning(
-            "card_news cluster source sync 실패 | cluster_id=%s error=%s",
-            cluster_id,
-            exc,
-        )
+        log.warning("legacy card source sync 실패 | cluster_id=%s error=%s", cluster_id, exc)
         return 0
 
 
@@ -2438,7 +2581,8 @@ def merge_card_news_sources_for_cluster(
         with SessionLocal() as db:
             row = db.execute(
                 text("""
-                    SELECT id, sources, source_raw_article_ids, source_articles, importance_score
+                    SELECT id, sources, source_raw_article_ids, source_articles,
+                           importance_score, peer_company_id, company
                     FROM card_news
                     WHERE cluster_id = :cluster_id
                       AND status <> 'DELETED'
@@ -2451,6 +2595,14 @@ def merge_card_news_sources_for_cluster(
                 return None
 
             current = dict(row._mapping)
+            articles = _filter_articles_for_card_company(articles, current)
+            if not articles:
+                log.info(
+                    "기존 카드 출처 병합 skip | card_id=%s cluster_id=%s reason=company_mismatch",
+                    current["id"],
+                    cluster_id,
+                )
+                return None
             existing_sources = _json_or_value(current.get("sources"), [])
             existing_source_articles = _json_or_value(current.get("source_articles"), [])
             existing_ids = [
@@ -3034,6 +3186,74 @@ def fetch_global_trend_inputs(window_days: int = 30) -> list[dict[str, Any]]:
     return items
 
 
+def fetch_domestic_trend_representative_inputs(
+    window_days: int = 30,
+    limit: int = 120,
+) -> list[dict[str, Any]]:
+    """ACTIVE card_news 대표 원문을 IT trend 국내 참고 맥락으로 반환.
+
+    글로벌 트렌드 감지는 글로벌 뉴스룸/리서치로 유지하고, 국내 카드뉴스는
+    전략/시사점 에이전트가 국내 동향을 참고할 수 있는 별도 evidence layer 로 둔다.
+    각 ACTIVE 카드뉴스 row 에서 primary_raw_article_id 또는 source_raw_article_ids 첫 항목
+    하나만 가져와 대표 클러스터별 중복 입력을 줄인다.
+    """
+    with SessionLocal() as db:
+        rows = (
+            db.execute(
+                text(
+                    """
+                SELECT
+                    cn.id AS card_news_id,
+                    cn.cluster_id,
+                    cn.title AS card_title,
+                    cn.summary_lines,
+                    cn.company AS card_company,
+                    cn.peer_company_id,
+                    cn.primary_keyword_category,
+                    cn.keyword_categories,
+                    cn.keywords,
+                    cn.created_at AS card_created_at,
+                    cn.primary_raw_article_id,
+                    cn.source_raw_article_ids,
+                    ra.id AS raw_article_id,
+                    ra.source_name,
+                    ra.source_type,
+                    ra.publisher,
+                    ra.title AS raw_title,
+                    ra.content,
+                    ra.url,
+                    ra.published_at,
+                    ra.collected_at,
+                    ra.company AS raw_company,
+                    ra.metadata
+                FROM card_news cn
+                LEFT JOIN raw_articles ra
+                  ON ra.id = COALESCE(cn.primary_raw_article_id, cn.source_raw_article_ids[1])
+                WHERE cn.status = 'ACTIVE'
+                  AND cn.created_at >= NOW() - make_interval(days => :days)
+                ORDER BY cn.created_at DESC NULLS LAST, cn.id DESC
+                LIMIT :limit
+                """
+                ),
+                {"days": window_days, "limit": limit},
+            )
+            .mappings()
+            .all()
+        )
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["id"] = item.get("raw_article_id") or item.get("primary_raw_article_id")
+        item["source_id"] = item["id"]
+        item["source_type"] = "domestic_card_news"
+        item["title"] = item.get("raw_title") or item.get("card_title")
+        item["company"] = item.get("card_company") or item.get("raw_company")
+        item["published_at"] = item.get("published_at") or item.get("card_created_at")
+        items.append(item)
+    return items
+
+
 def _ilike_any_clause(
     col_exprs: Sequence[str],
     terms: Sequence[str],
@@ -3341,12 +3561,24 @@ def fetch_latest_trend_context(within_days: int = 7) -> dict[str, Any]:
             summary = row["summary"] or ""
             if summary:
                 trend_lines.append(summary)
+            domestic_refs = [
+                ref
+                for ref in (payload.get("domestic_representative_issues") or [])
+                if isinstance(ref, dict)
+            ]
+            domestic_ref_ids = [
+                str(ref.get("card_news_id"))
+                for ref in domestic_refs
+                if str(ref.get("card_news_id") or "").strip()
+            ]
             signals.append(
                 {
                     "signal": row["keyword"],
                     "intensity": payload.get("intensity"),
                     "leading_companies": payload.get("leading_companies", []),
                     "source_ids": [row["source_analysis_id"]] if row["source_analysis_id"] else [],
+                    "domestic_reference_ids": domestic_ref_ids,
+                    "domestic_reference_count": len(domestic_refs),
                 }
             )
             sources.append(
@@ -3355,15 +3587,40 @@ def fetch_latest_trend_context(within_days: int = 7) -> dict[str, Any]:
                     "title": row["keyword"],
                 }
             )
+            for ref in domestic_refs[:5]:
+                card_id = str(ref.get("card_news_id") or "").strip()
+                if not card_id:
+                    continue
+                sources.append(
+                    {
+                        "source_id": card_id,
+                        "title": ref.get("title"),
+                        "source_name": "domestic_card_news",
+                        "url": ref.get("url"),
+                        "published_at": ref.get("published_at"),
+                        "cluster_id": ref.get("cluster_id"),
+                    }
+                )
         latest_date = rows[0]["trend_date"]
+        has_domestic_refs = any(
+            source.get("source_name") == "domestic_card_news" for source in sources
+        )
+        source_groups = ["global_industry_trends"]
+        if has_domestic_refs:
+            source_groups.append("domestic_card_news")
         result = {
             "period": f"last_{within_days}d",
             "trend_summary": " / ".join(trend_lines[:3]),
             "trend_lines": trend_lines,
             "signals": signals,
-            "source_groups": ["global_industry_trends"],
+            "source_groups": source_groups,
             "sources": sources,
-            "reference_issue_ids": [],
+            "reference_issue_ids": [
+                str(source.get("source_id"))
+                for source in sources
+                if source.get("source_name") == "domestic_card_news"
+                and str(source.get("source_id") or "").strip()
+            ],
             "updated_at": latest_date.isoformat()
             if hasattr(latest_date, "isoformat")
             else str(latest_date),
