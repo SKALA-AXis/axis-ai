@@ -1332,6 +1332,40 @@ def _profile_entries_for_linkage(profile: dict[str, Any]) -> list[dict[str, Any]
                         "text": text,
                     }
                 )
+    for overlay in _jsonish_list(profile.get("user_strategy_overlays")):
+        if not isinstance(overlay, dict):
+            continue
+        overlay_title = str(overlay.get("title") or overlay.get("summary") or "").strip()
+        overlay_text = _json_dumps(_compact_profile_item(overlay))
+        relevance_terms: list[str] = []
+        relevance_terms.extend(_string_list(overlay.get("related_domains"), max_items=12))
+        for context in _jsonish_list(overlay.get("strategy_context"))[:8]:
+            if isinstance(context, dict):
+                relevance_terms.extend(_string_list(context.get("relevance_terms"), max_items=8))
+                topic = str(context.get("topic") or "").strip()
+                if topic:
+                    relevance_terms.append(topic)
+        for initiative in _jsonish_list(overlay.get("initiatives"))[:8]:
+            if isinstance(initiative, dict):
+                name = str(initiative.get("name") or "").strip()
+                if name:
+                    relevance_terms.append(name)
+                relevance_terms.extend(_string_list(initiative.get("relevance_terms"), max_items=8))
+        if overlay_text.strip():
+            entries.append(
+                {
+                    "entry_type": "user_strategy_overlay",
+                    "business_line": "",
+                    "business_area": overlay_title,
+                    "name": overlay_title,
+                    "capabilities": list(dict.fromkeys(relevance_terms))[:16],
+                    "products_or_services": [],
+                    "evidence_texts": [],
+                    "source_refs": [],
+                    "relevance_text": " ".join([overlay_title, " ".join(relevance_terms)]),
+                    "text": overlay_text,
+                }
+            )
     return entries
 
 
@@ -2002,6 +2036,7 @@ def _shrink_profile(
         "cautions",
     )
     out: dict[str, Any] = {}
+    user_strategy_overlays = _compact_value(profile.get("user_strategy_overlays"))
     for key in identity_keys:
         if key not in profile:
             continue
@@ -2040,6 +2075,8 @@ def _shrink_profile(
         matched_caps = _string_list(linkage.get("matched_capabilities"), max_items=5)
         if include_linked_profile_body and matched_caps:
             out["machine_matched_capabilities"] = matched_caps
+        if user_strategy_overlays not in ({}, [], "", None):
+            out["user_strategy_overlays"] = user_strategy_overlays
         return out
 
     for key in scalar_keys:
@@ -2082,6 +2119,8 @@ def _shrink_profile(
             compacted = _compact_value(profile[key])
         if compacted not in ({}, [], "", None):
             out[key] = compacted
+    if user_strategy_overlays not in ({}, [], "", None):
+        out["user_strategy_overlays"] = user_strategy_overlays
     return out
 
 

@@ -637,6 +637,7 @@ class StrategicInsightAgent:
         *,
         profile_context: ProfileContext | dict[str, Any] | None = None,
         analysis_context: AnalysisContext | dict[str, Any] | None = None,
+        user_id: str | None = None,
         strict_profile: bool = False,
         require_skax_profile: bool = False,
     ) -> dict[str, Any]:
@@ -657,6 +658,8 @@ class StrategicInsightAgent:
         profile_context = profile_context or _load_profile_context_for_issue(
             integrated_issue=integrated_issue,
             classification=classification,
+            package=package,
+            user_id=user_id,
             strict=strict_profile,
             require_skax_profile=require_skax_profile,
         )
@@ -679,6 +682,7 @@ class StrategicInsightAgent:
         integrated_issue_id: str,
         *,
         save: bool = False,
+        user_id: str | None = None,
         strict_profile: bool = False,
         require_skax_profile: bool = False,
     ) -> dict[str, Any]:
@@ -696,6 +700,7 @@ class StrategicInsightAgent:
         record = _load_integrated_issue_analysis_package(integrated_issue_id)
         result = self.generate_from_analysis_package(
             record["analysis_package"],
+            user_id=user_id,
             strict_profile=strict_profile,
             require_skax_profile=require_skax_profile,
         )
@@ -706,6 +711,7 @@ class StrategicInsightAgent:
         card_news_id: str,
         *,
         save: bool = False,
+        user_id: str | None = None,
         strict_profile: bool = False,
         require_skax_profile: bool = False,
     ) -> dict[str, Any]:
@@ -718,6 +724,7 @@ class StrategicInsightAgent:
         record = _load_card_news_analysis_package(card_news_id)
         result = self.generate_from_analysis_package(
             record["analysis_package"],
+            user_id=user_id,
             strict_profile=strict_profile,
             require_skax_profile=require_skax_profile,
         )
@@ -2402,6 +2409,10 @@ def _load_card_news_analysis_package(card_news_id: str) -> dict[str, Any]:
     payload = _json_dict(row.get("evidence_payload"))
     package = _json_dict(payload.get("analysis_package"))
     if package:
+        metadata = _json_dict(package.get("metadata"))
+        metadata["card_news_id"] = card_id
+        metadata["integrated_issue_id"] = row.get("integrated_issue_id")
+        package["metadata"] = metadata
         return {
             "card_news_id": card_id,
             "integrated_issue_id": row.get("integrated_issue_id"),
@@ -2421,6 +2432,10 @@ def _load_card_news_analysis_package(card_news_id: str) -> dict[str, Any]:
         "integrated_issue": integrated_issue,
         "classification": classification,
         "sources": integrated_issue.get("representative_sources") or [],
+        "metadata": {
+            "card_news_id": card_id,
+            "integrated_issue_id": issue_id,
+        },
     }
     return {
         "card_news_id": card_id,
@@ -2683,6 +2698,8 @@ def _load_profile_context_for_issue(
     *,
     integrated_issue: dict[str, Any],
     classification: dict[str, Any],
+    package: dict[str, Any],
+    user_id: str | None,
     strict: bool,
     require_skax_profile: bool,
 ) -> dict[str, Any]:
@@ -2699,11 +2716,42 @@ def _load_profile_context_for_issue(
                 classification.get("event_type") or integrated_issue.get("cluster_event_type") or ""
             )
             or None,
+            user_id=user_id,
+            issue_scope=_user_strategy_issue_scope(
+                package=package,
+                integrated_issue=integrated_issue,
+                classification=classification,
+            ),
             strict=strict,
             require_skax_profile=require_skax_profile,
         )
         .to_dict()
     )
+
+
+def _user_strategy_issue_scope(
+    *,
+    package: dict[str, Any],
+    integrated_issue: dict[str, Any],
+    classification: dict[str, Any],
+) -> dict[str, Any]:
+    metadata = _json_dict(package.get("metadata"))
+    return {
+        "card_news_id": metadata.get("card_news_id"),
+        "integrated_issue_id": (
+            package.get("integrated_issue_id")
+            or integrated_issue.get("integrated_issue_id")
+            or integrated_issue.get("id")
+        ),
+        "cluster_id": integrated_issue.get("cluster_id"),
+        "headline": integrated_issue.get("headline") or integrated_issue.get("main_issue"),
+        "title": integrated_issue.get("title") or integrated_issue.get("headline"),
+        "event_type": classification.get("event_type")
+        or integrated_issue.get("cluster_event_type"),
+        "main_company": integrated_issue.get("main_company"),
+        "fact_summary": integrated_issue.get("fact_summary"),
+        "consolidated_facts": integrated_issue.get("consolidated_facts"),
+    }
 
 
 def _build_analysis_context_for_issue(
