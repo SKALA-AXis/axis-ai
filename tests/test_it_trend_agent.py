@@ -18,6 +18,8 @@ from src.agents.it_trend_agent import (
     _dedupe_items_by_id,
     _empty_result,
     _extract_keywords_from_rows,
+    _fallback_title,
+    _gate_diverging_on_evidence,
     _is_global_newsroom_row,
     _is_research_row,
     _make_source_analysis_id,
@@ -413,7 +415,9 @@ def test_strategic_note_prompt_injects_evidence_titles_and_korean_directive(monk
                 "alignment_type": "aligned",
                 "peer_mention_count": 3,
                 "global_mention_count": 10,
-                "_evidence_titles": ["삼성SDS, 생성형 AI 운영 플랫폼 출시"],
+                "_evidence": [
+                    {"title": "삼성SDS, 생성형 AI 운영 플랫폼 출시", "event_type": "tech"}
+                ],
                 "strategic_note": "",
             }
         ]
@@ -426,9 +430,11 @@ def test_strategic_note_prompt_injects_evidence_titles_and_korean_directive(monk
 
     # 실제 수집 제목이 프롬프트 근거로 주입됐는가
     assert "삼성SDS, 생성형 AI 운영 플랫폼 출시" in captured["prompt"]
-    # 한국어 강제 + generic 영어 금지 지시가 있는가
+    # event_type 까지 근거로 주입됐는가 (수주/인수/출시 구분용)
+    assert '"event_type"' in captured["prompt"]
+    # 한국어 강제 + 모호 표현 금지 지시가 있는가
     assert "반드시 한국어로" in captured["prompt"]
-    assert "like Amazon and Microsoft" in captured["prompt"]  # 금지 예시로 포함
+    assert "독자적인 방향을 추구" in captured["prompt"]  # 금지 표현으로 명시
     # note 가 채워졌는가
     assert out["agentic ai"][0]["strategic_note"] == "삼성SDS는 운영 플랫폼 동향으로 따라가는 중"
 
@@ -456,7 +462,7 @@ def test_strategic_note_payload_marks_missing_evidence(monkeypatch):
                 "alignment_type": "missing",
                 "peer_mention_count": 0,
                 "global_mention_count": 5,
-                "_evidence_titles": [],
+                "_evidence": [],
                 "strategic_note": "",
             }
         ]
@@ -467,7 +473,28 @@ def test_strategic_note_payload_marks_missing_evidence(monkeypatch):
 
     # 근거 없을 때 추측 금지 규칙이 프롬프트에 명시돼 있는가
     assert "관련 공개 동향 미확인" in captured["prompt"]
-    assert '"evidence_titles": []' in captured["prompt"]
+    assert '"evidence": []' in captured["prompt"]
+
+
+def test_fallback_title_uses_concrete_count_not_intensity_jargon() -> None:
+    # "strong 강도" 같은 영어·jargon 제거, 구체 수치(언급 건수)로 (사용자 리포트)
+    title = _fallback_title("llm", {"mention_count": 18, "intensity": "strong"})
+    assert "강도" not in title
+    assert "strong" not in title.lower()
+    assert "18" in title
+
+
+def test_gate_diverging_downgrades_to_missing_without_evidence() -> None:
+    # 근거(peer 동향) 없는 'diverging' 은 'missing' — 빈도만으로 '다른 방향' 단정 금지
+    assert _gate_diverging_on_evidence("diverging", []) == "missing"
+    # 근거 있으면 'diverging' 유지
+    assert (
+        _gate_diverging_on_evidence("diverging", [{"title": "포스코DX, P-GPT 2.1 출시"}])
+        == "diverging"
+    )
+    # 다른 alignment_type 은 그대로
+    assert _gate_diverging_on_evidence("aligned", []) == "aligned"
+    assert _gate_diverging_on_evidence("missing", []) == "missing"
 
 
 # ──────────────────────────────────────────────────────────────────────────
