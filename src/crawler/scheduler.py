@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -27,6 +28,7 @@ from src.db.crawl_state_store import (
 )
 
 log = logging.getLogger(__name__)
+KST = ZoneInfo("Asia/Seoul")
 
 PEER_ALIASES: dict[str, list[str]] = dict(COMPANY_ALIASES)
 KEYWORD_RUNNER_PATH = Path(__file__).resolve().parents[2] / "keyword.py"
@@ -535,11 +537,12 @@ def _to_raw_article(item: Any) -> RawArticle:
 
 def _parse_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
-        return value
+        return value if value.tzinfo is not None else value.replace(tzinfo=KST)
     if not value:
         return None
     try:
-        return datetime.fromisoformat(str(value))
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=KST)
     except ValueError:
         return None
 

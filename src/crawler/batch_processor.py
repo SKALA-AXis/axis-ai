@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from typing import Any, Protocol
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from src.config.companies import COMPANY_ALIASES, CORP_CODES
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES, GLOBAL_COMPANY_IDS
@@ -23,6 +24,7 @@ from src.db.crawl_state_store import (
 )
 
 log = logging.getLogger(__name__)
+KST = ZoneInfo("Asia/Seoul")
 
 TRACK_A_SOURCES = (
     "naver_news",
@@ -686,13 +688,16 @@ def _to_raw_article(item: object) -> RawArticle:
 
 
 def _parse_datetime(value: object) -> datetime | None:
-    if value is None or isinstance(value, datetime):
-        return value
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=KST)
     if isinstance(value, date):
-        return datetime.combine(value, time.min).astimezone()
+        return datetime.combine(value, time.min).replace(tzinfo=KST)
     if isinstance(value, str):
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=KST)
         except ValueError:
             return None
     return None

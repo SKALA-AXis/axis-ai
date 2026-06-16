@@ -840,6 +840,43 @@ def test_card_news_from_cluster_summary_uses_earliest_source_date(monkeypatch):
     assert card["created_at"] == "2026-06-12T09:00:00+09:00"
 
 
+def test_card_news_from_cluster_summary_uses_kst_source_date(monkeypatch):
+    import src.composers.card_news_composer as composer_module
+
+    monkeypatch.setattr(composer_module, "_now_iso", lambda: "2026-06-16T23:30:00+09:00")
+    monkeypatch.setattr(
+        composer_module,
+        "get_articles_by_ids",
+        lambda article_ids: [
+            {
+                "id": 10,
+                "title": "UTC 자정 경계 기사",
+                "content": "UTC 기준 16일이지만 KST 기준 17일 기사다.",
+                "source_name": "naver_news",
+                "url": "https://example.com/10",
+                "published_at": "2026-06-16T15:10:00+00:00",
+            }
+        ],
+    )
+
+    card = CardNewsComposer().generate_from_cluster(
+        cluster_id=10,
+        representative_id=10,
+        company="lg_cns",
+        classification={"event_type": "tech_release", "sector": "ax"},
+        summary={
+            "is_valid_summary": True,
+            "main_company": "lg_cns",
+            "headline": "LG CNS, UTC 경계 기사",
+            "fact_summary": ["LG CNS 관련 기사가 발행됐다."],
+        },
+    )
+
+    assert card["id"] == "CN-20260617-0010"
+    assert card["published_date"] == "2026-06-17"
+    assert card["created_at"] == "2026-06-17T00:10:00+09:00"
+
+
 def test_financial_only_card_title_adds_business_context():
     card = CardNewsComposer().generate(
         summary={

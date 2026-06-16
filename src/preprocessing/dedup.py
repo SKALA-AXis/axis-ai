@@ -872,10 +872,6 @@ def _event_prefilter_key(article: dict[str, Any]) -> str:
     if industry_key:
         return industry_key
 
-    project_key = _project_signal_key(article)
-    if project_key:
-        return project_key
-
     bucket = _event_bucket(article)
     if bucket == "contract_deal" or (
         bucket == "market_reaction" and _has_contract_markers(_issue_text(article))
@@ -893,10 +889,6 @@ def _event_split_key(article: dict[str, Any]) -> str:
     if industry_key:
         return industry_key
 
-    project_key = _project_signal_key(article)
-    if project_key:
-        return project_key
-
     bucket = _event_bucket(article)
     if bucket == "contract_deal":
         return _event_signature(article)
@@ -910,7 +902,7 @@ def _event_split_key(article: dict[str, Any]) -> str:
 
 
 def _uses_cross_day_prefilter(article: dict[str, Any]) -> bool:
-    if _industry_trend_signal_key(article) or _project_signal_key(article):
+    if _industry_trend_signal_key(article):
         return True
 
     bucket = _event_bucket(article)
@@ -928,10 +920,6 @@ def _event_signature(article: dict[str, Any]) -> str:
     bucket = _event_bucket(article)
     title = _compact_text(str(article.get("title") or ""))
     text = _issue_text(article)
-
-    project_key = _project_signal_key(article)
-    if project_key:
-        return f"{bucket}:{project_key}"
 
     if bucket == "market_reaction":
         if _has_contract_markers(text):
@@ -1717,43 +1705,6 @@ def _industry_trend_signal_key(article: dict[str, Any]) -> str:
 
     if "내부ai" in text and "외부ai" in text and "전환" in text:
         return "industry:enterprise_ai_adoption_shift"
-
-    return ""
-
-
-def _project_signal_key(article: dict[str, Any]) -> str:
-    """Title-only key for repeated coverage of the same concrete project.
-
-    This key is intentionally narrower than a topic key: it only fires when
-    multiple named anchors appear in the title, and company/industry scope plus
-    the published-date window are still checked elsewhere before merging.
-    """
-    title = _compact_text(str(article.get("title") or ""))
-    if not title:
-        return ""
-
-    if "구미" in title and "ai데이터센터" in title:
-        return "project:gumi_ai_datacenter"
-
-    if "국가ai컴퓨팅센터" in title or "국가인공지능컴퓨팅센터" in title:
-        if any(term in title for term in ("본격시동", "현장방문", "착공")):
-            return "project:national_ai_computing_center_kickoff"
-        if any(term in title for term in ("우선협상", "우협대상", "우선협상대상")):
-            return "project:national_ai_computing_center_preferred_bidder"
-
-    if "ces" in title and any(term in title for term in ("ai에이전트", "ai비서", "일하는방식")):
-        return "project:ces_ai_agent_workstyle"
-
-    if ("chatgpt" in title or "챗gpt" in title) and "엔터프라이즈" in title:
-        return "project:chatgpt_enterprise_supply"
-
-    if "5대" in title and "사이버보안위협" in title:
-        return "project:cyber_security_threats"
-
-    if "포스코dx" in title and any(
-        term in title for term in ("aw2026", "스마트공장", "자동화산업전")
-    ):
-        return "project:posco_dx_aw_smart_factory"
 
     return ""
 
