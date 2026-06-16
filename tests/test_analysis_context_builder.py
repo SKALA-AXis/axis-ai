@@ -128,6 +128,29 @@ def test_builder_returns_empty_context_when_db_unavailable():
     assert ctx.available_layer_count() == 0
 
 
+def test_builder_accepts_as_of_for_point_in_time_backfill():
+    """as_of(point-in-time 백필 기준일) 가 모든 query 메서드로 무사히 전달되는지 — 시그니처 회귀.
+
+    SessionLocal 을 patch 해 DB 없이도 실행. anchor 를 한 메서드라도 빠뜨리면 호출 시
+    TypeError 로 드러난다. (SQL 클램프 자체의 정확성은 live-DB smoke 로 별도 검증.)
+    """
+    from datetime import date
+
+    builder = AnalysisContextBuilder()
+    with patch(
+        "src.services.analysis_context_builder.SessionLocal",
+        side_effect=RuntimeError("db unavailable"),
+    ):
+        ctx = builder.build(
+            input_bundle=_stub_bundle(),
+            profile_context=None,
+            integrated_issue={"main_company": "samsung_sds"},
+            as_of=date(2026, 1, 15),
+        )
+    assert isinstance(ctx, AnalysisContext)
+    assert ctx.is_empty()
+
+
 def test_available_layer_count_consistent_with_provenance():
     ctx = _heavy_context()
     # compression 전엔 5 layers —
