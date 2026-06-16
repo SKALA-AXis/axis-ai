@@ -29,7 +29,7 @@ import operator
 import re
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, Any, Callable, TypedDict, cast
 
 from langgraph.graph import END, StateGraph
@@ -79,6 +79,8 @@ class SupervisorState(TypedDict, total=False):
     # inputs
     input_bundle: AnalysisInputBundle
     classification: dict[str, Any]
+    # 백필/재생성 point-in-time 기준일(=기사 발행일). 없으면 live(=오늘) 동작.
+    as_of: date | None
     # intermediate
     profile_context: ProfileContext | None
     analysis_context: AnalysisContext | None
@@ -288,6 +290,7 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
             input_bundle=bundle,
             profile_context=profile_context,
             integrated_issue=integrated,
+            as_of=state.get("as_of"),
         )
         return cast(SupervisorState, {**state, "analysis_context": ctx})
 
@@ -480,6 +483,13 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
                 existing_eval = {}
             existing_eval["rule_based"] = validation.metrics.to_dict()
             card["evaluation_payload"] = existing_eval
+
+        # 백필/재생성 point-in-time 모드: 카드 생성 시각이 아니라 기사 발행일(as_of)을
+        # created_at 으로 박아 프론트 정렬·타임라인이 실제 뉴스 날짜를 따르게 한다.
+        # (live 파이프라인은 as_of 없음 → save_card_news 가 NOW() 사용.)
+        as_of = state.get("as_of")
+        if as_of is not None and not card.get("created_at"):
+            card["created_at"] = as_of.isoformat()
 
         card_id = save_card_news(card)
         return cast(
