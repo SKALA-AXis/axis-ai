@@ -11,6 +11,7 @@ import argparse
 import logging
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -155,6 +156,10 @@ def main() -> None:
         article_ids = [int(value) for value in target["article_ids"]]
         representative_id = int(target["representative_id"])
         existing_card_id = str(target.get("existing_card_id") or "")
+        # point-in-time 백필: 클러스터 최초 발행일을 기준일로 — 과거맥락 클램프(룩어헤드 차단)
+        # + 카드 created_at 을 발행일로 박아 프론트 정렬·타임라인 정합.
+        _min_published = target.get("min_published")
+        as_of = _min_published.date() if isinstance(_min_published, datetime) else _min_published
         try:
             classified = service.classify_clusters(
                 representative_ids=[representative_id],
@@ -193,6 +198,7 @@ def main() -> None:
                 representative_id=representative_id,
                 cluster_article_ids=article_ids,
                 classification=classified[0],
+                as_of=as_of,
                 save_card=not args.update_existing_in_place,
             )
             card = result.get("card_news") or {}
@@ -582,7 +588,7 @@ def _load_targets(
                       )
                     GROUP BY ra.cluster_id
                 )
-                SELECT cluster_id, article_ids, titles, representative_id
+                SELECT cluster_id, article_ids, titles, representative_id, min_published
                      , (
                           SELECT cn.id
                           FROM card_news cn
