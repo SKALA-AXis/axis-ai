@@ -773,7 +773,9 @@ def _cluster_scope_compatible(left: dict[str, Any], right: dict[str, Any]) -> bo
     left_companies = set(_company_key(left))
     right_companies = set(_company_key(right))
     if left_companies and right_companies:
-        return bool(left_companies & right_companies)
+        return bool(left_companies & right_companies) or _same_cross_company_title_issue(
+            left, right
+        )
 
     return True
 
