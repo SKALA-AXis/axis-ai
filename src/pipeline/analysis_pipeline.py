@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date
 from typing import Any
 
 from sqlalchemy import text
@@ -44,6 +45,7 @@ class AnalysisPipelineRunner:
         representative_id: int | None = None,
         cluster_article_ids: list[int] | None = None,
         classification: dict[str, Any] | None = None,
+        as_of: date | None = None,
         save_card: bool = False,
     ) -> dict[str, Any]:
         """뉴스 클러스터 하나를 분석하고 카드뉴스 payload를 만든다."""
@@ -70,6 +72,7 @@ class AnalysisPipelineRunner:
             articles=articles,
             cluster_article_ids=article_ids,
             classification=classification,
+            as_of=as_of,
             save_card=save_card,
         )
 
@@ -78,6 +81,7 @@ class AnalysisPipelineRunner:
         *,
         raw_article_id: int,
         classification: dict[str, Any] | None = None,
+        as_of: date | None = None,
         save_card: bool = False,
     ) -> dict[str, Any]:
         """단일 문서/기사 raw_article_id를 분석 대상으로 실행한다."""
@@ -96,6 +100,7 @@ class AnalysisPipelineRunner:
             articles=articles,
             cluster_article_ids=[raw_article_id],
             classification=classification,
+            as_of=as_of,
             save_card=save_card,
         )
 
@@ -107,6 +112,7 @@ class AnalysisPipelineRunner:
         articles: list[dict[str, Any]],
         cluster_article_ids: list[int] | None = None,
         classification: dict[str, Any] | None = None,
+        as_of: date | None = None,
         save_card: bool = False,
     ) -> dict[str, Any]:
         """W2-1: analysis flow graph 를 invoke 하여 카드까지 한 번에 처리.
@@ -139,6 +145,7 @@ class AnalysisPipelineRunner:
         state = run_supervisor(
             input_bundle=input_bundle,
             classification=effective_classification,
+            as_of=as_of,
         )
         analysis_package_obj = state.get("analysis_package")
         analysis_package = (
