@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date
 from typing import Any
 
 from sqlalchemy import text
@@ -34,6 +35,7 @@ class ProfileContextLoader:
         sectors: list[str] | None = None,
         event_type: str | None = None,
         lookback_days: int = 30,
+        as_of: date | None = None,
         peer_profile_context: dict[str, Any] | None = None,
         skax_profile_context: dict[str, Any] | None = None,
         strict: bool = False,
@@ -80,9 +82,11 @@ class ProfileContextLoader:
             profile.setdefault("peer_id", peer_id)
             profile.setdefault("company_id", peer_id)
             profile["recent_signals"] = _load_recent_business_signals(
-                peer_id=peer_id, days=lookback_days, limit=3
+                peer_id=peer_id, days=lookback_days, limit=3, as_of=as_of
             )
-            profile["recent_financial"] = _load_latest_financial_metrics(peer_id=peer_id)
+            profile["recent_financial"] = _load_latest_financial_metrics(
+                peer_id=peer_id, as_of=as_of
+            )
             if event_type:
                 profile["event_type_focus"] = event_type
             peer_profiles[peer_id] = profile
@@ -184,13 +188,25 @@ def _safe_error(exc: Exception) -> str:
     return f"{type(exc).__name__}: {text[:300]}"
 
 
-def _load_recent_business_signals(*, peer_id: str, days: int, limit: int) -> list[dict[str, Any]]:
+def _load_recent_business_signals(
+    *, peer_id: str, days: int, limit: int, as_of: date | None = None
+) -> list[dict[str, Any]]:
     aliases = expand_peer_aliases(peer_id)
+    # point-in-time(백필): as_of 시점 이후 신호 차단 + 그 이전 N일 윈도우.
+    # as_of=None 이면 기존 now-relative 동작 (라이브 무변경).
+    if as_of is None:
+        time_filter = "AND created_at >= NOW() - (:days || ' days')::interval"
+        params: dict[str, Any] = {"aliases": aliases, "days": int(days), "limit": int(limit)}
+    else:
+        time_filter = (
+            "AND created_at >= (:as_of::date - :days::int) AND created_at < (:as_of::date + 1)"
+        )
+        params = {"aliases": aliases, "days": int(days), "limit": int(limit), "as_of": as_of}
     try:
         with SessionLocal() as db:
             rows = db.execute(
                 text(
-                    """
+                    f"""
                     SELECT id,
                            peer_id,
                            business_area,
@@ -204,12 +220,12 @@ def _load_recent_business_signals(*, peer_id: str, days: int, limit: int) -> lis
                            created_at
                       FROM raw_article_business_signals
                      WHERE peer_id = ANY(:aliases)
-                       AND created_at >= NOW() - (:days || ' days')::interval
+                       {time_filter}
                      ORDER BY confidence DESC NULLS LAST, created_at DESC
                      LIMIT :limit
                     """
                 ),
-                {"aliases": aliases, "days": int(days), "limit": int(limit)},
+                params,
             ).fetchall()
     except Exception as exc:  # noqa: BLE001 — env 미구성 fallback.
         log.debug("_load_recent_business_signals fallback | peer=%s error=%s", peer_id, exc)
@@ -231,14 +247,27 @@ def _load_recent_business_signals(*, peer_id: str, days: int, limit: int) -> lis
     ]
 
 
-def _load_latest_financial_metrics(*, peer_id: str) -> list[dict[str, Any]]:
+def _load_latest_financial_metrics(
+    *, peer_id: str, as_of: date | None = None
+) -> list[dict[str, Any]]:
     aliases = expand_peer_aliases(peer_id)
     canonical_keys = sorted(set(METRIC_CANONICAL.values()))
+    # point-in-time(백필): as_of 시점까지 공시된(evidence 기사 발행일 <= as_of) 재무만.
+    # as_of=None 이면 기존 동작(최신 전체).
+    if as_of is None:
+        as_of_filter = ""
+        params: dict[str, Any] = {"aliases": aliases}
+    else:
+        as_of_filter = (
+            "AND (raw_article_id IS NULL OR raw_article_id IN ("
+            " SELECT id FROM raw_articles WHERE published_at < (:as_of::date + 1)))"
+        )
+        params = {"aliases": aliases, "as_of": as_of}
     try:
         with SessionLocal() as db:
             rows = db.execute(
                 text(
-                    """
+                    f"""
                     SELECT peer_id,
                            metric_name,
                            metric_label,
@@ -252,13 +281,14 @@ def _load_latest_financial_metrics(*, peer_id: str) -> list[dict[str, Any]]:
                       FROM raw_article_financial_metrics
                      WHERE peer_id = ANY(:aliases)
                        AND period_year IS NOT NULL
+                       {as_of_filter}
                      ORDER BY period_year DESC NULLS LAST,
                               period_quarter DESC NULLS LAST,
                               confidence DESC NULLS LAST
                      LIMIT 12
                     """
                 ),
-                {"aliases": aliases},
+                params,
             ).fetchall()
     except Exception as exc:  # noqa: BLE001
         log.debug("_load_latest_financial_metrics fallback | peer=%s error=%s", peer_id, exc)

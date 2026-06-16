@@ -301,6 +301,8 @@ def test_supervisor_graph_threads_as_of_to_context_and_card_created_at():
 
     # (1) 빌더가 as_of 를 받았는가 (point-in-time 컨텍스트 클램프)
     assert deps.context_builder.build.call_args.kwargs.get("as_of") == as_of
+    # (1b) profile_context loader 도 as_of 를 받았는가 (recent_signals/financial 클램프)
+    assert deps.profile_context_loader.load.call_args.kwargs.get("as_of") == as_of
     # (2) 저장 카드의 created_at 이 발행일로 박혔는가 (프론트 정렬·타임라인 정합)
     saved_card = save_card.call_args.args[0]
     assert saved_card.get("created_at") == as_of.isoformat()
