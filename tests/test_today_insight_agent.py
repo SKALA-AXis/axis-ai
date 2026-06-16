@@ -354,6 +354,78 @@ def test_build_context_keeps_comparison_facts_within_anchor_current_inputs(monke
     assert all(issue["main_company"] == "lg_cns" for issue in context["current_issues"])
 
 
+def test_build_context_excludes_global_peer_issues_and_cards(monkeypatch) -> None:
+    """글로벌 IT peer(google 등)는 헤드라인/신호에서 제외되고 국내 4사만 남는다."""
+    anchor = date(2026, 6, 16)
+
+    domestic_issue = {
+        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "created_date_kst": anchor.isoformat(),
+        "latest_source_date_kst": anchor.isoformat(),
+        "has_anchor_source": True,
+        "main_company": "lg_cns",
+        "event_type": "contract",
+        "sectors": ["ax"],
+        "headline": "LG CNS 국내 계약 신호",
+        "one_line_summary": "LG CNS의 현재 기준 계약 신호입니다.",
+        "content_summary": "anchor-date 소스가 확인된 국내 이슈입니다.",
+        "source_ids": [1],
+        "sources": [{"id": "raw-1", "title": "LG CNS 국내 계약 신호", "source_name": "AXIS News"}],
+        "confidence": 0.9,
+    }
+    global_issue = {
+        "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "created_date_kst": anchor.isoformat(),
+        "latest_source_date_kst": anchor.isoformat(),
+        "has_anchor_source": True,
+        "main_company": "google",
+        "event_type": "product",
+        "sectors": ["security"],
+        "headline": "Google AI Threat Defense 운영 교훈 공개",
+        "one_line_summary": "글로벌 IT peer 의 보안 업데이트입니다.",
+        "content_summary": "해외 peer 단건 보도입니다.",
+        "source_ids": [2],
+        "sources": [
+            {"id": "raw-2", "title": "Google AI Threat Defense", "source_name": "Google Blog"}
+        ],
+        "confidence": 0.95,
+    }
+    global_card = {
+        "id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        "peer_id": "google",
+        "title": "Google AI Threat Defense 카드",
+        "summary_lines": ["글로벌 보안 카드"],
+        "sources": [],
+    }
+
+    monkeypatch.setattr(comparison_engine, "_fetch_keyword_trend_rows", lambda **kwargs: [])
+    monkeypatch.setattr(
+        today_module,
+        "_fetch_integrated_issues",
+        lambda **kwargs: [domestic_issue, global_issue],
+    )
+    monkeypatch.setattr(
+        today_module, "_fetch_cards_for_issues", lambda issue_ids, **kwargs: [global_card]
+    )
+    monkeypatch.setattr(today_module, "_fetch_anchor_date_cards", lambda **kwargs: [])
+    monkeypatch.setattr(today_module, "_fetch_recent_cards", lambda **kwargs: [])
+    monkeypatch.setattr(today_module, "_fetch_prior_today_reports", lambda **kwargs: [])
+    monkeypatch.setattr(today_module, "_fetch_analysis_ledger", lambda **kwargs: [])
+    monkeypatch.setattr(today_module, "_load_profile_context", lambda **kwargs: {})
+    monkeypatch.setattr(today_module, "_load_skax_context", lambda **kwargs: {})
+
+    context = today_module._build_context(
+        TodayInsightGenerateRequest(anchor_date=anchor, max_issues=8, max_cards=12),
+        anchor,
+    )
+
+    companies = {issue["main_company"] for issue in context["current_issues"]}
+    assert companies == {"lg_cns"}
+    facts_dump = json.dumps(context["comparison_facts"], ensure_ascii=False)
+    assert "Google AI Threat Defense" not in facts_dump
+    assert "google" not in facts_dump
+
+
 def test_today_insight_agent_returns_cached_payload_without_regeneration(monkeypatch) -> None:
     cached_payload = {
         "report_date": "2026-06-05",
@@ -607,10 +679,7 @@ def test_fit_llm_prompt_context_avoids_blind_truncation_marker() -> None:
 
 
 def test_today_insight_public_copy_qualifies_internal_scores() -> None:
-    text = (
-        "영향도 점수 0.7, 노출 점수 0.244로 "
-        "low_visibility_definite_event로 분류됐습니다."
-    )
+    text = "영향도 점수 0.7, 노출 점수 0.244로 low_visibility_definite_event로 분류됐습니다."
 
     sanitized = today_module._sanitize_public_text(text)
 
