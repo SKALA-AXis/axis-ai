@@ -905,6 +905,10 @@ def _snippet_score(
     score += min(1.0, 0.5 * len(_date_tokens(text)))
     if _rule_based_entities([text]):
         score += 1.0
+    if _has_detail_preservation_terms(text):
+        score += 1.5
+    if _has_business_scope_terms(text):
+        score += 1.0
     return score
 
 
@@ -1440,14 +1444,28 @@ def _merge_article_facts(article_fact_notes: list[dict[str, Any]]) -> dict[str, 
             fact_text = str(fact.get("fact") or "").strip()
             if not fact_text:
                 continue
+            evidence_text = str(fact.get("evidence_text") or fact_text)
             unique_facts.append(
                 {
                     "fact": fact_text,
                     "source_article_ids": [article_id] if article_id else [],
                     "evidence_count": 1,
-                    "evidence_texts": [str(fact.get("evidence_text") or fact_text)],
+                    "evidence_texts": [evidence_text],
                     "fact_type": fact.get("fact_type") or "general_fact",
                     "summary_role": fact.get("summary_role") or "main_event",
+                    "numbers_and_dates": _dedupe_keep_order(
+                        [
+                            *_normalize_string_list(fact.get("numbers_and_dates")),
+                            *_number_tokens(evidence_text),
+                            *_date_tokens(evidence_text),
+                        ]
+                    ),
+                    "customers_or_industries": _normalize_string_list(
+                        fact.get("customers_or_industries")
+                    ),
+                    "products_or_services": _normalize_string_list(
+                        fact.get("products_or_services")
+                    ),
                     "importance_reason": str(fact.get("importance_reason") or ""),
                 }
             )
@@ -2021,6 +2039,18 @@ def _has_business_scope_terms(text: str) -> bool:
             r"계약|수주|공급|협약|사업|프로젝트|업무|시스템|전환|구축|"
             r"플랫폼|솔루션|서비스|AI|에이전트|자동화|검증|운영|고객|"
             r"ERP|MES|단말|클라우드|데이터센터|모빌리티|소프트웨어|SW",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _has_detail_preservation_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"기능|모듈|라인업|범위|대상|적용|연계|접속|처리|수행|"
+            r"지원|관리|운영|보안|통합|고도화|확장|전환|도입|활용|"
+            r"실증|검증|시범|상용|출시|공개|제공|개발|협력|계획|예정|향후",
             str(text or ""),
             re.I,
         )
@@ -4012,7 +4042,10 @@ def _fact_key(value: str) -> str:
 
 
 def _has_unique_fact_importance(text: str) -> bool:
-    return bool(re.search(r"\d", text))
+    value = str(text or "")
+    if re.search(r"\d", value):
+        return True
+    return _has_business_scope_terms(value) and _has_detail_preservation_terms(value)
 
 
 def _detect_conflict_notes(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
