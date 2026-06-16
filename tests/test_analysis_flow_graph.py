@@ -14,6 +14,7 @@ from src.pipeline.analysis_flow_graph import (
     SupervisorDeps,
     _hard_validate,
     build_supervisor_graph,
+    run_supervisor,
 )
 
 
@@ -271,6 +272,38 @@ def test_supervisor_graph_uses_injected_profile_context():
     deps.profile_context_loader.load.assert_not_called()
     context_call = deps.context_builder.build.call_args
     assert context_call.kwargs.get("profile_context") is injected_profile
+
+
+def test_supervisor_graph_threads_as_of_to_context_and_card_created_at():
+    """백필 point-in-time: state.as_of 가 (1) context_builder.build(as_of=) 로,
+    (2) 저장 카드의 created_at(=발행일) 으로 전달되는지 — C1 배선 회귀."""
+    from datetime import date
+
+    deps = _stub_deps()
+    graph = build_supervisor_graph(deps)
+    as_of = date(2026, 2, 1)
+
+    with (
+        patch(
+            "src.pipeline.analysis_flow_graph.save_integrated_issue",
+            return_value="11111111-1111-1111-1111-111111111111",
+        ),
+        patch("src.pipeline.analysis_flow_graph.save_card_news", return_value="CN-OK") as save_card,
+        patch("src.pipeline.analysis_flow_graph.save_pipeline_log"),
+    ):
+        # run_supervisor(as_of=) 가 initial state 로 forwarding 하는지까지 함께 검증.
+        run_supervisor(
+            input_bundle=_stub_bundle(),
+            classification={"sector": "ax", "event_type": "partnership"},
+            as_of=as_of,
+            graph=graph,
+        )
+
+    # (1) 빌더가 as_of 를 받았는가 (point-in-time 컨텍스트 클램프)
+    assert deps.context_builder.build.call_args.kwargs.get("as_of") == as_of
+    # (2) 저장 카드의 created_at 이 발행일로 박혔는가 (프론트 정렬·타임라인 정합)
+    saved_card = save_card.call_args.args[0]
+    assert saved_card.get("created_at") == as_of.isoformat()
 
 
 def test_supervisor_graph_routes_human_review_on_fake_numeric():
