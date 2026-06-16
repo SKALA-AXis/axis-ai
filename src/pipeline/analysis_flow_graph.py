@@ -270,6 +270,7 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
                 companies=companies,
                 sectors=sectors,
                 event_type=bundle.event_type,
+                as_of=state.get("as_of"),
             )
             return cast(SupervisorState, {**state, "profile_context": ctx})
         except Exception as exc:  # noqa: BLE001
