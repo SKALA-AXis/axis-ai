@@ -260,6 +260,54 @@ def test_today_insight_generate_happy_path(monkeypatch):
     assert response.status_code == 200
 
 
+def test_today_insight_status_placeholder_returns_200(monkeypatch):
+    """신호·카드가 없는 조용한 날의 status placeholder 는 502 가 아니라 200 으로 내린다.
+
+    대시보드가 "오늘 중요한 뉴스 없음" 을 표시하고 평일 사전생성 cron 도 죽지 않게 하는
+    근본 수정의 회귀 가드.
+    """
+    monkeypatch.setattr(
+        "src.agents.today_insight_agent.TodayInsightAgent",
+        _fake_async_agent(
+            "generate",
+            {
+                "provenance": {
+                    "mode": "deterministic_fallback",
+                    "result_kind": "no_current_signals",
+                    "is_status_placeholder": True,
+                },
+                "warning": "today insight source data unavailable",
+            },
+        ),
+    )
+
+    response = client.post("/today-insight/generate", json={})
+
+    assert response.status_code == 200
+
+
+def test_today_insight_llm_failure_still_maps_to_502(monkeypatch):
+    """LLM 실패(generated_fallback)는 placeholder 가 아니므로 502 가시성을 유지한다."""
+    monkeypatch.setattr(
+        "src.agents.today_insight_agent.TodayInsightAgent",
+        _fake_async_agent(
+            "generate",
+            {
+                "provenance": {
+                    "mode": "deterministic_fallback",
+                    "result_kind": "generated_fallback",
+                    "is_status_placeholder": False,
+                },
+                "warning": "LLM generation failed: RuntimeError",
+            },
+        ),
+    )
+
+    response = client.post("/today-insight/generate", json={})
+
+    assert response.status_code == 502
+
+
 def test_insight_generate_happy_path(monkeypatch):
     monkeypatch.setattr(
         "src.agents.insight_cascade_agent.InsightCascadeAgent",

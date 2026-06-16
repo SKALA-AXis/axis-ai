@@ -92,6 +92,33 @@ def _raise_if_agent_failure(agent: str, result: Mapping[str, object] | None) -> 
     )
 
 
+def _is_today_insight_status_placeholder(result: Mapping[str, object] | None) -> bool:
+    """today-insight 결과가 '신호 없음' status placeholder 인지 — 장애가 아니라 정상 빈 결과.
+
+    당일 통합 이슈·신규 카드가 모두 없을 때 agent 가 만드는 placeholder("오늘은 주목할
+    동향 없음")는 502 가 아니라 200 으로 내려야 대시보드가 "오늘 중요한 뉴스 없음" 을
+    표시한다. LLM 실패(generated_fallback)·status=failed/error 같은 진짜 실패는 제외해
+    502 가시성을 유지한다.
+    """
+    if not result:
+        return False
+    if str(result.get("status") or "").strip().lower() in {"failed", "error"}:
+        return False
+    if str(result.get("error") or "").strip():
+        return False
+    provenance = result.get("provenance")
+    if isinstance(provenance, Mapping):
+        if str(provenance.get("error") or "").strip():
+            return False
+        if provenance.get("is_status_placeholder") is True:
+            return True
+        kind = str(provenance.get("result_kind") or "").strip().lower()
+        if kind in {"no_current_signals", "scheduled_pending"}:
+            return True
+    top_kind = str(result.get("result_kind") or "").strip().lower()
+    return top_kind in {"no_current_signals", "scheduled_pending"}
+
+
 def _agent_failure_event(agent: str, result: Mapping[str, object] | None) -> dict[str, str]:
     return {
         "type": "error",
@@ -1430,7 +1457,12 @@ async def generate_today_insight(
         request.save,
     )
     result = await TodayInsightAgent().generate(request)
-    _raise_if_agent_failure("TODAY_INSIGHT", result)
+    # 당일 신호·신규 카드가 없어 생성된 status placeholder("오늘은 주목할 동향 없음")는
+    # 장애가 아니라 정상 빈 결과 → 502 가 아니라 200 으로 그대로 내려보내, 대시보드가
+    # "오늘 중요한 뉴스 없음" 을 표시하고 평일 사전생성 cron 도 죽지 않게 한다.
+    # LLM 실패 등 진짜 실패는 _raise_if_agent_failure 가 그대로 502 로 처리한다.
+    if not _is_today_insight_status_placeholder(result):
+        _raise_if_agent_failure("TODAY_INSIGHT", result)
     return TodayInsightGenerateResponse.model_validate(result)
 
 

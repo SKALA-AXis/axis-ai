@@ -700,6 +700,18 @@ def _phase3_peer_alignment(
                 peer_age = (today - latest_peer).days
                 recency_gap_days = peer_age - global_recency
 
+            # strategic_note LLM 입력용 근거 — peer 가 실제로 뭘 했는지 (제목 + event_type).
+            # API 응답에 나가기 전, 아래에서 strip (전송 페이로드엔 남기지 않음).
+            evidence = [
+                {
+                    "title": str(c.get("title") or "").strip(),
+                    "event_type": str(c.get("event_type") or "").strip(),
+                }
+                for c in cards[:3]
+                if str(c.get("title") or "").strip()
+            ]
+            alignment_type = _gate_diverging_on_evidence(alignment_type, evidence)
+
             per_peer.append(
                 {
                     "peer_id": peer_id,
@@ -709,13 +721,7 @@ def _phase3_peer_alignment(
                     "global_mention_count": global_mention_count,
                     "recency_gap_days": recency_gap_days,
                     "evidence_card_ids": [str(c.get("id")) for c in cards[:5] if c.get("id")],
-                    # strategic_note LLM 입력용 근거 — peer 가 실제로 뭘 했는지 제목으로 전달.
-                    # API 응답에 나가기 전, 아래에서 strip (전송 페이로드엔 남기지 않음).
-                    "_evidence_titles": [
-                        str(c.get("title")).strip()
-                        for c in cards[:3]
-                        if str(c.get("title") or "").strip()
-                    ],
+                    "_evidence": evidence,
                     "strategic_note": "",
                 }
             )
@@ -728,10 +734,10 @@ def _phase3_peer_alignment(
         except Exception:
             log.exception("ITTrendAgent | strategic_note LLM 실패 — 빈 문자열 유지")
 
-    # 근거 제목은 LLM 입력 전용 — API 페이로드에서 제거.
+    # 근거는 LLM 입력 전용 — API 페이로드에서 제거.
     for plist in result.values():
         for p in plist:
-            p.pop("_evidence_titles", None)
+            p.pop("_evidence", None)
     return result
 
 
@@ -759,6 +765,18 @@ def _classify_alignment(*, score: float, peer_n: int) -> str:
     return "missing"
 
 
+def _gate_diverging_on_evidence(alignment_type: str, evidence: list[Any]) -> str:
+    """근거(peer 실제 동향)가 없는 'diverging' 은 'missing' 으로 강등.
+
+    alignment_type 은 키워드 언급 빈도 비율로만 정해지므로, 빈도가 낮다는 사실만으로
+    '다른 방향(독자 전략)' 을 단정할 수 없다. 인용할 peer 동향이 없으면 정직하게
+    '관련 공개 동향 미확인(missing)' 으로 표시한다.
+    """
+    if alignment_type == "diverging" and not evidence:
+        return "missing"
+    return alignment_type
+
+
 def _llm_fill_strategic_notes(
     result: dict[str, list[dict[str, Any]]],
     detections: list[dict[str, Any]],
@@ -779,8 +797,8 @@ def _llm_fill_strategic_notes(
                         "alignment_type": p["alignment_type"],
                         "peer_mention_count": p["peer_mention_count"],
                         "global_mention_count": p["global_mention_count"],
-                        # 실제 수집된 peer 동향 제목 — note 의 근거. 빈 리스트면 근거 없음.
-                        "evidence_titles": p.get("_evidence_titles", []),
+                        # peer 실제 동향(title+event_type) — note 근거 (비면 미확인).
+                        "evidence": p.get("_evidence", []),
                     }
                     for p in peers
                 ],
@@ -793,23 +811,28 @@ def _llm_fill_strategic_notes(
         "당신은 SK AX 사업전략팀의 글로벌 IT 트렌드 분석가입니다.\n"
         "각 (theme, peer) 조합에 대해 한 줄짜리 strategic_note 를 작성하세요.\n\n"
         "## 필수 규칙\n"
-        "1. **반드시 한국어로** 작성합니다. 회사명·고유명사 외 영어 문장 금지.\n"
-        "2. **evidence_titles 에 담긴 실제 수집 동향만 근거로** 사용합니다. "
-        "제목에 없는 사업·파트너십·수치를 지어내지 마세요.\n"
-        "3. evidence_titles 가 비어 있으면 추측하지 말고 정확히 "
+        "1. **반드시 한국어로** 작성합니다. 회사명·제품명·고유명사 외 영어 문장 금지.\n"
+        "2. **evidence 의 실제 동향(title·event_type)만 근거로** 사용합니다. "
+        "evidence 에 없는 사업·파트너십·수치를 지어내지 마세요.\n"
+        "3. **무엇을 했는지 구체적 행위로** 서술합니다 — 수주/계약/출시/개관/인수/합병/"
+        "파트너십 체결/투자 등 동사를 쓰고, title 의 사업·제품·고객명을 그대로 인용합니다. "
+        "event_type 은 행위 종류 힌트입니다(ma=인수·합병, partnership=파트너십, "
+        "contract=수주·계약, new_biz=신사업, tech=기술·제품).\n"
+        "4. **금지(모호한 표현)**: '독자적인 방향을 추구', '글로벌 흐름을 따라가고 있음', "
+        "'선도 기업과 정렬돼 있다' 처럼 무엇을 하는지 안 드러나는 서술.\n"
+        "5. evidence 가 비어 있으면 추측하지 말고 정확히 "
         '"관련 공개 동향 미확인" 이라고만 적습니다.\n'
-        "4. 'Amazon·Microsoft 같은 선도 기업과 정렬돼 있다' 류의 막연한 일반 서술 금지. "
-        "어떤 동향(제목 근거)에서 어떻게 정렬/지연/누락인지 구체적으로 씁니다.\n"
-        "5. alignment_type 별 관점:\n"
-        "   - aligned: 어떤 동향에서 글로벌 흐름을 따라가는지\n"
-        "   - lagging: 무엇이 부족한지\n"
-        "   - missing: 공개 동향이 없어 시급한지\n"
-        "   - diverging: 다른 방향이 맞는지\n\n"
+        "6. alignment_type 별 관점(모두 evidence 의 구체 동향으로 뒷받침):\n"
+        "   - aligned: 어떤 사업/제품으로 이 트렌드에 대응 중인지\n"
+        "   - lagging: 대응은 있으나 무엇이 부족·제한적인지\n"
+        "   - diverging: 이 트렌드 대신 어떤 다른 사업/제품에 집중하는지(다른 방향의 실체)\n"
+        "   - missing: 관련 공개 동향이 없어 미대응인지\n\n"
         "## 예시\n"
-        "- 좋음: \"삼성SDS는 '생성형 AI 운영 플랫폼 출시' 동향으로 에이전트형 AI "
-        '흐름을 따라가고 있음"\n'
-        '- 나쁨: "SK AX is aligned with leading cloud companies like Amazon and '
-        'Microsoft" (영어·근거 없음·막연함 — 금지)\n\n'
+        "- 좋음: \"포스코DX는 'P-GPT 2.1 출시'로 자체 산업용 LLM 제품을 키우는 중\"\n"
+        "- 좋음: \"LG CNS는 '팔란티어 파트너십 체결'로 데이터분석 사업을 확대\"\n"
+        '- 나쁨: "삼성SDS는 LLM 분야에서 독자적인 방향을 추구하고 있음" '
+        "(무엇을 하는지 없음 — 금지)\n"
+        '- 나쁨: "SK AX is aligned with leading cloud companies" (영어·근거 없음 — 금지)\n\n'
         "응답은 반드시 다음 JSON object:\n"
         '{"notes": [{"theme":"...", "peer_id":"...", "strategic_note":"..."}, ...]}\n\n'
         "입력:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
@@ -1232,8 +1255,9 @@ def _industry_for_category(category: str) -> str:
 
 
 def _fallback_title(keyword: str, det: dict[str, Any]) -> str:
-    intensity = det.get("intensity") or "weak"
-    return f"{keyword} — {intensity} 강도 글로벌 트렌드"
+    # "strong 강도" 같은 영어·jargon 대신 구체 수치 — 글로벌 6사 newsroom 언급 건수.
+    n = det.get("mention_count", 0)
+    return f"{keyword} — 글로벌 {n}건 언급"
 
 
 def _fallback_summary(keyword: str, det: dict[str, Any]) -> str:
