@@ -5,7 +5,7 @@ import logging
 import re
 import threading
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -1358,7 +1358,7 @@ _INSERT_CARD_NEWS_V2 = text("""
         implication, sources, validation_pass, validation_sc_score,
         peer_company_id, primary_keyword_category, integrated_issue_id, source_raw_article_ids,
         keyword_categories, evidence_payload, source_articles,
-        card_schema_version, evaluation_payload
+        card_schema_version, evaluation_payload, created_at
     ) VALUES (
         :id, :company, :cluster_id, :title, :summary_lines,
         :event_type, :importance, :importance_score,
@@ -1370,7 +1370,8 @@ _INSERT_CARD_NEWS_V2 = text("""
         CAST(:evidence_payload AS jsonb),
         CAST(:source_articles AS jsonb),
         :card_schema_version,
-        CAST(:evaluation_payload AS jsonb)
+        CAST(:evaluation_payload AS jsonb),
+        CAST(:created_at AS timestamptz)
     )
     ON CONFLICT (id) DO UPDATE SET
         status = 'ACTIVE',
@@ -1397,7 +1398,8 @@ _INSERT_CARD_NEWS_V2 = text("""
         card_schema_version = EXCLUDED.card_schema_version,
         evaluation_payload =
             COALESCE(card_news.evaluation_payload, '{}'::jsonb)
-            || COALESCE(EXCLUDED.evaluation_payload, '{}'::jsonb)
+            || COALESCE(EXCLUDED.evaluation_payload, '{}'::jsonb),
+        created_at = EXCLUDED.created_at
     RETURNING id
 """)
 
@@ -1408,7 +1410,7 @@ _INSERT_CARD_NEWS_V2_WITHOUT_INTEGRATED_ISSUE = text("""
         implication, sources, validation_pass, validation_sc_score,
         peer_company_id, primary_keyword_category, source_raw_article_ids,
         keyword_categories, evidence_payload, source_articles,
-        card_schema_version, evaluation_payload
+        card_schema_version, evaluation_payload, created_at
     ) VALUES (
         :id, :company, :cluster_id, :title, :summary_lines,
         :event_type, :importance, :importance_score,
@@ -1420,7 +1422,8 @@ _INSERT_CARD_NEWS_V2_WITHOUT_INTEGRATED_ISSUE = text("""
         CAST(:evidence_payload AS jsonb),
         CAST(:source_articles AS jsonb),
         :card_schema_version,
-        CAST(:evaluation_payload AS jsonb)
+        CAST(:evaluation_payload AS jsonb),
+        CAST(:created_at AS timestamptz)
     )
     ON CONFLICT (id) DO UPDATE SET
         status = 'ACTIVE',
@@ -1446,7 +1449,8 @@ _INSERT_CARD_NEWS_V2_WITHOUT_INTEGRATED_ISSUE = text("""
         card_schema_version = EXCLUDED.card_schema_version,
         evaluation_payload =
             COALESCE(card_news.evaluation_payload, '{}'::jsonb)
-            || COALESCE(EXCLUDED.evaluation_payload, '{}'::jsonb)
+            || COALESCE(EXCLUDED.evaluation_payload, '{}'::jsonb),
+        created_at = EXCLUDED.created_at
     RETURNING id
 """)
 
@@ -1608,11 +1612,13 @@ def _is_undefined_column_error(exc: Exception) -> bool:
 
 
 def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
-    implication_payload = _merge_implication_payload(card)
     source_ids = _normalize_int_list(card.get("source_raw_article_ids"))
     if not source_ids:
         source_ids = _source_ids_from_sources(card.get("sources"))
     evidence_payload = _build_evidence_payload(card)
+    merge_card = dict(card)
+    merge_card["evidence_payload"] = evidence_payload
+    implication_payload = _merge_implication_payload(merge_card)
     evaluation_payload = card.get("evaluation_payload") or {}
     if not isinstance(evaluation_payload, dict):
         evaluation_payload = {}
@@ -1642,6 +1648,7 @@ def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
         "source_articles": json.dumps(source_articles, ensure_ascii=False, default=str),
         "card_schema_version": str(card.get("card_schema_version") or "v2"),
         "evaluation_payload": json.dumps(evaluation_payload, ensure_ascii=False, default=str),
+        "created_at": _card_created_at_param(card, source_articles),
     }
 
 
@@ -1659,6 +1666,23 @@ def _resolve_integrated_issue_id(
         if text_value:
             return text_value
     return None
+
+
+def _card_created_at_param(card: dict[str, Any], source_articles: list[dict[str, Any]]) -> str:
+    del source_articles
+    value = _date_string_or_none(card.get("created_at"))
+    if value:
+        return value
+    return datetime.now(UTC).isoformat()
+
+
+def _date_string_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    text_value = str(value).strip()
+    return text_value or None
 
 
 def _sync_card_news_articles(
@@ -1952,24 +1976,58 @@ def _merge_implication_payload(card: dict[str, Any]) -> dict[str, Any]:
     함께 보존하여 frontend / sidecar 가 둘 다 읽을 수 있게 한다.
     """
     payload: dict[str, Any] = {}
-    for candidate in _implication_payload_candidates(card):
+    candidates = _implication_payload_candidates(card)
+    for candidate in candidates:
         if _has_structured_implication(candidate):
             payload = dict(candidate)
             break
-    frontend = card.get("frontend_implication")
-    if isinstance(frontend, dict) and frontend:
-        payload["frontend"] = dict(frontend)
-        if frontend.get("suggested_actions"):
-            payload.setdefault("recommended_actions", frontend.get("suggested_actions"))
+    if not _frontend_has_display_items(payload.get("frontend")):
+        payload.pop("frontend", None)
+    if not payload.get("frontend_ready"):
+        for candidate in candidates:
+            ready = candidate.get("frontend_ready")
+            if _frontend_implication_from_frontend_ready(ready):
+                payload["frontend_ready"] = ready
+                break
+    for key in ("peer_implication", "skax_implication"):
+        if not isinstance(payload.get(key), dict) or not payload.get(key):
+            for candidate in candidates:
+                value = candidate.get(key)
+                if isinstance(value, dict) and value:
+                    payload[key] = value
+                    break
+    ready_frontend = _frontend_implication_from_frontend_ready(payload.get("frontend_ready"))
+    if ready_frontend:
+        payload["frontend"] = ready_frontend
+        if ready_frontend.get("suggested_actions"):
+            payload.setdefault("recommended_actions", ready_frontend["suggested_actions"])
             skax = payload.get("skax_implication")
             if isinstance(skax, dict):
-                skax.setdefault("recommended_actions", frontend.get("suggested_actions"))
-    if not payload.get("frontend"):
+                skax.setdefault("recommended_actions", ready_frontend["suggested_actions"])
+    if not _frontend_has_display_items(payload.get("frontend")):
+        frontend = card.get("frontend_implication")
+        if isinstance(frontend, dict) and frontend:
+            payload["frontend"] = dict(frontend)
+            if frontend.get("suggested_actions"):
+                payload.setdefault("recommended_actions", frontend.get("suggested_actions"))
+                skax = payload.get("skax_implication")
+                if isinstance(skax, dict):
+                    skax.setdefault("recommended_actions", frontend.get("suggested_actions"))
+    if not _frontend_has_display_items(payload.get("frontend")):
         display_frontend = _frontend_implication_from_display_sections(card.get("display_sections"))
         if display_frontend:
             payload["frontend"] = display_frontend
             if display_frontend.get("suggested_actions"):
                 payload.setdefault("recommended_actions", display_frontend["suggested_actions"])
+    if not _frontend_has_display_items(payload.get("frontend")):
+        structured_frontend = _frontend_implication_from_structured_implication(
+            payload,
+            context=card,
+        )
+        if structured_frontend:
+            payload["frontend"] = structured_frontend
+            if structured_frontend.get("suggested_actions"):
+                payload.setdefault("recommended_actions", structured_frontend["suggested_actions"])
     # 보조 메타데이터 (sector / exposure / signals / evidence_chain) 는 별도 namespace.
     payload.setdefault(
         "sector_meta",
@@ -1983,6 +2041,170 @@ def _merge_implication_payload(card: dict[str, Any]) -> dict[str, Any]:
         },
     )
     return payload
+
+
+def _frontend_has_display_items(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    for key in (
+        "key_implication_items",
+        "suggested_action_items",
+        "key_implication_blocks",
+        "response_direction_blocks",
+    ):
+        if value.get(key):
+            return True
+    return bool(value.get("key_implications") or value.get("suggested_actions"))
+
+
+def _frontend_implication_from_structured_implication(
+    value: Any,
+    *,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    peer_value = value.get("peer_implication")
+    skax_value = value.get("skax_implication")
+    peer: dict[str, Any] = peer_value if isinstance(peer_value, dict) else {}
+    skax: dict[str, Any] = skax_value if isinstance(skax_value, dict) else {}
+    issue_lines = _integrated_issue_context_lines(context)
+    key_main = str(
+        peer.get("peer_meaning")
+        or peer.get("capability_change")
+        or value.get("why_important")
+        or ""
+    ).strip()
+    key_detail = str(peer.get("capability_change") or value.get("potential_impact") or "").strip()
+    if _looks_like_fragment(key_detail) and issue_lines:
+        key_detail = issue_lines[0]
+    actions = _string_list(skax.get("recommended_actions") or value.get("recommended_actions"))
+    action_main = actions[0] if actions else str(skax.get("why_important") or "").strip()
+    action_detail = str(skax.get("potential_impact") or skax.get("why_important") or "").strip()
+    if _looks_like_fragment(action_detail) and len(issue_lines) >= 2:
+        action_detail = issue_lines[1]
+    key_blocks = [{"main": key_main, "detail": key_detail}] if key_main else []
+    action_blocks = [{"main": action_main, "detail": action_detail}] if action_main else []
+    if not key_blocks and not action_blocks:
+        return {}
+    key_items = _labeled_lines_from_main_detail_blocks(key_blocks, prefix="핵심 시사점")
+    action_items = _labeled_lines_from_main_detail_blocks(action_blocks, prefix="핵심 대응")
+    payload: dict[str, Any] = {
+        "source": "structured_implication_fallback",
+        "key_implications": key_items,
+        "peer_implications": key_items,
+        "suggested_actions": action_items,
+        "response_directions": action_items,
+        "key_implication_blocks": key_blocks,
+        "key_implication_items": key_blocks,
+        "response_direction_blocks": action_blocks,
+        "suggested_action_items": action_blocks,
+        "follow_up_questions": [],
+    }
+    if key_items:
+        payload["potential_impact"] = key_items[0]
+    return payload
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    return [str(value).strip()] if str(value or "").strip() else []
+
+
+def _integrated_issue_from_card_context(card: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(card, dict):
+        return {}
+    for value in (
+        card.get("integrated_issue"),
+        (card.get("analysis_package") or {}).get("integrated_issue")
+        if isinstance(card.get("analysis_package"), dict)
+        else None,
+        (card.get("evidence_payload") or {}).get("analysis_package", {}).get("integrated_issue")
+        if isinstance(card.get("evidence_payload"), dict)
+        and isinstance((card.get("evidence_payload") or {}).get("analysis_package"), dict)
+        else None,
+    ):
+        if isinstance(value, dict) and value:
+            return value
+    return {}
+
+
+def _integrated_issue_context_lines(card: dict[str, Any] | None) -> list[str]:
+    issue = _integrated_issue_from_card_context(card)
+    if not issue:
+        return []
+    candidates: list[Any] = []
+    for key in ("display_fact_summary", "fact_summary", "summary_lines"):
+        value = issue.get(key)
+        if isinstance(value, list):
+            candidates.extend(value)
+    for item in issue.get("fact_basis") or issue.get("consolidated_facts") or []:
+        if isinstance(item, dict):
+            candidates.append(item.get("fact") or item.get("evidence_text"))
+        else:
+            candidates.append(item)
+    seen: set[str] = set()
+    lines: list[str] = []
+    for item in candidates:
+        text = _sentence_text(str(item or "").strip())
+        if not text:
+            continue
+        key = re.sub(r"\W+", "", text.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(text)
+        if len(lines) >= 5:
+            break
+    return lines
+
+
+def _join_issue_lines(lines: list[str]) -> str:
+    cleaned = [_sentence_text(line) for line in lines if str(line or "").strip()]
+    return " ".join(cleaned)
+
+
+def _looks_like_fragment(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    if re.search(r"(다|요|니다|됐다|했다|한다|된다|있다|없다|였다|이다)[.!?。]?$", text):
+        return False
+    if len(text.split()) <= 8 and re.search(r"(확보|구축|전환|검증|구성|사례|범위)$", text):
+        return True
+    return not bool(re.search(r"[.!?。]$", text))
+
+
+def _sentence_text(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return ""
+    if re.search(r"[.!?。]$", text):
+        return text
+    if re.search(r"(다|요|니다|됐다|했다|한다|된다|있다|없다|였다|이다)$", text):
+        return text + "."
+    return text + "다."
+
+
+def _labeled_lines_from_main_detail_blocks(
+    blocks: list[dict[str, str]], *, prefix: str
+) -> list[str]:
+    lines: list[str] = []
+    for block in blocks:
+        main = str(block.get("main") or "").strip()
+        detail = str(block.get("detail") or "").strip()
+        if not main:
+            continue
+        line = f"{prefix}: {main}"
+        if detail:
+            line = f"{line}\n근거/설명: {detail}"
+        lines.append(line)
+    return lines
 
 
 def _implication_payload_candidates(card: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2063,6 +2285,47 @@ def _frontend_implication_from_display_sections(value: Any) -> dict[str, Any]:
     if insight_items:
         payload["potential_impact"] = insight_items[0]
     return payload
+
+
+def _frontend_implication_from_frontend_ready(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    key_block = value.get("key_implication")
+    action_block = value.get("suggested_action")
+    key_items = _frontend_ready_display_lines(key_block, prefix="핵심 시사점")
+    action_items = _frontend_ready_display_lines(action_block, prefix="핵심 대응")
+    if not key_items and not action_items:
+        return {}
+    key_blocks = _main_detail_blocks_from_labeled_lines(key_items)
+    action_blocks = _main_detail_blocks_from_labeled_lines(action_items)
+    payload: dict[str, Any] = {
+        "source": value.get("source") or "frontend_ready",
+        "key_implications": key_items,
+        "peer_implications": key_items,
+        "suggested_actions": action_items,
+        "response_directions": action_items,
+        "key_implication_blocks": key_blocks,
+        "key_implication_items": key_blocks,
+        "response_direction_blocks": action_blocks,
+        "suggested_action_items": action_blocks,
+        "follow_up_questions": [],
+    }
+    if key_items:
+        payload["potential_impact"] = key_items[0]
+    return payload
+
+
+def _frontend_ready_display_lines(value: Any, *, prefix: str) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    sentence = str(value.get("sentence") or "").strip()
+    evidence = str(value.get("evidence_sentence") or "").strip()
+    if not sentence:
+        return []
+    line = f"{prefix}: {sentence}"
+    if evidence:
+        line = f"{line}\n근거/설명: {evidence}"
+    return [line]
 
 
 def _main_detail_blocks(value: Any) -> list[dict[str, str]]:

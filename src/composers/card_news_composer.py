@@ -180,8 +180,9 @@ class CardNewsComposer:
         )
         trust_score = _trust_score(articles)
         source_article_ids = _source_article_ids(summary, articles)
-        created_at = _now_iso()
-        published_date = _published_date(articles, created_at)
+        generated_at = _now_iso()
+        published_date = _published_date(articles, generated_at)
+        created_at = _published_datetime(articles, generated_at)
 
         title = _first_non_empty(
             summary.get("display_headline"),
@@ -192,6 +193,12 @@ class CardNewsComposer:
             classification.get("title"),
             (articles[0] or {}).get("title") if articles else "",
             "피어사 주요 뉴스",
+        )
+        title = _compact_card_title(
+            title,
+            summary=summary,
+            classification=classification,
+            articles=articles,
         )
         summary_lines = _plain_summary_lines(summary, use_llm=True)
         if not summary_lines:
@@ -467,8 +474,8 @@ class CardNewsComposer:
 
         articles_text = _format_articles(articles)
         prompt = _ISSUE_CARD_PROMPT.replace("{articles_text}", articles_text)
-        created_at = _now_iso()
-        published_date = _published_date(articles, created_at)
+        generated_at = _now_iso()
+        published_date = _published_date(articles, generated_at)
 
         try:
             from src.observability import tracing_config
@@ -573,15 +580,20 @@ def _card_from_summary(
         classification.get("title"),
         articles[0].get("title"),
     )
-    if _looks_like_sentence_title(title):
-        title = _first_non_empty(classification.get("title"), articles[0].get("title"), title)
+    title = _compact_card_title(
+        title,
+        summary=summary,
+        classification=classification,
+        articles=articles,
+    )
     title = _business_context_title(
         title,
         summary=summary,
         event_type=str(classification.get("event_type") or summary.get("cluster_event_type") or ""),
     )
-    created_at = _now_iso()
-    published_date = _published_date(articles, created_at)
+    generated_at = _now_iso()
+    published_date = _published_date(articles, generated_at)
+    created_at = _published_datetime(articles, generated_at)
     media_assets = _media_assets(articles)
 
     card = {
@@ -590,6 +602,7 @@ def _card_from_summary(
         "cluster_id": cluster_id,
         "representative_id": representative_id,
         "published_date": published_date,
+        "created_at": created_at,
         "title": title[:100],
         "summary_lines": summary_lines,
         "event_type": classification.get("event_type", "tech"),
@@ -709,6 +722,35 @@ def _looks_like_sentence_title(title: str) -> bool:
     if len(value) > 60 and value.endswith(("다", "다.", "했다", "했다.", "됐다", "됐다.")):
         return True
     return bool(re.search(r"(했다|공개했다|체결했다|진출했다|선보였다|밝혔다)[.]?$", value))
+
+
+def _compact_card_title(
+    title: str,
+    *,
+    summary: dict[str, Any],
+    classification: dict[str, Any],
+    articles: list[dict[str, Any]],
+) -> str:
+    value = _clean_source_headline(title)
+    if not _looks_like_sentence_title(value) and len(value) <= 52:
+        return value
+    candidates = [
+        classification.get("title"),
+        summary.get("display_headline"),
+        summary.get("headline"),
+    ]
+    candidates.extend(article.get("title") for article in articles if isinstance(article, dict))
+    for candidate in candidates:
+        compact = _clean_source_headline(candidate)
+        if compact and compact != value and len(compact) <= 52:
+            return compact
+    return value[:52].rstrip(" ,·…")
+
+
+def _clean_source_headline(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    text = re.sub(r"^\[[^\]]{1,12}\]\s*", "", text)
+    return text.strip(" -")
 
 
 def _is_financial_only_title(title: str) -> bool:
@@ -3284,11 +3326,18 @@ def _source_article_ids(summary: dict[str, Any], articles: list[dict[str, Any]])
 
 
 def _published_date(articles: list[dict[str, Any]], created_at: str) -> str:
-    for article in articles:
-        value = _string_or_none(article.get("published_at"))
-        if value:
-            return value[:10]
-    return created_at[:10]
+    return _published_datetime(articles, created_at)[:10]
+
+
+def _published_datetime(articles: list[dict[str, Any]], fallback: str) -> str:
+    values = [
+        value
+        for value in (_string_or_none(article.get("published_at")) for article in articles)
+        if value
+    ]
+    if not values:
+        return fallback
+    return sorted(values)[0]
 
 
 def _subtitle(analysis: dict[str, Any], classification: dict[str, Any]) -> str:
