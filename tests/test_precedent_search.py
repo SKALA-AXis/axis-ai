@@ -1,6 +1,7 @@
 """QdrantPrecedentSearch 어댑터 단위 테스트 — hybrid_search 는 monkeypatch."""
 
 import time
+from datetime import date
 from typing import Any
 
 import pytest
@@ -184,7 +185,12 @@ class TestBuilderIntegration:
         builder = AnalysisContextBuilder(qdrant_search=QdrantPrecedentSearch())
 
         out = builder._find_precedents(
-            input_bundle=_bundle(), peers=["lg_cns"], sectors=["ax"], min_days_since=7, top_k=5
+            input_bundle=_bundle(),
+            peers=["lg_cns"],
+            sectors=["ax"],
+            min_days_since=7,
+            top_k=5,
+            anchor=date.today(),
         )
 
         assert [c.card_id for c in out] == ["IC-20260601-001"]
@@ -201,7 +207,12 @@ class TestBuilderIntegration:
         # 어댑터 예외 → DB fallback 경로로 내려가며 예외가 전파되지 않아야 한다.
         # (로컬 DB 유무에 따라 fallback 결과 수는 달라질 수 있어 내용은 단언하지 않는다.)
         out = builder._find_precedents(
-            input_bundle=_bundle(), peers=["lg_cns"], sectors=["ax"], min_days_since=7, top_k=5
+            input_bundle=_bundle(),
+            peers=["lg_cns"],
+            sectors=["ax"],
+            min_days_since=7,
+            top_k=5,
+            anchor=date.today(),
         )
 
         assert isinstance(out, list)
