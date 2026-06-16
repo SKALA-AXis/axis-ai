@@ -25,6 +25,7 @@ from src.preprocessing.relevance import (
     _core_company_role_reject_result,
     _fast_pass_result,
     _noise_reject_result,
+    analyze_relevance_article,
 )
 
 
@@ -104,6 +105,80 @@ def test_preprocessing_skips_dead_news_links_before_relevance(monkeypatch):
 
     assert skipped == [1]
     assert marked == [(1, "https://dead.example/news/1", 404)]
+
+
+def test_industry_news_relevance_fast_pass_without_company_mention():
+    article = {
+        "id": 51009,
+        "company": ["industry_trend"],
+        "source_type": "news",
+        "source_name": "naver_industry_news",
+        "title": "AI 경쟁 승부처는 전력·데이터·제도…산업현장 확산이 성패 가른다",
+        "content": "AI 경쟁이 모델 성능을 넘어 산업 현장과 전력, 데이터 인프라로 확장되고 있다.",
+        "metadata": {"topic_scope": "industry_trend", "matched_sectors": ["ax", "infra"]},
+        "crawl_status": "success",
+    }
+
+    enriched, is_relevant = analyze_relevance_article(article)
+
+    assert is_relevant is True
+    assert enriched["relevance_label"] == "relevant"
+    assert enriched["metadata"]["topic_scope"] == "industry_trend"
+
+
+def test_industry_news_relevance_blocks_single_company_certification_noise():
+    article = {
+        "id": 51010,
+        "company": ["industry_trend"],
+        "source_type": "news",
+        "source_name": "naver_industry_news",
+        "title": "영풍, 정보보호 국제표준 'ISO 27001' 인증 획득",
+        "content": "개별 기업의 인증 획득 소식이다.",
+        "metadata": {"topic_scope": "industry_trend", "matched_sectors": ["security"]},
+        "crawl_status": "success",
+    }
+
+    enriched, is_relevant = analyze_relevance_article(article)
+
+    assert is_relevant is False
+    assert enriched["relevance_label"] == "irrelevant"
+    assert "인증 획득 단신" in enriched["relevance_reason"]
+
+
+def test_industry_news_relevance_keeps_broad_security_framework_anchor():
+    article = {
+        "id": 51012,
+        "company": ["industry_trend"],
+        "source_type": "news",
+        "source_name": "naver_industry_news",
+        "title": "N2SF 국가 망 보안체제 시대 공공 보안시장 공략",
+        "content": "국가 망 보안체제와 제로트러스트 전환이 공공 보안시장 변화로 제시됐다.",
+        "metadata": {"topic_scope": "industry_trend", "matched_sectors": ["security"]},
+        "crawl_status": "success",
+    }
+
+    enriched, is_relevant = analyze_relevance_article(article)
+
+    assert is_relevant is True
+    assert enriched["relevance_label"] == "relevant"
+
+
+def test_industry_news_relevance_keeps_ai_adoption_infrastructure_signal():
+    article = {
+        "id": 51011,
+        "company": ["industry_trend"],
+        "source_type": "news",
+        "source_name": "naver_industry_news",
+        "title": "대학 63% 생성형 AI 도입했지만 인프라·인력·예산 미비",
+        "content": "교육 분야 생성형 AI 도입이 확산됐지만 인프라와 인력 부족이 과제로 제시됐다.",
+        "metadata": {"topic_scope": "industry_trend", "matched_sectors": ["ax", "infra"]},
+        "crawl_status": "success",
+    }
+
+    enriched, is_relevant = analyze_relevance_article(article)
+
+    assert is_relevant is True
+    assert enriched["relevance_label"] == "relevant"
 
 
 def test_same_issue_does_not_merge_on_customer_name_only():
@@ -1353,6 +1428,110 @@ def test_national_ai_computing_center_uses_generic_signature():
     }
 
     assert _event_signature(article).startswith(("cloud_infra:", "general:"))
+
+
+def test_industry_trend_ai_competition_titles_share_signal_key():
+    left = {
+        "id": 51001,
+        "company": ["industry_trend"],
+        "source_name": "naver_industry_news",
+        "title": "[경제 브리핑] AI 경쟁 승부처, 인프라·데이터·제도 기반이 가른다",
+        "content": "",
+        "published_at": "2026-06-16T11:34:00+09:00",
+    }
+    right = {
+        "id": 51002,
+        "company": ["industry_trend"],
+        "source_name": "naver_industry_news",
+        "title": "\"AI 경쟁, '모델 성능' 넘어 '전력 인프라·데이터·제도'로 전선 확장\"",
+        "content": "",
+        "published_at": "2026-06-16T10:50:00+09:00",
+    }
+
+    assert _event_signature(left) == "industry:ai_competition_infra_data_policy"
+    assert _event_signature(left) == _event_signature(right)
+    assert _should_merge_articles(left, right, 0.62, 0.80) is True
+
+
+def test_industry_trend_6g_security_standard_titles_share_signal_key():
+    left = {
+        "id": 51003,
+        "company": ["industry_trend"],
+        "source_name": "naver_industry_news",
+        "title": "韓 AI·6G 보안 국제표준 개발 착수···ITU-T서 신규과제 14건 승인",
+        "content": "",
+        "published_at": "2026-06-14T14:19:00+09:00",
+    }
+    right = {
+        "id": 51004,
+        "company": ["industry_trend"],
+        "source_name": "naver_industry_news",
+        "title": "과기정통부, AI·6G 보안 국제표준 개발 착수",
+        "content": "",
+        "published_at": "2026-06-12T16:34:00+09:00",
+    }
+
+    assert _event_signature(left) == "industry:ai_6g_security_standard"
+    assert _event_signature(left) == _event_signature(right)
+    assert _should_merge_articles(left, right, 0.62, 0.80) is True
+
+
+def test_industry_trend_supply_chain_threat_titles_share_signal_key():
+    left = {
+        "id": 51007,
+        "company": ["industry_trend"],
+        "source_name": "naver_industry_news",
+        "title": "협력사 통해 뚫린다… 공급망 공격, 사이버 위협 1위",
+        "content": "",
+        "published_at": "2026-06-16T12:10:00+09:00",
+    }
+    right = {
+        "id": 51008,
+        "company": ["industry_trend"],
+        "source_name": "naver_industry_news",
+        "title": '"작년 기업 31% 공급망 위협 경험 ... 위협으로 꼽은 기업 9% 불과"',
+        "content": "",
+        "published_at": "2026-06-16T11:26:00+09:00",
+    }
+
+    assert _event_signature(left) == "industry:supply_chain_attack_risk"
+    assert _event_signature(left) == _event_signature(right)
+    assert _should_merge_articles(left, right, 0.62, 0.80) is True
+
+
+def test_industry_trend_signal_key_prefers_title_over_broad_body_context():
+    article = {
+        "id": 51010,
+        "company": ["industry_trend"],
+        "source_name": "naver_industry_news",
+        "title": "“믿었던 거래처가 구멍”…기업 3곳 중 1곳, 공급망 공격 당했다",
+        "content": "본문 배경에는 AI 경쟁이 전력·데이터·제도 싸움으로 확장된다는 설명도 포함됐다.",
+        "published_at": "2026-06-16T09:42:00+09:00",
+    }
+
+    assert _event_signature(article) == "industry:supply_chain_attack_risk"
+
+
+def test_industry_trend_keeps_different_signal_topics_separate():
+    ai_infra = {
+        "id": 51005,
+        "company": ["industry_trend"],
+        "source_name": "naver_industry_news",
+        "title": "AI 승부처 바뀌었다 “모델 성능 아닌 전력·법·데이터 싸움”",
+        "content": "",
+        "published_at": "2026-06-16T09:24:00+09:00",
+    }
+    security_standard = {
+        "id": 51006,
+        "company": ["industry_trend"],
+        "source_name": "naver_industry_news",
+        "title": "과기정통부, AI·6G 보안 국제표준 개발 착수",
+        "content": "",
+        "published_at": "2026-06-12T16:34:00+09:00",
+    }
+
+    assert _event_signature(ai_infra) != _event_signature(security_standard)
+    assert _should_merge_articles(ai_infra, security_standard, 0.95, 0.80) is False
 
 
 def test_relevance_rejects_financial_theme_without_peer_in_title():

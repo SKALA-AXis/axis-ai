@@ -390,10 +390,7 @@ def _test_directional_key_sentence(text: str) -> str:
     ):
         return value
     base = re.sub(r"(입니다|합니다|한다|다)$", "", value.rstrip(".。"))
-    return (
-        base
-        + "는 유사 사업의 평가 기준이 고객 제안 범위와 검증 조건으로 이동하는 흐름입니다."
-    )
+    return base + "는 유사 사업의 평가 기준이 고객 제안 범위와 검증 조건으로 이동하는 흐름입니다."
 
 
 def _companies_from_integrated_issue(integrated_issue: dict[str, Any]) -> list[str]:
@@ -812,99 +809,11 @@ def test_market_infra_signal_without_direct_peer_action_is_watch_only():
     assert diagnostics["direct_peer_action"] is False
     assert diagnostics["primary_actor_type"] in {"global_vendor", "multi_actor", "unknown"}
     assert "frontend_ready" not in result["implication"]
-    assert result["implication"]["industry_frontend_ready"]["display_policy"] == "industry_only"
-    assert result["implication"]["industry_frontend_ready"]["signal_scope"] == (
-        "market_infra_signal"
-    )
-    assert result["implication"]["industry_frontend_ready"]["items"]
+    assert "industry_frontend_ready" not in result["implication"]
+    assert diagnostics["display_policy"] == "needs_review_only"
+    assert "자동 생성하지 않습니다" in diagnostics["removed_reason"]
     assert "llm_skipped" in diagnostics["phase_decisions"]
     assert llm.invoke.call_count == 0
-
-
-def test_industry_frontend_ready_keeps_only_distinct_strategic_axes():
-    issue = _minimal_integrated_issue_with_fact(
-        company_id="lg_cns",
-        fact_id="infra_axis_f1",
-        fact=(
-            "글로벌 AI 반도체 기업 CEO는 한국 기업들이 AI 팩토리와 "
-            "데이터센터 인프라를 확장해야 한다고 말했다."
-        ),
-    )
-    issue["fact_summary"].extend(
-        [
-            "국내 주요 그룹과 AI 인프라 구축 협력 가능성도 함께 언급됐다.",
-            "AI 팩토리 구축에는 GPU 확보와 데이터센터 운영 조건이 포함된다.",
-        ]
-    )
-    issue["integrated_text"] = "\n".join(issue["fact_summary"])
-
-    frontend_ready = strategic_insight_module._industry_frontend_ready_from_decision(
-        integrated_issue=issue,
-        skip_decision={
-            "signal_scope": "market_infra_signal",
-            "primary_actor_type": "global_vendor",
-        },
-    )
-
-    items = frontend_ready["items"]
-    assert len(items) == 1
-    sentences = [
-        item["key_implication"]["sentence"]
-        for item in items
-        if isinstance(item.get("key_implication"), dict)
-    ]
-    evidence_sentences = [
-        item["key_implication"]["evidence_sentence"]
-        for item in items
-        if isinstance(item.get("key_implication"), dict)
-    ]
-    assert len(sentences) == len(set(sentences))
-    assert "AI 팩토리" in evidence_sentences[0] or "AI 인프라" in evidence_sentences[0]
-
-
-def test_industry_frontend_ready_uses_dynamic_decision_criteria_without_peer_reason():
-    issue = _minimal_integrated_issue_with_fact(
-        company_id="lg_cns",
-        fact_id="industry_dynamic_f1",
-        fact=(
-            "글로벌 공급사는 제조기업과 스마트팩토리 공동 실증을 논의했고, "
-            "기존 MES 연계와 비용 부담을 후속 검토한다고 밝혔다."
-        ),
-    )
-    issue["fact_summary"].append(
-        "참여 기업들은 현장 적용 범위와 파트너십 필요성을 추가로 확인할 예정이다."
-    )
-    issue["integrated_text"] = "\n".join(issue["fact_summary"])
-
-    frontend_ready = strategic_insight_module._industry_frontend_ready_from_decision(
-        integrated_issue=issue,
-        skip_decision={
-            "signal_scope": "industry_signal",
-            "primary_actor_type": "multi_actor",
-        },
-    )
-
-    item = frontend_ready["items"][0]
-    action = item["suggested_action"]
-    insight = item["key_implication"]
-    action_text = f"{action['sentence']} {action['evidence_sentence']}"
-    display_text = (
-        f"{insight['sentence']} {insight['evidence_sentence']} "
-        f"{action['sentence']} {action['evidence_sentence']}"
-    )
-
-    assert "피어 직접 실행" not in action_text
-    assert "투자 조건, 운영 책임, 고객 적용 가능성" not in action_text
-    assert "항목" not in display_text
-    assert action["decision_criteria"]
-    assert any(
-        criterion in action["decision_criteria"]
-        for criterion in ("비용 부담", "기존 시스템 접점", "파트너십 필요성", "고객 적용 가능성")
-    )
-    assert any(
-        phrase in action_text
-        for phrase in ("시스템", "외부 협력", "파트너", "고객 적용", "투자 부담", "접점")
-    )
 
 
 def test_invalid_market_infra_signal_preserves_industry_signal_diagnostics():
@@ -934,7 +843,8 @@ def test_invalid_market_infra_signal_preserves_industry_signal_diagnostics():
     assert diagnostics["signal_scope"] == "market_infra_signal"
     assert diagnostics["direct_peer_action"] is False
     assert result["implication"]["industry_signal"]["signal_scope"] == "market_infra_signal"
-    assert "display_label" not in result["implication"]["industry_frontend_ready"]
+    assert "industry_frontend_ready" not in result["implication"]
+    assert diagnostics["display_policy"] == "needs_review_only"
     assert "watch_only_industry_signal" in diagnostics["phase_decisions"]
     assert llm.invoke.call_count == 0
 
@@ -2046,8 +1956,7 @@ def test_frontend_ready_rejects_vague_mixed_peer_action_sentence():
     )
 
     assert any(
-        "너무 넓은 표현" in violation or "일반 결론" in violation
-        for violation in violations
+        "너무 넓은 표현" in violation or "일반 결론" in violation for violation in violations
     )
 
 
@@ -2062,8 +1971,7 @@ def test_frontend_ready_rejects_internal_memo_style_comparison_action():
     )
     result = _frontend_ready_result(
         key_sentence=(
-            "에이전틱 AI 경쟁은 업무 자동화와 현장 로봇 적용을 함께 "
-            "보여주는 쪽으로 넓어지고 있다."
+            "에이전틱 AI 경쟁은 업무 자동화와 현장 로봇 적용을 함께 보여주는 쪽으로 넓어지고 있다."
         ),
         key_evidence="11개 모듈 업무 자동화와 제조·물류 현장 로봇 플랫폼이 함께 제시됐다.",
         action_sentence=(
@@ -2365,9 +2273,7 @@ def test_valid_integrated_issue_with_dynamic_anchors_defaults_to_moderate_signal
         event_type="business_update",
     )
 
-    assert strategic_insight_module._has_integrated_issue_candidate_anchor_signal(
-        integrated_issue
-    )
+    assert strategic_insight_module._has_integrated_issue_candidate_anchor_signal(integrated_issue)
     assert strategic_insight_module._frontend_ready_actionable_signal_level(integrated_issue) == (
         "moderate"
     )
@@ -2387,12 +2293,11 @@ def test_invalid_summary_can_still_use_rich_integrated_text_as_candidate_signal(
     )
 
     assert strategic_insight_module._is_valid_integrated_issue(integrated_issue)
-    assert strategic_insight_module._has_integrated_issue_candidate_anchor_signal(
-        integrated_issue
-    )
-    assert strategic_insight_module._frontend_ready_actionable_signal_level(
-        integrated_issue
-    ) in {"strong", "moderate"}
+    assert strategic_insight_module._has_integrated_issue_candidate_anchor_signal(integrated_issue)
+    assert strategic_insight_module._frontend_ready_actionable_signal_level(integrated_issue) in {
+        "strong",
+        "moderate",
+    }
 
 
 def test_security_execution_flow_action_axis_can_display_without_customer_contract():
@@ -2640,8 +2545,7 @@ def test_action_copy_must_not_use_customer_scale_as_direct_response_basis():
     )
     result = _frontend_ready_result(
         key_sentence=(
-            "스마트물류 협약은 로봇 도입 경쟁이 학습·관제 운영 구조로 "
-            "확장될 수 있음을 보여줍니다."
+            "스마트물류 협약은 로봇 도입 경쟁이 학습·관제 운영 구조로 확장될 수 있음을 보여줍니다."
         ),
         key_evidence=(
             "학습 플랫폼과 통합 관제 플랫폼이 물류센터 로봇 운영에 함께 쓰인다는 "
@@ -2683,12 +2587,9 @@ def test_key_implication_allows_grounded_direction_when_business_context_exists(
     )
     result = _frontend_ready_result(
         key_sentence="운영 플랫폼 협약은 경쟁 기준이 더 구체화되는 흐름입니다.",
-        key_evidence=(
-            "고객 업무 시스템 적용과 운영 데이터 연계 범위가 협약에 포함됐습니다."
-        ),
+        key_evidence=("고객 업무 시스템 적용과 운영 데이터 연계 범위가 협약에 포함됐습니다."),
         action_sentence=(
-            "SK AX는 유사 운영 플랫폼 사업에서 시스템 연계 범위와 "
-            "데이터 연결 조건을 나눠야 합니다."
+            "SK AX는 유사 운영 플랫폼 사업에서 시스템 연계 범위와 데이터 연결 조건을 나눠야 합니다."
         ),
         action_evidence=(
             "이 구분이 있어야 SK AX가 직접 확인할 시스템 범위와 "
@@ -2768,10 +2669,7 @@ def test_frontend_ready_rejects_unsupported_business_jargon():
         event_type="launch",
     )
     result = _frontend_ready_result(
-        key_sentence=(
-            "업무 플랫폼 출시는 고객 제안 범위가 플랫폼 주도권으로 확장되는 "
-            "흐름입니다."
-        ),
+        key_sentence=("업무 플랫폼 출시는 고객 제안 범위가 플랫폼 주도권으로 확장되는 흐름입니다."),
         key_evidence="문서 시스템 처리 범위를 지원하는 업무 플랫폼 출시가 제시됐습니다.",
         action_sentence=(
             "SK AX는 업무 플랫폼 연동 범위와 처리 업무 기준을 고객 제안 단위로 나눠야 합니다."
@@ -2783,9 +2681,9 @@ def test_frontend_ready_rejects_unsupported_business_jargon():
         key_event_terms=["업무 플랫폼", "문서 시스템"],
         action_event_terms=["업무 플랫폼", "문서 시스템"],
     )
-    result["implication"]["frontend_ready"]["key_implication"][
-        "sentence"
-    ] += " 밸류에이션 개선 신호로도 볼 수 있습니다."
+    result["implication"]["frontend_ready"]["key_implication"]["sentence"] += (
+        " 밸류에이션 개선 신호로도 볼 수 있습니다."
+    )
 
     violations = strategic_insight_module._frontend_ready_required_violations(
         result,
@@ -3205,8 +3103,7 @@ def test_frontend_only_violation_skips_self_review_and_attempts_frontend_ready_r
                     "입력에는 토큰증권 기능분석 컨설팅과 테스트베드 플랫폼 구축이 함께 제시됩니다."
                 ),
                 action_sentence=(
-                    "SK AX는 토큰증권 유사 사업에서 수행 범위와 검증 기준을 "
-                    "나눠 점검해야 합니다."
+                    "SK AX는 토큰증권 유사 사업에서 수행 범위와 검증 기준을 나눠 점검해야 합니다."
                 ),
                 action_evidence=(
                     "두 과제가 함께 제시되어 유사 사업에서 수행 범위와 "

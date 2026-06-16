@@ -34,6 +34,93 @@ def test_card_news_insert_params_preserve_integrated_issue_id():
     assert payload["analysis_package"]["integrated_issue_id"] == issue_id
 
 
+def test_card_news_insert_params_leaves_industry_trend_peer_fk_empty():
+    params = _card_news_insert_params(
+        {
+            "id": "CN-20260616-1",
+            "company": "industry_trend",
+            "cluster_id": 1,
+            "title": "산업 동향 카드",
+            "summary_lines": ["1", "2", "3"],
+            "event_type": "industry_trend",
+            "sector": "security",
+        }
+    )
+
+    assert params["company"] == "industry_trend"
+    assert params["peer_company_id"] is None
+    assert params["primary_keyword_category"] == "security"
+
+
+def test_card_news_insert_params_maps_industry_frontend_ready_to_display_frontend():
+    params = _card_news_insert_params(
+        {
+            "id": "CN-20260616-2",
+            "company": "industry_trend",
+            "cluster_id": 2,
+            "title": "산업 동향 카드",
+            "summary_lines": ["요약"],
+            "event_type": "industry_trend",
+            "sector": "security",
+            "analysis_package": {
+                "implication": {
+                    "is_valid_implication": True,
+                    "industry_frontend_ready": {
+                        "source": "industry_signal_direct",
+                        "display_policy": "industry_only",
+                        "signal_scope": "industry_trend",
+                        "items": [
+                            {
+                                "key_implication": {
+                                    "sentence": (
+                                        "공급망 보안은 개별 기업 이슈보다 "
+                                        "산업 운영 기준으로 이동하고 있다."
+                                    ),
+                                    "evidence_sentence": (
+                                        "SW 공급망 보안 로드맵 공개 예고와 "
+                                        "공급망 공격 증가가 함께 확인됐다."
+                                    ),
+                                },
+                                "suggested_action": {
+                                    "sentence": (
+                                        "SK AX는 외부 솔루션과 오픈소스 검증 기준을 "
+                                        "제안 단계에서 분리해 점검해야 한다."
+                                    ),
+                                    "evidence_sentence": (
+                                        "로드맵 공개 예고가 SBOM과 공급망 검증 기준을 "
+                                        "선제 점검할 근거가 된다."
+                                    ),
+                                },
+                            }
+                        ],
+                    },
+                }
+            },
+        }
+    )
+
+    implication = json.loads(params["implication"])
+    frontend = implication["frontend"]
+    assert frontend["source"] == "industry_signal_direct"
+    assert frontend["display_policy"] == "industry_only"
+    assert frontend["signal_scope"] == "industry_trend"
+    assert frontend["key_implication_items"] == [
+        {
+            "main": "공급망 보안은 개별 기업 이슈보다 산업 운영 기준으로 이동하고 있다.",
+            "detail": "SW 공급망 보안 로드맵 공개 예고와 공급망 공격 증가가 함께 확인됐다.",
+        }
+    ]
+    assert frontend["suggested_action_items"] == [
+        {
+            "main": (
+                "SK AX는 외부 솔루션과 오픈소스 검증 기준을 제안 단계에서 분리해 점검해야 한다."
+            ),
+            "detail": "로드맵 공개 예고가 SBOM과 공급망 검증 기준을 선제 점검할 근거가 된다.",
+        }
+    ]
+    assert implication["recommended_actions"] == frontend["suggested_actions"]
+
+
 def test_card_news_insert_params_maps_frontend_ready_to_display_frontend():
     params = _card_news_insert_params(
         {

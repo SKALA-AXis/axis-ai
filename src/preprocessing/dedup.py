@@ -48,6 +48,8 @@ _CLUSTER_LLM_MAX_CALLS = int(os.getenv("DEDUP_CLUSTER_LLM_MAX_CALLS", "80"))
 _CLUSTER_LLM_MODEL = os.getenv("DEDUP_CLUSTER_LLM_MODEL", "gpt-4o-mini")
 _CLUSTER_LLM_CONTENT_CHARS = int(os.getenv("DEDUP_CLUSTER_LLM_CONTENT_CHARS", "280"))
 _ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
+_INDUSTRY_TREND_COMPANY = "industry_trend"
+_INDUSTRY_NEWS_SOURCE_NAME = "naver_industry_news"
 _EVENT_BUCKET_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("investment_deal", ("투자", "지분", "인수", "두나무", "m&a", "ma")),
     (
@@ -477,6 +479,10 @@ def _rule_prefilter_groups(articles: list[dict[str, Any]]) -> list[list[dict[str
 
 
 def _rule_prefilter_key(article: dict[str, Any]) -> str:
+    industry_key = _industry_trend_signal_key(article)
+    if industry_key:
+        return industry_key
+
     security_action_key = _security_action_prefilter_key(article)
     if security_action_key:
         return f"{_published_day(article)}::{security_action_key}"
@@ -799,6 +805,11 @@ def _split_cluster_value_by_event_key(
 
 
 def _event_buckets_compatible(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_industry_key = _industry_trend_signal_key(left)
+    right_industry_key = _industry_trend_signal_key(right)
+    if left_industry_key or right_industry_key:
+        return bool(left_industry_key and left_industry_key == right_industry_key)
+
     left_bucket = _event_bucket(left)
     right_bucket = _event_bucket(right)
     if left_bucket == "general" or right_bucket == "general":
@@ -839,6 +850,10 @@ def _event_signatures_compatible(left: dict[str, Any], right: dict[str, Any]) ->
 
 
 def _event_prefilter_key(article: dict[str, Any]) -> str:
+    industry_key = _industry_trend_signal_key(article)
+    if industry_key:
+        return industry_key
+
     bucket = _event_bucket(article)
     if bucket == "contract_deal" or (
         bucket == "market_reaction" and _has_contract_markers(_issue_text(article))
@@ -852,6 +867,10 @@ def _event_prefilter_key(article: dict[str, Any]) -> str:
 
 
 def _event_split_key(article: dict[str, Any]) -> str:
+    industry_key = _industry_trend_signal_key(article)
+    if industry_key:
+        return industry_key
+
     bucket = _event_bucket(article)
     if bucket == "contract_deal":
         return _event_signature(article)
@@ -865,6 +884,9 @@ def _event_split_key(article: dict[str, Any]) -> str:
 
 
 def _uses_cross_day_prefilter(article: dict[str, Any]) -> bool:
+    if _industry_trend_signal_key(article):
+        return True
+
     bucket = _event_bucket(article)
     if bucket in {"contract_deal", "investment_deal", "ax_strategy", "cloud_infra"}:
         return True
@@ -873,6 +895,10 @@ def _uses_cross_day_prefilter(article: dict[str, Any]) -> bool:
 
 def _event_signature(article: dict[str, Any]) -> str:
     """Fine-grained deterministic issue key used before BGE similarity."""
+    industry_key = _industry_trend_signal_key(article)
+    if industry_key:
+        return industry_key
+
     bucket = _event_bucket(article)
     title = _compact_text(str(article.get("title") or ""))
     text = _issue_text(article)
@@ -1132,6 +1158,11 @@ def _within_cluster_time_window(left: dict[str, Any], right: dict[str, Any]) -> 
 
 
 def _same_issue(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_industry_key = _industry_trend_signal_key(left)
+    right_industry_key = _industry_trend_signal_key(right)
+    if left_industry_key or right_industry_key:
+        return bool(left_industry_key and left_industry_key == right_industry_key)
+
     left_key = _issue_dedup_key(left)
     if left_key and left_key == _issue_dedup_key(right):
         return True
@@ -1598,6 +1629,66 @@ def _company_key(article: dict[str, Any]) -> list[str]:
     if isinstance(value, (list, tuple)):
         return _canonical_company_keys(value)
     return []
+
+
+def _is_industry_trend_article(article: dict[str, Any]) -> bool:
+    companies = set(_company_key(article))
+    if _INDUSTRY_TREND_COMPANY in companies:
+        return True
+
+    if str(article.get("source_name") or "") == _INDUSTRY_NEWS_SOURCE_NAME:
+        return True
+
+    metadata = article.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("topic_scope") == "industry_trend":
+        return True
+
+    extra = article.get("extra")
+    return isinstance(extra, dict) and extra.get("topic_scope") == "industry_trend"
+
+
+def _industry_trend_signal_key(article: dict[str, Any]) -> str:
+    """Narrow same-topic key for industry trend news.
+
+    Industry cards should cluster true same-topic coverage, not every broad
+    AI/security article in the week. These keys intentionally require multiple
+    anchor terms from the title/lead.
+    """
+    if not _is_industry_trend_article(article):
+        return ""
+
+    title_text = _compact_text(str(article.get("title") or ""))
+    full_text = _issue_text(article)
+    if not title_text and not full_text:
+        return ""
+    text = title_text or full_text
+
+    if (
+        "ai경쟁" in text
+        and any(
+            term in text for term in ("전력", "데이터", "인프라", "제도", "산업현장", "실물경제")
+        )
+    ) or (
+        "ai승부처" in text and any(term in text for term in ("전력", "데이터", "인프라", "제도"))
+    ):
+        return "industry:ai_competition_infra_data_policy"
+
+    if "6g" in text and "보안" in text and "표준" in text:
+        return "industry:ai_6g_security_standard"
+
+    if "공급망" in text and any(term in text for term in ("공격", "위협", "리스크")):
+        return "industry:supply_chain_attack_risk"
+
+    if "공급망" in text and "보안" in text and "로드맵" in text:
+        return "industry:sw_supply_chain_security_roadmap"
+
+    if ("ai에이전트" in text or "aiagent" in text) and ("권한관리" in text or "거버넌스" in text):
+        return "industry:ai_agent_governance"
+
+    if "내부ai" in text and "외부ai" in text and "전환" in text:
+        return "industry:enterprise_ai_adoption_shift"
+
+    return ""
 
 
 def _canonical_company_keys(values: list[Any] | tuple[Any, ...]) -> list[str]:

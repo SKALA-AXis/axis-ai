@@ -51,6 +51,7 @@ OFFICIAL_RELEVANCE_SOURCE_TYPES: set[str] = set()
 OFFICIAL_DOCUMENT_SOURCE_TYPES = OFFICIAL_SOURCE_TYPES
 COMPANY_SITE_DOCUMENT_SOURCE_TYPES = COMPANY_SITE_SOURCE_TYPES
 COMPANY_FILTER_EXEMPT_SOURCE_TYPES = INDUSTRY_DOCUMENT_SOURCE_TYPES | {"search_trend"}
+COMPANY_FILTER_EXEMPT_SOURCE_NAMES = {"naver_industry_news"}
 
 _LOAD_SQL = text("""
     SELECT ra.id
@@ -60,6 +61,7 @@ _LOAD_SQL = text("""
       AND (
           :no_filter
           OR ra.source_type = ANY(:company_filter_exempt_source_types)
+          OR ra.source_name = ANY(:company_filter_exempt_source_names)
           OR ra.company ?| :company
       )
       AND (:collected_since IS NULL OR ra.collected_at >= CAST(:collected_since AS timestamptz))
@@ -305,6 +307,7 @@ class PreprocessingService:
                     "company": company_filter if company_filter else [""],
                     "no_filter": len(company_filter) == 0,
                     "company_filter_exempt_source_types": list(COMPANY_FILTER_EXEMPT_SOURCE_TYPES),
+                    "company_filter_exempt_source_names": list(COMPANY_FILTER_EXEMPT_SOURCE_NAMES),
                     "source_types": source_type_filter if source_type_filter else [""],
                     "no_source_filter": len(source_type_filter) == 0,
                     "collected_since": collected_since,

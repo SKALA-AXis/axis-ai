@@ -19,6 +19,7 @@ DEFAULT_UNTIL_DATE = date(2023, 1, 1)
 
 BACKFILL_SOURCES: dict[str, BackfillSourceConfig] = {
     "naver_news": BackfillSourceConfig("naver_news", 1, 3, DEFAULT_UNTIL_DATE),
+    "naver_industry_news": BackfillSourceConfig("naver_industry_news", 7, 2, DEFAULT_UNTIL_DATE),
     "company_news": BackfillSourceConfig("company_news", 30, 2, DEFAULT_UNTIL_DATE),
     "global_newsroom": BackfillSourceConfig("global_newsroom", 30, 2, DEFAULT_UNTIL_DATE),
     "naver_research": BackfillSourceConfig("naver_research", 30, 2, DEFAULT_UNTIL_DATE),

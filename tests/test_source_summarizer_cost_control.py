@@ -284,6 +284,73 @@ def test_non_financial_summary_rejects_numeric_only_lines() -> None:
     assert "수치/시장반응 중심" in checked["reason"]
 
 
+def test_validate_fact_id_summary_detects_cross_company_attribution() -> None:
+    facts = [
+        {
+            "fact_id": "f1",
+            "article_id": 1,
+            "summary_role": "main_event",
+            "fact_type": "application_fact",
+            "normalized_fact": (
+                "삼성전자는 임직원 2500여명을 대상으로 서비스 실효성 검증을 거쳐 "
+                "생성형 AI 서비스 3종을 선정했다."
+            ),
+            "evidence_text": (
+                "삼성전자는 임직원 2500여명을 대상으로 서비스 실효성 검증을 거쳐 "
+                "생성형 AI 서비스 3종을 선정했다."
+            ),
+            "numbers": ["2500여명", "3종"],
+        },
+        {
+            "fact_id": "f2",
+            "article_id": 1,
+            "summary_role": "service_function",
+            "fact_type": "application_fact",
+            "normalized_fact": "LG CNS는 앤트로픽과 클로드 엔터프라이즈 통합 계약을 체결했다.",
+            "evidence_text": "LG CNS는 앤트로픽과 클로드 엔터프라이즈 통합 계약을 체결했다.",
+            "numbers": [],
+        },
+        {
+            "fact_id": "f3",
+            "article_id": 1,
+            "summary_role": "application_case",
+            "fact_type": "application_fact",
+            "normalized_fact": (
+                "계약은 특정 계열사가 아니라 그룹 전반에 적용 가능한 형태로 알려졌다."
+            ),
+            "evidence_text": "계약은 특정 계열사가 아니라 그룹 전반에 적용 가능한 형태로 알려졌다.",
+            "numbers": [],
+        },
+    ]
+    result = {
+        "is_valid_summary": True,
+        "cluster_event_type": "general_update",
+        "fact_summary": [
+            (
+                "LG CNS는 임직원 2500여명을 대상으로 서비스 실효성 검증을 거쳐 "
+                "생성형 AI 서비스 3종을 선정했다."
+            ),
+            facts[1]["normalized_fact"],
+            facts[2]["normalized_fact"],
+        ],
+        "summary_lines_with_fact_ids": [
+            {"line_index": 1, "text": "", "fact_ids": ["f1"]},
+            {"line_index": 2, "text": "", "fact_ids": ["f2"]},
+            {"line_index": 3, "text": "", "fact_ids": ["f3"]},
+        ],
+    }
+
+    checked = summarizer._validate_fact_id_summary(
+        result=result,
+        extracted_facts=facts,
+        source_article_ids=[],
+        main_company="lg_cns",
+    )
+
+    assert checked["is_valid_summary"] is False
+    assert "회사 주체 귀속 불일치" in checked["reason"]
+
+
 def test_extracted_facts_drop_article_body_noise_without_title_overlap() -> None:
     facts = summarizer._build_extracted_facts(
         cluster_id=46515,

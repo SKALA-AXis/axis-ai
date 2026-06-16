@@ -120,7 +120,7 @@ _ISSUE_CARD_PROMPT = """\
 
 ## 작성 규칙
 - 제목: 핵심 사실을 담은 한 문장 (40자 이내)
-- 요약: 최소 3줄, 최대 5줄. 각 줄은 "1.", "2."처럼 순번으로 시작
+- 요약: 최소 3줄, 최대 5줄. 각 줄은 순번 없이 사실 문장만 작성
 - 출처 목록: 사용한 기사의 title, source_name, url 포함
 
 ## 이벤트 타입 (하나만 선택, 가장 두드러진 성격 기준)
@@ -137,7 +137,7 @@ _ISSUE_CARD_PROMPT = """\
 다음 JSON 형식으로만 응답하세요 (추가 텍스트 금지):
 {{
   "title": "이슈 제목",
-  "summary_lines": ["1. ...", "2. ...", "3. ...", "4. ...", "5. ..."],
+  "summary_lines": ["...", "...", "...", "...", "..."],
   "event_type": "tech",
   "sources": [
     {{"index": 1, "title": "...", "source_name": "...", "url": "...", "credibility_score": 0.0}}
@@ -1946,7 +1946,9 @@ def _literal_summary_lines(
     out: list[str] = []
     seen: set[str] = set()
     for line in lines:
-        text = _clean_display_truncated_fragment(line)
+        text = _clean_display_truncated_fragment(_strip_number_prefix(str(line or "")))
+        if _looks_like_non_summary_line(text):
+            continue
         key = re.sub(r"\s+", " ", text).casefold()
         if not text or key in seen:
             continue
@@ -1965,7 +1967,7 @@ def _article_title_summary_lines(articles: list[dict[str, Any]]) -> list[str]:
     def add_line(value: Any) -> None:
         text = _clean_card_editorial_text(str(value or ""))
         text = re.sub(r"\s+", " ", text).strip(" .")
-        if not text or _looks_like_article_boilerplate(text):
+        if not text or _looks_like_article_boilerplate(text) or _looks_like_non_summary_line(text):
             return
         key = re.sub(r"\W+", "", text).casefold()
         if key in seen:
@@ -1991,6 +1993,8 @@ def _merge_summary_lines(primary: list[str], fallback: list[str]) -> list[str]:
     seen: set[str] = set()
     for line in [*primary, *fallback]:
         text = _clean_card_editorial_text(str(line or "")).strip(" .")
+        if _looks_like_non_summary_line(text):
+            continue
         key = re.sub(r"\W+", "", text).casefold()
         if not text or key in seen:
             continue
@@ -1999,6 +2003,28 @@ def _merge_summary_lines(primary: list[str], fallback: list[str]) -> list[str]:
         if len(merged) >= _SUMMARY_LINE_MAX:
             break
     return merged
+
+
+def _looks_like_non_summary_line(value: Any) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return True
+    if text.endswith(("?", "？")):
+        return True
+    if re.search(r"(이유|왜|전망은|가능성은|과제는|향방은|뭘까|무엇인가)\??$", text):
+        return True
+    if re.search(
+        r"^(단독|종합|속보|인터뷰|기획|칼럼|사설|재계|업계|현장)\s*[,·:]",
+        text,
+    ):
+        return True
+    if re.search(
+        r"뉴스\s*듣기|글자\s*크기|기사\s*공유|주소복사|댓글|다크모드|"
+        r"폰트|구독|프린트|카카오톡|페이스북",
+        text,
+    ):
+        return True
+    return False
 
 
 def _article_content_sentences(content: str) -> list[str]:
@@ -3360,6 +3386,7 @@ def _validation_pass(summary: dict[str, Any], analysis: dict[str, Any]) -> bool:
         bool(summary.get("is_valid_summary", True))
         and not bool(summary.get("fact_extraction_failed"))
         and _summary_line_count_valid(summary)
+        and not any(_looks_like_non_summary_line(line) for line in _literal_summary_lines(summary))
         and not _missing_fact_basis_line_indexes(summary)
     ) and bool(analysis.get("is_valid_analysis", True))
 
@@ -3374,6 +3401,8 @@ def _validation_missing(summary: dict[str, Any], analysis: dict[str, Any]) -> li
         )
     if not _summary_line_count_valid(summary):
         missing.append("summary_lines must contain 3~5 lines")
+    if any(_looks_like_non_summary_line(line) for line in _literal_summary_lines(summary)):
+        missing.append("summary_lines include article headline/question or boilerplate")
     if not bool(summary.get("is_valid_summary", True)):
         missing.append("summary is invalid")
     if bool(summary.get("fact_extraction_failed")):

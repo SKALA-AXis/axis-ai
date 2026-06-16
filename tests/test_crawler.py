@@ -19,13 +19,19 @@ from src.crawler.sources.keyword import (
     request_datalab_api,
 )
 from src.crawler.sources.naver import (
+    INDUSTRY_NEWS_SOURCE_NAME,
     NaverApiCredentialExhaustedError,
     NaverCredential,
+    NaverIndustryNewsCrawler,
     NaverNewsCrawler,
     article_mentions_target_peer,
+    classify_industry_news_candidate,
     classify_peer_relevance,
     get_search_aliases,
     load_naver_credentials,
+)
+from src.crawler.sources.naver import (
+    INDUSTRY_TREND_COMPANY as NAVER_INDUSTRY_TREND_COMPANY,
 )
 from src.crawler.sources.naver_research import (
     NaverResearchCrawler,
@@ -85,6 +91,85 @@ def test_posco_dx_search_aliases_include_group_ax_signals():
     assert "포스코DX" in aliases
     assert "포스코 AX" in aliases
     assert "포스코 AI 에이전트" in aliases
+
+
+def test_industry_news_candidate_accepts_directional_infra_trend():
+    article = RawArticle(
+        url="https://example.com/ai-infra",
+        title="AI 경쟁, 모델 넘어 인프라로...전력·데이터 확보가 경쟁력 가른다",
+        content=(
+            "글로벌 AI 경쟁이 모델 성능 경쟁을 넘어 전력 인프라와 활용 가능한 "
+            "데이터, 기업 투자를 뒷받침할 제도 기반으로 확장되고 있다는 진단이 나왔다."
+        ),
+        source_name=INDUSTRY_NEWS_SOURCE_NAME,
+        source_type="news",
+        company=[NAVER_INDUSTRY_TREND_COMPANY],
+        extra={"sector": "infra"},
+    )
+
+    decision = classify_industry_news_candidate(article)
+
+    assert decision["decision"] == "pass"
+    assert "strong_industry_frame" in str(decision["reason"])
+
+
+def test_industry_news_candidate_rejects_tracked_peer_single_company_story():
+    article = RawArticle(
+        url="https://example.com/skax",
+        title="SK AX, 에이전틱 엔터프라이즈 전략 공개",
+        content="SK AX가 금융·제조 고객 대상 AI 에이전트 업무 혁신 사례를 소개했다.",
+        source_name=INDUSTRY_NEWS_SOURCE_NAME,
+        source_type="news",
+        company=[NAVER_INDUSTRY_TREND_COMPANY],
+        extra={"sector": "ax"},
+    )
+
+    decision = classify_industry_news_candidate(article)
+
+    assert decision["decision"] == "reject"
+    assert "reject_peer_centered" in str(decision["reason"])
+
+
+def test_industry_news_candidate_rejects_third_party_supply_story():
+    article = RawArticle(
+        url="https://example.com/elice",
+        title="엘리스그룹, 국가 AI 데이터센터 GPU 인프라 공급",
+        content=(
+            "엘리스그룹이 AI 클라우드와 GPU 인프라를 공급한다. "
+            "국내 AI 산업 생태계 경쟁력 강화가 목표다."
+        ),
+        source_name=INDUSTRY_NEWS_SOURCE_NAME,
+        source_type="news",
+        company=[NAVER_INDUSTRY_TREND_COMPANY],
+        extra={"sector": "infra"},
+    )
+
+    decision = classify_industry_news_candidate(article)
+
+    assert decision["decision"] == "reject"
+    assert "reject_third_party_centered" in str(decision["reason"])
+
+
+def test_industry_news_crawler_stores_articles_in_industry_bucket():
+    crawler = NaverIndustryNewsCrawler(fetch_body=False)
+    article = crawler._item_to_article(
+        {
+            "originallink": "https://example.com/roadmap",
+            "link": "https://n.news.naver.com/mnews/article/001/1",
+            "title": "정부, SW 공급망 보안 로드맵 공개",
+            "description": "SBOM과 제로트러스트 제도화를 포함한 공급망 보안 정책 방향을 발표했다.",
+            "pubDate": "Tue, 16 Jun 2026 10:00:00 +0900",
+        },
+        query="SW 공급망 보안 로드맵",
+        sector="security",
+    )
+
+    assert article.source_name == INDUSTRY_NEWS_SOURCE_NAME
+    assert article.source_type == "news"
+    assert article.company == [NAVER_INDUSTRY_TREND_COMPANY]
+    assert article.extra["collection_scope"] == "industry_keyword"
+    assert article.extra["topic_scope"] == "industry_trend"
+    assert "security" in article.extra["matched_sectors"]
 
 
 def test_posco_group_ax_article_matches_posco_dx_context():

@@ -1913,10 +1913,14 @@ def _resolve_peer_company_id(card: dict[str, Any]) -> Optional[str]:
     안전을 위해 None 으로 두고 보조 컬럼 company 만 사용).
     """
     direct = card.get("peer_company_id")
+    if str(direct or "").strip() == INDUSTRY_TREND_COMPANY:
+        return None
     if direct:
         return str(direct)
     company = card.get("company") or card.get("peer_id")
     if not company:
+        return None
+    if str(company).strip() == INDUSTRY_TREND_COMPANY:
         return None
     return str(company)
 
@@ -2004,6 +2008,17 @@ def _merge_implication_payload(card: dict[str, Any]) -> dict[str, Any]:
             skax = payload.get("skax_implication")
             if isinstance(skax, dict):
                 skax.setdefault("recommended_actions", ready_frontend["suggested_actions"])
+    if not _frontend_has_display_items(payload.get("frontend")):
+        industry_frontend = _frontend_implication_from_industry_frontend_ready(
+            payload.get("industry_frontend_ready")
+        )
+        if industry_frontend:
+            payload["frontend"] = industry_frontend
+            if industry_frontend.get("suggested_actions"):
+                payload.setdefault("recommended_actions", industry_frontend["suggested_actions"])
+                skax = payload.get("skax_implication")
+                if isinstance(skax, dict):
+                    skax.setdefault("recommended_actions", industry_frontend["suggested_actions"])
     if not _frontend_has_display_items(payload.get("frontend")):
         frontend = card.get("frontend_implication")
         if isinstance(frontend, dict) and frontend:
@@ -2237,6 +2252,7 @@ def _has_structured_implication(value: dict[str, Any]) -> bool:
             "skax_implication",
             "peer_implication",
             "frontend",
+            "industry_frontend_ready",
             "recommended_actions",
             "watch_points",
             "follow_up_questions",
@@ -2312,6 +2328,49 @@ def _frontend_implication_from_frontend_ready(value: Any) -> dict[str, Any]:
     }
     if key_items:
         payload["potential_impact"] = key_items[0]
+    return payload
+
+
+def _frontend_implication_from_industry_frontend_ready(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    if str(value.get("source") or "").strip() != "industry_signal_direct":
+        return {}
+    insight_items: list[str] = []
+    action_items: list[str] = []
+    for item in value.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        insight_items.extend(
+            _frontend_ready_display_lines(item.get("key_implication"), prefix="핵심 시사점")
+        )
+        action_items.extend(
+            _frontend_ready_display_lines(item.get("suggested_action"), prefix="핵심 대응")
+        )
+    insight_items = insight_items[:2]
+    action_items = action_items[:2]
+    if not insight_items and not action_items:
+        return {}
+    insight_blocks = _main_detail_blocks_from_labeled_lines(insight_items)
+    action_blocks = _main_detail_blocks_from_labeled_lines(action_items)
+    payload: dict[str, Any] = {
+        "source": "industry_signal_direct",
+        "signal_scope": str(value.get("signal_scope") or "industry_signal"),
+        "display_policy": str(value.get("display_policy") or "industry_only"),
+        "key_implications": insight_items,
+        "peer_implications": insight_items,
+        "suggested_actions": action_items,
+        "response_directions": action_items,
+        "key_implication_blocks": insight_blocks,
+        "key_implication_items": insight_blocks,
+        "response_direction_blocks": action_blocks,
+        "suggested_action_items": action_blocks,
+        "follow_up_questions": [],
+    }
+    if insight_items:
+        payload["potential_impact"] = insight_items[0]
+    if action_items:
+        payload["recommended_action"] = action_items[0]
     return payload
 
 
