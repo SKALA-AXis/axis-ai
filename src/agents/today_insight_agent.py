@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 from sqlalchemy import text
 
 from src.config.companies import COMPANIES
-from src.config.company_tiers import SELF_COMPANY_IDS
+from src.config.company_tiers import DOMESTIC_COMPANY_IDS, SELF_COMPANY_IDS
 from src.contracts.today_insight_schemas import (
     TodayInsightGenerateRequest,
     TodayInsightGenerateResponse,
@@ -298,7 +298,7 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
         window_days=req.window_days,
         limit=max(req.max_issues * 3, req.max_issues),
     )
-    issues = [row for row in issues if not _is_self_company_issue(row)]
+    issues = [row for row in issues if _is_domestic_issue(row) and not _is_self_company_issue(row)]
     current_issues = [
         row for row in issues if _is_anchor_current_issue(row, anchor_date=anchor_date)
     ][: req.max_issues]
@@ -313,7 +313,7 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
         window_days=req.window_days,
         limit=req.max_cards,
     )
-    cards = [card for card in cards if not _is_self_company_card(card)]
+    cards = [card for card in cards if _is_domestic_card(card) and not _is_self_company_card(card)]
     if len(cards) < req.max_cards:
         supplemental_cards = _fetch_anchor_date_cards(
             anchor_date=anchor_date,
@@ -323,7 +323,9 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
             ],
         )
         supplemental_cards = [
-            card for card in supplemental_cards if not _is_self_company_card(card)
+            card
+            for card in supplemental_cards
+            if _is_domestic_card(card) and not _is_self_company_card(card)
         ]
         cards = [*cards, *supplemental_cards][: req.max_cards]
     if not cards:
@@ -332,7 +334,9 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
             window_days=req.window_days,
             limit=req.max_cards,
         )
-        cards = [card for card in cards if not _is_self_company_card(card)][: req.max_cards]
+        cards = [
+            card for card in cards if _is_domestic_card(card) and not _is_self_company_card(card)
+        ][: req.max_cards]
     peer_ids = _dedupe(
         [
             str(value)
@@ -2444,6 +2448,26 @@ def _is_self_company_card(card: dict[str, Any]) -> bool:
         " ".join(str(line) for line in _list(card.get("summary_lines"))),
         *source_texts,
     )
+
+
+def _is_domestic_company_id(value: object) -> bool:
+    """도메스틱 4사(samsung_sds·lg_cns·hyundai_autoever·posco_dx)면 True.
+
+    글로벌 IT peer(google 등 overseas)·self(sk_ax)·미상은 모두 False.
+    Today's Insight 는 국내 peer 만 헤드라인/신호에 노출한다.
+    """
+    if not value:
+        return False
+    canonical = normalize_to_canonical_id(str(value)) or str(value)
+    return canonical in DOMESTIC_COMPANY_IDS
+
+
+def _is_domestic_issue(issue: dict[str, Any]) -> bool:
+    return _is_domestic_company_id(issue.get("main_company"))
+
+
+def _is_domestic_card(card: dict[str, Any]) -> bool:
+    return _is_domestic_company_id(card.get("peer_id"))
 
 
 def _is_self_company_source(source: dict[str, Any]) -> bool:
