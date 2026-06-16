@@ -14,8 +14,11 @@ import pytest
 
 from src.agents.it_trend_agent import (
     ITTrendInput,
+    _build_persistence_rows,
+    _build_trend_context,
     _classify_intensity,
     _dedupe_items_by_id,
+    _domestic_representative_issues,
     _empty_result,
     _extract_keywords_from_rows,
     _fallback_title,
@@ -156,6 +159,127 @@ def test_reference_issue_ids_dedupes_and_handles_non_dict() -> None:
 
 def test_reference_issue_ids_empty_input_returns_empty_list() -> None:
     assert _reference_issue_ids([]) == []
+
+
+def test_domestic_representative_issues_match_keyword_without_driving_detection() -> None:
+    rows = [
+        {
+            "card_news_id": "CN-1",
+            "cluster_id": 101,
+            "raw_article_id": 9001,
+            "card_company": "LG CNS",
+            "card_title": "LG CNS, AI 에이전트 출시",
+            "summary_lines": ["PC 업무를 처리하는 AI 에이전트 서비스"],
+            "url": "https://example.com/a",
+            "published_at": datetime(2026, 6, 12, tzinfo=UTC),
+            "source_name": "domestic",
+        },
+        {
+            "card_news_id": "CN-2",
+            "cluster_id": 102,
+            "card_title": "물류 자동화 협약",
+            "summary_lines": ["로봇 운영 협력"],
+        },
+    ]
+
+    refs = _domestic_representative_issues(rows, "ai agent")
+
+    assert refs == [
+        {
+            "card_news_id": "CN-1",
+            "cluster_id": 101,
+            "raw_article_id": 9001,
+            "company": "LG CNS",
+            "title": "LG CNS, AI 에이전트 출시",
+            "summary_lines": ["PC 업무를 처리하는 AI 에이전트 서비스"],
+            "url": "https://example.com/a",
+            "published_at": "2026-06-12T00:00:00+00:00",
+            "source_name": "domestic",
+        }
+    ]
+
+
+def test_build_persistence_rows_keeps_domestic_representatives_in_payload_only() -> None:
+    detections = [
+        {
+            "theme": "ai agent",
+            "mention_count": 4,
+            "frequency_delta_pct": 0.0,
+            "intensity": "weak",
+            "leading_companies": ["microsoft"],
+            "keyword_category": "ai_tech",
+        }
+    ]
+    global_rows = [
+        {
+            "id": 10,
+            "title": "AI agent product update",
+            "content": "AI agent workflow",
+            "url": "https://global.example/a",
+        }
+    ]
+    domestic_rows = [
+        {
+            "card_news_id": "CN-1",
+            "cluster_id": 101,
+            "raw_article_id": 9001,
+            "card_company": "LG CNS",
+            "card_title": "LG CNS, AI 에이전트 출시",
+            "summary_lines": ["PC 업무를 처리하는 AI 에이전트 서비스"],
+        }
+    ]
+
+    rows = _build_persistence_rows(
+        batch_id="global-20260616-010203",
+        generated_at=datetime(2026, 6, 16, tzinfo=UTC),
+        detections=detections,
+        alignment={},
+        impact_matrix=[],
+        forecasts=[],
+        global_rows=global_rows,
+        domestic_rows=domestic_rows,
+        snapshots=[],
+        per_keyword_title={},
+        per_keyword_summary={},
+        per_keyword_implication={},
+        llm_batch_confidence=0.7,
+        sk_ax_implication="",
+        final_one_liner="",
+        overall_summary="",
+    )
+
+    assert rows[0]["region"] == "global"
+    assert rows[0]["source_raw_article_ids"] == [10]
+    assert rows[0]["payload"]["domestic_representative_issues"][0]["card_news_id"] == "CN-1"
+
+
+def test_build_trend_context_exposes_domestic_reference_ids() -> None:
+    context = _build_trend_context(
+        period="daily",
+        detections=[
+            {
+                "theme": "ai agent",
+                "mention_count": 4,
+                "intensity": "weak",
+                "leading_companies": ["microsoft"],
+            }
+        ],
+        global_rows=[],
+        domestic_rows=[
+            {
+                "card_news_id": "CN-1",
+                "cluster_id": 101,
+                "card_title": "LG CNS, AI 에이전트 출시",
+                "summary_lines": ["AI 에이전트 서비스"],
+            }
+        ],
+        generated_at=datetime(2026, 6, 16, tzinfo=UTC),
+        warning=None,
+    )
+
+    data = context.to_dict()
+    assert data["signals"][0]["domestic_reference_ids"] == ["CN-1"]
+    assert data["reference_issue_ids"] == ["CN-1"]
 
 
 # ──────────────────────────────────────────────────────────────────────────

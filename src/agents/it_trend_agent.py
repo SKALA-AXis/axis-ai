@@ -44,6 +44,7 @@ from src.analysis.models import TrendContext
 from src.config.global_companies import GLOBAL_COMPANY_IDS
 from src.db.article_store import (
     DEFAULT_PEER_COMPANY_IDS,
+    fetch_domestic_trend_representative_inputs,
     fetch_global_trend_inputs,
     fetch_peer_cards_for_alignment,
     fetch_previous_trend_context_for_delta,
@@ -271,6 +272,9 @@ class ITTrendAgent:
         min_mention_count: int = int(meta.get("min_mention_count", 3) or 3)
         max_trend_count: int = int(meta.get("max_trend_count", 8) or 8)
         focus_themes: list[str] = [t.lower() for t in (meta.get("focus_themes") or [])]
+        include_domestic_representatives: bool = bool(
+            meta.get("include_domestic_representatives", True)
+        )
 
         # 1) 원천 데이터 fetch — global newsroom + research + 기존 input.
         try:
@@ -278,6 +282,13 @@ class ITTrendAgent:
         except Exception:
             log.exception("ITTrendAgent | fetch_global_trend_inputs 실패")
             fetched_global = []
+        domestic_rows: list[dict[str, Any]] = []
+        if include_domestic_representatives:
+            try:
+                domestic_rows = fetch_domestic_trend_representative_inputs(window_days=window_days)
+            except Exception:
+                log.exception("ITTrendAgent | fetch_domestic_trend_representative_inputs 실패")
+                domestic_rows = []
         combined_items: list[dict[str, Any]] = []
         combined_items.extend(trend_input.trend_items or [])
         combined_items.extend(fetched_global)
@@ -417,6 +428,7 @@ class ITTrendAgent:
             impact_matrix=impact_matrix,
             forecasts=forecasts,
             global_rows=global_rows,
+            domestic_rows=domestic_rows,
             snapshots=snapshots,
             per_keyword_title=per_keyword_title,
             per_keyword_summary=per_keyword_summary,
@@ -444,6 +456,7 @@ class ITTrendAgent:
             period=trend_input.period,
             detections=detections,
             global_rows=global_rows,
+            domestic_rows=domestic_rows,
             generated_at=generated_at,
             warning=warning,
         )
@@ -492,6 +505,7 @@ class ITTrendAgent:
                 "previous_trend_context_provided": bool(previous_ctx),
                 "global_newsroom_row_count": len(global_rows),
                 "research_row_count": len(research_rows),
+                "domestic_representative_row_count": len(domestic_rows),
                 "peer_company_ids": peer_company_ids,
                 "sk_ax_business_lines": sk_ax_business_lines,
             },
@@ -1072,6 +1086,7 @@ def _build_persistence_rows(
     impact_matrix: list[dict[str, Any]],
     forecasts: list[dict[str, Any]],
     global_rows: list[dict[str, Any]],
+    domestic_rows: list[dict[str, Any]],
     snapshots: list[dict[str, Any]],
     per_keyword_title: dict[str, str],
     per_keyword_summary: dict[str, str],
@@ -1091,6 +1106,10 @@ def _build_persistence_rows(
         evidence_card_ids = [cid for p in peers for cid in p.get("evidence_card_ids", []) if cid]
         evidence_raw_ids = _evidence_raw_ids(global_rows, keyword)
         evidence_source_links = _evidence_source_links(global_rows, keyword)
+        domestic_representative_issues = _domestic_representative_issues(
+            domestic_rows,
+            keyword,
+        )
         impact_score = _impact_score_for_keyword(det, peers)
         keyword_confidence = _trend_confidence_for_keyword(
             det=det,
@@ -1127,10 +1146,12 @@ def _build_persistence_rows(
                     "overall_summary": overall_summary,
                     "leading_companies": det.get("leading_companies", []),
                     "evidence_source_links": evidence_source_links,
+                    "domestic_representative_issues": domestic_representative_issues,
                     "intensity": det.get("intensity"),
                     "frequency_delta_pct": det.get("frequency_delta_pct"),
                     "confidence_factors": {
                         "raw_evidence_count": len(evidence_raw_ids),
+                        "domestic_representative_count": len(domestic_representative_issues),
                         "leading_company_count": len(det.get("leading_companies", []) or []),
                         "peer_evidence_count": sum(1 for p in peers if p.get("evidence_card_ids")),
                         "has_llm_title": bool(per_keyword_title.get(keyword)),
@@ -1231,6 +1252,44 @@ def _evidence_source_links(global_rows: list[dict[str, Any]], keyword: str) -> l
     return links
 
 
+def _domestic_representative_issues(
+    domestic_rows: list[dict[str, Any]],
+    keyword: str,
+) -> list[dict[str, Any]]:
+    pattern = _keyword_regex(keyword)
+    issues: list[dict[str, Any]] = []
+    seen_cards: set[str] = set()
+    for row in domestic_rows:
+        haystack = (
+            f"{row.get('card_title') or ''} "
+            f"{row.get('title') or ''} "
+            f"{' '.join(str(x) for x in row.get('summary_lines') or [])} "
+            f"{row.get('content') or ''}"
+        )[:2500]
+        if not pattern.search(haystack.lower()):
+            continue
+        card_id = str(row.get("card_news_id") or "").strip()
+        if not card_id or card_id in seen_cards:
+            continue
+        seen_cards.add(card_id)
+        issues.append(
+            {
+                "card_news_id": card_id,
+                "cluster_id": row.get("cluster_id"),
+                "raw_article_id": row.get("raw_article_id") or row.get("source_id"),
+                "company": row.get("card_company") or row.get("company"),
+                "title": row.get("card_title") or row.get("title"),
+                "summary_lines": [str(line) for line in (row.get("summary_lines") or [])][:3],
+                "url": row.get("url"),
+                "published_at": _iso(row.get("published_at") or row.get("card_created_at")),
+                "source_name": row.get("source_name") or row.get("publisher"),
+            }
+        )
+        if len(issues) >= 5:
+            break
+    return issues
+
+
 def _impact_score_for_keyword(det: dict[str, Any], peers: list[dict[str, Any]]) -> float:
     """결정적 산식 — frequency × intensity × peer_alignment_coverage."""
     mention_count = float(det.get("mention_count", 0) or 0)
@@ -1308,18 +1367,30 @@ def _build_trend_context(
     period: str | None,
     detections: list[dict[str, Any]],
     global_rows: list[dict[str, Any]],
+    domestic_rows: list[dict[str, Any]],
     generated_at: datetime,
     warning: str | None,
 ) -> TrendContext:
-    signals = [
-        {
-            "signal": d["theme"],
-            "intensity": d.get("intensity"),
-            "leading_companies": d.get("leading_companies", []),
-            "mention_count": d.get("mention_count", 0),
-        }
-        for d in detections
-    ]
+    signals = []
+    reference_issue_ids: list[str] = []
+    for d in detections:
+        domestic_refs = _domestic_representative_issues(domestic_rows, d["theme"])
+        domestic_card_ids = [
+            str(ref["card_news_id"]) for ref in domestic_refs if ref.get("card_news_id")
+        ]
+        reference_issue_ids.extend(
+            cid for cid in domestic_card_ids if cid not in reference_issue_ids
+        )
+        signals.append(
+            {
+                "signal": d["theme"],
+                "intensity": d.get("intensity"),
+                "leading_companies": d.get("leading_companies", []),
+                "mention_count": d.get("mention_count", 0),
+                "domestic_reference_ids": domestic_card_ids,
+                "domestic_reference_count": len(domestic_refs),
+            }
+        )
     sources = [
         {
             "source_id": r.get("id"),
@@ -1330,23 +1401,45 @@ def _build_trend_context(
         }
         for r in global_rows[:20]
     ]
+    for row in domestic_rows[:20]:
+        card_id = row.get("card_news_id")
+        if not card_id:
+            continue
+        sources.append(
+            {
+                "source_id": card_id,
+                "source_name": "domestic_card_news",
+                "title": row.get("card_title") or row.get("title"),
+                "url": row.get("url"),
+                "published_at": _iso(row.get("published_at") or row.get("card_created_at")),
+                "card_news_id": card_id,
+                "cluster_id": row.get("cluster_id"),
+            }
+        )
     trend_lines = [
         f"{d['theme']} ({d.get('intensity')}, mentions={d.get('mention_count')})"
         for d in detections
     ]
+    source_groups = sorted(
+        {(r.get("source_name") or "") for r in global_rows if r.get("source_name")}
+    )
+    if domestic_rows:
+        source_groups.append("domestic_card_news")
     return TrendContext(
         period=period,
         trend_summary=" / ".join(trend_lines[:3]),
         trend_lines=trend_lines,
         signals=signals,
-        source_groups=sorted(
-            {(r.get("source_name") or "") for r in global_rows if r.get("source_name")}
-        ),
+        source_groups=source_groups,
         sources=sources,
-        reference_issue_ids=[],
+        reference_issue_ids=reference_issue_ids,
         updated_at=generated_at.isoformat(timespec="seconds"),
         validation={"pass": warning is None and bool(detections), "reason": warning or ""},
-        metadata={"row_count": len(global_rows), "trend_count": len(detections)},
+        metadata={
+            "row_count": len(global_rows),
+            "trend_count": len(detections),
+            "domestic_representative_count": len(domestic_rows),
+        },
     )
 
 
