@@ -197,6 +197,7 @@ def _normalize_error_code(value: str) -> str:
 
 PREPROCESS_SOURCE_TYPES_BY_SOURCE: dict[str, list[str]] = {
     "naver_news": ["news"],
+    "naver_industry_news": ["news"],
     "global_newsroom": ["official"],
     "stock": ["market_data"],
     "naver_research": ["securities_report"],

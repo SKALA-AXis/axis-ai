@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 
 TRACK_A_SOURCES = (
     "naver_news",
+    "naver_industry_news",
     "global_newsroom",
 )
 TRACK_B_SOURCES = (
@@ -46,6 +47,7 @@ TRACK_D_SOURCES = (
 
 REALTIME_SOURCE_OVERLAP_DAYS = {
     "naver_news": 0,
+    "naver_industry_news": 7,
     "global_newsroom": 1,
     "stock": 0,
     "naver_research": 3,
@@ -185,7 +187,7 @@ class BatchProcessor:
         from src.crawler.sources.ir import IRCrawler
         from src.crawler.sources.jobs import JobCrawler
         from src.crawler.sources.keyword import KeywordCrawler
-        from src.crawler.sources.naver import NaverNewsCrawler
+        from src.crawler.sources.naver import NaverIndustryNewsCrawler, NaverNewsCrawler
         from src.crawler.sources.naver_research import NaverResearchCrawler
 
         requested = set(source_names)
@@ -323,6 +325,17 @@ class BatchProcessor:
                     CompanyNewsCrawler(
                         crawl_window=effective_window,
                         latest_limit=100 if effective_window else 5,
+                    ),
+                )
+            )
+        if "naver_industry_news" in requested:
+            shared_crawlers.append(
+                (
+                    "naver_industry_news",
+                    NaverIndustryNewsCrawler(
+                        cutoff_datetime=effective_window.start if effective_window else None,
+                        end_datetime=effective_window.end if effective_window else None,
+                        max_results=60 if effective_window else 30,
                     ),
                 )
             )

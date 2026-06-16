@@ -25,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config.companies import COMPANY_ALIASES  # noqa: E402
+from src.config.sectors import SECTOR_KEYWORDS, match_sector_details  # noqa: E402
 from src.crawler.base import DailyLimitGuard, RawArticle  # noqa: E402
 from src.crawler.base_crawler import BaseCrawler  # noqa: E402
 from src.crawler.parsers.article_content import (  # noqa: E402
@@ -37,6 +38,8 @@ from src.crawler.parsers.article_content import (  # noqa: E402
 log = logging.getLogger(__name__)
 
 NAVER_API_URL = "https://openapi.naver.com/v1/search/news.json"
+INDUSTRY_NEWS_SOURCE_NAME = "naver_industry_news"
+INDUSTRY_TREND_COMPANY = "industry_trend"
 NAVER_MAX_DISPLAY = 100
 NAVER_MAX_START = 1000
 NAVER_CREDENTIAL_RETRY_STATUS_CODES = {401, 403, 429}
@@ -83,6 +86,122 @@ _NON_BUSINESS_TERMS = (
     "k-pop",
     "kpop",
     "celebrity",
+)
+
+_INDUSTRY_NEWS_QUERY_GROUPS: tuple[dict[str, str], ...] = (
+    {"sector": "ax", "query": "AI 경쟁 전력 데이터 인프라"},
+    {"sector": "ax", "query": "AI 거버넌스 에이전트 권한 관리"},
+    {"sector": "ax", "query": "AX 산업 전환 기업들"},
+    {"sector": "ax", "query": "AI 도입 확산 기업 업무 방식"},
+    {"sector": "security", "query": "SW 공급망 보안 로드맵"},
+    {"sector": "security", "query": "공급망 공격 기업 보안"},
+    {"sector": "security", "query": "제로트러스트 공급망 보안"},
+    {"sector": "security", "query": "AI 보안 표준 정책"},
+    {"sector": "infra", "query": "AI 인프라 전력 데이터 제도"},
+    {"sector": "infra", "query": "AI 데이터센터 전력 인프라"},
+    {"sector": "infra", "query": "GPU 클라우드 인프라 산업"},
+    {"sector": "infra", "query": "AI 인프라 투자 전력망"},
+)
+
+_INDUSTRY_DIRECTION_TERMS = (
+    "산업",
+    "시장",
+    "업계",
+    "기업들",
+    "정부",
+    "공공",
+    "정책",
+    "규제",
+    "로드맵",
+    "표준",
+    "제도",
+    "확산",
+    "수요",
+    "전망",
+    "인프라",
+    "전력",
+    "데이터",
+    "공급망",
+    "리스크",
+    "위협",
+    "거버넌스",
+    "권한",
+    "관리",
+    "대응",
+    "전환",
+)
+_INDUSTRY_STRONG_FRAME_RE = re.compile(
+    r"(AI\s*경쟁.{0,80}(전력|데이터|인프라|제도)|"
+    r"(전력|데이터|인프라|제도).{0,80}AI\s*경쟁|"
+    r"공급망.{0,40}(보안|공격|로드맵|SBOM|AIBOM)|"
+    r"(로드맵|표준|규제|정책|제도화).{0,40}(보안|AI|AX|공급망)|"
+    r"(거버넌스|권한\s*관리).{0,60}(AI\s*에이전트|생성형\s*AI))",
+    re.IGNORECASE,
+)
+_COMPANY_EVENT_TITLE_TERMS = (
+    "출범",
+    "선정",
+    "공급",
+    "파트너",
+    "협약",
+    "수주",
+    "대표",
+    "회장",
+    "출시",
+    "상장",
+    "매출",
+    "신용등급",
+    "계약",
+    "투자 확대",
+    "맡는다",
+)
+_THIRD_PARTY_TITLE_TERMS = (
+    "업스테이지",
+    "롯데",
+    "삼성",
+    "삼성전자",
+    "카카오",
+    "네이버",
+    "KT",
+    "SKT",
+    "SK텔레콤",
+    "LG유플러스",
+    "한컴",
+    "더존비즈온",
+    "솔트룩스",
+    "엘리스그룹",
+    "NC AI",
+    "다올티에스",
+    "파이오링크",
+    "KX넥스지",
+    "핸디소프트",
+    "텐센트",
+    "넷앱",
+    "스플렁크",
+    "스패로우",
+    "카스퍼스키",
+    "에임인텔리전스",
+    "NIA",
+    "한국지능정보사회진흥원",
+    "아케이드 AI",
+    "통신 3사",
+)
+_INDUSTRY_NEWS_TITLE_BLOCK_TERMS = (
+    "[GAM]",
+    "스테이블코인",
+    "크립토",
+    "전기차 캐즘",
+    "워크숍",
+    "세미나",
+    "컨퍼런스",
+    "에너지밸리포럼",
+    "경제발전공유사업",
+    "해외진출 지원",
+    "KSP",
+    "공모",
+    "정책 제안 공모전",
+    "보험감독국",
+    "[데스크가 만났습니다]",
 )
 
 REQUEST_HEADERS = {
@@ -293,6 +412,367 @@ class NaverNewsCrawler(BaseCrawler):
         if self.peer_id == "posco_dx":
             aliases.extend(_POSCO_DX_GROUP_SEARCH_ALIASES)
         return _dedupe_keep_order(aliases)
+
+
+class NaverIndustryNewsCrawler(NaverNewsCrawler):
+    """산업 방향성/IT 트렌드용 네이버 뉴스 크롤러.
+
+    기존 ``naver_news`` 는 피어사 단독 중심 기사 수집을 유지한다. 이 크롤러는
+    섹터 키워드 기반으로 검색하되 특정 타기업/피어사 단독 이벤트는 제외하고,
+    산업·시장·정책·보안 리스크·AI 인프라 방향성 기사만 ``industry_trend`` 버킷에 저장한다.
+    """
+
+    def __init__(
+        self,
+        search_queries: list[dict[str, str]] | None = None,
+        display: int = 100,
+        max_results: int = 60,
+        cutoff_datetime: datetime | None = None,
+        end_datetime: datetime | None = None,
+        fetch_body: bool = True,
+    ):
+        super().__init__(
+            peer_id=INDUSTRY_TREND_COMPANY,
+            aliases=[INDUSTRY_TREND_COMPANY],
+            search_queries=search_queries or list(_INDUSTRY_NEWS_QUERY_GROUPS),
+            display=display,
+            max_results=max_results,
+            cutoff_datetime=cutoff_datetime,
+            end_datetime=end_datetime,
+            fetch_body=fetch_body,
+        )
+
+    async def crawl(self) -> list[RawArticle]:
+        if not self.credentials:
+            log.warning("NAVER_CLIENT_ID 또는 NAVER_CLIENT_IDS 미설정. 산업 뉴스 크롤링 스킵.")
+            return []
+
+        articles: list[RawArticle] = []
+        for spec in self.search_queries or []:
+            try:
+                articles.extend(
+                    await self._fetch(query=spec["query"], sector=spec.get("sector", ""))
+                )
+            except NaverApiCredentialExhaustedError:
+                raise
+            except Exception as e:
+                log.error("산업 뉴스 크롤링 실패 | query=%s error=%s", spec["query"], e)
+
+        return _filter_industry_direction_articles(articles)
+
+    async def _fetch(self, query: str, sector: str) -> list[RawArticle]:
+        articles = await self._fetch_without_peer_filter(query=query, sector=sector)
+        filtered = _filter_industry_direction_articles(articles)
+
+        if self.fetch_body and filtered:
+            async with httpx.AsyncClient(
+                timeout=10,
+                headers=REQUEST_HEADERS,
+                follow_redirects=True,
+            ) as client:
+                await enrich_with_body_text(client, filtered)
+            filtered = _filter_industry_direction_articles(filtered)
+
+        return filtered
+
+    async def _fetch_without_peer_filter(self, query: str, sector: str) -> list[RawArticle]:
+        async with httpx.AsyncClient(
+            timeout=10,
+            headers=REQUEST_HEADERS,
+            follow_redirects=True,
+        ) as client:
+            items = []
+
+            for start in range(1, self.max_results + 1, self.display):
+                display = min(self.display, self.max_results - len(items))
+
+                if display <= 0:
+                    break
+
+                resp = await self._request_api(
+                    client,
+                    params={
+                        "query": query,
+                        "display": display,
+                        "start": start,
+                        "sort": "date",
+                    },
+                )
+
+                if resp is None:
+                    return []
+
+                if self._is_credential_retryable_status(resp.status_code):
+                    log.warning(
+                        "네이버 API 접근 차단 | source=%s status=%d credentials=%d",
+                        INDUSTRY_NEWS_SOURCE_NAME,
+                        resp.status_code,
+                        len(self.credentials),
+                    )
+                    raise NaverApiCredentialExhaustedError(
+                        f"Naver News API credential exhausted: HTTP {resp.status_code}"
+                    )
+
+                resp.raise_for_status()
+                page_items = resp.json().get("items", [])
+
+                if not page_items:
+                    break
+
+                items.extend(page_items)
+
+                if page_reaches_cutoff(page_items, self.cutoff_datetime):
+                    break
+
+                if len(page_items) < display:
+                    break
+
+            return [
+                article
+                for article in (
+                    self._item_to_article(item, query=query, sector=sector) for item in items
+                )
+                if article_within_window(article, self.cutoff_datetime, self.end_datetime)
+                and not is_obvious_non_business_candidate(article)
+            ]
+
+    def _item_to_article(self, item: dict, query: str, sector: str) -> RawArticle:
+        title = strip_html(item["title"])
+        description = strip_html(item.get("description", ""))
+        sector_details = _industry_sector_details(title, description, fallback_sector=sector)
+        sectors = _dedupe_keep_order(
+            [str(detail["sector_id"]) for detail in sector_details if detail.get("sector_id")]
+            or ([sector] if sector else [])
+        )
+
+        return RawArticle(
+            url=item.get("originallink") or item["link"],
+            title=title,
+            content=description,
+            published_at=parse_naver_date(item.get("pubDate")),
+            source_name=INDUSTRY_NEWS_SOURCE_NAME,
+            source_type="news",
+            content_type="html",
+            company=[INDUSTRY_TREND_COMPANY],
+            language="ko",
+            extra={
+                "collection_scope": "industry_keyword",
+                "topic_scope": "industry_trend",
+                "company_scope": "industry",
+                "sector": sector,
+                "matched_sectors": sectors,
+                "matched_sector_details": sector_details,
+                "search_query": query,
+                "naver_title": title,
+                "naver_description": description,
+            },
+        )
+
+
+def _filter_industry_direction_articles(articles: list[RawArticle]) -> list[RawArticle]:
+    filtered: list[RawArticle] = []
+    seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
+
+    for article in articles:
+        title_key = _industry_title_key(article.title or "")
+        url_key = article.url.strip()
+        if (url_key and url_key in seen_urls) or (title_key and title_key in seen_titles):
+            continue
+
+        decision = classify_industry_news_candidate(article)
+        article.extra["industry_relevance"] = decision["decision"]
+        article.extra["industry_relevance_reason"] = decision["reason"]
+        article.extra["industry_direction_score"] = decision["direction_score"]
+        article.extra["mentioned_tracked_peers"] = decision["mentioned_tracked_peers"]
+        article.extra["mentioned_title_companies"] = decision["mentioned_title_companies"]
+
+        if decision["decision"] == "pass":
+            filtered.append(article)
+            if url_key:
+                seen_urls.add(url_key)
+            if title_key:
+                seen_titles.add(title_key)
+
+    return filtered
+
+
+def classify_industry_news_candidate(article: RawArticle) -> dict[str, object]:
+    """산업 방향성/IT 트렌드 카드 후보인지 규칙 기반으로 판정한다."""
+
+    title = article.title or ""
+    content = article.content or ""
+    text = f"{title} {content}"
+    sector_details = _industry_sector_details(title, content)
+    sectors = _dedupe_keep_order(
+        [str(detail["sector_id"]) for detail in sector_details if detail.get("sector_id")]
+    )
+    direction_score = _industry_direction_score(text)
+    has_strong_frame = bool(_INDUSTRY_STRONG_FRAME_RE.search(text))
+    tracked_title_peers = _tracked_peers_in_text(title)
+    tracked_text_peers = _tracked_peers_in_text(text)
+    third_party_title_companies = [
+        company for company in _THIRD_PARTY_TITLE_TERMS if company.lower() in title.lower()
+    ]
+    event_terms = [term for term in _COMPANY_EVENT_TITLE_TERMS if term in title]
+    has_sector_signal = bool(sectors) or bool(str(article.extra.get("sector") or "").strip())
+
+    reason: list[str] = []
+    if sectors:
+        reason.append(f"sector={','.join(sectors)}")
+    if direction_score:
+        reason.append(f"direction_score={direction_score}")
+    if has_strong_frame:
+        reason.append("strong_industry_frame")
+
+    if len(tracked_title_peers) == 1 and len(tracked_text_peers) <= 1:
+        return _industry_decision(
+            "reject_peer_centered",
+            reason + [f"tracked_peer_title={tracked_title_peers[0]}"],
+            direction_score,
+            tracked_text_peers,
+            [*third_party_title_companies, *tracked_title_peers],
+        )
+
+    if any(term in title for term in _INDUSTRY_NEWS_TITLE_BLOCK_TERMS):
+        return _industry_decision(
+            "reject_blocked_title_pattern",
+            reason,
+            direction_score,
+            tracked_text_peers,
+            [*third_party_title_companies, *tracked_title_peers],
+        )
+
+    if len(tracked_text_peers) >= 2:
+        reason.append("multiple_tracked_peers")
+        return _industry_decision(
+            "pass",
+            reason,
+            direction_score,
+            tracked_text_peers,
+            [*third_party_title_companies, *tracked_title_peers],
+        )
+
+    if third_party_title_companies:
+        if event_terms or not _is_allowed_public_industry_title(title):
+            return _industry_decision(
+                "reject_third_party_centered",
+                reason
+                + [f"third_party_title={','.join(third_party_title_companies)}"]
+                + ([f"event_terms={','.join(event_terms)}"] if event_terms else []),
+                direction_score,
+                tracked_text_peers,
+                [*third_party_title_companies, *tracked_title_peers],
+            )
+
+    if not has_sector_signal:
+        return _industry_decision(
+            "reject_no_sector_signal",
+            reason,
+            direction_score,
+            tracked_text_peers,
+            [*third_party_title_companies, *tracked_title_peers],
+        )
+
+    if has_strong_frame and direction_score >= 3:
+        return _industry_decision(
+            "pass",
+            reason,
+            direction_score,
+            tracked_text_peers,
+            [*third_party_title_companies, *tracked_title_peers],
+        )
+
+    return _industry_decision(
+        "reject_weak_industry_direction",
+        reason,
+        direction_score,
+        tracked_text_peers,
+        [*third_party_title_companies, *tracked_title_peers],
+    )
+
+
+def _is_allowed_public_industry_title(title: str) -> bool:
+    """회사명이 제목에 있어도 산업·정책 프레임이 명확한 경우만 예외 허용."""
+
+    return any(
+        term in title
+        for term in (
+            "AI 경쟁",
+            "공급망 공격",
+            "정부",
+            "국가",
+            "과기정통부",
+            "정보보호학회",
+            "국제표준",
+            "로드맵",
+        )
+    )
+
+
+def _industry_decision(
+    decision: str,
+    reason: list[str],
+    direction_score: int,
+    tracked_peers: list[str],
+    title_companies: list[str],
+) -> dict[str, object]:
+    return {
+        "decision": "pass" if decision == "pass" else "reject",
+        "reason": decision if not reason else f"{decision}: {'; '.join(reason)}",
+        "direction_score": direction_score,
+        "mentioned_tracked_peers": _dedupe_keep_order(tracked_peers),
+        "mentioned_title_companies": _dedupe_keep_order(title_companies),
+    }
+
+
+def _industry_sector_details(
+    title: str,
+    content: str,
+    *,
+    fallback_sector: str = "",
+) -> list[dict[str, str]]:
+    details = [dict(item) for item in match_sector_details(f"{title} {content}")]
+    if details or not fallback_sector:
+        return details
+
+    sector = SECTOR_KEYWORDS.get(fallback_sector)
+    if not sector:
+        return []
+
+    return [
+        {
+            "sector_id": fallback_sector,
+            "sector_name_ko": str(sector.get("name_ko") or fallback_sector),
+            "keyword": str(sector["keywords"][0] if sector.get("keywords") else fallback_sector),
+        }
+    ]
+
+
+def _industry_direction_score(text: str) -> int:
+    return sum(1 for term in _INDUSTRY_DIRECTION_TERMS if term.lower() in text.lower())
+
+
+def _industry_title_key(title: str) -> str:
+    text = strip_html(title).lower()
+    text = re.sub(r"\[[^\]]+\]", "", text)
+    text = re.sub(r"\([^)]*\)", "", text)
+    text = re.sub(r"['\"“”‘’…·,.:;!?~\-\s]+", "", text)
+    return text[:120]
+
+
+def _tracked_peers_in_text(text: str) -> list[str]:
+    text_norm = normalize(text)
+    peers: list[str] = []
+
+    for peer_id in DEFAULT_PEER_IDS:
+        for alias in get_relevance_aliases(peer_id):
+            alias_norm = _search_alias_norm(alias)
+            if alias_norm and alias_norm in text_norm:
+                peers.append(peer_id)
+                break
+
+    return _dedupe_keep_order(peers)
 
 
 def load_naver_credentials() -> list[NaverCredential]:

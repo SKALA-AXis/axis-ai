@@ -134,6 +134,7 @@ _PEER_ALIASES = {
     for company_id, aliases in {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}.items()
     if company_tier(company_id) != "self"
 }
+_KNOWN_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
 
 _llm: ChatOpenAI | None = None
 
@@ -174,6 +175,9 @@ _ARTICLE_FACT_EXTRACTION_PROMPT = """\
    계약 기간, 최근 매출 대비 비율, 전환·구축 대상 시스템/업무 범위를 우선 추출하세요.
    "코어뱅킹 현대화 웹단말 전환 사업"처럼 업무·시스템 범위가 들어간 명칭을
    "웹단말 공급"처럼 단순 납품으로 축약하지 마세요.
+   SPC·컨소시엄·민관 합작·센터 구축 기사에서는 주도 기업, 지분율, 대표/운영 주체,
+   구축 지역, 착공/기공식 일정, GPU·데이터센터 규모, 정부·파트너 지분 구조를
+   서로 분리해 보존하세요.
 4. 피어사의 일반적 정체성, 기존 포지셔닝, 누구나 알 수 있는 배경 설명은 핵심 사실로 쓰지 마세요.
    기사에서 새로 확인되는 역할, 사건, 범위, 수치, 일정, 시설, 고객, 적용 업무를 우선하세요.
 5. 여러 기사에 반복되는 문장이라도 각 기사에서 확인한 사실로 기록하세요.
@@ -190,6 +194,9 @@ _ARTICLE_FACT_EXTRACTION_PROMPT = """\
 11. 제3자 회사·서비스·고객 사례는 피어사와 직접 계약/협약/도입/수주/공급/공동개발 관계로
     연결된 경우에만 핵심 사실로 추출하세요. 기사 배경이나 시장 예시로만 언급된 제3자 사례는
     application_fact/main_event 후보에서 제외하세요.
+12. 한 기사 안에 여러 회사가 나오면 fact의 주어를 원문 주체 그대로 유지하세요.
+    삼성전자/삼성SDS/SK하이닉스/LG CNS처럼 서로 다른 회사의 도입·검증·계약 사실을
+    main_company나 다른 피어사 사실로 바꿔 쓰지 마세요.
 
 기사 클러스터:
 {articles_text}
@@ -261,12 +268,19 @@ _FACT_ID_SUMMARY_PROMPT = """\
 13. 계약/수주 요약에서는 정확한 사업명·프로젝트명과 계약 금액을 가능하면 1문장에 보존하세요.
     2문장은 단순 공급 여부보다 고객 업무/시스템 전환 범위를 보존하세요.
     계약 기간, 최근 매출 대비 비율, 후속 단계가 별도 fact로 있으면 3~5문장에 우선 반영하세요.
+    민관 합작/SPC/컨소시엄형 인프라 사업은 단순 참여 여부보다 주도 기업, 지분율,
+    대표 선임, 구축·운영 역할, 예정 일정·자원 규모를 우선 반영하세요.
+    기사에 "핵심 축", "영향력", "재무 안정성", "사업 관리" 같은 해석이 원문 근거로
+    제시되면 요약 3~5문장 안에서 해당 역할 변화를 보존하세요.
 14. 계약/협력 기사가 기술·플랫폼·AI 서비스 도입을 다루면, "계약했다"와 "적용 가능하다"만 반복하지 마세요.
     내부 업무에서 무엇을 하게 되는지, 파트너 기술이 어떤 기능을 제공하는지,
     향후 외부 고객/사업 확장과 어떻게 연결되는지를 서로 다른 문장으로 나누어 쓰세요.
 15. 제3자 회사·서비스·고객 사례는 피어사와 직접 계약/협약/도입/수주/공급/공동개발 관계로 연결된
     fact_id가 있을 때만 summary_lines에 넣으세요. 본문 배경이나 시장 사례로만 나온 제3자 서비스는
     핵심 변화 3줄 요약에 넣지 말고, 피어사의 발표·제품·계약·고객 업무 범위로 문장을 구성하세요.
+16. 연결된 fact_id의 normalized_fact/evidence_text에 있는 회사 주체를 바꾸지 마세요.
+    다른 회사의 수치·검증 규모·서비스 선정 사실을 main_company 문장으로 귀속시키면 안 됩니다.
+    다중 회사 기사에서는 "A사는 …, B사는 …"처럼 각 사실의 주체가 분명하게 드러나야 합니다.
 
 문장별 역할:
 - 1문장: 핵심 사건·상태·평가
@@ -2726,6 +2740,13 @@ def _validate_fact_id_summary(
         ]
         if missing_numbers:
             warnings.append(f"{index}번 문장 수치 근거 부족: {', '.join(missing_numbers)}")
+        attribution_warning = _summary_line_company_attribution_warning(
+            line=line,
+            evidence=related_evidence,
+            main_company=main_company,
+        )
+        if attribution_warning:
+            warnings.append(f"{index}번 문장 {attribution_warning}")
     cleaned_lines = [normalize_korean_spacing(line) for line in lines]
     if cleaned_lines != lines:
         result["fact_summary"] = cleaned_lines
@@ -2799,6 +2820,63 @@ def _validate_fact_id_summary(
             [*_normalize_string_list(result.get("repair_actions")), *actions]
         )
     return result
+
+
+def _summary_line_company_attribution_warning(
+    *,
+    line: str,
+    evidence: str,
+    main_company: str,
+) -> str:
+    if not main_company:
+        return ""
+    line_text = str(line or "")
+    evidence_text = str(evidence or "")
+    if not line_text.strip() or not evidence_text.strip():
+        return ""
+    main_aliases = _company_aliases_for_detection(main_company)
+    if not _text_mentions_any_alias(line_text, main_aliases):
+        return ""
+    if _text_mentions_any_alias(evidence_text, main_aliases):
+        return ""
+    other_hits: list[str] = []
+    for company_id, aliases in _KNOWN_COMPANY_ALIASES.items():
+        if company_id == main_company:
+            continue
+        if _text_mentions_any_alias(evidence_text, _company_aliases_for_detection(company_id)):
+            other_hits.append(company_id)
+    if other_hits or _company_like_mentions(evidence_text):
+        return "회사 주체 귀속 불일치: related fact evidence가 다른 피어사를 가리킴"
+    return ""
+
+
+def _company_aliases_for_detection(company_id: str) -> list[str]:
+    aliases = [
+        str(alias) for alias in _KNOWN_COMPANY_ALIASES.get(company_id, []) if str(alias).strip()
+    ]
+    aliases.append(str(company_id or ""))
+    return _dedupe_keep_order(aliases)
+
+
+def _text_mentions_any_alias(text: str, aliases: list[str]) -> bool:
+    compact_text = _compact(text)
+    for alias in aliases:
+        compact_alias = _compact(alias)
+        if compact_alias and compact_alias in compact_text:
+            return True
+    return False
+
+
+def _company_like_mentions(text: str) -> list[str]:
+    value = re.sub(r"\s+", " ", str(text or ""))
+    patterns = (
+        r"[가-힣A-Z]+(?:전자|SDS|CNS|하이닉스|클라우드|오토에버|DX|테크윈|엔솔)",
+        r"(?:네이버|카카오|포스코|현대|삼성|SK|LG)[가-힣A-Z]*",
+    )
+    mentions: list[str] = []
+    for pattern in patterns:
+        mentions.extend(match.group(0) for match in re.finditer(pattern, value))
+    return _dedupe_keep_order([mention for mention in mentions if len(mention) >= 2])
 
 
 def _summary_line_role_counts(

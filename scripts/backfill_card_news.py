@@ -96,6 +96,16 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Comma-separated cluster ids to process after the normal target filters.",
     )
+    parser.add_argument(
+        "--include-industry-trend",
+        action="store_true",
+        help="Include industry_trend news clusters in addition to peer-company clusters.",
+    )
+    parser.add_argument(
+        "--industry-trend-only",
+        action="store_true",
+        help="Only process industry_trend news clusters.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -121,6 +131,8 @@ def main() -> None:
         only_needs_refresh=args.only_needs_refresh,
         only_deleted_needs_refresh=args.only_deleted_needs_refresh,
         cluster_ids=_parse_cluster_ids(args.cluster_ids),
+        include_industry_trend=args.include_industry_trend or args.industry_trend_only,
+        industry_trend_only=args.industry_trend_only,
     )
     log.info(
         (
@@ -368,6 +380,8 @@ def _load_targets(
     only_needs_refresh: bool,
     only_deleted_needs_refresh: bool,
     cluster_ids: list[int],
+    include_industry_trend: bool,
+    industry_trend_only: bool,
 ) -> list[dict[str, Any]]:
     existing_filter = (
         ""
@@ -513,6 +527,30 @@ def _load_targets(
         if cluster_ids
         else ""
     )
+    company_scope_filter = (
+        """
+                      AND ra.company ? 'industry_trend'
+        """
+        if industry_trend_only
+        else """
+                      AND (
+                          EXISTS (
+                              SELECT 1
+                              FROM peer_companies pc
+                              WHERE pc.is_active = TRUE
+                                AND pc.id <> 'sk_ax'
+                                AND (
+                                    ra.company ? pc.id
+                                    OR ra.matched_companies ? pc.id
+                                )
+                          )
+                          OR (
+                              :include_industry_trend
+                              AND ra.company ? 'industry_trend'
+                          )
+                      )
+        """
+    )
     with SessionLocal() as db:
         rows = db.execute(
             text(
@@ -576,16 +614,7 @@ def _load_targets(
                                 '사들인\\s*종목|매수\\s*종목|채용|공채|인재\\s*모집'
                             )
                       )
-                      AND EXISTS (
-                          SELECT 1
-                          FROM peer_companies pc
-                          WHERE pc.is_active = TRUE
-                            AND pc.id <> 'sk_ax'
-                            AND (
-                                ra.company ? pc.id
-                                OR ra.matched_companies ? pc.id
-                            )
-                      )
+                      {company_scope_filter}
                     GROUP BY ra.cluster_id
                 )
                 SELECT cluster_id, article_ids, titles, representative_id, min_published
@@ -615,6 +644,7 @@ def _load_targets(
                 "limit": limit,
                 "only_card_schema_version": only_card_schema_version,
                 "cluster_ids": cluster_ids,
+                "include_industry_trend": include_industry_trend,
             },
         ).mappings()
         return [dict(row) for row in rows]

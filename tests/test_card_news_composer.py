@@ -3,6 +3,7 @@ from __future__ import annotations
 from src.composers.card_news_composer import (
     CardNewsComposer,
     _card_from_summary,
+    _looks_like_non_summary_line,
     _plain_summary_lines,
     _public_copy_cleanup,
 )
@@ -89,6 +90,25 @@ def test_card_summary_does_not_dedupe_or_backfill_integration_copy():
     lines = _plain_summary_lines(summary)
 
     assert lines == summary["fact_summary"]
+
+
+def test_card_summary_filters_question_headline_from_display_copy():
+    summary = {
+        "cluster_event_type": "general_update",
+        "fact_summary": [
+            "LG CNS는 앤트로픽과 클로드 엔터프라이즈 통합 계약을 체결했다.",
+            "이번 계약은 특정 계열사가 아니라 그룹 전반에 적용 가능한 형태로 알려졌다.",
+            "재계, 내부 AI서 외부 AI 도입으로 전환 이유는?",
+        ],
+    }
+
+    lines = _plain_summary_lines(summary)
+
+    assert lines == [
+        "LG CNS는 앤트로픽과 클로드 엔터프라이즈 통합 계약을 체결했다.",
+        "이번 계약은 특정 계열사가 아니라 그룹 전반에 적용 가능한 형태로 알려졌다.",
+    ]
+    assert _looks_like_non_summary_line("재계, 내부 AI서 외부 AI 도입으로 전환 이유는?")
 
 
 def test_card_summary_ignores_display_llm_selection_and_keeps_integrated_summary(monkeypatch):
@@ -931,3 +951,21 @@ def test_summary_fallback_uses_article_title_and_image_for_sentence_headline():
         card["db_record"]["image_assets"][0]["url"]
         == "https://cdn.example.com/news/posco-agent.jpg"
     )
+
+
+def test_literal_summary_lines_strip_number_prefixes():
+    lines = _plain_summary_lines(
+        {
+            "fact_summary": [
+                "1. LG CNS가 생성형 AI 서비스를 도입하기 위한 검증을 진행했다.",
+                "2. 임직원 2500명을 대상으로 대표 서비스 3종을 선정했다.",
+                "3. 특정 계열사가 아닌 그룹 전반 적용 가능한 계약으로 알려졌다.",
+            ]
+        }
+    )
+
+    assert lines == [
+        "LG CNS가 생성형 AI 서비스를 도입하기 위한 검증을 진행했다.",
+        "임직원 2500명을 대상으로 대표 서비스 3종을 선정했다.",
+        "특정 계열사가 아닌 그룹 전반 적용 가능한 계약으로 알려졌다.",
+    ]

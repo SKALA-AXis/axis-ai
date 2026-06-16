@@ -38,7 +38,9 @@ from src.crawler.local.stock_crawler import StockCrawler
 from src.crawler.parsers.link_check import LinkChecker
 from src.crawler.result_writer import DEFAULT_RESULTS_DIR, save_crawler_results
 from src.crawler.sources.global_newsroom import GlobalNewsroomCrawler
+from src.crawler.sources.naver import NaverIndustryNewsCrawler
 from src.db.article_store import save_articles
+from src.db.postgres import reconfigure_from_env
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("run_local_crawler")
@@ -60,6 +62,7 @@ COMPANY_SOURCES = [
 ]
 OPTIONAL_COMPANY_SOURCES = ["catch"]
 INDUSTRY_SOURCES = [
+    "naver_industry_news",
     "naver_datalab",
     "company_news",
     "global_newsroom",
@@ -235,6 +238,16 @@ def _parse_args() -> argparse.Namespace:
 def _build_crawler(source: str, company: str | None, args: argparse.Namespace) -> Any:
     if source == "naver_datalab":
         return KeywordCrawler()
+
+    if source == "naver_industry_news":
+        cutoff_datetime = (
+            datetime.now().astimezone() - timedelta(hours=args.hours) if args.hours > 0 else None
+        )
+        return NaverIndustryNewsCrawler(
+            max_results=args.max_results,
+            cutoff_datetime=cutoff_datetime,
+            fetch_body=not args.no_body,
+        )
 
     if source == "company_news":
         return CompanyNewsCrawler(latest_limit=args.latest_limit)
@@ -622,6 +635,7 @@ def _build_run_plan(
 async def _run() -> None:
     args = _parse_args()
     profile = load_profile(args.env)
+    reconfigure_from_env()
     log.info("실행 프로파일: %s", profile)
 
     sources = _resolve_sources_for_company_tier(
