@@ -24,6 +24,27 @@ from src.services.peer_id_aliases import expand_peer_aliases
 
 log = logging.getLogger(__name__)
 
+# 백필 point-in-time 시 snapshot 에서 제거할 시점-민감/미래지향 필드.
+# snapshot 은 peer 당 단일 현재본이라 과거 카드엔 look-ahead — 안정 프로필
+# (business_areas·core_capabilities·key_products_services·company_summary 등)만 남기고
+# 아래는 제거한다. (시점 정합 재무/타임라인은 as_of 클램프된 AnalysisContext 가 제공.)
+_SNAPSHOT_TIME_SENSITIVE_KEYS = frozenset(
+    {
+        "financial_summary",
+        "recent_changes",
+        "capability_evolution",
+        "market_view",
+        "priority_initiatives",
+        "investment_roadmap",
+        "operational_highlights",
+    }
+)
+
+
+def _strip_snapshot_time_sensitive(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """백필(as_of) 시 snapshot 의 시점-민감 필드 제거 — 안정 프로필만 유지."""
+    return {k: v for k, v in snapshot.items() if k not in _SNAPSHOT_TIME_SENSITIVE_KEYS}
+
 
 class ProfileContextLoader:
     """Load Tier A snapshot and Tier B enrichment into ``ProfileContext``."""
@@ -62,6 +83,8 @@ class ProfileContextLoader:
                 "SK AX profile_snapshot was not loaded from peer_companies. "
                 "Check peer_companies.id/name aliases for sk_ax and profile_snapshot columns."
             )
+        if as_of is not None:
+            skax_profile = _strip_snapshot_time_sensitive(skax_profile)
 
         peer_profiles: dict[str, Any] = dict(peer_profile_context or {})
         for peer_id in peers_canonical:
@@ -79,6 +102,8 @@ class ProfileContextLoader:
                     f"| peer_id={peer_id} aliases={expand_peer_aliases(peer_id)}"
                 )
             profile = dict(snapshot)
+            if as_of is not None:
+                profile = _strip_snapshot_time_sensitive(profile)
             profile.setdefault("peer_id", peer_id)
             profile.setdefault("company_id", peer_id)
             profile["recent_signals"] = _load_recent_business_signals(
