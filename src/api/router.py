@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.briefing_schemas import BriefingGenerateRequest, BriefingGenerateResponse
 from src.api.chat_schemas import ChatPdfRequest, ChatTurnRequest, ChatTurnResponse
@@ -58,6 +59,34 @@ _MIXER_SSE_HEARTBEAT_SEC = 10
 _CHAT_PDF_MAX_BYTES = 15 * 1024 * 1024
 _CHAT_PDF_MAX_TEXT_CHARS = 80_000
 _AGENT_CALL_FAILED_MESSAGE = "호출에 실패했다"
+_USER_STRATEGY_FILE_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _safe_int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+_USER_STRATEGY_OCR_MAX_PAGES = _safe_int_env("USER_STRATEGY_OCR_MAX_PAGES", 8)
+
+
+class UserSkaxOverlayRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    raw_text: str = Field(..., min_length=1)
+    title: str | None = None
+    user_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class UserStrategyFileOcrRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    file_name: str | None = None
+    content_type: str | None = None
+    file_base64: str = Field(..., min_length=1)
 
 
 def _count_result_items(results: Iterable[Mapping[str, object]], key: str) -> int:
@@ -166,6 +195,156 @@ def _agent_failure_code(agent: str, result: Mapping[str, object] | None) -> str:
 def _normalize_error_code(value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9]+", "_", value or "").strip("_").upper()
     return normalized or "AI_RESPONSE_FAILED"
+
+
+def _build_user_skax_overlay_llm():
+    model = os.getenv(
+        "USER_SKAX_OVERLAY_MODEL",
+        os.getenv("FRONTEND_READY_MODEL", "gpt-5.5"),
+    )
+    return build_chat_llm(
+        LLMSpec(
+            model=model,
+            temperature=1,
+            max_tokens=5000,
+            max_tokens_reasoning=8000,
+            reasoning_effort="low",
+            timeout=120,
+            max_retries=1,
+            json_object=True,
+        )
+    )
+
+
+def _user_strategy_ocr_model_name() -> str:
+    return os.getenv(
+        "USER_STRATEGY_OCR_MODEL",
+        os.getenv("FRONTEND_READY_MODEL", "gpt-5.5"),
+    )
+
+
+def _build_user_strategy_ocr_llm():
+    return build_chat_llm(
+        LLMSpec(
+            model=_user_strategy_ocr_model_name(),
+            temperature=0,
+            max_tokens=6000,
+            max_tokens_reasoning=10000,
+            reasoning_effort="low",
+            timeout=180,
+            max_retries=1,
+            json_object=False,
+        )
+    )
+
+
+def _decode_user_strategy_file(file_base64: str) -> bytes:
+    try:
+        data = base64.b64decode(file_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="file_base64 is invalid") from exc
+    if not data:
+        raise HTTPException(status_code=400, detail="file is empty")
+    if len(data) > _USER_STRATEGY_FILE_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="file must be 5MB or smaller")
+    return data
+
+
+def _normalize_file_content_type(value: str | None, file_name: str | None) -> str:
+    content_type = str(value or "").strip().lower()
+    lower_name = str(file_name or "").strip().lower()
+    if content_type:
+        return content_type
+    if lower_name.endswith(".pdf"):
+        return "application/pdf"
+    if lower_name.endswith(".png"):
+        return "image/png"
+    if lower_name.endswith((".jpg", ".jpeg")):
+        return "image/jpeg"
+    if lower_name.endswith(".webp"):
+        return "image/webp"
+    return "application/octet-stream"
+
+
+def _image_data_url(content_type: str, data: bytes) -> str:
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{content_type};base64,{encoded}"
+
+
+def _render_pdf_pages_for_ocr(file_bytes: bytes) -> tuple[list[str], int]:
+    try:
+        import fitz  # PyMuPDF
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("PyMuPDF is required for scanned PDF OCR") from exc
+
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    try:
+        page_count = int(getattr(doc, "page_count", 0) or 0)
+        urls: list[str] = []
+        for page_index in range(min(page_count, max(1, _USER_STRATEGY_OCR_MAX_PAGES))):
+            page = doc.load_page(page_index)
+            pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+            urls.append(_image_data_url("image/png", pix.tobytes("png")))
+        return urls, page_count
+    finally:
+        doc.close()
+
+
+def _ocr_user_strategy_images(
+    *,
+    image_urls: list[str],
+    file_name: str,
+    page_count: int,
+) -> str:
+    if not image_urls:
+        return ""
+    llm = _build_user_strategy_ocr_llm()
+    pages_note = (
+        f"총 {page_count}페이지 중 앞 {len(image_urls)}페이지를 처리합니다."
+        if page_count > len(image_urls)
+        else f"총 {page_count or len(image_urls)}페이지를 처리합니다."
+    )
+    user_content: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": (
+                "아래 파일 이미지에서 보이는 텍스트를 원문 순서대로 추출하세요.\n"
+                "- 요약, 해석, 전략 문장 작성 금지\n"
+                "- 표는 읽기 쉬운 줄 단위 텍스트로 변환\n"
+                "- 보이지 않는 내용은 만들지 않기\n"
+                f"- file_name: {file_name}\n"
+                f"- page_info: {pages_note}\n"
+                "출력은 추출 텍스트만 작성하세요."
+            ),
+        }
+    ]
+    user_content.extend(
+        {"type": "image_url", "image_url": {"url": image_url}} for image_url in image_urls
+    )
+    result = llm.invoke(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "당신은 OCR 텍스트 추출기입니다. 이미지에 보이는 글자만 "
+                    "가능한 원문 순서대로 전사하고, 보이지 않는 정보는 만들지 마세요."
+                ),
+            },
+            {"role": "user", "content": user_content},
+        ]
+    )
+    content = getattr(result, "content", result)
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, Mapping):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts).strip()
+    return str(content or "").strip()
 
 
 PREPROCESS_SOURCE_TYPES_BY_SOURCE: dict[str, list[str]] = {
@@ -342,6 +521,100 @@ async def classify_article(request: ClassifyRequest) -> ClassifyResponse:
         source_type=request.source_type,
     )
     return ClassifyResponse(**result)
+
+
+@app.post("/profile/user-skax-overlay")
+async def summarize_user_skax_overlay(request: UserSkaxOverlayRequest) -> dict[str, Any]:
+    """사용자 입력 전략 자료를 SK AX profile overlay JSON으로 구조화한다."""
+    from src.services.profile_snapshot_summarizer import ProfileSnapshotSummarizer
+
+    raw_text = request.raw_text.strip()
+    if not raw_text:
+        raise HTTPException(status_code=400, detail="raw_text is required")
+    try:
+        overlay = await asyncio.to_thread(
+            ProfileSnapshotSummarizer(
+                llm=_build_user_skax_overlay_llm()
+            ).summarize_user_skax_overlay,
+            raw_text,
+            user_id=request.user_id,
+            title=request.title,
+            metadata=request.metadata,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("user SK AX overlay 구조화 실패 | error=%s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "USER_SKAX_OVERLAY_GENERATION_FAILED",
+                "message": _AGENT_CALL_FAILED_MESSAGE,
+                "detail": str(exc)[:500],
+            },
+        ) from exc
+    return {"overlay": overlay}
+
+
+@app.post("/profile/user-strategy-file-ocr")
+async def ocr_user_strategy_file(request: UserStrategyFileOcrRequest) -> dict[str, Any]:
+    """스캔 PDF/이미지 전략 자료에서 보이는 텍스트만 추출한다."""
+    file_name = str(request.file_name or "uploaded-file").strip() or "uploaded-file"
+    content_type = _normalize_file_content_type(request.content_type, file_name)
+    file_bytes = _decode_user_strategy_file(request.file_base64)
+
+    try:
+        if content_type == "application/pdf" or file_name.lower().endswith(".pdf"):
+            image_urls, page_count = await asyncio.to_thread(
+                _render_pdf_pages_for_ocr,
+                file_bytes,
+            )
+        elif content_type.startswith("image/"):
+            image_urls = [_image_data_url(content_type, file_bytes)]
+            page_count = 1
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="OCR supports scanned PDF and image files only",
+            )
+        extracted_text = await asyncio.to_thread(
+            _ocr_user_strategy_images,
+            image_urls=image_urls,
+            file_name=file_name,
+            page_count=page_count,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        log.warning("user strategy file OCR 실패 | file=%s error=%s", file_name, exc)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "USER_STRATEGY_FILE_OCR_FAILED",
+                "message": _AGENT_CALL_FAILED_MESSAGE,
+                "detail": str(exc)[:500],
+            },
+        ) from exc
+
+    if not extracted_text.strip():
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "USER_STRATEGY_FILE_OCR_EMPTY",
+                "message": _AGENT_CALL_FAILED_MESSAGE,
+                "detail": "OCR returned empty text",
+            },
+        )
+
+    return {
+        "extractedText": extracted_text.strip(),
+        "extracted_text": extracted_text.strip(),
+        "extractionMethod": "openai_vision_ocr",
+        "extraction_method": "openai_vision_ocr",
+        "model": _user_strategy_ocr_model_name(),
+        "pageCount": page_count,
+        "page_count": page_count,
+        "processedPageCount": len(image_urls),
+        "processed_page_count": len(image_urls),
+    }
 
 
 @app.post("/briefing/generate", response_model=BriefingGenerateResponse)

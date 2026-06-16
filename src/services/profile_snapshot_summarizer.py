@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 PROFILE_SNAPSHOT_SCHEMA_VERSION = "peer-profile-snapshot-v1"
+USER_SKAX_OVERLAY_SCHEMA_VERSION = "skax-user-profile-overlay-v1"
 
 
 class ProfileSnapshotSummarizer:
@@ -38,6 +39,60 @@ class ProfileSnapshotSummarizer:
         content = getattr(result, "content", result)
         snapshot = _parse_json(str(content))
         return _finalize_snapshot(snapshot, evidence_pack)
+
+    def summarize_user_skax_overlay(
+        self,
+        raw_prompt: str,
+        *,
+        user_id: str | None = None,
+        title: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Turn a user's internal-context prompt into a reusable SK AX profile overlay.
+
+        The overlay is profile context, not a card response. It is intentionally
+        structured so StrategicInsightAgent can decide later whether the current
+        card overlaps with the user's internal context.
+        """
+        prompt_text = str(raw_prompt or "").strip()
+        if not prompt_text:
+            return {}
+        if self._llm is None:
+            raise RuntimeError(
+                "LLM is required for user SK AX overlay summarization. "
+                "Deterministic fallback is disabled to avoid template-like profile overlays."
+            )
+
+        from src.observability import tracing_config
+
+        prompt = _build_user_skax_overlay_prompt(
+            prompt_text,
+            user_id=user_id,
+            title=title,
+            metadata=metadata,
+        )
+        result = self._llm.invoke(
+            prompt,
+            config=tracing_config(
+                agent="ProfileSnapshotSummarizer",
+                phase="summarize_user_skax_overlay",
+                prompt_version=USER_SKAX_OVERLAY_SCHEMA_VERSION,
+            ),
+        )
+        content = getattr(result, "content", result)
+        overlay = _parse_json(str(content))
+        overlay["schema_version"] = USER_SKAX_OVERLAY_SCHEMA_VERSION
+        overlay["overlay_type"] = "skax_user_strategy_context"
+        if title and not overlay.get("title"):
+            overlay["title"] = title
+        source_raw = overlay.get("source")
+        source: dict[str, Any] = dict(source_raw) if isinstance(source_raw, dict) else {}
+        source["type"] = "user_prompt"
+        if user_id is not None:
+            source["user_id"] = str(user_id)
+        source["metadata"] = metadata or source.get("metadata") or {}
+        overlay["source"] = source
+        return overlay
 
 
 def _build_prompt(evidence_pack: dict[str, Any]) -> str:
@@ -120,6 +175,75 @@ source_ref 형식:
 
 evidence_pack:
 {json.dumps(evidence_pack, ensure_ascii=False, indent=2, default=str)}
+""".strip()
+
+
+def _build_user_skax_overlay_prompt(
+    raw_prompt: str,
+    *,
+    user_id: str | None,
+    title: str | None,
+    metadata: dict[str, Any] | None,
+) -> str:
+    return f"""
+당신은 ProfileSnapshotSummarizer입니다.
+
+사용자가 입력한 SK AX 내부 맥락을 카드뉴스 문장으로 쓰지 말고,
+StrategicInsightAgent가 나중에 SK AX 대응방향을 더 구체화할 때 참고할
+구조화된 SK AX 보강 프로필 JSON으로 변환하세요.
+
+원칙:
+- 입력에 있는 내부 정보만 구조화하고 새 사실은 만들지 않습니다.
+- 특정 카드뉴스 대응방안 문장을 작성하지 않습니다.
+- 사용자 문장을 그대로 복사하지 말고 재사용 가능한 판단 맥락으로 압축합니다.
+- 여러 주제가 섞여 있으면 strategy_context를 의미 단위로 나눕니다.
+- 각 strategy_context에는 현재 카드 fact와 관련성 판단에 쓸 relevance_terms를 넣습니다.
+- 내부 initiative/제품/로드맵 명칭은 관련 이슈에서 SK AX 대응방향을 구체화하는
+  근거가 될 수 있으므로 입력에 있으면 보존합니다.
+- 영문 단계명이나 모듈명은 보존하되, target_direction에는 화면 문장에 바로 쓰기 좋은
+  한국어 포지셔닝 표현을 우선 담습니다.
+
+출력은 JSON만 반환하세요. schema:
+{{
+  "schema_version": "{USER_SKAX_OVERLAY_SCHEMA_VERSION}",
+  "overlay_type": "skax_user_strategy_context",
+  "title": "",
+  "summary": "",
+  "related_domains": [],
+  "initiatives": [
+    {{
+      "name": "",
+      "current_scope": [],
+      "target_direction": "",
+      "planned_expansion": [],
+      "control_or_operating_requirements": [],
+      "relevance_terms": []
+    }}
+  ],
+  "strategy_context": [
+    {{
+      "topic": "",
+      "current_state": [],
+      "target_direction": [],
+      "decision_basis": [],
+      "constraints": [],
+      "relevance_terms": []
+    }}
+  ],
+  "cautions": [],
+  "source": {{
+    "type": "user_prompt",
+    "user_id": "",
+    "metadata": {{}}
+  }}
+}}
+
+title_hint: {title or ""}
+user_id: {user_id or ""}
+metadata: {json.dumps(metadata or {}, ensure_ascii=False, default=str)}
+
+user_prompt:
+{raw_prompt}
 """.strip()
 
 
@@ -1450,4 +1574,8 @@ def _parse_json(value: str) -> dict[str, Any]:
     return parsed
 
 
-__all__ = ["PROFILE_SNAPSHOT_SCHEMA_VERSION", "ProfileSnapshotSummarizer"]
+__all__ = [
+    "PROFILE_SNAPSHOT_SCHEMA_VERSION",
+    "USER_SKAX_OVERLAY_SCHEMA_VERSION",
+    "ProfileSnapshotSummarizer",
+]

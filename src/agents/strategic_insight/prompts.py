@@ -162,6 +162,42 @@ FRONTEND_READY_REPAIR_USER_PROMPT_TEMPLATE = """\
 8. suggested_action은 현재 사건이 SK AX의 후속 판단에 남기는 변화를 씁니다.
    SK AX의 사업, 운영 모델, 협력 방식, 고객 대응 방식 중 실제 근거와 연결되는
    한 축을 골라 구체적으로 작성합니다.
+   ProfileContext.skax_profile.user_strategy_overlays가 있으면, 현재 사건 fact와 직접
+   관련되는 의미 단위만 사용해 공통 대응방향을 더 구체화합니다.
+   overlay가 관련 없으면 사용하지 않습니다. 관련 있더라도 overlay 문장을 그대로
+   복사하지 말고 현재 사건에서 드러난 업무/시스템/운영 구조에 비춰 재해석합니다.
+   overlay에만 있는 제품명, 수치, 로드맵, 역할 구분은 현재 사건과 연결될 때만
+   suggested_action의 구체화 근거로 사용하고, key_implication에는 넣지 않습니다.
+   현재 사건과 overlay가 업무 영역, 시스템 접점, 실행 방식에서 강하게 겹치고
+   overlay에 SK AX의 내부 initiative/제품/로드맵이 명시되어 있으면,
+   suggested_action에서는 그 initiative를 숨기지 말고 SK AX가 해당 initiative를
+   어떻게 재정의·확장·범위 조정해야 하는지까지 씁니다.
+   이 경우 판단을 뒤로 미루는 완곡한 문장으로 낮추지 말고,
+   overlay의 target_direction과 현재 사건 fact가 만나는 지점에서 필요한 제품/사업
+   방향 조정을 한 문장으로 제시합니다.
+   overlay의 목표 방향이 명확하면 suggested_action.sentence는 후속 검토 과제가 아니라
+   SK AX가 취할 제품/사업 방향을 직접 드러내는 문장으로 씁니다.
+   suggested_action.sentence는 내부 initiative의 현재 범위와 목표 방향이 대비될 때
+   그 대비를 살려 직접적인 방향 전환 문장으로 씁니다. 현재 범위는 원문 목록처럼
+   나열하지 말고 하나의 사업/제품 단계로 압축하고, 목표 방향에 시스템 접점과
+   운영·통제 조건이 함께 있으면 둘 다 한 문장에 짧게 반영합니다.
+   suggested_action.evidence_sentence는 필요하면 2~4문장으로 작성해도 됩니다.
+   현재 사건 fact를 다시 요약하는 문장으로 시작하지 말고, 그 fact가 뜻하는
+   경쟁 기준 변화를 먼저 해석합니다. 이어서 overlay에 있는 현재 범위의 한계,
+   overlay의 확장/운영 조건, 그 결과 SK AX가 취해야 할 포지셔닝을 연결해 설명합니다.
+   overlay의 current_scope/current_state는 원문 기능 목록을 옮기지 말고,
+   현재 사건과 비교해 드러나는 좁은 범위나 초기 단계의 의미로 해석합니다.
+   시스템명·운영 조건은 현재 사건과 겹치는 대표 근거만 골라 쓰고,
+   여러 항목을 길게 열거하지 않습니다.
+   마지막 문장은 지시형으로 끝내기보다, 그렇게 조정했을 때
+   SK AX initiative가 어떤 전략적 위치나 차별화 근거를 얻는지 설명하는 결과 문장으로
+   마무리합니다. 단, 차별화/포지셔닝 의미는 overlay 또는 SK AX 프로필 근거가 있을 때만 씁니다.
+   overlay에 차별화 메시지나 고객 적용 가치가 있으면 마지막 문장에 그 효과를 반영합니다.
+   관련 initiative가 명시되어 있으면 마지막 효과 문장은 SK AX 일반 주어보다
+   그 initiative를 주어로 삼아 제품/서비스 포지셔닝 변화를 설명합니다.
+   이때 overlay 문장을 그대로 베끼지 말고, 현재 사건의 fact가 왜 그 내부
+   initiative의 방향 조정 근거가 되는지 설명합니다.
+   입력에 없는 고객명, 사업명, 수치, 계약, 레퍼런스, 성과, 시장 지위는 만들지 않습니다.
    대응방향은 지시문이나 체크리스트가 아니라 전략적 해석 문장입니다.
    특히 협력/MOU/공동개발 이슈에서는 각 참여자가 보유한 역량이 어떻게 맞물리는지
    먼저 읽습니다. 기사에 한쪽의 현장·시스템·운영 역량과 다른 쪽의 AI 모델·기술
@@ -434,6 +470,8 @@ SYSTEM_PROMPT = """\
 데이터 역할:
 - IntegratedIssue와 StrategicEvidencePack은 현재 사건의 유일한 사실 근거입니다.
 - ProfileContext는 피어사와 SK AX의 기존 사업영역/역량 배경입니다.
+  ProfileContext.skax_profile.user_strategy_overlays가 있으면 사용자별 SK AX 보강 프로필입니다.
+  현재 사건과 직접 관련될 때만 SK AX 대응방향을 더 구체화하는 데 사용합니다.
 - AnalysisContext는 현재 사건과 직접 연결될 때만 보조 맥락으로 사용합니다.
 - Machine linkage hints와 Response artifact guidance는 참고용 안전 힌트이며 최종 판단이 아닙니다.
 - 카드뉴스 요약은 IntegratedIssue.fact_summary를 그대로 사용하므로 생성하지 않습니다.
@@ -503,6 +541,9 @@ USER_PROMPT_TEMPLATE = """\
    SK AX 프로필과 현재 피어 신호가 실제로 만나는 지점을 찾습니다.
    접점이 약하면 새로운 기술명이나 성공 사례를 만들지 말고, 기사에서 확인된 변화가
    SK AX에 남기는 관찰 과제로 낮춰 씁니다.
+   SK AX 프로필에 user_strategy_overlays가 있으면 먼저 현재 사건 fact와 겹치는 부분이
+   있는지 판단합니다. 관련이 있으면 공통 대응방향을 대체하지 말고 더 구체화하고,
+   관련이 없으면 overlay를 사용하지 않습니다.
 5. SK AX 대응방향 작성:
    유사 고객군/유사 사업 관점은 유지하되, 내부 메모체가 아니라
    카드뉴스 화면에서 바로 읽히는 대응 문장으로 씁니다.
@@ -524,6 +565,57 @@ USER_PROMPT_TEMPLATE = """\
 - 대응방향은 현재 사건 신호가 SK AX의 후속 사업, 운영 모델, 협력 방식에
   어떤 변화를 남기는지 씁니다. 기능, 시스템, 데이터, 검증, 파트너 같은 항목은
   기사와 프로필 맥락에서 자연스럽게 필요할 때만 사용합니다.
+- ProfileContext.skax_profile.user_strategy_overlays는 SK AX 프로필을 사용자 관점으로
+  보강한 구조화 정보입니다. 현재 IntegratedIssue의 대상 업무, 시스템, 서비스,
+  운영 방식, 고객군, 기술 구조와 실제로 만나는 내용만 사용합니다.
+  overlay가 여러 주제를 담고 있으면 관련되는 의미 단위만 고르고, 관련 없는 부분은 무시합니다.
+  overlay 문장을 그대로 반복하지 말고, 현재 사건 fact에 비춰 SK AX식 대응 관점으로 재해석합니다.
+  overlay에만 있는 제품명, 수치, 로드맵, 역할 구분은 현재 사건과 연결될 때만
+  suggested_action의 구체화 근거로 쓸 수 있습니다.
+  현재 사건과 overlay가 강하게 겹치면, 대응방향을 추상적인 후속 검토 과제로
+  일반화해 끝내지 말고 overlay의 내부 initiative/제품을 기준으로 SK AX가
+  무엇을 재정의하거나 제품 범위에 포함해야 하는지 한 단계 더 구체화합니다.
+  overlay에 이미 목표 방향이 명확하면 방향 선택을 뒤로 미루지 말고,
+  그 목표 방향을 현재 사건 fact에 비춰 실행 가능한 대응방향으로 정리합니다.
+  overlay의 목표 방향에 제품/사업의 포지셔닝 표현이 있으면 이를
+  suggested_action.sentence에서도 과도하게 일반화하지 말고 보존합니다.
+  overlay의 목표 방향에 핵심 수식어와 범주 표현이 있으면 suggested_action.sentence에서
+  누락하지 않습니다. 목표 방향이 명확할 때 sentence를 완곡한 검토 과제로 약화하지 말고
+  직접적인 재정의/구체화 문장으로 씁니다.
+  overlay에 한국어 포지셔닝 표현과 영문 단계명/모듈명이 함께 있으면,
+  suggested_action.sentence에는 영문 단계명/모듈명을 올리지 말고 한국어 포지셔닝을
+  사용합니다. 영문 단계명/모듈명은 필요할 때 suggested_action.evidence_sentence에서
+  보조 근거로만 사용합니다.
+  내부 initiative의 현재 범위와 목표 방향이 overlay에 함께 있으면,
+  suggested_action.sentence는 현재 범위에 머무르지 말아야 하는 이유와
+  목표 방향을 한 문장 안에서 대비시켜 씁니다. 현재 범위는 overlay의 기능 목록을
+  그대로 옮기지 말고 하나의 사업/제품 단계로 압축하며, 목표 방향에 시스템 접점과
+  운영·통제 조건이 함께 있으면 둘 다 짧게 반영합니다.
+  suggested_action.evidence_sentence에서 overlay의 현재 범위를 사용할 때는 기능 목록을
+  그대로 나열하지 말고, 그 범위가 갖는 장점과 한계를 해석합니다.
+  원문 current_scope/current_state를 여러 개 열거하지 말고, 현재 사건이 보여준
+  실행 범위와 비교해 어떤 의미나 한계가 생기는지 설명합니다.
+  입력에 있는 개발 단계명이나 약어는 화면 문장에서 필요하면 의미 중심의 한국어 표현으로
+  풀어 씁니다.
+  suggested_action.evidence_sentence는 짧은 일반론으로 끝내지 말고,
+  현재 사건 fact를 다시 요약하지 말고, 그 fact가 뜻하는 경쟁 기준 변화에서
+  출발합니다. 그 다음 overlay의 현재 범위/한계, overlay의 확장 또는 운영 조건,
+  그 조건이 SK AX 포지셔닝에 주는 의미를 연결합니다.
+  마지막은 지시문으로 닫지 말고, 그렇게 구체화했을 때 SK AX initiative가
+  단순 기능 추격이 아니라 어떤 적용 가치나 포지셔닝을 얻는지 설명합니다.
+  이 해석은 overlay나 SK AX 프로필에 있는 목표 방향/차별화 근거 안에서만 허용합니다.
+  overlay에 차별화 메시지나 고객 적용 가치가 있으면 suggested_action.evidence_sentence의
+  마지막 문장에 그 효과를 반영합니다.
+  관련 initiative가 명시되어 있으면 마지막 효과 문장은 SK AX 일반 주어보다
+  그 initiative를 주어로 삼아 제품/서비스 포지셔닝 변화를 설명합니다.
+  회사명·제품명·연결 대상 나열은 key_implication.evidence_sentence에서 이미
+  사용했다면 suggested_action.evidence_sentence에서는 반복을 최소화합니다.
+  현재 사건이 실행형 업무를 다루고 overlay에 그 실행을 안전하게 운영하기 위한
+  조건이나 제품 방향이 있으면, suggested_action.sentence에도 단순 적용 범위 확대가
+  아니라 overlay에서 확인되는 운영/통제 관점의 포지셔닝이 드러나야 합니다.
+  단, 그 initiative는 ProfileContext에 들어 있는 경우에만 사용합니다.
+  입력에 없는 고객명, 사업명, 수치, 계약, 레퍼런스, 성과, 시장 지위는 만들지 않습니다.
+  key_implication에는 overlay 내용을 넣지 말고, suggested_action에서만 관련된 경우 사용합니다.
 - 둘 다 현재 사건의 고유 명사·수치·제품/서비스·고객군을 근거로 자연스럽게 씁니다.
 - frontend_ready 생성 가능성은 고객명/계약/구축 범위의 유무만으로 닫지 말고
   fact 충분성으로 판단합니다.

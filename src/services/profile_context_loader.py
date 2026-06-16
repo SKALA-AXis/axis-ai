@@ -10,6 +10,7 @@ cluster-time LLM 추가 호출 0건. <50ms 목표 (peer 1명 당 2 SQL).
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Any
 
@@ -22,6 +23,15 @@ from src.services.metric_canonical import METRIC_CANONICAL
 from src.services.peer_id_aliases import expand_peer_aliases
 
 log = logging.getLogger(__name__)
+
+_TEMP_CLO_ISSUE_MARKERS = ("클로", "에이엑스씽크")
+
+
+def _user_strategy_overlay_limit() -> int:
+    try:
+        return max(1, int(os.getenv("USER_STRATEGY_OVERLAY_LIMIT", "20")))
+    except ValueError:
+        return 20
 
 
 class ProfileContextLoader:
@@ -36,6 +46,10 @@ class ProfileContextLoader:
         lookback_days: int = 30,
         peer_profile_context: dict[str, Any] | None = None,
         skax_profile_context: dict[str, Any] | None = None,
+        user_id: str | None = None,
+        user_profile_overlay: dict[str, Any] | None = None,
+        user_profile_overlays: list[dict[str, Any]] | None = None,
+        issue_scope: dict[str, Any] | None = None,
         strict: bool = False,
         require_skax_profile: bool = False,
     ) -> ProfileContext:
@@ -55,6 +69,15 @@ class ProfileContextLoader:
             "sk_ax",
             strict=require_skax_profile,
         )
+        overlays = _user_strategy_overlays(
+            user_id=user_id,
+            user_profile_overlay=user_profile_overlay,
+            user_profile_overlays=user_profile_overlays,
+            issue_scope=issue_scope,
+        )
+        if overlays:
+            skax_profile = dict(skax_profile)
+            skax_profile["user_strategy_overlays"] = overlays
         if require_skax_profile and not _has_snapshot_payload(skax_profile):
             raise RuntimeError(
                 "SK AX profile_snapshot was not loaded from peer_companies. "
@@ -175,6 +198,108 @@ def _has_snapshot_payload(snapshot: dict[str, Any]) -> bool:
             "capability_evolution",
         )
     )
+
+
+def _user_strategy_overlays(
+    *,
+    user_id: str | None,
+    user_profile_overlay: dict[str, Any] | None,
+    user_profile_overlays: list[dict[str, Any]] | None,
+    issue_scope: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    overlays: list[dict[str, Any]] = []
+    limit = _user_strategy_overlay_limit()
+    overlays.extend(
+        _load_user_strategy_overlays(
+            user_id=user_id,
+            limit=limit,
+            issue_scope=issue_scope,
+        )
+    )
+    if isinstance(user_profile_overlay, dict) and user_profile_overlay:
+        overlays.append(user_profile_overlay)
+    for overlay in user_profile_overlays or []:
+        if isinstance(overlay, dict) and overlay:
+            overlays.append(overlay)
+    return _filter_user_strategy_overlays_for_issue(overlays, issue_scope=issue_scope)[:limit]
+
+
+def _load_user_strategy_overlays(
+    *,
+    user_id: str | None,
+    limit: int,
+    issue_scope: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not user_id:
+        return []
+    try:
+        with SessionLocal() as db:
+            rows = db.execute(
+                text(
+                    """
+                    SELECT id, overlay_json, metadata
+                     FROM user_strategy_contexts
+                     WHERE user_id = CAST(:user_id AS uuid)
+                     ORDER BY updated_at DESC
+                     LIMIT :limit
+                    """
+                ),
+                {"user_id": user_id, "limit": int(limit)},
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — pre-migration/local fallback.
+        log.debug("user_strategy_contexts 조회 실패 | user_id=%s error=%s", user_id, exc)
+        return []
+    overlays: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        mapping = row._mapping
+        context_id = str(mapping.get("id") or "").strip()
+        if context_id and context_id in seen:
+            continue
+        if context_id:
+            seen.add(context_id)
+        overlay = mapping.get("overlay_json")
+        if isinstance(overlay, dict) and overlay:
+            item = dict(overlay)
+            item["_strategy_context_id"] = context_id
+            metadata = mapping.get("metadata")
+            if isinstance(metadata, dict):
+                item["_strategy_context_metadata"] = metadata
+            overlays.append(item)
+    return overlays
+
+
+def _filter_user_strategy_overlays_for_issue(
+    overlays: list[dict[str, Any]],
+    *,
+    issue_scope: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """TEMP: 사용자 맞춤 전략자료는 클로 카드에만 강제 적용.
+
+    제거할 때는 이 함수의 TEMP 분기와 상단 _TEMP_CLO_* 상수, 그리고
+    _is_temp_clo_issue helper만 삭제하면 된다.
+    """
+    return overlays if _is_temp_clo_issue(issue_scope) else []
+
+
+def _is_temp_clo_issue(issue_scope: dict[str, Any] | None) -> bool:
+    if not isinstance(issue_scope, dict):
+        return False
+    text = _scope_text(issue_scope).casefold()
+    return all(marker.casefold() in text for marker in _TEMP_CLO_ISSUE_MARKERS)
+
+
+def _scope_text(value: Any) -> str:
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key, item in value.items():
+            if str(key).startswith("_") and key not in {"_strategy_context_id"}:
+                continue
+            parts.append(_scope_text(item))
+        return " ".join(part for part in parts if part)
+    if isinstance(value, list):
+        return " ".join(_scope_text(item) for item in value)
+    return "" if value is None else str(value)
 
 
 def _safe_error(exc: Exception) -> str:
