@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date
 from typing import Any
 
@@ -364,11 +365,7 @@ def build_classification_from_articles(
         [
             *_normalize_string_list(overrides.get("sectors")),
             *_normalize_string_list(overrides.get("sector")),
-            *[
-                sector
-                for article in articles
-                for sector in _normalize_string_list(article.get("matched_sectors"))
-            ],
+            *[sector for article in articles for sector in _article_sector_candidates(article)],
         ]
     )
     importance_score = _first_float(
@@ -419,6 +416,27 @@ def _event_type_from_articles(articles: list[dict[str, Any]]) -> str:
             if value:
                 return str(value)
     return "general_update"
+
+
+def _article_sector_candidates(article: dict[str, Any]) -> list[str]:
+    metadata = _metadata(article)
+    values: list[str] = [
+        *_normalize_string_list(article.get("matched_sectors")),
+        *_normalize_string_list(metadata.get("matched_sectors")),
+        *_normalize_string_list(metadata.get("sector")),
+    ]
+    details = article.get("matched_sector_details") or metadata.get("matched_sector_details")
+    for item in details if isinstance(details, list) else []:
+        if isinstance(item, dict):
+            values.extend(_normalize_string_list(item.get("sector_id") or item.get("sector")))
+    reason = str(metadata.get("industry_relevance_reason") or "")
+    for match in re.findall(r"sector=([A-Za-z0-9_, -]+)", reason):
+        values.extend(part.strip() for part in re.split(r"[, ]+", match) if part.strip())
+    return [
+        sector
+        for sector in _dedupe_strings(values)
+        if sector and sector not in {"industry", "industry_trend", "other"}
+    ]
 
 
 def _representative_article(
