@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import text
 
 from src.agents.analysis_graph_runner import AnalysisGraphRunner
+from src.agents.strategic_insight_agent import _is_valid_integrated_issue
 from src.analysis.models import AnalysisInputBundle
 from src.composers.card_news_composer import CardNewsComposer
 from src.db.article_store import get_articles_by_ids, save_card_news
@@ -234,13 +235,21 @@ class AnalysisPipelineRunner:
             "summary",
             {},
         )
-        if not integrated_issue.get("is_valid_summary", True):
+        if not integrated_issue.get("is_valid_summary", True) and not _is_valid_integrated_issue(
+            integrated_issue
+        ):
             log.info(
                 "카드뉴스 생성 제외 | cluster=%s reason=invalid_integrated_issue:%s",
                 integrated_issue.get("cluster_id"),
                 integrated_issue.get("reason"),
             )
             return {}
+        if not integrated_issue.get("is_valid_summary", True):
+            log.info(
+                "카드뉴스 생성 유지 | cluster=%s validation=non_fatal_summary reason=%s",
+                integrated_issue.get("cluster_id"),
+                integrated_issue.get("reason"),
+            )
         return self.card_news_composer.generate_from_analysis_package(
             analysis_package,
             classification=classification,

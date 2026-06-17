@@ -2525,8 +2525,8 @@ def _frontend_implication_from_frontend_ready(value: Any) -> dict[str, Any]:
     action_items = _frontend_ready_display_lines(action_block, prefix="핵심 대응")
     if not key_items and not action_items:
         return {}
-    key_blocks = _main_detail_blocks_from_labeled_lines(key_items)
-    action_blocks = _main_detail_blocks_from_labeled_lines(action_items)
+    key_blocks = _frontend_ready_display_blocks(key_block)
+    action_blocks = _frontend_ready_display_blocks(action_block)
     payload: dict[str, Any] = {
         "source": value.get("source") or "frontend_ready",
         "key_implications": key_items,
@@ -2551,21 +2551,23 @@ def _frontend_implication_from_industry_frontend_ready(value: Any) -> dict[str, 
         return {}
     insight_items: list[str] = []
     action_items: list[str] = []
+    insight_blocks: list[dict[str, str]] = []
+    action_blocks: list[dict[str, str]] = []
     for item in value.get("items") or []:
         if not isinstance(item, dict):
             continue
-        insight_items.extend(
-            _frontend_ready_display_lines(item.get("key_implication"), prefix="핵심 시사점")
-        )
-        action_items.extend(
-            _frontend_ready_display_lines(item.get("suggested_action"), prefix="핵심 대응")
-        )
+        key_block = item.get("key_implication")
+        action_block = item.get("suggested_action")
+        insight_items.extend(_frontend_ready_display_lines(key_block, prefix="핵심 시사점"))
+        action_items.extend(_frontend_ready_display_lines(action_block, prefix="핵심 대응"))
+        insight_blocks.extend(_frontend_ready_display_blocks(key_block))
+        action_blocks.extend(_frontend_ready_display_blocks(action_block))
     insight_items = insight_items[:2]
     action_items = action_items[:2]
+    insight_blocks = insight_blocks[:2]
+    action_blocks = action_blocks[:2]
     if not insight_items and not action_items:
         return {}
-    insight_blocks = _main_detail_blocks_from_labeled_lines(insight_items)
-    action_blocks = _main_detail_blocks_from_labeled_lines(action_items)
     payload: dict[str, Any] = {
         "source": "industry_signal_direct",
         "signal_scope": str(value.get("signal_scope") or "industry_signal"),
@@ -2594,10 +2596,20 @@ def _frontend_ready_display_lines(value: Any, *, prefix: str) -> list[str]:
     evidence = str(value.get("evidence_sentence") or "").strip()
     if not sentence:
         return []
-    line = f"{prefix}: {sentence}"
+    lines = [f"{prefix}: {sentence}"]
     if evidence:
-        line = f"{line}\n근거/설명: {evidence}"
-    return [line]
+        lines.append(f"근거: {evidence}")
+    return lines
+
+
+def _frontend_ready_display_blocks(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, dict):
+        return []
+    sentence = str(value.get("sentence") or "").strip()
+    evidence = str(value.get("evidence_sentence") or "").strip()
+    if not sentence:
+        return []
+    return [{"main": sentence, "detail": evidence}]
 
 
 def _main_detail_blocks(value: Any) -> list[dict[str, str]]:

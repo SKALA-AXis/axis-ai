@@ -15,6 +15,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, TypedDict
 
+from src.agents.strategic_insight_agent import _is_valid_integrated_issue
 from src.config.company_tiers import SELF_COMPANY_IDS
 from src.config.preprocessing import DEFAULT_GPT_WORKERS
 from src.db.article_store import get_articles_by_ids, save_card_news, save_pipeline_log
@@ -111,7 +112,9 @@ class AnalysisDeliveryService:
                 "summary",
                 {},
             )
-            if not integrated_issue.get("is_valid_summary"):
+            if not integrated_issue.get("is_valid_summary") and not _is_valid_integrated_issue(
+                integrated_issue
+            ):
                 log.info(
                     "카드뉴스 생성 제외 | cluster=%s company=%s reason=invalid_summary:%s",
                     cluster_id,
@@ -119,6 +122,13 @@ class AnalysisDeliveryService:
                     integrated_issue.get("reason"),
                 )
                 return {}
+            if not integrated_issue.get("is_valid_summary"):
+                log.info(
+                    "카드뉴스 생성 유지 | cluster=%s company=%s validation=non_fatal_summary:%s",
+                    cluster_id,
+                    cluster.get("company"),
+                    integrated_issue.get("reason"),
+                )
             return result.get("card_news") or {}
 
         def _generate_raw_article_card(raw_article_id: int, source_group: str) -> dict[str, Any]:
