@@ -477,7 +477,7 @@ def _apply_user_strategy_projections(rows: list[dict[str, Any]], *, user_id: str
         projection = projections.get(card_id)
         if not projection:
             continue
-        action = projection.get("applied_action") or {}
+        action = _json_dict(projection.get("applied_action"))
         if not action:
             continue
         evidence_payload = _json_dict(row.get("evidence_payload"))
