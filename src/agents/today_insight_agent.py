@@ -1569,6 +1569,33 @@ def _section_actions(
     return actions[:1]
 
 
+def _norm_id_set(values: Any) -> set[str]:
+    """출처 id 비교용 정규화 집합.
+
+    대소문자 무시 + raw 원문 id 의 ``raw-123`` ↔ ``123`` 표기 차이를 흡수한다.
+    (integrated issue 의 source_ids 는 숫자 raw id 인데 source 메타의 id 는 ``raw-N``
+    으로 갈려 있어, LLM 이 어느 표기로 인용하든 매칭되도록 양방향 보강.) ``cn-``/``ic-``
+    같은 prefix 는 그대로 두어 서로 다른 타입(raw vs card vs issue)이 우연히
+    교차 매칭되지 않게 한다.
+    """
+    if isinstance(values, (set, frozenset, list, tuple)):
+        items = list(values)
+    else:
+        items = _list(values)
+    out: set[str] = set()
+    for value in items:
+        token = str(value or "").strip().lower()
+        if not token:
+            continue
+        out.add(token)
+        raw_match = re.match(r"^raw-(\d+)$", token)
+        if raw_match:
+            out.add(raw_match.group(1))
+        elif token.isdigit():
+            out.add(f"raw-{token}")
+    return out
+
+
 def _match_sources_by_ids(
     sources: list[dict[str, Any]],
     source_ids: set[str],
@@ -1580,17 +1607,18 @@ def _match_sources_by_ids(
     ]
     if not source_ids:
         return (url_sources or sources)[:4]
+    cited = _norm_id_set(source_ids)
     matched = [
-        source
-        for source in sources
-        if str(source.get("id") or "") in source_ids or str(source.get("url") or "") in source_ids
+        source for source in sources if _norm_id_set([source.get("id"), source.get("url")]) & cited
     ]
     matched_url_sources = [
         source
         for source in matched
         if str(source.get("url") or "").startswith(("http://", "https://"))
     ]
-    return matched_url_sources or matched or url_sources[:2] or sources[:2]
+    # 인용된 source_id 와 실제로 매칭된 출처만 노출한다. 매칭 실패 시 임의의 다른
+    # 출처를 붙이지 않는다 — 본문과 무관한 "출처 링크"(오링크) 방지.
+    return matched_url_sources or matched
 
 
 def _match_trace_by_ids(
@@ -1599,16 +1627,20 @@ def _match_trace_by_ids(
 ) -> list[dict[str, Any]]:
     if not source_ids:
         return trace[:6]
+    cited = _norm_id_set(source_ids)
     matched = []
     for row in trace:
-        values = {
-            str(row.get("source_integrated_issue_id") or ""),
-            str(row.get("source_card_id") or ""),
-            *[str(raw_id) for raw_id in _list(row.get("source_raw_article_ids"))],
-        }
-        if values.intersection(source_ids):
+        values = _norm_id_set(
+            [
+                row.get("source_integrated_issue_id"),
+                row.get("source_card_id"),
+                *_list(row.get("source_raw_article_ids")),
+            ]
+        )
+        if values & cited:
             matched.append(row)
-    return matched or trace[:3]
+    # 매칭 실패 시 임의 trace 를 붙이지 않는다(오링크 방지).
+    return matched
 
 
 def _source_trace_from_context(context: dict[str, Any]) -> list[dict[str, Any]]:

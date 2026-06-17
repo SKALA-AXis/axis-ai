@@ -747,3 +747,47 @@ def test_today_insight_public_copy_qualifies_internal_scores() -> None:
     assert "내용 영향은 큰 편" in sanitized
     assert "보도 확산은 아직 낮은 편" in sanitized
     assert "노출은 낮지만 내용이 확인된 이벤트" in sanitized
+
+
+def test_match_sources_no_arbitrary_fallback_when_unmatched() -> None:
+    sources = [
+        {"id": "CN-1", "url": "https://a.example/1"},
+        {"id": "CN-2", "url": "https://b.example/2"},
+    ]
+    # 인용한 id 가 어느 출처와도 안 맞으면 임의 출처를 붙이지 않는다(빈 리스트) — 오링크 방지.
+    assert today_module._match_sources_by_ids(sources, {"CN-999"}) == []
+
+
+def test_match_sources_exact_and_raw_prefix_normalization() -> None:
+    sources = [
+        {"id": "CN-1", "url": "https://a.example/1"},
+        {"id": "raw-7", "url": "https://b.example/7"},
+    ]
+    assert today_module._match_sources_by_ids(sources, {"CN-1"})[0]["id"] == "CN-1"
+    # 숫자 raw id 인용이 raw- 표기 출처와 양방향 매칭된다.
+    assert today_module._match_sources_by_ids(sources, {"7"})[0]["id"] == "raw-7"
+    assert today_module._match_sources_by_ids(sources, {"raw-7"})[0]["id"] == "raw-7"
+
+
+def test_match_sources_no_citation_returns_doc_sources() -> None:
+    sources = [{"id": "CN-1", "url": "https://a.example/1"}]
+    # source_ids 가 없으면(섹션이 특정 인용 안 함) 문서 출처를 보여주는 기존 동작 유지.
+    assert today_module._match_sources_by_ids(sources, set()) == sources
+
+
+def test_match_trace_no_arbitrary_fallback_when_unmatched() -> None:
+    trace = [
+        {"source_card_id": "CN-1", "url": "https://a.example/1"},
+        {"source_card_id": "CN-2", "url": "https://b.example/2"},
+    ]
+    assert today_module._match_trace_by_ids(trace, {"CN-999"}) == []
+
+
+def test_match_trace_matches_card_and_raw_article_ids() -> None:
+    trace = [
+        {"source_card_id": "CN-1", "source_raw_article_ids": ["123"], "url": "https://x"},
+        {"source_card_id": "CN-2", "source_raw_article_ids": ["456"], "url": "https://y"},
+    ]
+    assert today_module._match_trace_by_ids(trace, {"CN-1"}) == [trace[0]]
+    # LLM 이 raw-123 으로 인용해도 trace 의 숫자 "123" 과 매칭된다.
+    assert today_module._match_trace_by_ids(trace, {"raw-123"}) == [trace[0]]
