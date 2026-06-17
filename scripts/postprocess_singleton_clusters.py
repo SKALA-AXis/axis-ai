@@ -32,7 +32,7 @@ if str(ROOT) not in sys.path:
 from src.config.companies import COMPANY_ALIASES  # noqa: E402
 from src.config.env_loader import load_profile  # noqa: E402
 from src.config.openai_policy import openai_calls_enabled  # noqa: E402
-from src.db.postgres import SessionLocal  # noqa: E402
+from src.db.postgres import SessionLocal, reconfigure_from_env  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -149,6 +149,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     profile = load_profile(args.env)
+    reconfigure_from_env()
     log.info(
         "singleton 후처리 시작 | profile=%s lookback_hours=%d time_field=%s apply=%s",
         profile,
@@ -1109,6 +1110,12 @@ def _has_event_action(titles: list[str]) -> bool:
             "선정",
             "출시",
             "공개",
+            "개최",
+            "개관",
+            "참여",
+            "발표",
+            "협약",
+            "지원",
             "공급",
             "구축",
             "투자",

@@ -4274,12 +4274,7 @@ def _industry_frontend_item(
         decision_criteria=decision_criteria,
         primary_actor_type=str(skip_decision.get("primary_actor_type") or ""),
     )
-    action_sentence = _industry_action_sentence(
-        anchors,
-        axis_key=axis_key,
-        decision_criteria=decision_criteria,
-    )
-    action_evidence = _industry_action_evidence_sentence(
+    action_block = _industry_source_grounded_action_block(
         axis_key=axis_key,
         anchors=anchors,
         decision_criteria=decision_criteria,
@@ -4306,17 +4301,7 @@ def _industry_frontend_item(
             ),
             "evidence_sentence": evidence_text,
         },
-        "suggested_action": {
-            "source": "industry_signal_direct",
-            "frame": "industry_response_check",
-            "claim_type": "internal_strategy_check",
-            "claim_strength": "cautious",
-            "evidence_mode": "generic_monitoring",
-            "event_anchor_terms": anchors,
-            "decision_criteria": decision_criteria,
-            "sentence": action_sentence,
-            "evidence_sentence": action_evidence,
-        },
+        "suggested_action": action_block,
     }
 
 
@@ -4568,7 +4553,7 @@ def _industry_criteria_flags(
             _anchor_norm("기존 시스템 접점"),
         }
         & normalized
-    ) or bool(re.search(r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I))
+    ) or bool(re.search(r"고객|업무|시스템|ERP|메일|문서|데이터베이스|자동화", value, flags=re.I))
     has_operation = bool({_anchor_norm("실행 조건")} & normalized)
     has_investment = bool(
         {
@@ -4597,13 +4582,13 @@ def _industry_role_structure_subject(
 ) -> str:
     flags = _industry_criteria_flags(criteria, anchors)
     if flags["actor_or_partner"] and flags["infra_or_supply"]:
-        return "기술 제공자와 적용 기업이 함께 드러난 논의"
+        return "참여 주체와 인프라 준비 조건이 함께 드러난 논의"
     if flags["infra_or_supply"] and (flags["customer_or_system"] or flags["operation"]):
-        return "기술·인프라 준비와 적용 조건이 함께 드러난 논의"
+        return "인프라 준비 수준과 실행 조건이 함께 드러난 논의"
     if flags["actor_or_partner"] and (flags["customer_or_system"] or flags["operation"]):
         return "여러 참여 주체와 실행 단계가 함께 드러난 논의"
     if flags["customer_or_system"] and flags["operation"]:
-        return "고객 적용 범위와 실행 조건이 함께 드러난 논의"
+        return "시스템 접점과 실행 조건이 함께 드러난 논의"
     if flags["investment"] and flags["infra_or_supply"]:
         return "투자 조건과 기술 준비가 함께 드러난 논의"
     return ""
@@ -4620,47 +4605,20 @@ def _industry_role_structure_change_clause(
         and (flags["customer_or_system"] or flags["operation"])
     ):
         return (
-            "기술 확보 자체보다 적용 기업의 업무 변화와 실행 가능성을 함께 보는 "
+            "기술 확보 자체보다 참여 구조와 실행 가능성을 함께 보는 "
             "경쟁 기준으로 이어질 수 있음을 보여준다."
         )
     if flags["infra_or_supply"] and (flags["customer_or_system"] or flags["operation"]):
-        return (
-            "기술 준비 수준을 고객 적용 단계와 운영 조건까지 함께 보는 흐름으로 "
-            "확장될 수 있음을 보여준다."
-        )
+        return "기술 준비 수준을 운영 조건까지 함께 보는 흐름으로 확장될 수 있음을 보여준다."
     if flags["actor_or_partner"] and (flags["customer_or_system"] or flags["operation"]):
         return (
             "협력 여부보다 각 주체의 역량이 실제 적용 단계에서 "
             "어떻게 맞물리는지가 중요해질 수 있음을 보여준다."
         )
     if flags["customer_or_system"] and flags["operation"]:
-        return "기능 제공보다 고객 업무에 닿는 적용 범위를 함께 보는 흐름을 보여준다."
+        return "기능 제공보다 시스템 접점과 실행 조건을 함께 보는 흐름을 보여준다."
     if flags["investment"] and flags["infra_or_supply"]:
         return "투자 규모보다 실제 적용 조건과 후속 운영 가능성을 함께 따지는 흐름을 보여준다."
-    return ""
-
-
-def _industry_action_role_axis(
-    criteria: Sequence[str],
-    anchors: Sequence[str] | None = None,
-) -> str:
-    flags = _industry_criteria_flags(criteria, anchors)
-    if (
-        flags["actor_or_partner"]
-        and flags["infra_or_supply"]
-        and (flags["customer_or_system"] or flags["operation"])
-    ):
-        return "기술 역량과 고객 적용 경험을 함께 사업화하는 방식"
-    if flags["infra_or_supply"] and flags["customer_or_system"]:
-        return "기술·인프라 준비 조건과 고객 적용 단계"
-    if flags["actor_or_partner"] and flags["operation"]:
-        return "협력 역량을 실제 운영으로 연결하는 방식"
-    if flags["actor_or_partner"]:
-        return "협력 역량을 사업 기회로 연결하는 방식"
-    if flags["customer_or_system"] and flags["operation"]:
-        return "고객 업무 적용 범위"
-    if flags["investment"] and flags["infra_or_supply"]:
-        return "투자 부담, 준비 조건, 후속 적용 가능성"
     return ""
 
 
@@ -4790,7 +4748,7 @@ def _industry_decision_criteria_from_issue(
         ("비용 부담", r"비용|부담|원가|가격"),
         ("실행 조건", r"운영|관제|책임|관리|유지|서비스\s*개시"),
         ("기술 공급 구조", r"공급|벤더|기술|GPU|그래픽처리장치|반도체|클라우드|플랫폼|모델|장비"),
-        ("고객 적용 가능성", r"고객|적용|도입|사용|서비스|업무|기업\s*AI"),
+        ("고객 적용 가능성", r"고객|적용|도입|사용|업무|기업\s*AI"),
         ("기존 시스템 접점", r"기존\s*시스템|시스템\s*연계|연계|ERP|전환|업무\s*시스템"),
         ("파트너십 필요성", r"협력|제휴|공동|파트너|협약|MOU"),
         ("참여 주체", r"참여|주체|그룹|기업|기관|정부|벤더|컨소시엄|총수|CEO"),
@@ -4882,93 +4840,57 @@ def _industry_evidence_sentence(
     )
 
 
-def _industry_action_sentence(
-    anchors: Sequence[str],
-    *,
-    axis_key: str = "",
-    decision_criteria: Sequence[str],
-) -> str:
-    if _is_technology_event_adoption_axis(axis_key, anchors):
-        return (
-            "SK AX는 대규모 기술 전시에서 확인된 AI 적용 분야 중 제조·물류·업무 자동화 "
-            "수요가 먼저 구체화되는 영역을 추적해야 한다."
-        )
-    anchor_phrase = _anchor_phrase(anchors, max_items=3)
-    role_axis = _industry_action_role_axis(decision_criteria, anchors)
-    if role_axis:
-        role_object = _with_korean_object_particle(role_axis)
-        return f"SK AX의 후속 사업은 이 흐름에서 {role_object} 중심으로 전개될 수 있다."
-    action_reading = _industry_dynamic_action_reading_from_anchors(
-        anchors,
-        decision_criteria=decision_criteria,
-    ) or _industry_action_reading_phrase(decision_criteria)
-    if action_reading:
-        action_object = _with_korean_object_particle(action_reading)
-        return (
-            f"SK AX의 후속 사업은 {anchor_phrase} 흐름에서 {action_object} 중심으로 전개될 수 있다."
-        )
-    return (
-        f"SK AX의 후속 사업은 {anchor_phrase} 흐름에서 드러난 참여 구조와 "
-        "적용 조건을 함께 반영하는 쪽으로 전개될 수 있다."
-    )
-
-
-def _industry_action_evidence_sentence(
+def _industry_source_grounded_action_block(
     *,
     axis_key: str,
     anchors: Sequence[str],
     decision_criteria: Sequence[str],
-    evidence_lines: Sequence[str] = (),
+    evidence_lines: Sequence[str],
+) -> dict[str, Any]:
+    anchor_phrase = _anchor_phrase(anchors, max_items=3)
+    fact_line = _industry_primary_action_evidence_line(evidence_lines)
+    action_sentence = _industry_source_grounded_action_sentence(
+        anchor_phrase=anchor_phrase,
+        fact_line=fact_line,
+    )
+    evidence_sentence = _industry_source_grounded_action_evidence(
+        anchor_phrase=anchor_phrase,
+        fact_line=fact_line,
+    )
+    return {
+        "source": "industry_signal_direct",
+        "frame": "industry_response_check",
+        "claim_type": "internal_strategy_check",
+        "claim_strength": "cautious",
+        "evidence_mode": "source_grounded",
+        "event_anchor_terms": list(anchors),
+        "decision_criteria": list(decision_criteria),
+        "sentence": action_sentence,
+        "evidence_sentence": evidence_sentence,
+        "strategic_axis": axis_key,
+    }
+
+
+def _industry_source_grounded_action_sentence(
+    *,
+    anchor_phrase: str,
+    fact_line: str,
 ) -> str:
-    if _is_technology_event_adoption_axis(axis_key, anchors):
-        scale = _technology_event_scale_phrase([*anchors, *evidence_lines])
-        domains = _technology_event_domain_phrase([*anchors, *evidence_lines])
-        return (
-            f"{scale}가 참가한 행사에서 {domains}가 함께 제시된 만큼, SK AX도 "
-            "단순 AI 관심도보다 제조·물류·업무 자동화 가운데 실제 도입 논의가 "
-            "앞서 움직이는 영역을 우선 확인해야 한다."
-        )
-    anchor_phrase = _anchor_phrase(anchors, max_items=2)
-    result_phrase = _industry_action_result_phrase(decision_criteria)
-    evidence_reading = _industry_action_evidence_reading_phrase(decision_criteria)
-    dynamic_reading = _industry_dynamic_action_reading_from_anchors(
-        anchors,
-        decision_criteria=decision_criteria,
-    )
-    if dynamic_reading:
-        fact_line = _industry_primary_action_evidence_line(evidence_lines)
-        role_reading = _industry_action_role_reading_phrase(
-            anchors,
-            decision_criteria=decision_criteria,
-        )
-        role_axis = _industry_action_role_axis(decision_criteria, anchors)
-        if fact_line and role_reading:
-            fact_clause = _short_fact_clause(fact_line, max_chars=118)
-            if role_axis:
-                role_object = _with_korean_object_particle(role_axis)
-                return (
-                    f"{fact_clause} {anchor_phrase} 흐름에서는 SK AX도 {role_object} "
-                    "중심의 사업 접근으로 이어질 수 있다."
-                )
-            return (
-                f"{fact_clause} {anchor_phrase} 흐름에서는 SK AX도 적용 대상과 "
-                "실행 단계가 구체화되는 속도에 맞춰 사업 관점이 조정될 수 있다."
-            )
-        fallback_role_reading = "참여 주체의 역량이 적용 단계에서 맞물리는 방식이 중요해질 수 있다."
-        return (
-            f"{anchor_phrase} 흐름에서 {dynamic_reading}이 부각되므로, "
-            f"{role_reading or fallback_role_reading}"
-        )
-    if evidence_reading and result_phrase:
-        result_object = _with_korean_object_particle(result_phrase)
-        return (
-            f"{anchor_phrase}와 함께 {evidence_reading}이 드러난 만큼, SK AX도 "
-            f"{result_object} 중심으로 고객 적용 가능성과 협력 필요성을 확인할 수 있다."
-        )
-    return (
-        f"{anchor_phrase}가 제시된 만큼, SK AX는 직접 사업화를 단정하기보다 "
-        "참여 주체와 적용 조건이 맞물리는 흐름을 후속 사업 관점에 반영할 수 있다."
-    )
+    if fact_line:
+        fact = _short_fact_clause(fact_line, max_chars=96)
+        return f"SK AX는 {fact} {anchor_phrase} 관련 대응 필요 여부를 원문 기준으로 확인한다."
+    return f"SK AX는 {anchor_phrase} 관련 대응 필요 여부를 원문 기준으로 확인한다."
+
+
+def _industry_source_grounded_action_evidence(
+    *,
+    anchor_phrase: str,
+    fact_line: str,
+) -> str:
+    if fact_line:
+        fact = _short_fact_clause(fact_line, max_chars=118)
+        return f"{fact} 이 문장이 {anchor_phrase} 관련 대응 검토의 근거다."
+    return f"{anchor_phrase}가 원문 근거에서 확인된다."
 
 
 def _industry_primary_action_evidence_line(evidence_lines: Sequence[str]) -> str:
@@ -4978,34 +4900,6 @@ def _industry_primary_action_evidence_line(evidence_lines: Sequence[str]) -> str
             next((item for item in evidence_lines if str(item).strip()), ""),
         )
     ).strip()
-
-
-def _industry_action_role_reading_phrase(
-    anchors: Sequence[str],
-    *,
-    decision_criteria: Sequence[str],
-) -> str:
-    flags = _industry_criteria_flags(decision_criteria, anchors)
-    if flags["actor_or_partner"] and flags["infra_or_supply"]:
-        return "기술을 제공하는 주체와 이를 적용하는 기업의 역량 결합이 중요해질 수 있다."
-    if flags["actor_or_partner"] and (flags["operation"] or flags["customer_or_system"]):
-        return "서비스 제공자와 적용 조직의 협업 방식이 실행 단계의 완성도를 좌우할 수 있다."
-    if flags["infra_or_supply"]:
-        return (
-            "기술·인프라 확보 여부만이 아니라 실제 적용 이후의 운영 조건까지 "
-            "함께 비교해야 하는 흐름으로 이어질 수 있다."
-        )
-    if flags["actor_or_partner"]:
-        return (
-            "참여 주체가 여럿이면 협력 자체보다 각 주체의 역량이 후속 실행으로 "
-            "이어지는 방식이 중요해질 수 있다."
-        )
-    if flags["operation"] or flags["customer_or_system"]:
-        return (
-            "고객 업무에 닿는 적용 범위가 제시될수록 시스템 접점과 실행 단계가 "
-            "사업 방향의 핵심 조건이 될 수 있다."
-        )
-    return ""
 
 
 def _industry_criteria_phrase(criteria: Sequence[str], *, max_items: int = 3) -> str:
@@ -5020,7 +4914,7 @@ def _industry_market_reading_phrase(criteria: Sequence[str]) -> str:
     if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
         parts.append("여러 주체가 역할을 나누는 협력 구조")
     if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 적용 방식")} & normalized:
-        parts.append("고객 업무에 적용되는 방식")
+        parts.append("업무 시스템과 맞닿는 방식")
     if {_anchor_norm("실행 조건"), _anchor_norm("기존 시스템 접점")} & normalized:
         parts.append("기존 시스템 연결 방식")
     if {_anchor_norm("투자 조건"), _anchor_norm("비용 부담")} & normalized:
@@ -5042,53 +4936,13 @@ def _industry_evidence_reading_phrase(criteria: Sequence[str]) -> str:
     if {_anchor_norm("실행 조건"), _anchor_norm("기존 시스템 접점")} & normalized:
         parts.append("시스템 연결 조건")
     if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 적용 방식")} & normalized:
-        parts.append("고객 적용 가능성")
+        parts.append("시스템 접점")
     if {_anchor_norm("투자 조건"), _anchor_norm("비용 부담")} & normalized:
         parts.append("투자와 비용 부담")
     if {_anchor_norm("후속 사업화 조건"), _anchor_norm("규제/정책 대응 조건")} & normalized:
         parts.append("후속 사업화나 정책 조건")
     if {_anchor_norm("내부 관리 지표")} & normalized:
         parts.append("성과 추적 필요성")
-    return _natural_join(_dedupe_keep_order(parts)[:2])
-
-
-def _industry_action_reading_phrase(criteria: Sequence[str]) -> str:
-    normalized = {_anchor_norm(item) for item in criteria}
-    parts: list[str] = []
-    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 적용 방식")} & normalized:
-        parts.append("고객 적용 가능성이 있는 접점")
-    if {_anchor_norm("실행 조건"), _anchor_norm("기존 시스템 접점")} & normalized:
-        parts.append("기존 시스템과 맞닿는 범위")
-    if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
-        parts.append("파트너 역량을 사업 실행으로 연결하는 방식")
-    if {_anchor_norm("기술 공급 구조"), _anchor_norm("데이터/인프라 준비 수준")} & normalized:
-        parts.append("기술·인프라 준비를 직접 맡을 수 있는 범위")
-    if {_anchor_norm("투자 조건"), _anchor_norm("비용 부담")} & normalized:
-        parts.append("투자 부담을 감당할 수 있는 조건")
-    if {_anchor_norm("후속 사업화 조건"), _anchor_norm("규제/정책 대응 조건")} & normalized:
-        parts.append("후속 사업화나 정책 변화에 따라 달라질 부분")
-    if {_anchor_norm("내부 관리 지표")} & normalized:
-        parts.append("내부적으로 추적할 성과 기준")
-    return _natural_join(_dedupe_keep_order(parts)[:2])
-
-
-def _industry_action_evidence_reading_phrase(criteria: Sequence[str]) -> str:
-    normalized = {_anchor_norm(item) for item in criteria}
-    parts: list[str] = []
-    if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
-        parts.append("참여 구조")
-    if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 적용 방식")} & normalized:
-        parts.append("고객 적용 방향")
-    if {_anchor_norm("실행 조건"), _anchor_norm("기존 시스템 접점")} & normalized:
-        parts.append("운영·시스템 연결 조건")
-    if {_anchor_norm("기술 공급 구조"), _anchor_norm("데이터/인프라 준비 수준")} & normalized:
-        parts.append("기술·인프라 준비 방식")
-    if {_anchor_norm("투자 조건"), _anchor_norm("비용 부담")} & normalized:
-        parts.append("투자 부담")
-    if {_anchor_norm("후속 사업화 조건"), _anchor_norm("규제/정책 대응 조건")} & normalized:
-        parts.append("후속 적용 조건")
-    if {_anchor_norm("내부 관리 지표")} & normalized:
-        parts.append("성과 추적 기준")
     return _natural_join(_dedupe_keep_order(parts)[:2])
 
 
@@ -5230,7 +5084,7 @@ def _action_structure_axis_phrase(integrated_issue: dict[str, Any]) -> str:
     if re.search(r"보안|취약점|탐지|사고|모니터링|대응", target_text):
         axes.extend(["보안 운영 방향", "위험 대응 체계"])
     if re.search(r"GPU|데이터센터|인프라|AI\s*팩토리|컴퓨팅", target_text, flags=re.IGNORECASE):
-        axes.extend(["고객 적용 단계", "운영 지원 범위"])
+        axes.extend(["인프라 운영 범위", "운영 지원 범위"])
     if re.search(r"계약|수주|공급|운영|DevOps|장애", target_text, flags=re.IGNORECASE):
         axes.extend(["사업 추진 방향", "운영 전환 관점"])
     if not axes:
@@ -5245,42 +5099,6 @@ def _is_substantive_industry_evidence_line(value: Any) -> bool:
     if re.search(r"\.\.\.|…", text):
         return False
     return bool(re.search(r"발표|강조|구축|투자|협력|참여|운영|도입|확장|필요|진행|논의", text))
-
-
-def _industry_dynamic_action_reading_from_anchors(
-    anchors: Sequence[str],
-    *,
-    decision_criteria: Sequence[str] | None = None,
-) -> str:
-    value = " ".join(str(anchor or "") for anchor in anchors)
-    if not value.strip():
-        return ""
-    flags = _industry_criteria_flags(decision_criteria or (), anchors)
-    if flags["customer_or_system"] and re.search(
-        r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I
-    ):
-        return "고객 업무에 실제로 연결될 수 있는 처리 범위와 기존 시스템 접점"
-    if (
-        flags["infra_or_supply"]
-        and (flags["operation"] or flags["customer_or_system"] or flags["actor_or_partner"])
-        and re.search(r"데이터\s*센터|데이터센터|GPU|AI\s*팩토리|컴퓨팅|인프라", value, flags=re.I)
-    ):
-        return "기술 준비, 고객 적용, 운영 지원으로 나뉘는 역할 구조"
-    if flags["actor_or_partner"] and re.search(
-        r"협력|제휴|파트너|컨소시엄|그룹|기업|정부|기관|참여",
-        value,
-        flags=re.I,
-    ):
-        return "참여 주체별 역할과 협력 필요성이 생기는 구간"
-    if (flags["operation"] or flags["customer_or_system"]) and re.search(
-        r"계약|수주|공급|구축|운영|운용|실증|도입",
-        value,
-        flags=re.I,
-    ):
-        return "실행 범위와 후속 확인이 필요한 구간"
-    if flags["financial"] and re.search(r"매출|비중|수익|거래|성과|지표", value, flags=re.I):
-        return "성과와 거래 구조를 설명할 수 있는 관리 기준"
-    return ""
 
 
 def _industry_anchor_market_reading(
@@ -5298,14 +5116,14 @@ def _industry_anchor_market_reading(
         and re.search(r"데이터\s*센터|데이터센터|GPU|AI\s*팩토리|컴퓨팅|인프라", value, flags=re.I)
     ):
         return (
-            "기술 확보 자체보다 적용 기업과 구축 범위를 나눠 보는 "
+            "기술 확보 자체보다 참여 구조와 구축 범위를 나눠 보는 "
             "경쟁 기준으로 이어질 수 있음을 보여준다."
         )
     if flags["customer_or_system"] and re.search(
-        r"업무|시스템|ERP|메일|문서|데이터베이스|자동화|서비스", value, flags=re.I
+        r"고객|업무|시스템|ERP|메일|문서|데이터베이스|자동화", value, flags=re.I
     ):
         return (
-            "기업 도입 기준이 기능 소개보다 실제 업무 적용 범위와 "
+            "기업 도입 기준이 기능 소개보다 업무 시스템 접점과 "
             "시스템 연결성으로 이동할 수 있음을 보여준다."
         )
     if (flags["operation"] or flags["customer_or_system"]) and re.search(
@@ -5354,7 +5172,7 @@ def _industry_action_result_phrase(criteria: Sequence[str]) -> str:
     if {_anchor_norm("참여 주체"), _anchor_norm("파트너십 필요성")} & normalized:
         result.append("협력 필요성")
     if {_anchor_norm("고객 적용 가능성"), _anchor_norm("고객 적용 방식")} & normalized:
-        result.append("고객 접점")
+        result.append("시스템 접점")
     if {_anchor_norm("실행 조건"), _anchor_norm("기존 시스템 접점")} & normalized:
         result.append("운영·시스템 연계 조건")
     if {

@@ -197,6 +197,55 @@ def test_industry_same_event_merges_by_content_anchors_without_llm(monkeypatch) 
     assert relation[2] >= 0.74
 
 
+def test_same_company_mou_title_variants_merge_without_llm(monkeypatch) -> None:
+    def fail_llm(*args, **kwargs):
+        raise AssertionError("same-company anchor relation should run before LLM judge")
+
+    monkeypatch.setattr(postprocess, "_title_llm_same_event", fail_llm)
+
+    relation = _cluster_relation(
+        ["LG CNS와 중기중앙회, 중소기업 AI 확산을 위한 협력 체결"],
+        ["LG CNS, 중소기업 AI 확산을 위한 업무협약 체결"],
+        target_size=16,
+        left_snippets=[
+            "LG CNS와 중소기업중앙회가 중소기업 AI 확산을 위한 상생협력 업무협약을 체결했다."
+        ],
+        right_snippets=[
+            "중소기업중앙회와 LG CNS가 중소기업 인공지능 전환 지원 업무협약을 체결했다."
+        ],
+    )
+
+    assert relation is not None
+    assert relation[0].startswith("title_anchor:")
+    assert relation[2] >= 0.74
+
+
+def test_industry_webinar_analysis_variants_merge_without_llm(monkeypatch) -> None:
+    def fail_llm(*args, **kwargs):
+        raise AssertionError("industry anchor relation should run before LLM judge")
+
+    monkeypatch.setattr(postprocess, "_title_llm_same_event", fail_llm)
+
+    relation = _cluster_relation(
+        ["더그래프 엣지앤노드·체인링크·TRM 랩스, 거버넌스 웨비나 개최"],
+        ["더그래프 생태계, AI 에이전트 결제 논의 본격화…체인링크·TRM 랩스 참여"],
+        target_size=1,
+        left_snippets=[
+            "더그래프 생태계 개발사 엣지앤노드가 체인링크, TRM 랩스와 함께 "
+            "AI 에이전트 결제 거버넌스 웨비나를 개최한다."
+        ],
+        right_snippets=[
+            "AI 에이전트가 결제까지 수행하는 흐름이 확산되면서 기업의 결제 통제와 "
+            "컴플라이언스 체계가 과제로 떠오르고 있다. 엣지앤노드는 체인링크, "
+            "TRM 랩스와 웨비나를 연다."
+        ],
+    )
+
+    assert relation is not None
+    assert relation[0].startswith("title_anchor:")
+    assert relation[2] >= 0.74
+
+
 def test_title_llm_judge_skips_unrelated_event_titles(monkeypatch) -> None:
     monkeypatch.setattr(postprocess, "openai_calls_enabled", lambda: True)
 
