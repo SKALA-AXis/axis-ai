@@ -260,6 +260,31 @@ _RADAR_AXIS_LABELS: dict[str, str] = {
     "regulatory_risk": "규제 리스크",
     "talent_movement": "인재 이동",
 }
+_RADAR_AXIS_ALIASES: dict[str, str] = {
+    "peer 전략 전환": "peer_strategic_shift",
+    "peer전략전환": "peer_strategic_shift",
+    "peer_strategy_shift": "peer_strategic_shift",
+    "peer_strategic_transition": "peer_strategic_shift",
+    "전략 전환": "peer_strategic_shift",
+    "전략전환": "peer_strategic_shift",
+    "기술 투자": "tech_investment",
+    "기술투자": "tech_investment",
+    "tech investment": "tech_investment",
+    "market position": "market_position",
+    "market_positioning": "market_position",
+    "시장 포지션": "market_position",
+    "시장포지션": "market_position",
+    "파트너십": "partnership_momentum",
+    "파트너십 모멘텀": "partnership_momentum",
+    "partnership": "partnership_momentum",
+    "partnership_momentum": "partnership_momentum",
+    "규제 리스크": "regulatory_risk",
+    "규제리스크": "regulatory_risk",
+    "regulation_risk": "regulatory_risk",
+    "인재 이동": "talent_movement",
+    "인재이동": "talent_movement",
+    "talent": "talent_movement",
+}
 _RADAR_AXIS_PROMPTS: dict[str, str] = {
     "peer_strategic_shift": (
         "선택한 카드들이 피어사의 전략 방향 전환을 얼마나 직접적으로 보여주는가?"
@@ -628,6 +653,45 @@ radar_axis_interpretations:
 """
 
 
+_MIXER_RADAR_AXIS_FILL_PROMPT = """\
+# Radar Axis Interpretation Fill
+
+당신은 MixerAgent의 6축 레이더에서 비어 있는 축별 해석만 보강하는 분석자입니다.
+새로운 사실을 만들지 말고, 아래 선택 카드와 축별 근거만 사용하세요.
+
+## 선택된 카드에 연결된 내부 결과
+{context}
+
+## 해석이 비어 있는 레이더 축
+{missing_axes}
+
+## 작성 규칙
+
+- 요청된 모든 axis를 정확히 1번씩 포함하세요.
+- axis 값은 peer_strategic_shift, tech_investment, market_position,
+  partnership_momentum, regulatory_risk, talent_movement 중 하나만 사용하세요.
+- interpretation은 점수, 퍼센트, 카드 개수만 반복하지 말고 근거 카드의 사실과
+  연결해 쓰세요.
+- 해당 축을 지지하는 근거 카드가 없으면 "근거 부족"이라고 명시하고,
+  어떤 후속 신호를 확인해야 하는지 쓰세요.
+- 사용자에게 보이는 모든 문장은 존댓말 종결어미와 마침표로 끝내세요.
+
+## 출력 형식
+
+반드시 valid JSON object만 출력하세요.
+
+{{
+  "radar_axis_interpretations": [
+    {{
+      "axis": "market_position",
+      "analysis_prompt": "이 축을 본문 근거에서 읽기 위한 분석 질문 1문장",
+      "interpretation": "현재 카드 묶음에서 이 축을 어떻게 판단해야 하는지 1~2문장"
+    }}
+  ]
+}}
+"""
+
+
 _MIXER_REPAIR_PROMPT = """\
 # Mix Insight Quality Editor
 
@@ -975,6 +1039,9 @@ class MixerAnalysisAgent:
         result["radar_axes"] = _merge_radar_axis_interpretations(
             radar, result.get("radar_axis_interpretations")
         )
+        result["radar_axes"] = _fill_missing_radar_axis_interpretations(
+            result["radar_axes"], cards, normalized_mode
+        )
         result["mix_id"] = _new_mix_id()
         result.setdefault("provenance", {}).update(
             {
@@ -1171,13 +1238,25 @@ def _radar_axis_analysis_prompt(axis: str) -> str:
     return _RADAR_AXIS_PROMPTS.get(axis, "본문 근거가 이 신호 축을 어떻게 지지하거나 약화하는가?")
 
 
+def _normalize_radar_axis_key(value: object) -> str:
+    key = str(value or "").strip()
+    if not key:
+        return ""
+    if key in _RADAR_AXIS_ORDER:
+        return key
+    normalized = key.lower().replace("-", "_").replace(" ", "_")
+    if normalized in _RADAR_AXIS_ORDER:
+        return normalized
+    return _RADAR_AXIS_ALIASES.get(key) or _RADAR_AXIS_ALIASES.get(normalized) or ""
+
+
 def _merge_radar_axis_interpretations(radar: list[dict], interpretations: object) -> list[dict]:
     by_axis: dict[str, dict[str, object]] = {}
     for item in _json_list(interpretations):
         if not isinstance(item, dict):
             continue
-        axis_key = str(item.get("axis") or "").strip()
-        if axis_key in _RADAR_AXIS_ORDER:
+        axis_key = _normalize_radar_axis_key(item.get("axis"))
+        if axis_key:
             by_axis[axis_key] = item
 
     enriched: list[dict] = []
@@ -1202,6 +1281,113 @@ def _merge_radar_axis_interpretations(radar: list[dict], interpretations: object
         next_axis["prompted_interpretation"] = clip_string(interpretation_text, 420)
         enriched.append(next_axis)
     return enriched
+
+
+def _fill_missing_radar_axis_interpretations(
+    radar_axes: list[dict],
+    cards: list[dict],
+    analysis_mode: str,
+) -> list[dict]:
+    missing_axes = [
+        axis for axis in radar_axes if not str(axis.get("prompted_interpretation") or "").strip()
+    ]
+    if not missing_axes:
+        return radar_axes
+
+    prompt = _MIXER_RADAR_AXIS_FILL_PROMPT.replace(
+        "{context}", _format_analysis_units(cards)
+    ).replace("{missing_axes}", _format_missing_radar_axes(missing_axes, cards))
+    try:
+        response = _get_llm(analysis_mode).invoke(
+            prompt,
+            config=tracing_config(
+                agent="MixerAnalysisAgent",
+                phase="radar_axis_fill",
+                prompt_version=f"{_PROMPT_VERSION}-radar-fill",
+            ),
+        )
+        content = response.content if isinstance(response.content, str) else str(response.content)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Mixer radar axis LLM 보강 실패 | error=%s", exc)
+        return radar_axes
+
+    interpretations = _parse_radar_axis_interpretation_response(content)
+    if not interpretations:
+        log.warning("Mixer radar axis LLM 보강 응답 파싱 실패 | content=%s", content[:200])
+        return radar_axes
+
+    filled_axes = _merge_radar_axis_interpretations(missing_axes, interpretations)
+    filled_by_axis = {
+        str(axis.get("axis") or ""): axis
+        for axis in filled_axes
+        if str(axis.get("prompted_interpretation") or "").strip()
+    }
+    return [
+        filled_by_axis.get(str(axis.get("axis") or ""), axis)
+        if not str(axis.get("prompted_interpretation") or "").strip()
+        else axis
+        for axis in radar_axes
+    ]
+
+
+def _parse_radar_axis_interpretation_response(content: str) -> list:
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        stripped = content.strip()
+        if stripped.startswith("```"):
+            stripped = stripped.strip("`").strip()
+            if stripped.startswith("json"):
+                stripped = stripped[4:].strip()
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return []
+    if isinstance(parsed, dict):
+        return _json_list(
+            parsed.get("radar_axis_interpretations")
+            or parsed.get("interpretations")
+            or parsed.get("axes")
+        )
+    if isinstance(parsed, list):
+        return parsed
+    return []
+
+
+def _format_missing_radar_axes(axes: list[dict], cards: list[dict]) -> str:
+    card_lookup = {str(card.get("id") or ""): card for card in cards}
+    blocks: list[str] = []
+    for axis in axes:
+        axis_id = str(axis.get("axis") or "")
+        label = _RADAR_AXIS_LABELS.get(axis_id, axis_id)
+        support_count = int(axis.get("support_count") or 0)
+        total_count = int(axis.get("total_count") or 0)
+        score = float(axis.get("score") or 0.0)
+        matched_ids = [str(card_id) for card_id in _json_list(axis.get("matched_card_ids"))]
+        evidence_lines: list[str] = []
+        for card_id in matched_ids[:6]:
+            card = card_lookup.get(card_id, {})
+            title = str(card.get("title") or card_id).strip()
+            company = str(card.get("company") or card.get("peer_id") or "").strip()
+            prefix = f"{company}: " if company else ""
+            evidence_lines.append(f"  - {card_id}: {prefix}{title}")
+        if not evidence_lines:
+            evidence_lines.append("  - 직접 근거 카드 없음")
+        blocks.append(
+            "\n".join(
+                [
+                    f"- axis: {axis_id}",
+                    f"  label: {label}",
+                    f"  score: {score:.2f}",
+                    f"  support_count: {support_count}/{total_count}",
+                    f"  analysis_prompt: {_radar_axis_analysis_prompt(axis_id)}",
+                    f"  explanation: {axis.get('explanation') or ''}",
+                    "  matched_cards:",
+                    *evidence_lines,
+                ]
+            )
+        )
+    return "\n\n".join(blocks)
 
 
 # ──────────────────────────────────────────────────────────────────────────
