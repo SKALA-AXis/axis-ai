@@ -1064,8 +1064,9 @@ def _phase5_forecast_synthesis(
         "6. company_movements — company_inputs 의 각 company_id 별 최신 움직임. "
         f"반드시 다음 company_id 를 빠짐없이 정확히 한 번씩 포함하세요: "
         f"{', '.join(company_ids_required)}. "
-        "반드시 해당 회사의 top_themes 와 headlines 에 근거해 headline 과 summary 를 "
-        "한국어로 작성하세요. "
+        "반드시 해당 회사의 top_themes 와 최근 30일 headlines 전체 흐름에 근거해 "
+        "headline 과 summary 를 한국어로 작성하세요. "
+        "headline 은 대표 기사 제목 번역이 아니라 회사의 전략/기술 축을 표현하세요. "
         "summary 는 '무슨 전략/기술을 강화하는지'가 드러나는 1문장으로 쓰고, "
         "근거 없는 일반론이나 모든 회사에 같은 문장 반복은 금지합니다. "
         "evidence_titles 에 실제 입력 headline 제목 1~2개를 그대로 넣으세요.\n"
@@ -1180,7 +1181,7 @@ def _company_movement_inputs(snapshots: list[dict[str, Any]]) -> list[dict[str, 
                     "published_at": ann.get("published_at"),
                 }
             )
-            if len(headlines) >= 5:
+            if len(headlines) >= 12:
                 break
         inputs.append(
             {
