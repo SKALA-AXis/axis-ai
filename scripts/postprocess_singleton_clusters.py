@@ -1057,8 +1057,7 @@ def _has_enough_industry_event_anchor_evidence(
         return True
     if len(title_shared) >= 1 and len(context_shared) >= 5:
         return True
-    distinctive = {token for token in context_shared if len(token) >= 4}
-    return len(distinctive) >= 5
+    return False
 
 
 def _event_anchor_token_useful(token: str) -> bool:
@@ -1408,6 +1407,11 @@ def _title_anchor_tokens(titles: list[str]) -> set[str]:
         "본격화",
         "전환",
         "인공지능",
+        "보안",
+        "에이전트",
+        "관리",
+        "통합",
+        "제품",
     }
     return {token for token in tokens if token not in broad and len(token) >= 2}
 
