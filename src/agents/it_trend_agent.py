@@ -1062,8 +1062,10 @@ def _phase5_forecast_synthesis(
         + "5. per_keyword — 각 trend 별 title (한 줄) + summary (1문장) + implication (한 줄). "
         "summary는 변화 신호 카드에 들어가므로 final_one_liner와 같은 문장을 반복하지 마세요.\n"
         "6. company_movements — company_inputs 의 각 company_id 별 최신 움직임. "
-        f"반드시 다음 company_id 를 빠짐없이 정확히 한 번씩 포함하세요: {', '.join(company_ids_required)}. "
-        "반드시 해당 회사의 top_themes 와 headlines 에 근거해 headline 과 summary 를 한국어로 작성하세요. "
+        f"반드시 다음 company_id 를 빠짐없이 정확히 한 번씩 포함하세요: "
+        f"{', '.join(company_ids_required)}. "
+        "반드시 해당 회사의 top_themes 와 headlines 에 근거해 headline 과 summary 를 "
+        "한국어로 작성하세요. "
         "summary 는 '무슨 전략/기술을 강화하는지'가 드러나는 1문장으로 쓰고, "
         "근거 없는 일반론이나 모든 회사에 같은 문장 반복은 금지합니다. "
         "evidence_titles 에 실제 입력 headline 제목 1~2개를 그대로 넣으세요.\n"
@@ -1221,7 +1223,8 @@ def _sanitize_company_movements(
             }
 
     return [
-        movements_by_company.get(company_id) or _fallback_company_movement(company_id, allowed_inputs)
+        movements_by_company.get(company_id)
+        or _fallback_company_movement(company_id, allowed_inputs)
         for company_id in _GLOBAL_PEER_MOVEMENT_COMPANIES
         if company_id in allowed_inputs
     ]
@@ -1532,11 +1535,9 @@ def _sanitize_per_keyword_text(value: Any, *, max_length: int) -> str:
     )
     if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in banned_patterns):
         return ""
-    return (
-        text.replace("newsroom", "자료")
-        .replace("Newsroom", "자료")
-        .replace("뉴스룸", "자료")
-    )[:max_length]
+    return (text.replace("newsroom", "자료").replace("Newsroom", "자료").replace("뉴스룸", "자료"))[
+        :max_length
+    ]
 
 
 def _clean_global_headline(value: str) -> str:

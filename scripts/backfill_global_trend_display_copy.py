@@ -24,8 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.db.postgres import SessionLocal
-
+from src.db.postgres import SessionLocal  # noqa: E402
 
 _SELECT_SQL = text(
     """
@@ -119,7 +118,13 @@ def _clean_title(title: str, keyword: str) -> str:
     return text_value[:300]
 
 
-def _clean_summary(*, summary: str, keyword: str, mention_count: int, payload: dict[str, Any]) -> str:
+def _clean_summary(
+    *,
+    summary: str,
+    keyword: str,
+    mention_count: int,
+    payload: dict[str, Any],
+) -> str:
     text_value = re.sub(r"\s+", " ", summary).strip()
     if text_value and not _is_internal_summary(text_value):
         return text_value
