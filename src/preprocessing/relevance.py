@@ -446,6 +446,21 @@ class RelevanceEvaluator:
                 ),
             )
 
+        participant_listing_result = _participant_listing_reject_result(
+            title=title,
+            content=analysis_content,
+            source_type=row.source_type,
+            matched_companies=matched_company_candidates,
+            matched_sectors=matched_sector_candidates,
+        )
+        if participant_listing_result is not None:
+            log.info(
+                "Gate 2.5 피어사 참여사 나열 기사 제외 | id=%s reason=%s",
+                getattr(row, "id", None),
+                participant_listing_result["reason"],
+            )
+            return participant_listing_result
+
         precheck = _precheck(
             company=company,
             matched_companies=matched_company_candidates,
@@ -1376,6 +1391,48 @@ def _fast_pass_result(
     )
 
 
+def _participant_listing_reject_result(
+    *,
+    title: str,
+    content: str,
+    source_type: str | None,
+    matched_companies: list[str],
+    matched_sectors: list[str],
+) -> dict[str, Any] | None:
+    if str(source_type or "").strip().lower() != "news":
+        return None
+    if not matched_companies:
+        return None
+    if _company_in_title(title=title, matched_companies=matched_companies):
+        return None
+
+    content_compact = _compact(content)
+    if not content_compact:
+        return None
+
+    saw_alias = False
+    for company_id in matched_companies:
+        aliases = ALL_COMPANY_ALIASES.get(company_id, [company_id])
+        for alias in aliases:
+            alias_compact = _compact(alias)
+            if not alias_compact or alias_compact not in content_compact:
+                continue
+            saw_alias = True
+            if not _alias_only_in_participant_listing_context(content_compact, alias_compact):
+                return None
+
+    if not saw_alias:
+        return None
+
+    return _result(
+        label="irrelevant",
+        score=0.25,
+        companies=matched_companies,
+        sectors=matched_sectors,
+        reason="피어사가 제목의 핵심 주체가 아니고 본문에서 참여사 목록으로만 언급돼 제외",
+    )
+
+
 def _core_company_role_reject_result(
     *,
     title: str,
@@ -1460,6 +1517,54 @@ def _weak_company_mention_reject_result(
             f"{MIN_PEER_MENTIONS}회 미만이라 단순 언급으로 판단"
         ),
     )
+
+
+def _alias_only_in_participant_listing_context(
+    text_compact: str,
+    alias_compact: str,
+) -> bool:
+    start = 0
+    found = False
+    while True:
+        pos = text_compact.find(alias_compact, start)
+        if pos < 0:
+            return found
+
+        found = True
+        left = max(0, pos - ROLE_CONTEXT_WINDOW)
+        right = min(len(text_compact), pos + len(alias_compact) + ROLE_CONTEXT_WINDOW)
+        context = text_compact[left:right]
+        if not _is_participant_listing_context(context):
+            return False
+
+        start = pos + len(alias_compact)
+
+
+def _is_participant_listing_context(context_compact: str) -> bool:
+    has_participation = any(
+        keyword in context_compact
+        for keyword in (
+            "참여",
+            "참가",
+            "파트너",
+            "협의체",
+            "연합",
+            "컨소시엄",
+            "이니셔티브",
+            "명단",
+            "이름을올",
+            "운영주체",
+        )
+    )
+    if not has_participation:
+        return False
+
+    has_list_marker = (
+        "등" in context_compact
+        or bool(re.search(r"\d+개(?:사|기업|기관)", context_compact))
+        or sum(context_compact.count(marker) for marker in ("·", ",", "ㆍ", "/")) >= 2
+    )
+    return has_list_marker
 
 
 def _company_has_core_role(

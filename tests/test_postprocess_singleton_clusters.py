@@ -11,6 +11,7 @@ from scripts.postprocess_singleton_clusters import (
     _has_title_anchor_overlap,
     _is_list_like,
     _is_stock_noise,
+    _should_consult_title_llm,
 )
 
 
@@ -72,8 +73,8 @@ def test_multi_company_roundup_title_is_list_like_noise() -> None:
 def test_mojibake_content_is_parser_noise() -> None:
     broken = "LG CNS 관련 기사입니다. " + ("�����Һ��ڽŹ� " * 12)
     normal = (
-        "LG CNS는 중소기업중앙회와 중소 제조기업 AX 전환 지원을 위한 "
-        "업무협약을 체결했다. 교육과 기술 지원을 함께 추진한다."
+        "LG CNS는 고객사 통합 관제 플랫폼 구축을 위한 계약을 체결했다. "
+        "운영 자동화와 모니터링 기능을 함께 제공한다."
     )
 
     assert _has_mojibake_content(broken) is True
@@ -147,6 +148,68 @@ def test_llm_confirmed_merge_survives_high_min_score(monkeypatch) -> None:
 
     assert len(candidates) == 1
     assert candidates[0].score >= 0.72
+
+
+def test_same_event_small_clusters_merge_by_shared_anchors_without_llm(monkeypatch) -> None:
+    def fail_llm(*args, **kwargs):
+        raise AssertionError("deterministic anchor relation should run before LLM judge")
+
+    monkeypatch.setattr(postprocess, "_title_llm_same_event", fail_llm)
+
+    relation = _cluster_relation(
+        ["LG CNS, 통합 관제 자동화 플랫폼 구축 계약 체결"],
+        ["LG CNS, 통합 관제 자동화 플랫폼 구축 계약"],
+        target_size=1,
+        left_snippets=[
+            "LG CNS는 고객사와 통합 관제 플랫폼 구축 계약을 체결하고 운영 자동화 기능을 제공한다."
+        ],
+        right_snippets=[
+            "LG CNS는 고객사 통합관제 시스템 구축 사업에서 운영 자동화와 모니터링 기능을 맡는다."
+        ],
+    )
+
+    assert relation is not None
+    assert relation[0].startswith("title_anchor:")
+    assert relation[2] >= 0.74
+
+
+def test_industry_same_event_merges_by_content_anchors_without_llm(monkeypatch) -> None:
+    def fail_llm(*args, **kwargs):
+        raise AssertionError("industry anchor relation should run before LLM judge")
+
+    monkeypatch.setattr(postprocess, "_title_llm_same_event", fail_llm)
+
+    relation = _cluster_relation(
+        ["A솔루션, 자율 업무 통제 플랫폼 공개"],
+        ["자율 업무 통제 플랫폼 확대로 운영 리스크 관리 부상"],
+        target_size=1,
+        left_snippets=[
+            "A솔루션은 자율 업무 통제 플랫폼에서 권한 관리와 감사 추적 기능을 제공한다."
+        ],
+        right_snippets=[
+            "자율 업무 통제 플랫폼 확대로 기업은 권한 관리, 감사 추적, "
+            "운영 리스크 관리가 중요해졌다."
+        ],
+    )
+
+    assert relation is not None
+    assert relation[0].startswith("title_anchor:")
+    assert relation[2] >= 0.74
+
+
+def test_title_llm_judge_skips_unrelated_event_titles(monkeypatch) -> None:
+    monkeypatch.setattr(postprocess, "openai_calls_enabled", lambda: True)
+
+    assert (
+        _should_consult_title_llm(
+            ["정부, 소프트웨어 보안 정책 공개"],
+            ["C인프라, 신규 데이터센터 구축"],
+            {"ai"},
+            ["정부가 소프트웨어 보안 정책 방향을 공개했다."],
+            ["C인프라가 신규 데이터센터 구축 계획을 설명했다."],
+        )
+        is False
+    )
 
 
 def test_llm_confirmed_merge_does_not_get_dropped_as_ambiguous(monkeypatch) -> None:

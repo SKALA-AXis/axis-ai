@@ -423,7 +423,7 @@ def _find_candidates(
         if (
             len(scored) >= 2
             and best.score - scored[1].score < 0.08
-            and best.event_key != "title_content_llm"
+            and not _is_verified_event_key(best.event_key)
         ):
             log.info(
                 "ambiguous small-cluster merge skipped | cluster_id=%s best=%s second=%s",
@@ -939,6 +939,16 @@ def _cluster_relation(
         )
         return f"title_event:{left_title_key}", shared_tokens, score
 
+    anchor_relation = _strong_anchor_overlap_relation(
+        left_titles,
+        right_titles,
+        target_size,
+        left_snippets,
+        right_snippets,
+    )
+    if anchor_relation is not None:
+        return anchor_relation
+
     title_llm_decision = _title_llm_same_event(
         left_titles,
         right_titles,
@@ -977,7 +987,86 @@ def _cluster_relation(
 
 
 def _is_verified_event_key(event_key: str) -> bool:
-    return event_key.startswith("title_event:") or event_key == "title_content_llm"
+    return (
+        event_key.startswith("title_event:")
+        or event_key.startswith("title_anchor:")
+        or event_key == "title_content_llm"
+    )
+
+
+def _strong_anchor_overlap_relation(
+    left_titles: list[str],
+    right_titles: list[str],
+    target_size: int,
+    left_snippets: list[str] | None,
+    right_snippets: list[str] | None,
+) -> tuple[str, set[str], float] | None:
+    if len(left_titles) > 3 or len(right_titles) > 8:
+        return None
+    same_company = _same_company_family(left_titles, right_titles)
+    title_shared = _title_anchor_tokens(left_titles) & _title_anchor_tokens(right_titles)
+    left_context = _cluster_context_tokens(left_titles, left_snippets) - _company_anchor_tokens()
+    right_context = _cluster_context_tokens(right_titles, right_snippets) - _company_anchor_tokens()
+    context_shared = {
+        token for token in left_context & right_context if _event_anchor_token_useful(token)
+    }
+    shared = set(title_shared) | set(context_shared)
+    if same_company:
+        if not (_has_event_action(left_titles) and _has_event_action(right_titles)):
+            return None
+        if not _has_enough_same_event_anchor_evidence(title_shared, context_shared):
+            return None
+    else:
+        if len(left_titles) > 2 or len(right_titles) > 2:
+            return None
+        if _company_families(left_titles) or _company_families(right_titles):
+            return None
+        if not (_has_event_action(left_titles) or _has_event_action(right_titles)):
+            return None
+        if not _has_enough_industry_event_anchor_evidence(title_shared, context_shared):
+            return None
+
+    if not shared:
+        return None
+
+    score = max(
+        _candidate_score(left_context, right_context, shared, target_size),
+        0.74,
+    )
+    event_key = "title_anchor:" + "_".join(sorted(shared)[:5])
+    return event_key, shared, score
+
+
+def _has_enough_same_event_anchor_evidence(
+    title_shared: set[str],
+    context_shared: set[str],
+) -> bool:
+    if len(title_shared) >= 2 and len(context_shared) >= 2:
+        return True
+    if len(title_shared) >= 1 and len(context_shared) >= 4:
+        return True
+    distinctive = {token for token in context_shared if len(token) >= 4}
+    return len(distinctive) >= 3
+
+
+def _has_enough_industry_event_anchor_evidence(
+    title_shared: set[str],
+    context_shared: set[str],
+) -> bool:
+    if len(title_shared) >= 2 and len(context_shared) >= 3:
+        return True
+    if len(title_shared) >= 1 and len(context_shared) >= 5:
+        return True
+    distinctive = {token for token in context_shared if len(token) >= 4}
+    return len(distinctive) >= 5
+
+
+def _event_anchor_token_useful(token: str) -> bool:
+    if not _context_token_useful(token):
+        return False
+    if re.fullmatch(r"\d{1,4}(년|월|일)?", token):
+        return False
+    return True
 
 
 def _event_tokens(title: str) -> set[str]:
@@ -1236,7 +1325,9 @@ def _should_consult_title_llm(
         left_snippets,
         right_snippets,
     )
-    if not (has_event_action or same_company and has_context_overlap):
+    if not (same_company or has_context_overlap):
+        return False
+    if not (has_event_action or has_context_overlap):
         return False
 
     left_tokens = _cluster_context_tokens(left_titles, left_snippets)
@@ -1344,7 +1435,11 @@ def _context_token_useful(token: str) -> bool:
         "기술",
         "사업",
     }
-    return token not in generic
+    if token in generic:
+        return False
+    if re.search(r"(했다|한다|있다|있는|위한|대한)$", token):
+        return False
+    return True
 
 
 def _snippet(value: Any, max_chars: int = 360) -> str:
@@ -1367,7 +1462,7 @@ def _is_title_event_key_token(token: str) -> bool:
 
 
 def _strip_korean_particle(token: str) -> str:
-    if len(token) < 4 or not re.fullmatch(r"[가-힣]+", token):
+    if len(token) < 3 or not re.fullmatch(r"[가-힣]+", token):
         return token
     for suffix in ("으로", "에게", "에서", "과", "와", "은", "는", "이", "가", "을", "를", "의"):
         if token.endswith(suffix) and len(token) - len(suffix) >= 3:

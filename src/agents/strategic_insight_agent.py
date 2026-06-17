@@ -3403,12 +3403,6 @@ def _strategic_generation_skip_decision(
                 category="stock_market",
             ),
         }
-    industry_decision = _industry_or_market_infra_watch_only_decision(
-        integrated_issue=integrated_issue,
-        classification=classification,
-    )
-    if industry_decision:
-        return industry_decision
     hiring_decision = _weak_hiring_watch_only_decision(
         integrated_issue=integrated_issue,
         classification=classification,

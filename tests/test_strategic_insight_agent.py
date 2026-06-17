@@ -779,8 +779,7 @@ def test_weak_hiring_signal_is_watch_only_without_llm_call():
     assert llm.invoke.call_count == 0
 
 
-def test_market_infra_signal_without_direct_peer_action_is_watch_only():
-    payload = _fixture()
+def test_market_infra_signal_without_direct_peer_action_is_not_watch_only():
     issue = _minimal_integrated_issue_with_fact(
         company_id="lg_cns",
         fact_id="infra_f1",
@@ -791,35 +790,16 @@ def test_market_infra_signal_without_direct_peer_action_is_watch_only():
     )
     issue["fact_summary"].append("국내 주요 그룹과 AI 인프라 구축 협력 가능성도 함께 언급됐다.")
     issue["integrated_text"] = "\n".join(issue["fact_summary"])
-    llm = MagicMock()
 
-    result = StrategicInsightAgent(llm=llm).generate(
-        input_bundle=payload["input_bundle"],
+    decision = strategic_insight_module._strategic_generation_skip_decision(
         integrated_issue=issue,
         classification={"event_type": "industry_trend"},
-        profile_context=payload["profile_context"],
-        analysis_context=payload["analysis_context"],
     )
 
-    assert result["is_valid_strategic_insight"] is False
-    diagnostics = result["implication"]["frontend_ready_diagnostics"]
-    assert diagnostics["watch_only"] is True
-    assert diagnostics["decision_type"] == "watch_only_industry_signal"
-    assert diagnostics["signal_scope"] == "market_infra_signal"
-    assert diagnostics["direct_peer_action"] is False
-    assert diagnostics["primary_actor_type"] in {"global_vendor", "multi_actor", "unknown"}
-    assert "frontend_ready" not in result["implication"]
-    assert result["implication"]["industry_frontend_ready"]["source"] == "industry_signal_direct"
-    assert result["implication"]["industry_frontend_ready"]["display_policy"] == "industry_only"
-    assert result["implication"]["industry_frontend_ready"]["items"]
-    assert diagnostics["display_policy"] == "industry_only"
-    assert diagnostics["displayable"] is True
-    assert "llm_skipped" in diagnostics["phase_decisions"]
-    assert llm.invoke.call_count == 0
+    assert decision == {}
 
 
-def test_invalid_market_infra_signal_preserves_industry_signal_diagnostics():
-    payload = _fixture()
+def test_invalid_market_infra_signal_is_not_industry_watch_only():
     issue = _minimal_integrated_issue_with_fact(
         company_id="lg_cns",
         fact_id="infra_invalid_f1",
@@ -829,29 +809,13 @@ def test_invalid_market_infra_signal_preserves_industry_signal_diagnostics():
         ),
     )
     issue["is_valid_summary"] = False
-    llm = MagicMock()
 
-    result = StrategicInsightAgent(llm=llm).generate(
-        input_bundle=payload["input_bundle"],
+    decision = strategic_insight_module._strategic_generation_skip_decision(
         integrated_issue=issue,
         classification={"event_type": "industry_trend"},
-        profile_context=payload["profile_context"],
-        analysis_context=payload["analysis_context"],
     )
 
-    diagnostics = result["implication"]["frontend_ready_diagnostics"]
-    assert result["is_valid_strategic_insight"] is False
-    assert diagnostics["decision_type"] == "watch_only_industry_signal"
-    assert diagnostics["signal_scope"] == "market_infra_signal"
-    assert diagnostics["direct_peer_action"] is False
-    assert result["implication"]["industry_signal"]["signal_scope"] == "market_infra_signal"
-    assert result["implication"]["industry_frontend_ready"]["source"] == "industry_signal_direct"
-    assert result["implication"]["industry_frontend_ready"]["display_policy"] == "industry_only"
-    assert result["implication"]["industry_frontend_ready"]["items"]
-    assert diagnostics["display_policy"] == "industry_only"
-    assert diagnostics["displayable"] is True
-    assert "watch_only_industry_signal" in diagnostics["phase_decisions"]
-    assert llm.invoke.call_count == 0
+    assert decision == {}
 
 
 def test_market_infra_direct_peer_action_is_not_watch_only():

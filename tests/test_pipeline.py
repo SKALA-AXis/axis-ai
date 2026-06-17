@@ -183,16 +183,16 @@ def test_industry_news_relevance_keeps_ai_adoption_infrastructure_signal():
 
 def test_news_relevance_blocks_title_company_missing_from_body_parser_noise():
     article = {
-        "id": 51304,
+        "id": 1,
         "company": ["lg_cns"],
         "source_type": "news",
         "source_name": "naver_news",
-        "title": "LG CNS, 중소기업 AI 전환 지원 협력",
+        "title": "LG CNS, 공공 AI 플랫폼 구축 협력",
         "content": (
-            "[인천지법 판결]금 비싸게 팔아준다며 순금 900돈 등 10억대 가로챈 "
-            "30대, '실형' 선고 · [서울중앙지법 판결]경찰 단속 중 나체 촬영 "
-            "당한 성매매 여성 2심도 국가가 배상 선고 · 대법원, 공시송달로 "
-            "피고인의 진술 없이 판결 선고 원심 파기환송."
+            "법원은 민사 사건에서 손해배상 판결을 선고했다. 원고와 피고의 "
+            "항소심 판단, 소송 절차, 증거 제출 기한에 대한 내용만 포함됐다. "
+            "재판부는 청구 원인과 변론 경과를 검토한 뒤 일부 청구를 기각하고 "
+            "판결문 송달 절차와 불복 기간을 안내했다."
         ),
         "metadata": {},
         "crawl_status": "success",
@@ -203,6 +203,30 @@ def test_news_relevance_blocks_title_company_missing_from_body_parser_noise():
     assert is_relevant is False
     assert enriched["relevance_label"] == "irrelevant"
     assert "파싱 품질 문제" in enriched["relevance_reason"]
+
+
+def test_news_relevance_blocks_peer_only_participant_listing():
+    article = {
+        "id": 2,
+        "company": ["posco_dx"],
+        "source_type": "news",
+        "source_name": "naver_news",
+        "title": "AI 보안 협력체 출범, 공익 인프라 강화 추진",
+        "content": (
+            "국내 기업과 기관들이 AI 보안 협력체를 출범했다. "
+            "A사, 포스코DX, B사 등 5개 기업은 핵심 운영 주체 그룹으로 참여하며, "
+            "공공기관과 연구기관도 파트너사로 이름을 올렸다. "
+            "협력체는 취약점 탐지 기술을 민생 인프라 전반으로 확산하는 것을 목표로 한다."
+        ),
+        "metadata": {},
+        "crawl_status": "success",
+    }
+
+    enriched, is_relevant = analyze_relevance_article(article)
+
+    assert is_relevant is False
+    assert enriched["relevance_label"] == "irrelevant"
+    assert "참여사 목록" in enriched["relevance_reason"]
 
 
 def test_same_issue_does_not_merge_on_customer_name_only():
