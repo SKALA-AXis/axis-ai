@@ -241,9 +241,9 @@ def _build_user_skax_overlay_llm():
     return build_chat_llm(
         LLMSpec(
             model=model,
-            temperature=1,
-            max_tokens=5000,
-            max_tokens_reasoning=8000,
+            temperature=0,
+            max_tokens=8000,
+            max_tokens_reasoning=24000,
             reasoning_effort="low",
             timeout=120,
             max_retries=1,
