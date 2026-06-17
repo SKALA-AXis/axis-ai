@@ -181,6 +181,30 @@ def test_industry_news_relevance_keeps_ai_adoption_infrastructure_signal():
     assert enriched["relevance_label"] == "relevant"
 
 
+def test_news_relevance_blocks_title_company_missing_from_body_parser_noise():
+    article = {
+        "id": 51304,
+        "company": ["lg_cns"],
+        "source_type": "news",
+        "source_name": "naver_news",
+        "title": "LG CNS, 중소기업 AI 전환 지원 협력",
+        "content": (
+            "[인천지법 판결]금 비싸게 팔아준다며 순금 900돈 등 10억대 가로챈 "
+            "30대, '실형' 선고 · [서울중앙지법 판결]경찰 단속 중 나체 촬영 "
+            "당한 성매매 여성 2심도 국가가 배상 선고 · 대법원, 공시송달로 "
+            "피고인의 진술 없이 판결 선고 원심 파기환송."
+        ),
+        "metadata": {},
+        "crawl_status": "success",
+    }
+
+    enriched, is_relevant = analyze_relevance_article(article)
+
+    assert is_relevant is False
+    assert enriched["relevance_label"] == "irrelevant"
+    assert "파싱 품질 문제" in enriched["relevance_reason"]
+
+
 def test_same_issue_does_not_merge_on_customer_name_only():
     left = {
         "company": ["lg_cns"],

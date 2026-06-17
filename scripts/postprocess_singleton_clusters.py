@@ -741,6 +741,38 @@ def _sync_card_news_with_current_clusters(db: Any) -> dict[str, int]:
         )
     )
 
+    duplicate_update = db.execute(
+        text(
+            """
+            WITH ranked_cards AS (
+                SELECT
+                    id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY cluster_id
+                        ORDER BY
+                            cardinality(COALESCE(source_raw_article_ids, ARRAY[]::bigint[]))
+                                DESC,
+                            created_at ASC,
+                            id ASC
+                    ) AS rn
+                FROM card_news
+                WHERE status = 'ACTIVE'
+                  AND cluster_id IS NOT NULL
+            ),
+            duplicates AS (
+                SELECT id
+                FROM ranked_cards
+                WHERE rn > 1
+            )
+            UPDATE card_news cn
+            SET status = 'DELETED'
+            FROM duplicates
+            WHERE cn.id = duplicates.id
+              AND cn.status = 'ACTIVE'
+            """
+        )
+    )
+
     source_update = db.execute(
         text(
             """
@@ -837,7 +869,8 @@ def _sync_card_news_with_current_clusters(db: Any) -> dict[str, int]:
     return {
         "cluster_id_updated": int(getattr(cluster_update, "rowcount", 0) or 0),
         "source_payload_updated": int(getattr(source_update, "rowcount", 0) or 0),
-        "stale_deleted": int(getattr(stale_update, "rowcount", 0) or 0),
+        "stale_deleted": int(getattr(stale_update, "rowcount", 0) or 0)
+        + int(getattr(duplicate_update, "rowcount", 0) or 0),
     }
 
 

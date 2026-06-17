@@ -1013,6 +1013,20 @@ def _noise_reject_result(
             reason="개별 기업 인증 획득 단신 성격이 강해 전략 동향 근거에서 제외",
         )
 
+    if _title_company_missing_from_content(
+        title=title,
+        content=content,
+        source_type=source_type,
+        matched_companies=matched_companies,
+    ):
+        return _result(
+            label="irrelevant",
+            score=0.25,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason="제목의 피어사명이 본문 핵심 내용에서 확인되지 않아 파싱 품질 문제로 제외",
+        )
+
     has_peer_strategy_signal = _has_peer_strategy_signal(
         title=title,
         content=content,
@@ -1803,6 +1817,35 @@ def _is_single_company_certification_notice(title: str) -> bool:
     if re.search(r"ISO\s*\d{4,5}.*인증\s*(?:획득|취득|받)", title_text, re.IGNORECASE):
         return True
     return bool(re.search(r"(?:국제표준|정보보호|보안)?\s*인증\s*(?:획득|취득|받)", title_text))
+
+
+def _title_company_missing_from_content(
+    *,
+    title: str,
+    content: str,
+    source_type: str | None,
+    matched_companies: list[str],
+) -> bool:
+    if str(source_type or "").strip().lower() != "news":
+        return False
+    if not matched_companies:
+        return False
+    content_text = str(content or "").strip()
+    if len(content_text) < 120:
+        return False
+
+    title_compact = _compact(title)
+    content_compact = _compact(content_text)
+    for company_id in matched_companies:
+        aliases = ALL_COMPANY_ALIASES.get(company_id, [company_id])
+        compact_aliases = [_compact(alias) for alias in aliases if _compact(alias)]
+        if not compact_aliases:
+            continue
+        if any(alias in title_compact for alias in compact_aliases) and not any(
+            alias in content_compact for alias in compact_aliases
+        ):
+            return True
+    return False
 
 
 def _is_roundup_news_title(title: str) -> bool:
