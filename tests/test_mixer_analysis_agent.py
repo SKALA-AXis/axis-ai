@@ -673,3 +673,57 @@ def test_mixer_action_quality_rejects_program_artifacts():
     assert not mixer_module._is_generic_action_text(
         "금융 고객군 우선순위를 정하고 오퍼링 책임 조직과 리스크 승인 권한을 지정한다."
     )
+
+
+def test_follow_up_comparison_question_uses_card_subjects_when_peer_names_are_empty():
+    result = {
+        "comparison_point": {
+            "finding": "한쪽은 규제 대응을, 다른 쪽은 전략 제휴를 앞세웁니다.",
+            "rationale": "두 카드가 서로 다른 적용 맥락을 보여줍니다.",
+            "evidence_card_ids": ["CN-1", "CN-2"],
+        }
+    }
+    cards = [
+        {
+            "id": "CN-1",
+            "company": "와",
+            "peer_id": "",
+            "title": "미국 AI 규제 강화, 앤스로픽 IPO 불확실성 확대",
+        },
+        {
+            "id": "CN-2",
+            "company": "",
+            "peer_id": "",
+            "title": "LG CNS, 제네시스 AI와 국내 첫 전략제휴 체결",
+        },
+    ]
+
+    checks = mixer_module._build_follow_up_checks(result, cards)
+    question = checks[0]["question"]
+    answer = checks[0]["answer"]
+
+    assert "와 의" not in question
+    assert "미국 AI 규제 강화와 LG CNS" in question
+    assert "미국 AI 규제 강화와 LG CNS가" in answer
+
+
+def test_follow_up_comparison_question_prefers_llm_subject_terms():
+    result = {
+        "comparison_point": {
+            "finding": "한쪽은 규제 대응을, 다른 쪽은 전략 제휴를 앞세웁니다.",
+            "rationale": "두 카드가 서로 다른 적용 맥락을 보여줍니다.",
+            "subject_terms": ["규제 대응", "전략 제휴"],
+            "evidence_card_ids": ["CN-1", "CN-2"],
+        }
+    }
+    cards = [
+        {"id": "CN-1", "company": "A사", "title": "첫 번째 카드"},
+        {"id": "CN-2", "company": "B사", "title": "두 번째 카드"},
+    ]
+
+    checks = mixer_module._build_follow_up_checks(result, cards)
+    question = checks[0]["question"]
+    answer = checks[0]["answer"]
+
+    assert "규제 대응과 전략 제휴의 서로 다른 접근" in question
+    assert "규제 대응과 전략 제휴가 같은 흐름" in answer
