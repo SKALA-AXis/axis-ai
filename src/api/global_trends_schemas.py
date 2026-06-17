@@ -56,6 +56,10 @@ class GlobalTrendsRequest(BaseModel):
         default=True,
         description="Phase 3 peer alignment 포함 여부. design §4 metadata 옵션.",
     )
+    global_only: bool = Field(
+        default=False,
+        description="글로벌 탭 전용 모드. SK AX 관점 정렬/영향 분석은 생략하고 글로벌 요약만 생성.",
+    )
     min_mention_count: int = Field(
         default=3,
         ge=1,
