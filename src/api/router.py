@@ -663,11 +663,16 @@ async def regenerate_card_news_strategy_context(
         raise HTTPException(status_code=400, detail="analysis_package is required")
 
     from src.agents.strategic_insight_agent import StrategicInsightAgent
-    from src.composers.card_news_composer import CardNewsComposer
 
     package = copy.deepcopy(request.analysis_package)
+    started_at = time.perf_counter()
+    log.info(
+        "CardNews strategy-context 재생성 시작 | card_news_id=%s user_id=%s",
+        request.card_news_id,
+        request.user_id,
+    )
     strategic_result = await asyncio.to_thread(
-        StrategicInsightAgent().generate_from_analysis_package,
+        StrategicInsightAgent(enable_self_review=False).generate_from_analysis_package,
         package,
         user_id=request.user_id,
     )
@@ -678,15 +683,17 @@ async def regenerate_card_news_strategy_context(
     if strategic_result.get("sentence_grounding"):
         next_package["sentence_grounding"] = strategic_result.get("sentence_grounding")
 
-    card_news = await asyncio.to_thread(
-        CardNewsComposer().generate_from_analysis_package,
-        next_package,
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+    log.info(
+        "CardNews strategy-context 재생성 완료 | card_news_id=%s elapsed_ms=%s",
+        request.card_news_id,
+        elapsed_ms,
     )
     return {
         "card_news_id": request.card_news_id,
         "analysis_package": next_package,
         "strategic_result": strategic_result,
-        "card_news": card_news,
+        "card_news": {"implication": strategic_result.get("implication") or {}},
     }
 
 

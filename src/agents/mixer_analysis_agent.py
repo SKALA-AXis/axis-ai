@@ -509,6 +509,9 @@ comparison_point:
 - 같은 흐름 안의 다른 강조점입니다.
 - 회사명 나열이 아니라 접근 방식, 고객/업무/현장, 성과 기준의 차이를 말하세요.
 - 공통 흐름은 유지하되 각 이슈가 무엇을 더 앞세우는지 비교하세요.
+- subject_terms에는 후속 질문의 주어로 쓸 짧은 명칭을 1~3개 쓰세요.
+  회사명, 카드 제목의 핵심 대상, 비교되는 접근명 중 사용자가 바로 알아볼 수 있는 표현을 고르세요.
+  빈 문자열, 조사만 남은 표현, "선택한 Peer" 같은 일반 표현은 쓰지 마세요.
 - finding은 비교 결과를 쓰고, rationale은 같은 문장을 반복하지 마세요.
 - rationale은 왜 이 차이가 사용자에게 의미 있는지 설명해야 합니다.
   예를 들어 한쪽 근거가 운영 실행 역할이고 다른 쪽 근거가 실적 전망이면,
@@ -609,6 +612,7 @@ radar_axis_interpretations:
   "comparison_point": {{
     "finding": "같은 흐름 안에서 다르게 풀어내는 방식 1문장",
     "rationale": "사용자가 이 차이를 어떻게 이해하면 되는지 1문장",
+    "subject_terms": ["후속 질문 주어 후보 1", "후속 질문 주어 후보 2"],
     "evidence": [
       {{"card_id": "CN-...", "text": "근거 사실"}},
       {{"card_id": "CN-...", "text": "근거 사실"}}
@@ -1734,6 +1738,9 @@ def _normalize_mix_block(value: object, allowed_card_ids: set[str]) -> dict:
     return {
         "finding": _normalize_mixer_display_sentence(value.get("finding", ""), 260),
         "rationale": _normalize_mixer_display_sentence(value.get("rationale", ""), 320),
+        "subject_terms": _normalize_follow_up_subject_terms(
+            value.get("subject_terms") or value.get("subjects")
+        ),
         "evidence": evidence[:4],
         "evidence_card_ids": refs[:6],
     }
@@ -2477,19 +2484,112 @@ def _build_follow_up_questions(result: dict, cards: list[dict]) -> list[str]:
     ][:3]
 
 
+_FOLLOW_UP_INVALID_SUBJECTS = {
+    "",
+    "-",
+    "n/a",
+    "none",
+    "null",
+    "unknown",
+    "와",
+    "과",
+    "의",
+    "및",
+}
+
+
+def _normalize_follow_up_subject_terms(value: object) -> list[str]:
+    terms = [_clean_follow_up_subject(item) for item in _json_list(value)]
+    return _dedupe_keep_order([term for term in terms if term])[:3]
+
+
+def _follow_up_subject_phrase(
+    cards: list[dict],
+    evidence_refs: object = None,
+    subject_terms: object = None,
+) -> str:
+    llm_subjects = _normalize_follow_up_subject_terms(subject_terms)
+    if llm_subjects:
+        return _format_follow_up_subjects(llm_subjects)
+
+    scoped_cards = _cards_for_evidence_refs(cards, evidence_refs) or cards
+    candidates: list[str] = []
+    for card in scoped_cards:
+        for raw_value in (
+            card.get("company"),
+            card.get("peer_id"),
+            _follow_up_title_subject(card.get("title")),
+        ):
+            candidate = _clean_follow_up_subject(raw_value)
+            if candidate:
+                candidates.append(candidate)
+                break
+    return _format_follow_up_subjects(_dedupe_keep_order(candidates)[:3])
+
+
+def _format_follow_up_subjects(subjects: list[str]) -> str:
+    if len(subjects) == 1:
+        return f"{subjects[0]} 관련 이슈들"
+    if len(subjects) == 2:
+        return _join_follow_up_subject_pair(subjects[0], subjects[1])
+    if len(subjects) >= 3:
+        return ", ".join(subjects[:3])
+    return "선택한 카드들"
+
+
+def _join_follow_up_subject_pair(left: str, right: str) -> str:
+    particle = "과" if _has_hangul_final_consonant(left) else "와"
+    return f"{left}{particle} {right}"
+
+
+def _has_hangul_final_consonant(value: str) -> bool:
+    for char in reversed(value.strip()):
+        code = ord(char)
+        if 0xAC00 <= code <= 0xD7A3:
+            return (code - 0xAC00) % 28 != 0
+    return False
+
+
+def _cards_for_evidence_refs(cards: list[dict], evidence_refs: object) -> list[dict]:
+    refs = [str(ref).strip() for ref in _json_list(evidence_refs) if str(ref).strip()]
+    if not refs:
+        return []
+    by_id = {str(card.get("id") or "").strip(): card for card in cards}
+    return [by_id[ref] for ref in refs if ref in by_id]
+
+
+def _follow_up_title_subject(value: object) -> str:
+    title = str(value or "").strip()
+    if not title:
+        return ""
+    for separator in (",", "·", "|", " - ", " – ", " — "):
+        if separator in title:
+            title = title.split(separator, 1)[0].strip()
+            break
+    return clip_string(title, 32)
+
+
+def _clean_follow_up_subject(value: object) -> str:
+    subject = str(value or "").strip().strip("'\"“”‘’")
+    subject = re.sub(r"\s+", " ", subject)
+    if subject.lower() in _FOLLOW_UP_INVALID_SUBJECTS:
+        return ""
+    if len(subject) < 2:
+        return ""
+    return clip_string(subject, 32)
+
+
+def _subject_with_particle(subject: str) -> str:
+    if subject.endswith(("들", "들)")):
+        return f"{subject}이"
+    return f"{subject}가"
+
+
 def _build_follow_up_checks(result: dict, cards: list[dict]) -> list[dict]:
     """다음 분석 질문과 현재 근거만으로 답할 수 있는 초안을 함께 생성."""
     comparison = _dict_or_empty(result.get("comparison_point"))
     hidden = _dict_or_empty(result.get("hidden_conclusion"))
     common = _dict_or_empty(result.get("common_pattern"))
-    peers = _dedupe_keep_order(
-        [
-            str(c.get("company") or c.get("peer_id") or "").strip()
-            for c in cards
-            if str(c.get("company") or c.get("peer_id") or "").strip()
-        ]
-    )
-    peer_phrase = "와 ".join(peers[:3]) if peers else "선택한 Peer"
     checks: list[dict] = []
     if str(hidden.get("finding") or "").strip():
         hidden_refs = _json_list(hidden.get("evidence_card_ids"))
@@ -2513,15 +2613,21 @@ def _build_follow_up_checks(result: dict, cards: list[dict]) -> list[dict]:
             }
         )
     if str(comparison.get("finding") or "").strip():
+        comparison_refs = _json_list(comparison.get("evidence_card_ids"))
+        subject_phrase = _follow_up_subject_phrase(
+            cards,
+            comparison_refs,
+            comparison.get("subject_terms"),
+        )
         comparison_answer = (
-            f"현재 답은 {peer_phrase}가 같은 흐름 안에서도 서로 다른 성과 기준이나 적용 맥락을 "
-            "앞세운다는 점입니다. "
+            f"현재 답은 {_subject_with_particle(subject_phrase)} 같은 흐름 안에서도 "
+            "서로 다른 성과 기준이나 적용 맥락을 앞세운다는 점입니다. "
             f"{str(comparison.get('rationale') or comparison.get('finding') or '').strip()}"
         )
         checks.append(
             {
                 "question": (
-                    f"{peer_phrase}의 서로 다른 접근 중 어느 고객군·업무 맥락에 "
+                    f"{subject_phrase}의 서로 다른 접근 중 어느 고객군·업무 맥락에 "
                     "먼저 적용할 수 있는 차이인가?"
                 ),
                 "answer": clip_string(comparison_answer, 260),
@@ -2529,7 +2635,7 @@ def _build_follow_up_checks(result: dict, cards: list[dict]) -> list[dict]:
                     "비교 포인트가 단순 회사별 차이가 아니라 고객군 선택이나 오퍼링 "
                     "우선순위로 이어질 수 있는지 판단하기 위한 질문입니다."
                 ),
-                "evidence_refs": _json_list(comparison.get("evidence_card_ids")),
+                "evidence_refs": comparison_refs,
             }
         )
     if _json_list(result.get("recommended_action_basis")) or _json_list(
