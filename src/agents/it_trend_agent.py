@@ -580,7 +580,7 @@ def _phase1_snapshot(global_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         "url": r.get("url"),
                         "published_at": _iso(r.get("published_at") or r.get("collected_at")),
                     }
-                    for r in rows[:3]
+                    for r in rows[:12]
                 ],
                 "source_marker": f"raw_articles WHERE source_name~{company_id}",
             }
@@ -1066,10 +1066,15 @@ def _phase5_forecast_synthesis(
         f"{', '.join(company_ids_required)}. "
         "반드시 해당 회사의 top_themes 와 최근 30일 headlines 전체 흐름에 근거해 "
         "headline 과 summary 를 한국어로 작성하세요. "
-        "headline 은 대표 기사 제목 번역이 아니라 회사의 전략/기술 축을 표현하세요. "
-        "summary 는 '무슨 전략/기술을 강화하는지'가 드러나는 1문장으로 쓰고, "
-        "근거 없는 일반론이나 모든 회사에 같은 문장 반복은 금지합니다. "
-        "evidence_titles 에 실제 입력 headline 제목 1~2개를 그대로 넣으세요.\n"
+        "headline 은 대표 기사 제목 번역이 아니라 회사의 전략/기술 축을 35자 안팎으로 표현하세요. "
+        "회사명을 반복하거나 '혁신 주도', '강화', '사용자 경험 혁신'처럼 "
+        "포괄적인 제목은 금지합니다. "
+        "summary 는 최소 2개 이상의 입력 headline 또는 top_theme 를 묶어, "
+        "해당 회사가 어떤 제품/인프라/보안/개발자 생태계 전략을 밀고 있는지 1문장으로 설명하세요. "
+        "'AI 기술을 활용', '중요성이 커지고 있음', "
+        "'비즈니스 기회를 강화' 같은 일반론은 금지합니다. "
+        "evidence_titles 에는 summary 근거가 되는 실제 입력 headline 제목 2개를 그대로 넣으세요. "
+        "입력이 1개뿐인 회사만 1개를 허용합니다.\n"
         "7. confidence — 전반적 자신감 (0.0~1.0)\n\n"
         "응답 JSON object:\n"
         + response_shape

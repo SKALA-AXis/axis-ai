@@ -3222,8 +3222,8 @@ def fetch_global_trend_inputs(window_days: int = 30) -> list[dict[str, Any]]:
                        published_at, collected_at, metadata, company
                 FROM raw_articles
                 WHERE source_name = ANY(:names)
-                  AND collected_at >= NOW() - make_interval(days => :days)
-                ORDER BY collected_at DESC NULLS LAST
+                  AND COALESCE(published_at, collected_at) >= NOW() - make_interval(days => :days)
+                ORDER BY COALESCE(published_at, collected_at) DESC NULLS LAST
                 """
                 ),
                 {"names": names, "days": window_days},
