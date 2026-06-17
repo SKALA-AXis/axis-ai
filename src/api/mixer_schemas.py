@@ -33,6 +33,9 @@ class MixerAnalysisRequest(BaseModel):
     )
     ratios: Optional[dict[str, Any]] = Field(default=None)
     user_context: Optional[str] = Field(default=None)
+    user_id: Optional[str] = Field(
+        default=None, description="사용자별 맞춤 전략 projection 조회용 user id"
+    )
     analysis_mode: Literal["quick", "deep"] = Field(default="quick")
 
     @model_validator(mode="after")

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import binascii
+import copy
 import hashlib
 import json
 import logging
@@ -87,6 +88,14 @@ class UserStrategyFileOcrRequest(BaseModel):
     file_name: str | None = None
     content_type: str | None = None
     file_base64: str = Field(..., min_length=1)
+
+
+class CardNewsStrategyContextRegenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    card_news_id: str | None = None
+    analysis_package: dict[str, Any] = Field(default_factory=dict)
+    user_id: str | None = None
 
 
 def _count_result_items(results: Iterable[Mapping[str, object]], key: str) -> int:
@@ -642,6 +651,42 @@ async def ocr_user_strategy_file(request: UserStrategyFileOcrRequest) -> dict[st
         "page_count": page_count,
         "processedPageCount": len(image_urls),
         "processed_page_count": len(image_urls),
+    }
+
+
+@app.post("/card-news/strategy-context/regenerate")
+async def regenerate_card_news_strategy_context(
+    request: CardNewsStrategyContextRegenerateRequest,
+) -> dict[str, Any]:
+    """기존 analysis_package 기반으로 전략 문장만 재생성한다."""
+    if not request.analysis_package:
+        raise HTTPException(status_code=400, detail="analysis_package is required")
+
+    from src.agents.strategic_insight_agent import StrategicInsightAgent
+    from src.composers.card_news_composer import CardNewsComposer
+
+    package = copy.deepcopy(request.analysis_package)
+    strategic_result = await asyncio.to_thread(
+        StrategicInsightAgent().generate_from_analysis_package,
+        package,
+        user_id=request.user_id,
+    )
+
+    next_package = copy.deepcopy(package)
+    next_package["analysis"] = strategic_result.get("analysis") or {}
+    next_package["implication"] = strategic_result.get("implication") or {}
+    if strategic_result.get("sentence_grounding"):
+        next_package["sentence_grounding"] = strategic_result.get("sentence_grounding")
+
+    card_news = await asyncio.to_thread(
+        CardNewsComposer().generate_from_analysis_package,
+        next_package,
+    )
+    return {
+        "card_news_id": request.card_news_id,
+        "analysis_package": next_package,
+        "strategic_result": strategic_result,
+        "card_news": card_news,
     }
 
 
@@ -1784,6 +1829,7 @@ async def analyze_mixer(request: MixerAnalysisRequest) -> MixerAnalysisResponse:
         ratios=request.ratios,
         user_context=request.user_context,
         analysis_mode=request.analysis_mode,
+        user_id=request.user_id,
     )
     _raise_if_agent_failure("MIXER", result)
     return MixerAnalysisResponse.model_validate(result)
@@ -1824,6 +1870,7 @@ async def analyze_mixer_stream(request: MixerAnalysisRequest) -> StreamingRespon
                 ratios=request.ratios,
                 user_context=request.user_context,
                 analysis_mode=request.analysis_mode,
+                user_id=request.user_id,
                 progress=progress,
             )
         )
