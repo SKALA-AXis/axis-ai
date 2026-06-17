@@ -75,32 +75,50 @@ class _FakeLLM:
                         {
                             "axis": "peer_strategic_shift",
                             "analysis_prompt": "전략 전환 축을 어떻게 읽을지 묻습니다.",
-                            "interpretation": "전략 전환 축은 이번 묶음에서 근거 부족으로 보며, 신사업이나 M&A 신호가 반복되는지 확인해야 합니다.",
+                            "interpretation": (
+                                "전략 전환 축은 이번 묶음에서 근거 부족으로 보며, "
+                                "신사업이나 M&A 신호가 반복되는지 확인해야 합니다."
+                            ),
                         },
                         {
                             "axis": "tech_investment",
                             "analysis_prompt": "기술 투자 축을 어떻게 읽을지 묻습니다.",
-                            "interpretation": "기술 투자 축은 두 이슈의 기술 근거가 운영 성과 설명에 쓰인다는 점으로 해석됩니다.",
+                            "interpretation": (
+                                "기술 투자 축은 두 이슈의 기술 근거가 운영 성과 설명에 "
+                                "쓰인다는 점으로 해석됩니다."
+                            ),
                         },
                         {
                             "axis": "market_position",
                             "analysis_prompt": "시장 포지션 축을 어떻게 읽을지 묻습니다.",
-                            "interpretation": "시장 포지션 축은 여러 peer의 성과 근거가 경쟁 위치 판단으로 이어지는지 확인하는 축입니다.",
+                            "interpretation": (
+                                "시장 포지션 축은 여러 peer의 성과 근거가 경쟁 위치 판단으로 "
+                                "이어지는지 확인하는 축입니다."
+                            ),
                         },
                         {
                             "axis": "partnership_momentum",
                             "analysis_prompt": "파트너십 축을 어떻게 읽을지 묻습니다.",
-                            "interpretation": "파트너십 축은 이번 묶음에서 근거 부족으로 보며, 협력 구조가 후속 카드에서 반복되는지 봐야 합니다.",
+                            "interpretation": (
+                                "파트너십 축은 이번 묶음에서 근거 부족으로 보며, "
+                                "협력 구조가 후속 카드에서 반복되는지 봐야 합니다."
+                            ),
                         },
                         {
                             "axis": "regulatory_risk",
                             "analysis_prompt": "규제 리스크 축을 어떻게 읽을지 묻습니다.",
-                            "interpretation": "규제 리스크 축은 이번 묶음에서 근거 부족으로 보며, 정책 조건이 의사결정 제약으로 등장하는지 확인해야 합니다.",
+                            "interpretation": (
+                                "규제 리스크 축은 이번 묶음에서 근거 부족으로 보며, "
+                                "정책 조건이 의사결정 제약으로 등장하는지 확인해야 합니다."
+                            ),
                         },
                         {
                             "axis": "talent_movement",
                             "analysis_prompt": "인재 이동 축을 어떻게 읽을지 묻습니다.",
-                            "interpretation": "인재 이동 축은 이번 묶음에서 근거 부족으로 보며, 조직 변화가 실행 역량 신호로 연결되는지 확인해야 합니다.",
+                            "interpretation": (
+                                "인재 이동 축은 이번 묶음에서 근거 부족으로 보며, "
+                                "조직 변화가 실행 역량 신호로 연결되는지 확인해야 합니다."
+                            ),
                         },
                     ],
                     "connections": [
@@ -128,6 +146,32 @@ class _FakeLLM:
                     ],
                     "sources_used": ["CN-1", "CN-2"],
                     "confidence": 0.8,
+                },
+                ensure_ascii=False,
+            )
+        )
+
+
+class _RadarFillLLM:
+    def __init__(self) -> None:
+        self.prompts: list[Any] = []
+
+    def invoke(self, prompt: Any, config: Any | None = None) -> _FakeResponse:
+        del config
+        self.prompts.append(prompt)
+        return _FakeResponse(
+            json.dumps(
+                {
+                    "radar_axis_interpretations": [
+                        {
+                            "axis": "시장 포지션",
+                            "analysis_prompt": "시장 포지션 변화를 어떻게 읽을지 묻습니다.",
+                            "interpretation": (
+                                "여러 peer의 이슈가 함께 묶여 있어 개별 뉴스보다 "
+                                "시장 포지션 변화 신호로 읽어야 합니다."
+                            ),
+                        }
+                    ]
                 },
                 ensure_ascii=False,
             )
@@ -372,7 +416,12 @@ def test_radar_interpretation_uses_llm_text_without_fallback():
     }
     result = mixer_module._merge_radar_axis_interpretations(
         [radar_axis],
-        [{"axis": "regulatory_risk", "interpretation": "규제 이벤트가 의사결정 리스크로 작동하는지 봅니다."}],
+        [
+            {
+                "axis": "regulatory_risk",
+                "interpretation": "규제 이벤트가 의사결정 리스크로 작동하는지 봅니다.",
+            }
+        ],
     )
 
     interpretation = result[0]["prompted_interpretation"]
@@ -380,6 +429,63 @@ def test_radar_interpretation_uses_llm_text_without_fallback():
 
     empty_result = mixer_module._merge_radar_axis_interpretations([radar_axis], [])
     assert empty_result[0]["prompted_interpretation"] == ""
+
+
+def test_radar_interpretation_accepts_korean_axis_label():
+    radar_axis = {
+        "axis": "market_position",
+        "score": 1.0,
+        "explanation": "시장 포지션 판단 설명입니다.",
+        "meaning": "강한 판단 신호입니다.",
+        "support_count": 4,
+        "total_count": 4,
+        "matched_card_ids": ["CN-1", "CN-2", "CN-3", "CN-4"],
+    }
+
+    result = mixer_module._merge_radar_axis_interpretations(
+        [radar_axis],
+        [
+            {
+                "axis": "시장 포지션",
+                "interpretation": "여러 peer의 이슈가 시장 포지션 변화로 읽힙니다.",
+            }
+        ],
+    )
+
+    assert result[0]["prompted_interpretation"] == "여러 peer의 이슈가 시장 포지션 변화로 읽힙니다."
+
+
+def test_missing_radar_interpretation_is_filled_by_llm(monkeypatch):
+    fake_llm = _RadarFillLLM()
+    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: fake_llm)
+    radar_axis = {
+        "axis": "market_position",
+        "score": 1.0,
+        "explanation": "여러 peer에 걸친 시장 신호인지 보는 값입니다.",
+        "meaning": "강한 판단 신호입니다.",
+        "support_count": 2,
+        "total_count": 2,
+        "matched_card_ids": ["CN-1", "CN-2"],
+        "analysis_prompt": "시장 포지션 축을 어떻게 읽을지 묻습니다.",
+        "prompted_interpretation": "",
+    }
+    cards = [
+        {"id": "CN-1", "title": "A사 시장 확대", "peer_id": "A사"},
+        {"id": "CN-2", "title": "B사 전략 제휴", "peer_id": "B사"},
+    ]
+
+    result = mixer_module._fill_missing_radar_axis_interpretations(
+        [radar_axis],
+        cards,
+        "quick",
+    )
+
+    assert fake_llm.prompts
+    assert "market_position" in str(fake_llm.prompts[0])
+    assert "CN-1" in str(fake_llm.prompts[0])
+    assert result[0]["prompted_interpretation"] == (
+        "여러 peer의 이슈가 함께 묶여 있어 개별 뉴스보다 시장 포지션 변화 신호로 읽어야 합니다."
+    )
 
 
 def test_mixer_card_ids_are_interpreted_as_analysis_units(monkeypatch):
