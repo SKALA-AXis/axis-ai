@@ -247,7 +247,10 @@ class TodayInsightAgent:
             return _scheduled_cache_pending_result(anchor_date)
 
         context = _build_context(req, anchor_date)
-        if not context["current_issues"] and not context["recent_cards"]:
+        # anchor_date(오늘) 기준 current 신호(현재 이슈 또는 당일 카드)가 없으면,
+        # 과거 카드로 active 리포트를 만들지 않고 '신규 신호 없음' 플레이스홀더를 반환한다.
+        # (recent_cards 폴백이 과거 카드를 채워도 그것을 오늘 헤드라인으로 내보내지 않음.)
+        if not context.get("has_current_signal", True):
             result = _fallback_result(
                 anchor_date=anchor_date,
                 context=context,
@@ -328,6 +331,9 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
             if _is_domestic_card(card) and not _is_self_company_card(card)
         ]
         cards = [*cards, *supplemental_cards][: req.max_cards]
+    # anchor_date(오늘) 기준 current 카드(현재 이슈 카드 또는 당일 카드) 존재 여부 —
+    # 아래 _fetch_recent_cards 폴백(과거 카드)으로 채워지기 전에 확정해 둔다.
+    has_anchor_cards = bool(cards)
     if not cards:
         cards = _fetch_recent_cards(
             anchor_date=anchor_date,
@@ -388,6 +394,7 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
     return {
         "report_date": anchor_date.isoformat(),
         "window_days": req.window_days,
+        "has_current_signal": bool(current_issues) or has_anchor_cards,
         "current_issues": [_issue_for_prompt(row) for row in current_issues],
         "history_issues": [_issue_for_prompt(row) for row in history_issues],
         "recent_cards": [_card_for_prompt(card) for card in cards[: req.max_cards]],
