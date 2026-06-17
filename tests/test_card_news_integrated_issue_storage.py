@@ -83,6 +83,59 @@ def test_card_news_insert_params_leaves_industry_trend_peer_fk_empty():
     assert params["primary_keyword_category"] == "security"
 
 
+def test_card_news_insert_params_leaves_global_company_peer_fk_empty():
+    params = _card_news_insert_params(
+        {
+            "id": "CN-20260617-50946",
+            "company": "nvidia",
+            "peer_company_id": "nvidia",
+            "cluster_id": 50946,
+            "title": "앤스로픽 IPO 규제 리스크",
+            "summary_lines": ["미국 AI 규제가 IPO 불확실성을 키우고 있다."],
+            "event_type": "regulation",
+            "source_raw_article_ids": [50946],
+        }
+    )
+
+    assert params["company"] == "nvidia"
+    assert params["peer_company_id"] is None
+
+
+def test_card_news_insert_params_leaves_unregistered_company_peer_fk_empty():
+    params = _card_news_insert_params(
+        {
+            "id": "CN-20260617-50947",
+            "company": "anthropic",
+            "peer_company_id": "anthropic",
+            "cluster_id": 50947,
+            "title": "앤스로픽 AI 규제 대응",
+            "summary_lines": ["앤스로픽 관련 규제 이슈가 확인됐다."],
+            "event_type": "regulation",
+            "source_raw_article_ids": [50947],
+        }
+    )
+
+    assert params["company"] == "anthropic"
+    assert params["peer_company_id"] is None
+
+
+def test_card_news_insert_params_leaves_self_company_peer_fk_empty():
+    params = _card_news_insert_params(
+        {
+            "id": "CN-20260617-1",
+            "company": "sk_ax",
+            "peer_company_id": "sk_ax",
+            "cluster_id": 1,
+            "title": "SK AX 자체 기사",
+            "summary_lines": ["SK AX 관련 자체 기사다."],
+            "event_type": "general_update",
+        }
+    )
+
+    assert params["company"] == "sk_ax"
+    assert params["peer_company_id"] is None
+
+
 def test_card_news_insert_params_maps_industry_frontend_ready_to_display_frontend():
     params = _card_news_insert_params(
         {

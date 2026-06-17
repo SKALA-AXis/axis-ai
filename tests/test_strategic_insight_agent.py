@@ -809,9 +809,11 @@ def test_market_infra_signal_without_direct_peer_action_is_watch_only():
     assert diagnostics["direct_peer_action"] is False
     assert diagnostics["primary_actor_type"] in {"global_vendor", "multi_actor", "unknown"}
     assert "frontend_ready" not in result["implication"]
-    assert "industry_frontend_ready" not in result["implication"]
-    assert diagnostics["display_policy"] == "needs_review_only"
-    assert "자동 생성하지 않습니다" in diagnostics["removed_reason"]
+    assert result["implication"]["industry_frontend_ready"]["source"] == "industry_signal_direct"
+    assert result["implication"]["industry_frontend_ready"]["display_policy"] == "industry_only"
+    assert result["implication"]["industry_frontend_ready"]["items"]
+    assert diagnostics["display_policy"] == "industry_only"
+    assert diagnostics["displayable"] is True
     assert "llm_skipped" in diagnostics["phase_decisions"]
     assert llm.invoke.call_count == 0
 
@@ -843,8 +845,11 @@ def test_invalid_market_infra_signal_preserves_industry_signal_diagnostics():
     assert diagnostics["signal_scope"] == "market_infra_signal"
     assert diagnostics["direct_peer_action"] is False
     assert result["implication"]["industry_signal"]["signal_scope"] == "market_infra_signal"
-    assert "industry_frontend_ready" not in result["implication"]
-    assert diagnostics["display_policy"] == "needs_review_only"
+    assert result["implication"]["industry_frontend_ready"]["source"] == "industry_signal_direct"
+    assert result["implication"]["industry_frontend_ready"]["display_policy"] == "industry_only"
+    assert result["implication"]["industry_frontend_ready"]["items"]
+    assert diagnostics["display_policy"] == "industry_only"
+    assert diagnostics["displayable"] is True
     assert "watch_only_industry_signal" in diagnostics["phase_decisions"]
     assert llm.invoke.call_count == 0
 

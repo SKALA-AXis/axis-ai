@@ -11,7 +11,8 @@ from typing import Any, Optional
 from sqlalchemy import text
 
 from src.config.companies import COMPANY_ALIASES
-from src.config.company_tiers import SELF_COMPANY_IDS, resolve_company_id
+from src.config.company_tiers import DOMESTIC_COMPANY_IDS, SELF_COMPANY_IDS, resolve_company_id
+from src.config.global_companies import GLOBAL_COMPANY_IDS
 from src.crawler.base import CrawlRunContext, RawArticle
 from src.db.postgres import SessionLocal
 
@@ -2112,20 +2113,29 @@ def _resolve_peer_company_id(card: dict[str, Any]) -> Optional[str]:
 
     우선순위: card['peer_company_id'] (CardNewsComposer 가 set 했을 수 있음) →
     card['company'] (peer_companies.id 와 동일 표기) → card['peer_id'].
-    SK AX 같은 self 회사는 FK NULL (peer_companies 가 self 도 포함하지만,
-    안전을 위해 None 으로 두고 보조 컬럼 company 만 사용).
+    국내 peer FK 로 안전하게 확인되는 값만 저장한다. 산업 트렌드, 글로벌 기업,
+    SK AX 같은 self 회사, 미등록 회사는 보조 컬럼 company 만 사용하고 FK 는 NULL.
     """
-    direct = card.get("peer_company_id")
-    if str(direct or "").strip() == INDUSTRY_TREND_COMPANY:
+    for value in (card.get("peer_company_id"), card.get("company"), card.get("peer_id")):
+        peer_id = _normalize_peer_company_fk(value)
+        if peer_id:
+            return peer_id
+    return None
+
+
+def _normalize_peer_company_fk(value: Any) -> Optional[str]:
+    text_value = str(value or "").strip()
+    if not text_value:
         return None
-    if direct:
-        return str(direct)
-    company = card.get("company") or card.get("peer_id")
-    if not company:
+    company_id = resolve_company_id(text_value)
+    if (
+        company_id == INDUSTRY_TREND_COMPANY
+        or company_id in SELF_COMPANY_IDS
+        or company_id in GLOBAL_COMPANY_IDS
+        or company_id not in DOMESTIC_COMPANY_IDS
+    ):
         return None
-    if str(company).strip() == INDUSTRY_TREND_COMPANY:
-        return None
-    return str(company)
+    return company_id
 
 
 def _normalize_int_list(value: Any) -> list[int]:
@@ -2515,8 +2525,8 @@ def _frontend_implication_from_frontend_ready(value: Any) -> dict[str, Any]:
     action_items = _frontend_ready_display_lines(action_block, prefix="핵심 대응")
     if not key_items and not action_items:
         return {}
-    key_blocks = _main_detail_blocks_from_labeled_lines(key_items)
-    action_blocks = _main_detail_blocks_from_labeled_lines(action_items)
+    key_blocks = _frontend_ready_display_blocks(key_block)
+    action_blocks = _frontend_ready_display_blocks(action_block)
     payload: dict[str, Any] = {
         "source": value.get("source") or "frontend_ready",
         "key_implications": key_items,
@@ -2541,21 +2551,23 @@ def _frontend_implication_from_industry_frontend_ready(value: Any) -> dict[str, 
         return {}
     insight_items: list[str] = []
     action_items: list[str] = []
+    insight_blocks: list[dict[str, str]] = []
+    action_blocks: list[dict[str, str]] = []
     for item in value.get("items") or []:
         if not isinstance(item, dict):
             continue
-        insight_items.extend(
-            _frontend_ready_display_lines(item.get("key_implication"), prefix="핵심 시사점")
-        )
-        action_items.extend(
-            _frontend_ready_display_lines(item.get("suggested_action"), prefix="핵심 대응")
-        )
+        key_block = item.get("key_implication")
+        action_block = item.get("suggested_action")
+        insight_items.extend(_frontend_ready_display_lines(key_block, prefix="핵심 시사점"))
+        action_items.extend(_frontend_ready_display_lines(action_block, prefix="핵심 대응"))
+        insight_blocks.extend(_frontend_ready_display_blocks(key_block))
+        action_blocks.extend(_frontend_ready_display_blocks(action_block))
     insight_items = insight_items[:2]
     action_items = action_items[:2]
+    insight_blocks = insight_blocks[:2]
+    action_blocks = action_blocks[:2]
     if not insight_items and not action_items:
         return {}
-    insight_blocks = _main_detail_blocks_from_labeled_lines(insight_items)
-    action_blocks = _main_detail_blocks_from_labeled_lines(action_items)
     payload: dict[str, Any] = {
         "source": "industry_signal_direct",
         "signal_scope": str(value.get("signal_scope") or "industry_signal"),
@@ -2584,10 +2596,20 @@ def _frontend_ready_display_lines(value: Any, *, prefix: str) -> list[str]:
     evidence = str(value.get("evidence_sentence") or "").strip()
     if not sentence:
         return []
-    line = f"{prefix}: {sentence}"
+    lines = [f"{prefix}: {sentence}"]
     if evidence:
-        line = f"{line}\n근거/설명: {evidence}"
-    return [line]
+        lines.append(f"근거: {evidence}")
+    return lines
+
+
+def _frontend_ready_display_blocks(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, dict):
+        return []
+    sentence = str(value.get("sentence") or "").strip()
+    evidence = str(value.get("evidence_sentence") or "").strip()
+    if not sentence:
+        return []
+    return [{"main": sentence, "detail": evidence}]
 
 
 def _main_detail_blocks(value: Any) -> list[dict[str, str]]:
@@ -3222,8 +3244,8 @@ def fetch_global_trend_inputs(window_days: int = 30) -> list[dict[str, Any]]:
                        published_at, collected_at, metadata, company
                 FROM raw_articles
                 WHERE source_name = ANY(:names)
-                  AND collected_at >= NOW() - make_interval(days => :days)
-                ORDER BY collected_at DESC NULLS LAST
+                  AND COALESCE(published_at, collected_at) >= NOW() - make_interval(days => :days)
+                ORDER BY COALESCE(published_at, collected_at) DESC NULLS LAST
                 """
                 ),
                 {"names": names, "days": window_days},

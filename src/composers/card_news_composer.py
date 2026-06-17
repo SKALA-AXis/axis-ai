@@ -3408,34 +3408,43 @@ def _trust_score(articles: list[dict[str, Any]]) -> float | None:
 
 
 def _validation_pass(summary: dict[str, Any], analysis: dict[str, Any]) -> bool:
-    return (
-        bool(summary.get("is_valid_summary", True))
-        and not bool(summary.get("fact_extraction_failed"))
-        and _summary_line_count_valid(summary)
-        and not any(_looks_like_non_summary_line(line) for line in _literal_summary_lines(summary))
-        and not _missing_fact_basis_line_indexes(summary)
-    ) and bool(analysis.get("is_valid_analysis", True))
+    del analysis
+    return not _fatal_summary_validation_issues(summary)
 
 
 def _validation_missing(summary: dict[str, Any], analysis: dict[str, Any]) -> list[str]:
-    missing: list[str] = []
-    missing_indexes = _missing_fact_basis_line_indexes(summary)
-    if missing_indexes:
-        missing.append(
-            "fact_basis missing for summary_line_index: "
-            + ", ".join(str(index) for index in missing_indexes)
-        )
-    if not _summary_line_count_valid(summary):
-        missing.append("summary_lines must contain 3~5 lines")
-    if any(_looks_like_non_summary_line(line) for line in _literal_summary_lines(summary)):
-        missing.append("summary_lines include article headline/question or boilerplate")
+    missing: list[str] = _fatal_summary_validation_issues(summary)
     if not bool(summary.get("is_valid_summary", True)):
-        missing.append("summary is invalid")
+        missing.append("summary has non-fatal quality warnings")
     if bool(summary.get("fact_extraction_failed")):
         missing.append("fact extraction failed; rule-based candidates used")
     if not bool(analysis.get("is_valid_analysis", True)):
         missing.append("analysis is invalid")
     return missing
+
+
+def _fatal_summary_validation_issues(summary: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    missing_indexes = _missing_fact_basis_line_indexes(summary)
+    if missing_indexes:
+        issues.append(
+            "fact_basis missing for summary_line_index: "
+            + ", ".join(str(index) for index in missing_indexes)
+        )
+    if not _summary_line_count_valid(summary):
+        issues.append("summary_lines must contain 3~5 lines")
+    if any(_looks_like_non_summary_line(line) for line in _literal_summary_lines(summary)):
+        issues.append("summary_lines include article headline/question or boilerplate")
+    if bool(summary.get("fact_extraction_failed")):
+        issues.append("fact extraction failed")
+    for warning in _list_string(summary.get("validation_warnings")):
+        if (
+            "fact_basis source_article_ids가 비어 있음" in warning
+            or "수치 근거 부족" in warning
+            or "한국어 조사/띄어쓰기 오류" in warning
+        ):
+            issues.append(warning)
+    return list(dict.fromkeys(issues))
 
 
 def _missing_fact_basis_line_indexes(summary: dict[str, Any]) -> list[int]:

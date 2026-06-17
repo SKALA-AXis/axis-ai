@@ -4035,11 +4035,19 @@ def _attach_strategy_skip_diagnostics(
             "reason": skip_decision.get("reason"),
             "evidence": skip_decision.get("evidence") or {},
         }
-        implication["frontend_ready_diagnostics"]["display_policy"] = "needs_review_only"
-        implication["frontend_ready_diagnostics"]["removed_reason"] = (
-            "watch-only 산업 신호는 코드 fallback 문장을 화면용 시사점/대응방향으로 "
-            "자동 생성하지 않습니다."
+        industry_ready = _industry_frontend_ready_from_decision(
+            integrated_issue=integrated_issue,
+            skip_decision=skip_decision,
         )
+        if industry_ready:
+            implication["industry_frontend_ready"] = industry_ready
+            implication["frontend_ready_diagnostics"]["display_policy"] = "industry_only"
+            implication["frontend_ready_diagnostics"]["displayable"] = True
+        else:
+            implication["frontend_ready_diagnostics"]["display_policy"] = "needs_review_only"
+            implication["frontend_ready_diagnostics"]["removed_reason"] = (
+                "watch-only 산업 신호에서 화면용 시사점/대응방향을 만들 근거 축을 찾지 못했습니다."
+            )
     out["implication"] = implication
     return out
 
