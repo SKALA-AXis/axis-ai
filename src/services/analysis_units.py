@@ -110,11 +110,15 @@ class AnalysisUnit:
         }
 
 
-def load_analysis_units_by_card_ids(card_ids: list[str]) -> list[AnalysisUnit]:
+def load_analysis_units_by_card_ids(
+    card_ids: list[str],
+    *,
+    user_id: str | None = None,
+) -> list[AnalysisUnit]:
     cleaned = _clean_ids(card_ids)
     if not cleaned:
         return []
-    rows = _fetch_card_rows(cleaned)
+    rows = _fetch_card_rows(cleaned, user_id=user_id)
     units = [analysis_unit_from_card(row) for row in rows]
     order = {value: index for index, value in enumerate(cleaned)}
     return sorted(
@@ -125,11 +129,13 @@ def load_analysis_units_by_card_ids(card_ids: list[str]) -> list[AnalysisUnit]:
 
 def load_analysis_units_by_integrated_issue_ids(
     integrated_issue_ids: list[str],
+    *,
+    user_id: str | None = None,
 ) -> list[AnalysisUnit]:
     cleaned = _clean_ids(integrated_issue_ids)
     if not cleaned:
         return []
-    rows = _fetch_integrated_issue_rows(cleaned)
+    rows = _fetch_integrated_issue_rows(cleaned, user_id=user_id)
     units = [analysis_unit_from_card(row) for row in rows]
     order = {value: index for index, value in enumerate(cleaned)}
     return sorted(
@@ -243,7 +249,7 @@ def analysis_unit_from_card(card: dict[str, Any]) -> AnalysisUnit:
     )
 
 
-def _fetch_card_rows(card_ids: list[str]) -> list[dict[str, Any]]:
+def _fetch_card_rows(card_ids: list[str], *, user_id: str | None = None) -> list[dict[str, Any]]:
     placeholders = ",".join(f":id_{index}" for index in range(len(card_ids)))
     params = {f"id_{index}": card_id for index, card_id in enumerate(card_ids)}
     sql_v40 = text(f"""
@@ -346,10 +352,16 @@ def _fetch_card_rows(card_ids: list[str]) -> list[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001
         log.exception("analysis unit card 조회 실패 | error=%s", exc)
         return []
-    return [_normalize_row(dict(row)) for row in rows]
+    normalized_rows = [_normalize_row(dict(row)) for row in rows]
+    _apply_user_strategy_projections(normalized_rows, user_id=user_id)
+    return normalized_rows
 
 
-def _fetch_integrated_issue_rows(integrated_issue_ids: list[str]) -> list[dict[str, Any]]:
+def _fetch_integrated_issue_rows(
+    integrated_issue_ids: list[str],
+    *,
+    user_id: str | None = None,
+) -> list[dict[str, Any]]:
     placeholders = ",".join(f":id_{index}" for index in range(len(integrated_issue_ids)))
     params = {f"id_{index}": issue_id for index, issue_id in enumerate(integrated_issue_ids)}
     sql = text(f"""
@@ -417,7 +429,118 @@ def _fetch_integrated_issue_rows(integrated_issue_ids: list[str]) -> list[dict[s
             return []
         log.exception("analysis unit integrated issue 조회 실패 | error=%s", exc)
         return []
-    return [_normalize_row(dict(row)) for row in rows]
+    normalized_rows = [_normalize_row(dict(row)) for row in rows]
+    _apply_user_strategy_projections(normalized_rows, user_id=user_id)
+    return normalized_rows
+
+
+def _apply_user_strategy_projections(rows: list[dict[str, Any]], *, user_id: str | None) -> None:
+    if not rows or not user_id:
+        return
+    card_ids = _dedupe(
+        [
+            str(row.get("card_id") or row.get("id") or "").strip()
+            for row in rows
+            if str(row.get("card_id") or row.get("id") or "").strip()
+        ]
+    )
+    if not card_ids:
+        return
+    placeholders = ",".join(f":card_id_{index}" for index in range(len(card_ids)))
+    params: dict[str, Any] = {"user_id": user_id}
+    params.update({f"card_id_{index}": card_id for index, card_id in enumerate(card_ids)})
+    sql = text(f"""
+        SELECT card_news_id,
+               applied_action,
+               applied_at
+          FROM card_news_strategy_context_projections
+         WHERE user_id = CAST(:user_id AS uuid)
+           AND is_applied = TRUE
+           AND card_news_id IN ({placeholders})
+    """)
+    try:
+        with SessionLocal() as db:
+            projection_rows = db.execute(sql, params).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        log.info("user strategy projection lookup skipped | error=%s", exc)
+        return
+    projections = {
+        str(row.get("card_news_id")): {
+            "applied_action": _json_dict(row.get("applied_action")),
+            "applied_at": str(row.get("applied_at") or ""),
+        }
+        for row in projection_rows
+        if row.get("card_news_id")
+    }
+    for row in rows:
+        card_id = str(row.get("card_id") or row.get("id") or "")
+        projection = projections.get(card_id)
+        if not projection:
+            continue
+        action = projection.get("applied_action") or {}
+        if not action:
+            continue
+        evidence_payload = _json_dict(row.get("evidence_payload"))
+        package = _json_dict(evidence_payload.get("analysis_package"))
+        base_implication = (
+            _json_dict(package.get("implication"))
+            or _json_dict(evidence_payload.get("implication"))
+            or _json_dict(row.get("implication"))
+        )
+        implication = _implication_with_applied_action(base_implication, action)
+        if package:
+            package["implication"] = implication
+            evidence_payload["analysis_package"] = package
+        evidence_payload["implication"] = implication
+        evidence_payload["strategy_context_projection"] = {
+            "is_applied": True,
+            "applied_at": projection.get("applied_at"),
+        }
+        row["implication"] = implication
+        row["evidence_payload"] = evidence_payload
+
+
+def _implication_with_applied_action(
+    base_implication: dict[str, Any],
+    applied_action: dict[str, Any],
+) -> dict[str, Any]:
+    merged = json.loads(json.dumps(base_implication or {}, ensure_ascii=False))
+    frontend = _json_dict(merged.get("frontend"))
+    if not frontend:
+        frontend = dict(merged)
+    for key in (
+        "suggested_actions",
+        "response_directions",
+        "skax_checkpoints",
+        "response_direction_blocks",
+        "suggested_action_items",
+        "skax_checkpoint_blocks",
+    ):
+        if key in applied_action:
+            frontend[key] = applied_action[key]
+    merged["frontend"] = frontend
+
+    frontend_ready_action = _json_dict(applied_action.get("frontend_ready_suggested_action"))
+    if frontend_ready_action:
+        frontend_ready = _json_dict(merged.get("frontend_ready"))
+        frontend_ready["suggested_action"] = frontend_ready_action
+        merged["frontend_ready"] = frontend_ready
+
+    industry_actions = _json_list(applied_action.get("industry_frontend_ready_actions"))
+    if industry_actions:
+        industry_ready = _json_dict(merged.get("industry_frontend_ready"))
+        items = _json_list(industry_ready.get("items"))
+        updated_items: list[dict[str, Any]] = []
+        for index, item in enumerate(items):
+            item_map = _json_dict(item)
+            if index < len(industry_actions):
+                action_map = _json_dict(industry_actions[index])
+                if action_map:
+                    item_map["suggested_action"] = action_map
+            updated_items.append(item_map)
+        industry_ready["items"] = updated_items
+        merged["industry_frontend_ready"] = industry_ready
+    return merged
 
 
 def _normalize_row(row: dict[str, Any]) -> dict[str, Any]:
