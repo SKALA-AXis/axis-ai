@@ -813,8 +813,8 @@ def test_apply_insight_state_today_signal_above_bar(monkeypatch) -> None:
     assert base["coverage_stats"]["reviewed_last_7d"] == 12
 
 
-def test_apply_insight_state_quiet_below_bar(monkeypatch) -> None:
-    """오늘 신호 있어도 lead salience < 0.70(변두리 필러) → quiet + week_synthesis + depth_gate."""
+def test_apply_insight_state_today_signal_even_below_prior_salience_bar(monkeypatch) -> None:
+    """오늘 신호가 있으면 내부 salience 점수로 숨기지 않고 today_signal 로 노출."""
     monkeypatch.setattr(today_module, "_build_coverage_stats", lambda **kw: {"reviewed_last_7d": 9})
     base: dict[str, Any] = {
         "report_date": "2026-06-17",
@@ -826,11 +826,10 @@ def test_apply_insight_state_quiet_below_bar(monkeypatch) -> None:
         "provenance": {},
     }
     today_module._apply_insight_state(base, {"has_current_signal": True})
-    assert base["state"] == "quiet"
-    assert base["signal_date"] is None
-    assert base["week_synthesis"]
-    assert "포스코DX" in base["week_synthesis"]
-    assert base["provenance"]["depth_gate"] == "below_bar"
+    assert base["state"] == "today_signal"
+    assert base["signal_date"] == "2026-06-17"
+    assert base["week_synthesis"] is None
+    assert "depth_gate" not in base["provenance"]
 
 
 def test_apply_insight_state_quiet_when_no_current_signal(monkeypatch) -> None:
