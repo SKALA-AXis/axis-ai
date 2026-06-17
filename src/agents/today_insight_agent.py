@@ -496,10 +496,23 @@ def _fetch_integrated_issues(
                                       ) issue_source_dates
                                 WHERE source_date = CAST(:anchor_date AS date)
                            ) AS has_anchor_source
-                      FROM integrated_issues ii
+                     FROM integrated_issues ii
                      WHERE ii.is_current = TRUE
                        AND ii.status = 'active'
                        AND ii.is_valid = TRUE
+                       AND (
+                           NOT EXISTS (
+                               SELECT 1
+                                 FROM card_news cn_any
+                                WHERE cn_any.integrated_issue_id = ii.id
+                           )
+                           OR EXISTS (
+                               SELECT 1
+                                 FROM card_news cn_active
+                                WHERE cn_active.integrated_issue_id = ii.id
+                                  AND LOWER(cn_active.status) = 'active'
+                           )
+                       )
                        AND (ii.created_at AT TIME ZONE 'Asia/Seoul')::date
                            >= CAST(:anchor_date AS date) - (:window_days * INTERVAL '1 day')
                      ORDER BY
@@ -596,6 +609,7 @@ def _fetch_cards_for_issues(
                           WHERE ra.id = ANY(COALESCE(source_raw_article_ids, '{{}}'::bigint[]))
                      ) src ON TRUE
                      WHERE integrated_issue_id IN ({placeholders})
+                       AND LOWER(status) = 'active'
                        AND COALESCE(
                                src.earliest_source_date,
                                (created_at AT TIME ZONE 'Asia/Seoul')::date
@@ -696,6 +710,7 @@ def _fetch_anchor_date_cards(
                                src.earliest_source_date,
                                (created_at AT TIME ZONE 'Asia/Seoul')::date
                            ) = CAST(:anchor_date AS date)
+                       AND LOWER(status) = 'active'
                        AND COALESCE(peer_company_id, company, '') <> 'sk_ax'
                        AND (
                            COALESCE(cardinality(source_raw_article_ids), 0) = 0
@@ -780,6 +795,7 @@ def _fetch_recent_cards(
                            BETWEEN CAST(:anchor_date AS date)
                                - (:window_days * INTERVAL '1 day')
                                AND CAST(:anchor_date AS date)
+                       AND LOWER(status) = 'active'
                        AND COALESCE(peer_company_id, company, '') <> 'sk_ax'
                        AND (
                            COALESCE(cardinality(source_raw_article_ids), 0) = 0
@@ -1188,36 +1204,19 @@ def _build_change_stats(
 # PR #212 의 has_current_signal/has_anchor_cards 게이트는 그대로 두고, 결과 정규화
 # 단계에서 state/signal_date/week_synthesis/coverage_stats 만 얹는다.
 # (recent_signal: 최근 2~3 영업일 윈도우는 후속 단계에서 추가.)
-_DEEP_ANALYSIS_SALIENCE_BAR = 0.70  # comparison primary-lane 바 재사용 — 변두리 필러 차단
-
-
-def _lead_salience(base: Mapping[str, Any], context: Mapping[str, Any]) -> float:
-    """비교 엔진 primary_selection lead 의 salience_score (없으면 0.0)."""
-    comparison = base.get("comparison_facts") or context.get("comparison_facts")
-    if isinstance(comparison, Mapping):
-        primary = comparison.get("primary_selection")
-        if isinstance(primary, Mapping):
-            items = primary.get("items")
-            if isinstance(items, list) and items and isinstance(items[0], Mapping):
-                try:
-                    return float(items[0].get("salience_score") or 0.0)
-                except (TypeError, ValueError):
-                    return 0.0
-    return 0.0
 
 
 def _derive_insight_state(base: Mapping[str, Any], context: Mapping[str, Any]) -> str:
     """today_signal | quiet.
 
-    오늘(anchor) 신호가 있고 품질바(primary-lane salience ≥ 0.70)를 넘으면 today_signal,
-    그 외(오늘 신호 없음 OR 후보가 품질바 미달=변두리 필러)는 quiet.
+    오늘(anchor) 신호가 있으면 today_signal, 당일 신호가 없거나 placeholder 일 때만 quiet.
+    홈은 "오늘 들어온 것 중 중요한 것"을 보여주는 화면이므로 내부 salience 컷으로
+    실제 당일 신호를 숨기지 않는다.
     """
     provenance = base.get("provenance")
     if isinstance(provenance, Mapping) and provenance.get("is_status_placeholder"):
         return "quiet"
-    if bool(context.get("has_current_signal", False)) and (
-        _lead_salience(base, context) >= _DEEP_ANALYSIS_SALIENCE_BAR
-    ):
+    if bool(context.get("has_current_signal", False)):
         return "today_signal"
     return "quiet"
 
@@ -1266,7 +1265,8 @@ def _build_coverage_stats(*, window_days: int = 7) -> dict[str, Any]:
                           (SELECT COUNT(*) FROM raw_articles
                              WHERE created_at >= now() - make_interval(days => :d)) AS reviewed,
                           (SELECT COUNT(*) FROM card_news
-                             WHERE created_at >= now() - make_interval(days => :d)) AS cards,
+                             WHERE created_at >= now() - make_interval(days => :d)
+                               AND LOWER(status) = 'active') AS cards,
                           (SELECT COUNT(*) FROM sent_alerts
                              WHERE sent_at >= now() - make_interval(days => :d)) AS urgent
                         """

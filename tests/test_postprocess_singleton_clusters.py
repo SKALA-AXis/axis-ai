@@ -7,6 +7,7 @@ from scripts.postprocess_singleton_clusters import (
     _cluster_relation,
     _filter_group_candidates_after_target_merges,
     _find_candidates,
+    _has_mojibake_content,
     _has_title_anchor_overlap,
     _is_list_like,
     _is_stock_noise,
@@ -66,6 +67,17 @@ def test_contract_stock_article_is_stock_noise_even_with_event_terms() -> None:
 def test_multi_company_roundup_title_is_list_like_noise() -> None:
     assert _is_list_like("[#시큐리티 포커스] 유락 '디파스 프로 맥' 출시·삼성SDS 'AI 클라우드 ...")
     assert _is_list_like("[전자·IT 레이더] 삼성SDS·한컴·카페24, 보안·AI·커머스 핵심 사업")
+
+
+def test_mojibake_content_is_parser_noise() -> None:
+    broken = "LG CNS 관련 기사입니다. " + ("�����Һ��ڽŹ� " * 12)
+    normal = (
+        "LG CNS는 중소기업중앙회와 중소 제조기업 AX 전환 지원을 위한 "
+        "업무협약을 체결했다. 교육과 기술 지원을 함께 추진한다."
+    )
+
+    assert _has_mojibake_content(broken) is True
+    assert _has_mojibake_content(normal) is False
 
 
 def test_small_lg_cns_anthropic_cluster_merges_to_large_cluster_with_llm(monkeypatch) -> None:

@@ -57,29 +57,6 @@ log = logging.getLogger(__name__)
 
 ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
 _FAST_PASS_COMPANY_IDS = set(COMPANY_IDS)
-_INDUSTRY_TREND_LOW_VALUE_TITLE_TERMS = (
-    "에너지밸리포럼",
-    "경제발전공유사업",
-    "KSP",
-    "해외진출 지원",
-    "국립대병원",
-    "[정치",
-    "구윤철",
-    "이준석 대표",
-    "교육정보화 콘퍼런스",
-)
-_INDUSTRY_TREND_LOW_VALUE_EVENT_RE = re.compile(
-    r"(ISO\s*27001|인증\s*획득|전시회?\s*참가|계약\s*(?:체결|수주)?|정부\s*사업\s*참여|적용\s*완료|표창\s*수상)",
-    re.IGNORECASE,
-)
-_INDUSTRY_TREND_BROAD_ANCHOR_RE = re.compile(
-    r"(산업|시장|기업\s*\d+곳|기업\s*보안|공급망\s*(?:공격|보안|위협|로드맵)|"
-    r"국가\s*(?:망|SW|소프트웨어)|국제\s*표준|표준화|정책|제도|"
-    r"AI\s*(?:경쟁|거버넌스|에이전트|도입|인프라|데이터센터)|"
-    r"생성형\s*AI|전력망|데이터\s*제도|N2SF|제로트러스트)",
-    re.IGNORECASE,
-)
-
 _llm: ChatOpenAI | None = None
 _PROMPT_VERSION = "relevance-v1.0"
 _LLM_BATCH_SIZE = int(os.getenv("RELEVANCE_LLM_BATCH_SIZE", "20"))
@@ -440,15 +417,6 @@ class RelevanceEvaluator:
         matched_company_candidates = _match_companies(text_body, company)
         matched_sector_candidates = match_sectors(text_body)
         if _is_industry_trend_news(row, company):
-            noise_reason = _industry_trend_noise_reason(title=title, content=analysis_content)
-            if noise_reason:
-                return _result(
-                    label="irrelevant",
-                    score=0.0,
-                    companies=[],
-                    sectors=[],
-                    reason=noise_reason,
-                )
             sectors = [sector for sector in matched_sector_candidates if sector != "other"]
             if not sectors:
                 sectors = _industry_metadata_sectors(metadata)
@@ -825,26 +793,6 @@ def _is_industry_trend_news(row: Any, company: list[str]) -> bool:
 
     metadata = _metadata_dict(_row_value(row, "metadata", {}))
     return metadata.get("topic_scope") == "industry_trend"
-
-
-def _industry_trend_noise_reason(*, title: str, content: str) -> str:
-    text = _join_text(title, content)
-    if any(term in title for term in _INDUSTRY_TREND_LOW_VALUE_TITLE_TERMS):
-        return "industry trend 제외: 산업 방향성보다 행사/정치/외곽 정책 단신 성격이 강함"
-    if re.search(r"ISO\s*27001", title, re.IGNORECASE) and re.search(r"획득", title):
-        return "industry trend 제외: 개별 기업 인증 획득 단신 성격이 강함"
-    if re.search(
-        r"(인증\s*획득|보안인증|전시회?\s*참가|계약\s*(?:체결|수주)?|정부\s*사업\s*참여|적용\s*완료|표창\s*수상)",
-        title,
-    ):
-        return "industry trend 제외: 개별 기업 이벤트 단신 성격이 강함"
-    if _INDUSTRY_TREND_LOW_VALUE_EVENT_RE.search(title) and not (
-        _INDUSTRY_TREND_BROAD_ANCHOR_RE.search(text)
-    ):
-        return "industry trend 제외: 산업 anchor가 약한 인증·계약·전시 참가 단신 성격이 강함"
-    if "병원" in title and not re.search(r"생성형\s*AI|AI\s*도입|인프라|데이터", text):
-        return "industry trend 제외: 의료기관 단신으로 IT 산업 방향성 근거가 약함"
-    return ""
 
 
 def _industry_metadata_sectors(metadata: dict[str, Any]) -> list[str]:
