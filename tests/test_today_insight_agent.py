@@ -791,3 +791,56 @@ def test_match_trace_matches_card_and_raw_article_ids() -> None:
     assert today_module._match_trace_by_ids(trace, {"CN-1"}) == [trace[0]]
     # LLM 이 raw-123 으로 인용해도 trace 의 숫자 "123" 과 매칭된다.
     assert today_module._match_trace_by_ids(trace, {"raw-123"}) == [trace[0]]
+
+
+def test_apply_insight_state_today_signal_above_bar(monkeypatch) -> None:
+    """오늘 신호 + lead salience ≥ 0.70 → today_signal, signal_date=오늘, 페이로드 보존."""
+    monkeypatch.setattr(
+        today_module, "_build_coverage_stats", lambda **kw: {"reviewed_last_7d": 12}
+    )
+    base: dict[str, Any] = {
+        "report_date": "2026-06-17",
+        "comparison_facts": {"primary_selection": {"items": [{"salience_score": 0.82}]}},
+        "insight_sections": [{"id": "s1"}],
+        "signals": [{"id": "sig1", "value": "x"}],
+        "provenance": {},
+    }
+    today_module._apply_insight_state(base, {"has_current_signal": True})
+    assert base["state"] == "today_signal"
+    assert base["signal_date"] == "2026-06-17"
+    assert base["week_synthesis"] is None
+    assert base["insight_sections"] == [{"id": "s1"}]  # 보존
+    assert base["coverage_stats"]["reviewed_last_7d"] == 12
+
+
+def test_apply_insight_state_quiet_below_bar(monkeypatch) -> None:
+    """오늘 신호 있어도 lead salience < 0.70(변두리 필러) → quiet + week_synthesis + depth_gate."""
+    monkeypatch.setattr(today_module, "_build_coverage_stats", lambda **kw: {"reviewed_last_7d": 9})
+    base: dict[str, Any] = {
+        "report_date": "2026-06-17",
+        "comparison_facts": {
+            "primary_selection": {"items": [{"salience_score": 0.40}]},
+            "salience_candidates": [{"peer_label": "포스코DX", "event_type": "contract"}],
+        },
+        "signals": [{"id": "sig1", "value": "x"}],
+        "provenance": {},
+    }
+    today_module._apply_insight_state(base, {"has_current_signal": True})
+    assert base["state"] == "quiet"
+    assert base["signal_date"] is None
+    assert base["week_synthesis"]
+    assert "포스코DX" in base["week_synthesis"]
+    assert base["provenance"]["depth_gate"] == "below_bar"
+
+
+def test_apply_insight_state_quiet_when_no_current_signal(monkeypatch) -> None:
+    """오늘 신호 없음(placeholder) → quiet + week_synthesis (빈 화면 대신 종합)."""
+    monkeypatch.setattr(today_module, "_build_coverage_stats", lambda **kw: {"reviewed_last_7d": 0})
+    base: dict[str, Any] = {
+        "report_date": "2026-06-17",
+        "comparison_facts": {},
+        "provenance": {"is_status_placeholder": True, "result_kind": "no_current_signals"},
+    }
+    today_module._apply_insight_state(base, {"has_current_signal": False})
+    assert base["state"] == "quiet"
+    assert base["week_synthesis"]
