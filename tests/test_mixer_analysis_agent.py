@@ -71,6 +71,38 @@ class _FakeLLM:
                         }
                     ],
                     "recommended_actions": ["제안 첫 장에 운영 성과 근거를 배치합니다."],
+                    "radar_axis_interpretations": [
+                        {
+                            "axis": "peer_strategic_shift",
+                            "analysis_prompt": "전략 전환 축을 어떻게 읽을지 묻습니다.",
+                            "interpretation": "전략 전환 축은 이번 묶음에서 근거 부족으로 보며, 신사업이나 M&A 신호가 반복되는지 확인해야 합니다.",
+                        },
+                        {
+                            "axis": "tech_investment",
+                            "analysis_prompt": "기술 투자 축을 어떻게 읽을지 묻습니다.",
+                            "interpretation": "기술 투자 축은 두 이슈의 기술 근거가 운영 성과 설명에 쓰인다는 점으로 해석됩니다.",
+                        },
+                        {
+                            "axis": "market_position",
+                            "analysis_prompt": "시장 포지션 축을 어떻게 읽을지 묻습니다.",
+                            "interpretation": "시장 포지션 축은 여러 peer의 성과 근거가 경쟁 위치 판단으로 이어지는지 확인하는 축입니다.",
+                        },
+                        {
+                            "axis": "partnership_momentum",
+                            "analysis_prompt": "파트너십 축을 어떻게 읽을지 묻습니다.",
+                            "interpretation": "파트너십 축은 이번 묶음에서 근거 부족으로 보며, 협력 구조가 후속 카드에서 반복되는지 봐야 합니다.",
+                        },
+                        {
+                            "axis": "regulatory_risk",
+                            "analysis_prompt": "규제 리스크 축을 어떻게 읽을지 묻습니다.",
+                            "interpretation": "규제 리스크 축은 이번 묶음에서 근거 부족으로 보며, 정책 조건이 의사결정 제약으로 등장하는지 확인해야 합니다.",
+                        },
+                        {
+                            "axis": "talent_movement",
+                            "analysis_prompt": "인재 이동 축을 어떻게 읽을지 묻습니다.",
+                            "interpretation": "인재 이동 축은 이번 묶음에서 근거 부족으로 보며, 조직 변화가 실행 역량 신호로 연결되는지 확인해야 합니다.",
+                        },
+                    ],
                     "connections": [
                         {
                             "source_card_id": "CN-1",
@@ -326,6 +358,28 @@ def test_mixer_accepts_integrated_issue_ids_and_exposes_sources(monkeypatch):
     assert reasoning_phases[0] == "per_card"
     assert "cross_card" in reasoning_phases
     assert reasoning_phases[-1] == "synthesis"
+
+
+def test_radar_interpretation_uses_llm_text_without_fallback():
+    radar_axis = {
+        "axis": "regulatory_risk",
+        "score": 0.65,
+        "explanation": "규제 리스크 판단 설명입니다.",
+        "meaning": "보조 판단 신호입니다.",
+        "support_count": 1,
+        "total_count": 3,
+        "matched_card_ids": ["CN-1"],
+    }
+    result = mixer_module._merge_radar_axis_interpretations(
+        [radar_axis],
+        [{"axis": "regulatory_risk", "interpretation": "규제 이벤트가 의사결정 리스크로 작동하는지 봅니다."}],
+    )
+
+    interpretation = result[0]["prompted_interpretation"]
+    assert interpretation == "규제 이벤트가 의사결정 리스크로 작동하는지 봅니다."
+
+    empty_result = mixer_module._merge_radar_axis_interpretations([radar_axis], [])
+    assert empty_result[0]["prompted_interpretation"] == ""
 
 
 def test_mixer_card_ids_are_interpreted_as_analysis_units(monkeypatch):
