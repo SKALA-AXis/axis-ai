@@ -1,9 +1,12 @@
-"""Report agent structure.
+"""Deprecated report agent structure.
 
 ReportAgent belongs to the 2단계 data-usage pipeline. It will generate daily,
 weekly, monthly, executive, company, and sector reports from stored card news,
 implications, integrated issues, and trend outputs. The detailed generation
 logic is intentionally left for a later implementation pass.
+
+Deprecated: production briefing/report generation uses
+``src.agents.briefing_generation_agent``.
 """
 
 from __future__ import annotations

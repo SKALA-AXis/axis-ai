@@ -2054,9 +2054,12 @@ def _source_articles_payload(card: dict[str, Any], source_ids: list[int]) -> lis
             return payload
 
     if source_ids:
-        articles_by_id = {
-            int(article["id"]): article for article in get_articles_by_ids(source_ids)
-        }
+        try:
+            articles = get_articles_by_ids(source_ids)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("source article lookup skipped | ids=%s error=%s", source_ids, exc)
+            articles = []
+        articles_by_id = {int(article["id"]): article for article in articles}
         if articles_by_id:
             return [
                 _source_article_dict_from_article(articles_by_id[raw_id])

@@ -34,6 +34,37 @@ def test_card_news_insert_params_preserve_integrated_issue_id():
     assert payload["analysis_package"]["integrated_issue_id"] == issue_id
 
 
+def test_card_news_insert_params_canonicalizes_id_and_date_from_source_articles(monkeypatch):
+    monkeypatch.setattr(
+        "src.db.article_store.get_articles_by_ids",
+        lambda ids: [
+            {
+                "id": 44755,
+                "title": "인스웨이브, LG CNS와 99억원 규모 계약 체결",
+                "url": "https://example.com/44755",
+                "source_name": "naver_news",
+                "publisher": "naver_news",
+                "published_at": "2026-06-02T09:00:00+09:00",
+                "collected_at": "2026-06-15T09:00:00+09:00",
+            }
+        ],
+    )
+
+    params = _card_news_insert_params(
+        {
+            "id": "CN-20260615-44755",
+            "company": "lg_cns",
+            "title": "LG CNS, 인스웨이브와 코어뱅킹 현대화 웹단말 전환 사업 계약 체결",
+            "summary_lines": ["요약"],
+            "source_raw_article_ids": [44755],
+            "created_at": "2026-06-15T09:00:00+09:00",
+        }
+    )
+
+    assert params["id"] == "CN-20260602-44755"
+    assert params["created_at"] == "2026-06-02T00:00:00+00:00"
+
+
 def test_card_news_insert_params_leaves_industry_trend_peer_fk_empty():
     params = _card_news_insert_params(
         {

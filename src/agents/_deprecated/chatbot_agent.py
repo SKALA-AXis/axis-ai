@@ -1,8 +1,10 @@
-"""Chatbot agent structure.
+"""Deprecated Chatbot agent structure.
 
 ChatbotAgent belongs to the 2단계 data-usage pipeline. It answers user questions
 from stored raw/clean data, card news, implications, evidence chains, and
 profile context. Detailed RAG/search orchestration is left for a later pass.
+
+Deprecated: production chat uses ``src.agents.chat_orchestrator_agent``.
 """
 
 from __future__ import annotations
