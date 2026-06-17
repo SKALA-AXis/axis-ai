@@ -672,7 +672,7 @@ async def regenerate_card_news_strategy_context(
         request.user_id,
     )
     strategic_result = await asyncio.to_thread(
-        StrategicInsightAgent(enable_self_review=False).generate_from_analysis_package,
+        StrategicInsightAgent().generate_from_analysis_package,
         package,
         user_id=request.user_id,
     )
