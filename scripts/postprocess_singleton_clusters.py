@@ -62,6 +62,7 @@ _LIST_LIKE_COMPACT_MARKERS = (
     "technow",
     "클라우드월드",
 )
+_MOJIBAKE_REPLACEMENT_CHAR = "\ufffd"
 _TITLE_LLM_JUDGE_ENABLED = (
     os.getenv("POSTPROCESS_TITLE_LLM_JUDGE_ENABLED", "true").lower() == "true"
 )
@@ -613,26 +614,26 @@ def _find_noise_ids(db: Any, source_type: str, lookback_hours: int, time_field: 
     rows = db.execute(
         text(
             f"""
-            SELECT id
+            SELECT id, title, content
             FROM raw_articles
             WHERE source_type = :source_type
               AND {order_field} >= now() - (:lookback_hours * interval '1 hour')
               AND processing_status = 'PROCESSED'
               AND relevance_label = 'relevant'
-              AND (
-                  title ~ :stock_pattern
-                  OR title ~* :list_pattern
-              )
             """
         ),
         {
             "source_type": source_type,
             "lookback_hours": lookback_hours,
-            "stock_pattern": _STOCK_NOISE_RE.pattern,
-            "list_pattern": _LIST_LIKE_RE.pattern,
         },
-    )
-    return [int(row[0]) for row in rows]
+    ).mappings()
+    return [
+        int(row["id"])
+        for row in rows
+        if _is_stock_noise(str(row.get("title") or ""))
+        or _is_list_like(str(row.get("title") or ""))
+        or _has_mojibake_content(str(row.get("content") or ""))
+    ]
 
 
 def _apply_noise_skips(db: Any, article_ids: list[int]) -> int:
@@ -645,7 +646,7 @@ def _apply_noise_skips(db: Any, article_ids: list[int]) -> int:
             SET processing_status = 'SKIPPED',
                 relevance_label = 'irrelevant',
                 relevance_score = LEAST(COALESCE(relevance_score, 0.25), 0.25),
-                relevance_reason = '주가/특징주/목록형 기사라 전략 이벤트 통합 재료에서 제외',
+                relevance_reason = :relevance_reason,
                 cluster_id = NULL,
                 is_representative = FALSE
             WHERE id = ANY(:article_ids)
@@ -653,7 +654,12 @@ def _apply_noise_skips(db: Any, article_ids: list[int]) -> int:
               AND relevance_label = 'relevant'
             """
         ),
-        {"article_ids": article_ids},
+        {
+            "article_ids": article_ids,
+            "relevance_reason": (
+                "주가/특징주/목록형/본문 파싱 품질 문제로 전략 이벤트 통합 재료에서 제외"
+            ),
+        },
     )
     return int(getattr(result, "rowcount", 0) or 0)
 
@@ -1042,6 +1048,17 @@ def _is_list_like(title: str) -> bool:
     if re.match(r"^\[?#?[가-힣a-z0-9]*(?:포커스|레이더|브리프|스냅샷)\]?", compact):
         return True
     return bool(_LIST_LIKE_RE.search(title or ""))
+
+
+def _has_mojibake_content(content: str) -> bool:
+    text = str(content or "")
+    if len(text) < 80:
+        return False
+    replacement_count = text.count(_MOJIBAKE_REPLACEMENT_CHAR)
+    if replacement_count < 8:
+        return False
+    replacement_ratio = replacement_count / max(len(text), 1)
+    return replacement_ratio >= 0.01 or _MOJIBAKE_REPLACEMENT_CHAR * 4 in text
 
 
 def _normalize_token(token: str) -> str:

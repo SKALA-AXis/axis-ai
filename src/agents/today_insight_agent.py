@@ -496,10 +496,23 @@ def _fetch_integrated_issues(
                                       ) issue_source_dates
                                 WHERE source_date = CAST(:anchor_date AS date)
                            ) AS has_anchor_source
-                      FROM integrated_issues ii
+                     FROM integrated_issues ii
                      WHERE ii.is_current = TRUE
                        AND ii.status = 'active'
                        AND ii.is_valid = TRUE
+                       AND (
+                           NOT EXISTS (
+                               SELECT 1
+                                 FROM card_news cn_any
+                                WHERE cn_any.integrated_issue_id = ii.id
+                           )
+                           OR EXISTS (
+                               SELECT 1
+                                 FROM card_news cn_active
+                                WHERE cn_active.integrated_issue_id = ii.id
+                                  AND LOWER(cn_active.status) = 'active'
+                           )
+                       )
                        AND (ii.created_at AT TIME ZONE 'Asia/Seoul')::date
                            >= CAST(:anchor_date AS date) - (:window_days * INTERVAL '1 day')
                      ORDER BY
@@ -596,6 +609,7 @@ def _fetch_cards_for_issues(
                           WHERE ra.id = ANY(COALESCE(source_raw_article_ids, '{{}}'::bigint[]))
                      ) src ON TRUE
                      WHERE integrated_issue_id IN ({placeholders})
+                       AND LOWER(status) = 'active'
                        AND COALESCE(
                                src.earliest_source_date,
                                (created_at AT TIME ZONE 'Asia/Seoul')::date
@@ -696,6 +710,7 @@ def _fetch_anchor_date_cards(
                                src.earliest_source_date,
                                (created_at AT TIME ZONE 'Asia/Seoul')::date
                            ) = CAST(:anchor_date AS date)
+                       AND LOWER(status) = 'active'
                        AND COALESCE(peer_company_id, company, '') <> 'sk_ax'
                        AND (
                            COALESCE(cardinality(source_raw_article_ids), 0) = 0
@@ -780,6 +795,7 @@ def _fetch_recent_cards(
                            BETWEEN CAST(:anchor_date AS date)
                                - (:window_days * INTERVAL '1 day')
                                AND CAST(:anchor_date AS date)
+                       AND LOWER(status) = 'active'
                        AND COALESCE(peer_company_id, company, '') <> 'sk_ax'
                        AND (
                            COALESCE(cardinality(source_raw_article_ids), 0) = 0
@@ -1184,6 +1200,111 @@ def _build_change_stats(
     }
 
 
+# === 홈 3상태(today_signal/recent_signal/quiet) + 모니터링 커버리지 ===
+# PR #212 의 has_current_signal/has_anchor_cards 게이트는 그대로 두고, 결과 정규화
+# 단계에서 state/signal_date/week_synthesis/coverage_stats 만 얹는다.
+# (recent_signal: 최근 2~3 영업일 윈도우는 후속 단계에서 추가.)
+
+
+def _derive_insight_state(base: Mapping[str, Any], context: Mapping[str, Any]) -> str:
+    """today_signal | quiet.
+
+    오늘(anchor) 신호가 있으면 today_signal, 당일 신호가 없거나 placeholder 일 때만 quiet.
+    홈은 "오늘 들어온 것 중 중요한 것"을 보여주는 화면이므로 내부 salience 컷으로
+    실제 당일 신호를 숨기지 않는다.
+    """
+    provenance = base.get("provenance")
+    if isinstance(provenance, Mapping) and provenance.get("is_status_placeholder"):
+        return "quiet"
+    if bool(context.get("has_current_signal", False)):
+        return "today_signal"
+    return "quiet"
+
+
+def _build_week_synthesis(base: Mapping[str, Any], context: Mapping[str, Any]) -> str:
+    """조용한 날용 결정적 1줄 종합 (LLM 호출 없음 — quiet 는 LLM 을 타지 않음)."""
+    coverage = base.get("coverage_stats")
+    reviewed = int(coverage.get("reviewed_last_7d", 0)) if isinstance(coverage, Mapping) else 0
+    comparison = base.get("comparison_facts") or context.get("comparison_facts")
+    top_label = ""
+    if isinstance(comparison, Mapping):
+        candidates = comparison.get("salience_candidates")
+        if isinstance(candidates, list) and candidates and isinstance(candidates[0], Mapping):
+            peer = str(candidates[0].get("peer_label") or "").strip()
+            event = str(candidates[0].get("event_type") or "").strip()
+            if peer:
+                top_label = peer + (f"·{event}" if event and event != "-" else "")
+    if top_label:
+        return (
+            f"최근 7일 peer 4사 동향 {reviewed}건을 검토했고 {top_label} 등이 관찰됐으나, "
+            "오늘 새로 부상한 주요 전략 신호는 없습니다."
+        )
+    return (
+        f"최근 7일 peer 4사 동향 {reviewed}건을 모니터링했으며, "
+        "오늘 새로 부상한 주요 전략 신호는 없습니다."
+    )
+
+
+def _build_coverage_stats(*, window_days: int = 7) -> dict[str, Any]:
+    """모니터링 안심 스트립용 결정적 DB 카운트 (실패해도 기본값 반환)."""
+    stats: dict[str, Any] = {
+        "window_days": window_days,
+        "reviewed_last_7d": 0,
+        "cards_last_7d": 0,
+        "urgent_last_7d": 0,
+        "peers_monitored": 4,
+        "peer_names": ["삼성SDS", "LG CNS", "현대오토에버", "포스코DX"],
+    }
+    try:
+        with SessionLocal() as db:
+            row = (
+                db.execute(
+                    text(
+                        """
+                        SELECT
+                          (SELECT COUNT(*) FROM raw_articles
+                             WHERE created_at >= now() - make_interval(days => :d)) AS reviewed,
+                          (SELECT COUNT(*) FROM card_news
+                             WHERE created_at >= now() - make_interval(days => :d)
+                               AND LOWER(status) = 'active') AS cards,
+                          (SELECT COUNT(*) FROM sent_alerts
+                             WHERE sent_at >= now() - make_interval(days => :d)) AS urgent
+                        """
+                    ),
+                    {"d": window_days},
+                )
+                .mappings()
+                .first()
+            )
+            if row is not None:
+                stats["reviewed_last_7d"] = int(row["reviewed"] or 0)
+                stats["cards_last_7d"] = int(row["cards"] or 0)
+                stats["urgent_last_7d"] = int(row["urgent"] or 0)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("today insight coverage stats failed | %s", exc)
+    return stats
+
+
+def _apply_insight_state(base: dict[str, Any], context: Mapping[str, Any]) -> None:
+    """base 에 state/signal_date/week_synthesis/coverage_stats 를 얹는다.
+
+    페이로드(signals/insight_sections)는 그대로 두고 state 만 정한다. quiet 면
+    프론트가 깊은 3섹션 대신 week_synthesis 를 렌더해 변두리 필러 분석 노출을 막는다.
+    """
+    base["coverage_stats"] = _build_coverage_stats(window_days=7)
+    state = _derive_insight_state(base, context)
+    base["state"] = state
+    if state == "today_signal":
+        base["signal_date"] = (str(base.get("report_date") or "")[:10]) or None
+        base["week_synthesis"] = None
+        return
+    base["signal_date"] = None
+    base["week_synthesis"] = _build_week_synthesis(base, context)
+    provenance = base.get("provenance")
+    if isinstance(provenance, dict):
+        provenance.setdefault("depth_gate", "below_bar")
+
+
 def _normalize_result(
     data: Mapping[str, Any],
     *,
@@ -1307,6 +1428,7 @@ def _normalize_result(
         context=context,
         anchor_date=anchor_date,
     )
+    _apply_insight_state(base, context)
     response = TodayInsightGenerateResponse.model_validate(base)
     return response.model_dump()
 

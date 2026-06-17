@@ -57,37 +57,6 @@ log = logging.getLogger(__name__)
 
 ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
 _FAST_PASS_COMPANY_IDS = set(COMPANY_IDS)
-_POSCO_DX_GROUP_AX_RE = re.compile(
-    r"포스코.{0,80}(AX|AI\s*에이전트|피지컬\s*AI|스마트\s*팩토리|"
-    r"자동화|디지털\s*전환|업무\s*혁신|제조\s*AI|수주|영업|품질)"
-    r"|"
-    r"(AX|AI\s*에이전트|피지컬\s*AI|스마트\s*팩토리|자동화|"
-    r"디지털\s*전환|업무\s*혁신|제조\s*AI).{0,80}포스코",
-    re.IGNORECASE,
-)
-_INDUSTRY_TREND_LOW_VALUE_TITLE_TERMS = (
-    "에너지밸리포럼",
-    "경제발전공유사업",
-    "KSP",
-    "해외진출 지원",
-    "국립대병원",
-    "[정치",
-    "구윤철",
-    "이준석 대표",
-    "교육정보화 콘퍼런스",
-)
-_INDUSTRY_TREND_LOW_VALUE_EVENT_RE = re.compile(
-    r"(ISO\s*27001|인증\s*획득|전시회?\s*참가|계약\s*(?:체결|수주)?|정부\s*사업\s*참여|적용\s*완료|표창\s*수상)",
-    re.IGNORECASE,
-)
-_INDUSTRY_TREND_BROAD_ANCHOR_RE = re.compile(
-    r"(산업|시장|기업\s*\d+곳|기업\s*보안|공급망\s*(?:공격|보안|위협|로드맵)|"
-    r"국가\s*(?:망|SW|소프트웨어)|국제\s*표준|표준화|정책|제도|"
-    r"AI\s*(?:경쟁|거버넌스|에이전트|도입|인프라|데이터센터)|"
-    r"생성형\s*AI|전력망|데이터\s*제도|N2SF|제로트러스트)",
-    re.IGNORECASE,
-)
-
 _llm: ChatOpenAI | None = None
 _PROMPT_VERSION = "relevance-v1.0"
 _LLM_BATCH_SIZE = int(os.getenv("RELEVANCE_LLM_BATCH_SIZE", "20"))
@@ -446,35 +415,7 @@ class RelevanceEvaluator:
 
         text_body = _join_text(title, subtitle, content)
         matched_company_candidates = _match_companies(text_body, company)
-        if "posco_dx" in company and _matches_posco_dx_group_ax_signal(text_body):
-            matched_company_candidates = _dedupe_keep_order(
-                [*matched_company_candidates, "posco_dx"]
-            )
         matched_sector_candidates = match_sectors(text_body)
-        if _is_industry_trend_news(row, company):
-            noise_reason = _industry_trend_noise_reason(title=title, content=analysis_content)
-            if noise_reason:
-                return _result(
-                    label="irrelevant",
-                    score=0.0,
-                    companies=[],
-                    sectors=[],
-                    reason=noise_reason,
-                )
-            sectors = [sector for sector in matched_sector_candidates if sector != "other"]
-            if not sectors:
-                sectors = _industry_metadata_sectors(metadata)
-            return _result(
-                label="relevant",
-                score=0.82,
-                companies=[],
-                sectors=sectors or ["other"],
-                reason=(
-                    "industry fast-pass: naver_industry_news/industry_trend로 수집된 "
-                    "산업 방향성 기사"
-                ),
-            )
-
         noise_result = _noise_reject_result(
             title=title,
             content=analysis_content,
@@ -489,6 +430,21 @@ class RelevanceEvaluator:
                 noise_result["reason"],
             )
             return noise_result
+
+        if _is_industry_trend_news(row, company):
+            sectors = [sector for sector in matched_sector_candidates if sector != "other"]
+            if not sectors:
+                sectors = _industry_metadata_sectors(metadata)
+            return _result(
+                label="relevant",
+                score=0.82,
+                companies=[],
+                sectors=sectors or ["other"],
+                reason=(
+                    "industry fast-pass: naver_industry_news/industry_trend로 수집된 "
+                    "산업 방향성 기사"
+                ),
+            )
 
         precheck = _precheck(
             company=company,
@@ -839,26 +795,6 @@ def _is_industry_trend_news(row: Any, company: list[str]) -> bool:
     return metadata.get("topic_scope") == "industry_trend"
 
 
-def _industry_trend_noise_reason(*, title: str, content: str) -> str:
-    text = _join_text(title, content)
-    if any(term in title for term in _INDUSTRY_TREND_LOW_VALUE_TITLE_TERMS):
-        return "industry trend 제외: 산업 방향성보다 행사/정치/외곽 정책 단신 성격이 강함"
-    if re.search(r"ISO\s*27001", title, re.IGNORECASE) and re.search(r"획득", title):
-        return "industry trend 제외: 개별 기업 인증 획득 단신 성격이 강함"
-    if re.search(
-        r"(인증\s*획득|보안인증|전시회?\s*참가|계약\s*(?:체결|수주)?|정부\s*사업\s*참여|적용\s*완료|표창\s*수상)",
-        title,
-    ):
-        return "industry trend 제외: 개별 기업 이벤트 단신 성격이 강함"
-    if _INDUSTRY_TREND_LOW_VALUE_EVENT_RE.search(title) and not (
-        _INDUSTRY_TREND_BROAD_ANCHOR_RE.search(text)
-    ):
-        return "industry trend 제외: 산업 anchor가 약한 인증·계약·전시 참가 단신 성격이 강함"
-    if "병원" in title and not re.search(r"생성형\s*AI|AI\s*도입|인프라|데이터", text):
-        return "industry trend 제외: 의료기관 단신으로 IT 산업 방향성 근거가 약함"
-    return ""
-
-
 def _industry_metadata_sectors(metadata: dict[str, Any]) -> list[str]:
     values = metadata.get("matched_sectors") or []
     if isinstance(values, list):
@@ -1066,6 +1002,15 @@ def _noise_reject_result(
             companies=matched_companies,
             sectors=matched_sectors,
             reason="한국어 뉴스 모니터링 대상에서 제외: 제목에 한글이 없는 외국어 기사",
+        )
+
+    if _is_single_company_certification_notice(title):
+        return _result(
+            label="irrelevant",
+            score=0.20,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason="개별 기업 인증 획득 단신 성격이 강해 전략 동향 근거에서 제외",
         )
 
     has_peer_strategy_signal = _has_peer_strategy_signal(
@@ -1356,20 +1301,6 @@ def _fast_pass_result(
 
     if not any(company_id in _FAST_PASS_COMPANY_IDS for company_id in matched_companies):
         return None
-
-    if "posco_dx" in matched_companies and _matches_posco_dx_group_ax_signal(
-        _join_text(title, content)
-    ):
-        return _result(
-            label="relevant",
-            score=0.78,
-            companies=matched_companies,
-            sectors=matched_sectors,
-            reason=(
-                "fast-pass: 포스코그룹 AX/AI 업무혁신 신호가 포스코DX 관찰 축과 "
-                "직접 연결되어 관련 기사로 판단"
-            ),
-        )
 
     title_compact = _compact(title)
     text_compact = _compact(f"{title} {content}")
@@ -1865,6 +1796,15 @@ def _is_low_value_news_noise(*, title: str, content: str) -> bool:
     return False
 
 
+def _is_single_company_certification_notice(title: str) -> bool:
+    title_text = str(title or "").strip()
+    if not title_text:
+        return False
+    if re.search(r"ISO\s*\d{4,5}.*인증\s*(?:획득|취득|받)", title_text, re.IGNORECASE):
+        return True
+    return bool(re.search(r"(?:국제표준|정보보호|보안)?\s*인증\s*(?:획득|취득|받)", title_text))
+
+
 def _is_roundup_news_title(title: str) -> bool:
     compact_title = _compact_for_title_marker(title)
     if not compact_title:
@@ -2097,17 +2037,6 @@ def _match_companies(text_body: str, company: list[str]) -> list[str]:
             matched.append(company_id)
 
     return _dedupe_keep_order(matched)
-
-
-def _matches_posco_dx_group_ax_signal(text_body: str) -> bool:
-    if not text_body:
-        return False
-    if not _POSCO_DX_GROUP_AX_RE.search(text_body):
-        return False
-    text = _join_text(text_body)
-    if _MARKET_PRICE_RE.search(text) and _MARKET_METRIC_RE.search(text):
-        return False
-    return True
 
 
 def _normalize_company(value: Any) -> list[str]:

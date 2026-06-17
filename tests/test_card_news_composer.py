@@ -76,7 +76,7 @@ def test_card_summary_cleans_truncated_display_fragments_without_rewriting_sourc
     assert "…" not in str((card.get("db_record") or {}).get("title"))
 
 
-def test_card_summary_does_not_dedupe_or_backfill_integration_copy():
+def test_card_summary_dedupes_repeated_integration_copy_without_rewriting():
     summary = {
         "cluster_event_type": "contract",
         "fact_summary": [
@@ -84,6 +84,24 @@ def test_card_summary_does_not_dedupe_or_backfill_integration_copy():
             "과기정통부는 GPU 확보·구축 사업 참여 기업으로 삼성SDS를 최종 선정했다.",
             "삼성SDS가 정부 GPU 확보 사업 참여 기업으로 선정됐다.",
             "삼성SDS 주가가 전 거래일 대비 3.22% 상승했다.",
+        ],
+    }
+
+    lines = _plain_summary_lines(summary)
+
+    assert lines == [
+        "정부가 GPU 확보 사업 참여 기업으로 네이버클라우드와 삼성SDS를 선정했다.",
+        "삼성SDS 주가가 전 거래일 대비 3.22% 상승했다.",
+    ]
+
+
+def test_card_summary_keeps_distinct_numeric_detail_when_event_repeats():
+    summary = {
+        "cluster_event_type": "contract",
+        "fact_summary": [
+            "LG CNS가 중소기업 AI 확산을 위한 업무협약(MOU)을 체결했다.",
+            "LG CNS는 2년간 총 42억 원 규모로 AX 교육과 기술 지원을 제공한다.",
+            "LG CNS는 중소기업 100개사의 글로벌 시장 진출을 지원한다.",
         ],
     }
 

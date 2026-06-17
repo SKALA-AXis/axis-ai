@@ -1042,7 +1042,15 @@ def _summary_lines_too_similar(left: str, right: str) -> bool:
     if ratio >= 0.72:
         return True
     shared_actions = (left_tokens & right_tokens) & _SUMMARY_ACTION_TOKENS
-    return bool(shared_actions) and ratio >= 0.6
+    if shared_actions and ratio >= 0.6:
+        return True
+    shared_event_anchors = {
+        token
+        for token in left_tokens & right_tokens
+        if token in {"mou", "업무협약", "협약", "선정", "수주", "계약", "도입", "구축"}
+        or token.endswith("협약")
+    }
+    return bool(shared_event_anchors) and overlap >= 4 and ratio >= 0.55
 
 
 def _summary_similarity_tokens(text: str) -> set[str]:
@@ -1953,6 +1961,10 @@ def _literal_summary_lines(
             continue
         key = re.sub(r"\s+", " ", text).casefold()
         if not text or key in seen:
+            continue
+        if not _has_numeric_or_period_signal(text) and any(
+            _summary_lines_too_similar(text, existing) for existing in out
+        ):
             continue
         out.append(text)
         seen.add(key)
