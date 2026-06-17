@@ -134,6 +134,8 @@ _PEER_ALIASES = {
     for company_id, aliases in {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}.items()
     if company_tier(company_id) != "self"
 }
+_INDUSTRY_TREND_COMPANY_ID = "industry_trend"
+_INDUSTRY_TREND_ALIASES = ["산업 트렌드", "AI 산업", "AX 산업", "industry_trend"]
 _KNOWN_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
 
 _llm: ChatOpenAI | None = None
@@ -2825,6 +2827,7 @@ def _validate_fact_id_summary(
         warnings.append("한국어 조사/띄어쓰기 오류가 남아 있음")
     if (
         main_company
+        and main_company != _INDUSTRY_TREND_COMPANY_ID
         and result.get("is_valid_summary")
         and not _summary_mentions_company(result, main_company)
     ):
@@ -2881,6 +2884,8 @@ def _summary_line_company_attribution_warning(
 
 
 def _company_aliases_for_detection(company_id: str) -> list[str]:
+    if company_id == _INDUSTRY_TREND_COMPANY_ID:
+        return _INDUSTRY_TREND_ALIASES
     aliases = [
         str(alias) for alias in _KNOWN_COMPANY_ALIASES.get(company_id, []) if str(alias).strip()
     ]
@@ -3365,6 +3370,9 @@ def _candidate_peer_companies(articles: list[dict[str, Any]]) -> list[str]:
     peer-comparison issue, preserve the peer aliases in the article body so the
     IntegratedIssue does not collapse to a single representative company.
     """
+    if _is_industry_trend_cluster(articles):
+        return [_INDUSTRY_TREND_COMPANY_ID]
+
     candidates: list[str] = []
     for article in articles:
         candidates.extend(_company_list(article))
@@ -3377,6 +3385,20 @@ def _candidate_peer_companies(articles: list[dict[str, Any]]) -> list[str]:
         for company_id in _dedupe_keep_order(candidates)
         if company_id in _PEER_ALIASES and company_tier(company_id) != "self"
     ]
+
+
+def _is_industry_trend_cluster(articles: list[dict[str, Any]]) -> bool:
+    for article in articles:
+        if _INDUSTRY_TREND_COMPANY_ID in _company_list(article):
+            return True
+        if str(article.get("source_name") or "").strip() == "naver_industry_news":
+            return True
+        metadata = _metadata(article)
+        if metadata.get("topic_scope") == _INDUSTRY_TREND_COMPANY_ID:
+            return True
+        if metadata.get("company_scope") == "industry":
+            return True
+    return False
 
 
 def _body_peer_companies(articles: list[dict[str, Any]]) -> list[str]:
@@ -3898,11 +3920,22 @@ def _normalize_string_list(value: Any) -> list[str]:
 
 
 def _target_company_aliases(company_ids: list[str]) -> dict[str, list[str]]:
-    return {company_id: _PEER_ALIASES.get(company_id, [company_id]) for company_id in company_ids}
+    return {
+        company_id: (
+            _INDUSTRY_TREND_ALIASES
+            if company_id == _INDUSTRY_TREND_COMPANY_ID
+            else _PEER_ALIASES.get(company_id, [company_id])
+        )
+        for company_id in company_ids
+    }
 
 
 def _summary_mentions_company(summary: dict[str, Any], company_id: str) -> bool:
-    aliases = _PEER_ALIASES.get(company_id, [company_id])
+    aliases = (
+        _INDUSTRY_TREND_ALIASES
+        if company_id == _INDUSTRY_TREND_COMPANY_ID
+        else _PEER_ALIASES.get(company_id, [company_id])
+    )
     compact_text = _compact(
         " ".join(
             [
