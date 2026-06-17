@@ -258,6 +258,55 @@ def test_today_insight_agent_generates_ui_ready_executive_payload(monkeypatch) -
     assert "엔터프라이즈 LLM 운영·보안 대응 기회" in fake_llm.prompts[0]
 
 
+def test_generate_returns_no_current_signals_when_only_stale_recent_cards(monkeypatch) -> None:
+    """current 신호(현재 이슈/당일 카드)가 없고 과거 recent_cards 폴백만 있으면,
+    옛 카드로 active 리포트를 만들지 않고 no_current_signals 플레이스홀더를 반환한다.
+
+    회귀: 6/17 리포트가 current_issues=0 인데도 과거(6/2) 카드 헤드라인을 active 로
+    노출한 버그. anchor_date 기준 current 신호가 없으면 '신규 신호 없음' 이어야 한다.
+    """
+    fake_llm = _FakeLLM()
+    saved: list[dict[str, Any]] = []
+    stale_card = {
+        "id": "CN-20260602-44755",
+        "peer_id": "lg_cns",
+        "title": "LG CNS 인스웨이브와 코어뱅킹 현대화 웹단말 전환 사업 계약 체결",
+        "summary_lines": ["코어뱅킹 현대화", "웹단말 전환", "계약 체결"],
+        "sources": [{"id": "raw-1", "title": "원문", "source_name": "AXIS News"}],
+    }
+
+    monkeypatch.setattr(comparison_engine, "_fetch_keyword_trend_rows", lambda **kwargs: [])
+    monkeypatch.setattr(today_module, "_fetch_integrated_issues", lambda **kwargs: [])
+    monkeypatch.setattr(today_module, "_fetch_cards_for_issues", lambda issue_ids, **kwargs: [])
+    monkeypatch.setattr(today_module, "_fetch_anchor_date_cards", lambda **kwargs: [])
+    monkeypatch.setattr(today_module, "_fetch_recent_cards", lambda **kwargs: [stale_card])
+    monkeypatch.setattr(today_module, "_fetch_prior_today_reports", lambda **kwargs: [])
+    monkeypatch.setattr(today_module, "_fetch_analysis_ledger", lambda **kwargs: [])
+    monkeypatch.setattr(today_module, "_load_profile_context", lambda **kwargs: {})
+    monkeypatch.setattr(today_module, "_load_skax_context", lambda **kwargs: {})
+    monkeypatch.setattr(today_module, "_get_llm", lambda: fake_llm)
+    monkeypatch.setattr(
+        today_module, "_save_report", lambda result, input_snapshot: saved.append(result)
+    )
+
+    result = asyncio.run(
+        TodayInsightAgent().generate(
+            TodayInsightGenerateRequest(
+                anchor_date=date(2026, 6, 17),
+                use_cached=False,
+                save=True,
+            )
+        )
+    )
+
+    # 과거 카드를 오늘 헤드라인으로 만들지 않는다 — LLM 자체가 호출되지 않아야 한다.
+    assert fake_llm.prompts == []
+    # '신규 신호 없음' 플레이스홀더 — 프론트가 is_status_placeholder 로 빈 상태를 노출한다.
+    assert result["provenance"]["result_kind"] == "no_current_signals"
+    assert result["provenance"]["is_status_placeholder"] is True
+    assert saved and saved[0]["provenance"]["is_status_placeholder"] is True
+
+
 def test_build_context_keeps_comparison_facts_within_anchor_current_inputs(monkeypatch) -> None:
     anchor = date(2026, 6, 12)
 
@@ -554,19 +603,24 @@ def test_today_insight_agent_returns_fallback_when_no_source_data(monkeypatch) -
     assert response.signals[2].label == "다음 판단"
 
 
-def test_today_insight_agent_uses_recent_cards_when_integrated_issues_empty(
+def test_today_insight_agent_uses_anchor_date_cards_when_integrated_issues_empty(
     monkeypatch,
 ) -> None:
+    """통합 이슈가 없어도 anchor_date(오늘) 카드가 있으면 그 카드로 리포트를 생성한다.
+
+    과거 recent_cards 폴백은 더 이상 헤드라인 소스로 쓰지 않는다(그 경우 no_current_signals).
+    당일 카드는 current 신호이므로 정상 리포트가 나와야 한다.
+    """
     fake_llm = _FakeLLM()
     saved: list[dict[str, Any]] = []
-    recent_lookup_args: list[dict[str, Any]] = []
+    anchor_lookup_args: list[dict[str, Any]] = []
 
     monkeypatch.setattr(comparison_engine, "_fetch_keyword_trend_rows", lambda **kwargs: [])
     monkeypatch.setattr(today_module, "_fetch_integrated_issues", lambda **kwargs: [])
     monkeypatch.setattr(today_module, "_fetch_cards_for_issues", lambda issue_ids, **kwargs: [])
 
-    def fake_recent_cards(**kwargs: Any) -> list[dict[str, Any]]:
-        recent_lookup_args.append(kwargs)
+    def fake_anchor_cards(**kwargs: Any) -> list[dict[str, Any]]:
+        anchor_lookup_args.append(kwargs)
         return [
             {
                 "id": "CN-RECENT",
@@ -587,7 +641,8 @@ def test_today_insight_agent_uses_recent_cards_when_integrated_issues_empty(
             }
         ]
 
-    monkeypatch.setattr(today_module, "_fetch_recent_cards", fake_recent_cards)
+    monkeypatch.setattr(today_module, "_fetch_anchor_date_cards", fake_anchor_cards)
+    monkeypatch.setattr(today_module, "_fetch_recent_cards", lambda **kwargs: [])
     monkeypatch.setattr(today_module, "_fetch_prior_today_reports", lambda **kwargs: [])
     monkeypatch.setattr(today_module, "_fetch_analysis_ledger", lambda **kwargs: [])
     monkeypatch.setattr(
@@ -616,11 +671,13 @@ def test_today_insight_agent_uses_recent_cards_when_integrated_issues_empty(
     )
 
     response = TodayInsightGenerateResponse.model_validate(result)
+    # 당일 카드는 current 신호 → 정상 리포트(플레이스홀더 아님)
+    assert result["provenance"].get("result_kind") != "no_current_signals"
     assert response.source_integrated_issue_ids == []
     assert response.source_card_ids == ["CN-RECENT"]
     assert response.peer_ids == ["samsung_sds"]
     assert response.change_summary[1].value == "최근 60일"
-    assert recent_lookup_args[0]["window_days"] == 60
+    assert anchor_lookup_args  # anchor-date 카드 조회가 사용됨
     assert "삼성SDS 생성형 AI 운영 자동화 확대" in fake_llm.prompts[0]
 
 
