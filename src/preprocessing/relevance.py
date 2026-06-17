@@ -446,7 +446,11 @@ class RelevanceEvaluator:
 
         text_body = _join_text(title, subtitle, content)
         matched_company_candidates = _match_companies(text_body, company)
-        if "posco_dx" in company and _matches_posco_dx_group_ax_signal(text_body):
+        if (
+            "posco_dx" in company
+            and _has_posco_dx_primary_context(title=title, content=content)
+            and _matches_posco_dx_group_ax_signal(text_body)
+        ):
             matched_company_candidates = _dedupe_keep_order(
                 [*matched_company_candidates, "posco_dx"]
             )
@@ -1357,8 +1361,10 @@ def _fast_pass_result(
     if not any(company_id in _FAST_PASS_COMPANY_IDS for company_id in matched_companies):
         return None
 
-    if "posco_dx" in matched_companies and _matches_posco_dx_group_ax_signal(
-        _join_text(title, content)
+    if (
+        "posco_dx" in matched_companies
+        and _has_posco_dx_primary_context(title=title, content=content)
+        and _matches_posco_dx_group_ax_signal(_join_text(title, content))
     ):
         return _result(
             label="relevant",
@@ -2108,6 +2114,32 @@ def _matches_posco_dx_group_ax_signal(text_body: str) -> bool:
     if _MARKET_PRICE_RE.search(text) and _MARKET_METRIC_RE.search(text):
         return False
     return True
+
+
+def _has_posco_dx_primary_context(*, title: str, content: str) -> bool:
+    title_compact = _compact(title)
+    posco_aliases = [
+        _compact(alias)
+        for alias in ALL_COMPANY_ALIASES.get("posco_dx", ["포스코DX", "포스코"])
+        if _compact(alias)
+    ]
+    if any(alias in title_compact for alias in posco_aliases):
+        return True
+
+    lead_compact = _compact(str(content or "")[:800])
+    if not any(alias in lead_compact for alias in posco_aliases):
+        return False
+    return any(
+        keyword in lead_compact
+        for keyword in (
+            "포스코그룹",
+            "포스코DX",
+            "포스코디엑스",
+            "포스코가",
+            "포스코는",
+            "포스코의",
+        )
+    )
 
 
 def _normalize_company(value: Any) -> list[str]:
