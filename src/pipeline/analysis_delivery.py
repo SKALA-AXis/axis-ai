@@ -246,9 +246,7 @@ def _card_eligible_structured_signal_ids(values: list[int]) -> list[int]:
         if article.get("id") is not None
     }
     eligible = [
-        article_id
-        for article_id in ids
-        if source_type_by_id.get(article_id) != "market_data"
+        article_id for article_id in ids if source_type_by_id.get(article_id) != "market_data"
     ]
     skipped = len(ids) - len(eligible)
     if skipped:
