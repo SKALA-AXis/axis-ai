@@ -47,7 +47,10 @@ def _strip_snapshot_time_sensitive(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in snapshot.items() if k not in _SNAPSHOT_TIME_SENSITIVE_KEYS}
 
 
-_TEMP_CLO_ISSUE_MARKERS = ("클로", "에이엑스씽크")
+_TEMP_CLO_ISSUE_MARKER_GROUPS = (
+    ("클로",),
+    ("에이엑스씽크", "에이엑스싱크", "AXThink", "AX Think", "AX씽크", "AX싱크"),
+)
 
 
 def _user_strategy_overlay_limit() -> int:
@@ -316,7 +319,10 @@ def _is_temp_clo_issue(issue_scope: dict[str, Any] | None) -> bool:
     if not isinstance(issue_scope, dict):
         return False
     text = _scope_text(issue_scope).casefold()
-    return all(marker.casefold() in text for marker in _TEMP_CLO_ISSUE_MARKERS)
+    return all(
+        any(marker.casefold() in text for marker in marker_group)
+        for marker_group in _TEMP_CLO_ISSUE_MARKER_GROUPS
+    )
 
 
 def _scope_text(value: Any) -> str:
