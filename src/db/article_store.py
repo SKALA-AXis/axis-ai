@@ -1568,8 +1568,9 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
             )
             return None
         params = _card_news_insert_params(card)
+        insert_card_id = str(params["id"])
         try:
-            card_id = _execute_v2_insert(card_id=card["id"], params=params)
+            card_id = _execute_v2_insert(card_id=insert_card_id, params=params)
         except Exception as exc:  # noqa: BLE001
             if not _is_undefined_column_error(exc):
                 raise
@@ -1581,7 +1582,10 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
                 card.get("id"),
             )
             try:
-                card_id = _execute_v2_without_integrated_issue(card_id=card["id"], params=params)
+                card_id = _execute_v2_without_integrated_issue(
+                    card_id=insert_card_id,
+                    params=params,
+                )
             except Exception as legacy_exc:  # noqa: BLE001
                 if not _is_undefined_column_error(legacy_exc):
                     raise
@@ -1589,7 +1593,7 @@ def save_card_news(card: dict[str, Any]) -> Optional[str]:
                     "card_news legacy v2 INSERT 실패 (v33 미적용) → v1 fallback 사용 | id=%s",
                     card.get("id"),
                 )
-                card_id = _execute_v1_fallback(card_id=card["id"], params=params)
+                card_id = _execute_v1_fallback(card_id=insert_card_id, params=params)
         if card_id:
             _sync_card_news_articles(
                 card_id=card_id,
@@ -1684,8 +1688,9 @@ def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(keyword_categories, dict):
         keyword_categories = {}
     source_articles = _source_articles_payload(card, source_ids)
+    created_at = _card_created_at_param(card, source_articles)
     return {
-        "id": card["id"],
+        "id": _canonical_card_id(card["id"], created_at),
         "company": card.get("company") or card.get("peer_id") or _resolve_peer_company_id(card),
         "cluster_id": card.get("cluster_id"),
         "title": card["title"][:500],
@@ -1706,7 +1711,7 @@ def _card_news_insert_params(card: dict[str, Any]) -> dict[str, Any]:
         "source_articles": json.dumps(source_articles, ensure_ascii=False, default=str),
         "card_schema_version": str(card.get("card_schema_version") or "v2"),
         "evaluation_payload": json.dumps(evaluation_payload, ensure_ascii=False, default=str),
-        "created_at": _card_created_at_param(card, source_articles),
+        "created_at": created_at,
     }
 
 
@@ -1727,11 +1732,50 @@ def _resolve_integrated_issue_id(
 
 
 def _card_created_at_param(card: dict[str, Any], source_articles: list[dict[str, Any]]) -> str:
-    del source_articles
+    source_value = _source_basis_datetime(source_articles)
+    if source_value:
+        return source_value
     value = _date_string_or_none(card.get("created_at"))
     if value:
         return value
     return datetime.now(UTC).isoformat()
+
+
+def _canonical_card_id(value: Any, created_at: str) -> str:
+    raw = str(value)
+    match = re.match(r"^(CN-)(\d{8})(-.+)$", raw)
+    basis_date = _date_string_or_none(created_at)
+    if not match or not basis_date:
+        return raw
+    return f"{match.group(1)}{basis_date[:10].replace('-', '')}{match.group(3)}"
+
+
+def _source_basis_datetime(source_articles: list[dict[str, Any]]) -> str | None:
+    values: list[datetime] = []
+    for article in source_articles:
+        for key in ("published_at", "collected_at"):
+            parsed = _parse_datetime(article.get(key))
+            if parsed is not None:
+                values.append(parsed)
+                break
+    if not values:
+        return None
+    return min(values).astimezone(UTC).isoformat()
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    text_value = str(value).strip()
+    if not text_value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _date_string_or_none(value: Any) -> str | None:
@@ -2005,9 +2049,22 @@ def _source_ids_from_sources(value: Any) -> list[int]:
 def _source_articles_payload(card: dict[str, Any], source_ids: list[int]) -> list[dict[str, Any]]:
     source_articles = card.get("source_articles")
     if isinstance(source_articles, list) and source_articles:
-        return [item for item in source_articles if isinstance(item, dict)]
+        payload = [item for item in source_articles if isinstance(item, dict)]
+        if any(item.get("published_at") or item.get("collected_at") for item in payload):
+            return payload
 
-    payload: list[dict[str, Any]] = []
+    if source_ids:
+        articles_by_id = {
+            int(article["id"]): article for article in get_articles_by_ids(source_ids)
+        }
+        if articles_by_id:
+            return [
+                _source_article_dict_from_article(articles_by_id[raw_id])
+                for raw_id in source_ids
+                if raw_id in articles_by_id
+            ]
+
+    source_payload: list[dict[str, Any]] = []
     sources = card.get("sources")
     if isinstance(sources, list):
         for source in sources:
@@ -2041,9 +2098,9 @@ def _source_articles_payload(card: dict[str, Any], source_ids: list[int]) -> lis
             ):
                 if source.get(image_key):
                     item[image_key] = source[image_key]
-            payload.append(item)
-    if payload:
-        return payload
+            source_payload.append(item)
+    if source_payload:
+        return source_payload
     return [{"id": raw_id} for raw_id in source_ids]
 
 
