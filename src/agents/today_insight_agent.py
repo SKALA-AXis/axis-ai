@@ -1285,22 +1285,76 @@ def _build_coverage_stats(*, window_days: int = 7) -> dict[str, Any]:
     return stats
 
 
-def _apply_insight_state(base: dict[str, Any], context: Mapping[str, Any]) -> None:
+def _subtract_business_days(anchor: date, business_days: int) -> date:
+    """anchor 에서 영업일(월~금) 기준 business_days 만큼 뺀 날짜."""
+    cur = anchor
+    remaining = max(0, business_days)
+    while remaining > 0:
+        cur = cur - timedelta(days=1)
+        if cur.weekday() < 5:  # 0=월 ~ 4=금
+            remaining -= 1
+    return cur
+
+
+def _find_recent_signal(
+    context: Mapping[str, Any], anchor_date: date, *, business_days: int = 3
+) -> dict[str, str] | None:
+    """오늘 신호가 없을 때, 최근 N 영업일 내의 '실제 신호' 리포트를 찾는다.
+
+    prior_today_insight_memory(최근순)에서 출처(card/issue)가 붙은 = 진짜 신호였던
+    리포트 중 최근 N영업일 안의 가장 최근 것을 반환. 조용했던 날의 placeholder 는
+    출처가 없으므로 자동 제외된다.
+    """
+    cutoff = _subtract_business_days(anchor_date, business_days)
+    priors = context.get("prior_today_insight_memory")
+    if not isinstance(priors, list):
+        return None
+    for prior in priors:
+        if not isinstance(prior, Mapping):
+            continue
+        rdate_str = str(prior.get("report_date") or "")[:10]
+        headline = str(prior.get("headline") or "").strip()
+        has_sources = bool(prior.get("source_card_ids") or prior.get("source_integrated_issue_ids"))
+        if not rdate_str or not headline or not has_sources:
+            continue
+        try:
+            rdate = date.fromisoformat(rdate_str)
+        except ValueError:
+            continue
+        if cutoff <= rdate < anchor_date:
+            return {"signal_date": rdate_str, "headline": headline}
+    return None
+
+
+def _apply_insight_state(
+    base: dict[str, Any], context: Mapping[str, Any], *, anchor_date: date
+) -> None:
     """base 에 state/signal_date/week_synthesis/coverage_stats 를 얹는다.
 
-    페이로드(signals/insight_sections)는 그대로 두고 state 만 정한다. quiet 면
-    프론트가 깊은 3섹션 대신 week_synthesis 를 렌더해 변두리 필러 분석 노출을 막는다.
+    - today_signal: 오늘 품질 신호. 헤드라인+3섹션 유지.
+    - recent_signal: 오늘은 없지만 최근 2~3 영업일 내 실제 신호 → 날짜 명시해 노출.
+    - quiet: 최근에도 없음/필러 → week_synthesis(이번 주 종합)로 빈 화면 방지.
+    페이로드(signals/insight_sections)는 그대로 두고 프론트가 state 로 렌더 분기한다.
     """
     base["coverage_stats"] = _build_coverage_stats(window_days=7)
-    state = _derive_insight_state(base, context)
-    base["state"] = state
-    if state == "today_signal":
+    if _derive_insight_state(base, context) == "today_signal":
+        base["state"] = "today_signal"
         base["signal_date"] = (str(base.get("report_date") or "")[:10]) or None
         base["week_synthesis"] = None
         return
-    base["signal_date"] = None
+
     base["week_synthesis"] = _build_week_synthesis(base, context)
+    recent = _find_recent_signal(context, anchor_date)
     provenance = base.get("provenance")
+    if recent:
+        base["state"] = "recent_signal"
+        base["signal_date"] = recent["signal_date"]
+        base["recent_headline"] = recent["headline"]
+        if isinstance(provenance, dict):
+            provenance.setdefault("depth_gate", "recent_signal")
+        return
+    base["state"] = "quiet"
+    base["signal_date"] = None
     if isinstance(provenance, dict):
         provenance.setdefault("depth_gate", "below_bar")
 
@@ -1428,7 +1482,7 @@ def _normalize_result(
         context=context,
         anchor_date=anchor_date,
     )
-    _apply_insight_state(base, context)
+    _apply_insight_state(base, context, anchor_date=anchor_date)
     response = TodayInsightGenerateResponse.model_validate(base)
     return response.model_dump()
 

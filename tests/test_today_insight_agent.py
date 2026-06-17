@@ -805,7 +805,9 @@ def test_apply_insight_state_today_signal_above_bar(monkeypatch) -> None:
         "signals": [{"id": "sig1", "value": "x"}],
         "provenance": {},
     }
-    today_module._apply_insight_state(base, {"has_current_signal": True})
+    today_module._apply_insight_state(
+        base, {"has_current_signal": True}, anchor_date=date(2026, 6, 17)
+    )
     assert base["state"] == "today_signal"
     assert base["signal_date"] == "2026-06-17"
     assert base["week_synthesis"] is None
@@ -825,7 +827,9 @@ def test_apply_insight_state_quiet_below_bar(monkeypatch) -> None:
         "signals": [{"id": "sig1", "value": "x"}],
         "provenance": {},
     }
-    today_module._apply_insight_state(base, {"has_current_signal": True})
+    today_module._apply_insight_state(
+        base, {"has_current_signal": True}, anchor_date=date(2026, 6, 17)
+    )
     assert base["state"] == "quiet"
     assert base["signal_date"] is None
     assert base["week_synthesis"]
@@ -841,6 +845,55 @@ def test_apply_insight_state_quiet_when_no_current_signal(monkeypatch) -> None:
         "comparison_facts": {},
         "provenance": {"is_status_placeholder": True, "result_kind": "no_current_signals"},
     }
-    today_module._apply_insight_state(base, {"has_current_signal": False})
+    today_module._apply_insight_state(
+        base, {"has_current_signal": False}, anchor_date=date(2026, 6, 17)
+    )
     assert base["state"] == "quiet"
     assert base["week_synthesis"]
+
+
+def test_apply_insight_state_recent_signal_within_window(monkeypatch) -> None:
+    """오늘 신호 없지만 최근 영업일 내 실제 신호(출처 있음) → recent_signal + signal_date."""
+    monkeypatch.setattr(today_module, "_build_coverage_stats", lambda **kw: {"reviewed_last_7d": 5})
+    base: dict[str, Any] = {
+        "report_date": "2026-06-17",
+        "comparison_facts": {},
+        "provenance": {"is_status_placeholder": True, "result_kind": "no_current_signals"},
+    }
+    context = {
+        "has_current_signal": False,
+        "prior_today_insight_memory": [
+            # 6/16 = 최근 영업일, 출처 있는 실제 신호 → 채택
+            {
+                "report_date": "2026-06-16",
+                "headline": "LG CNS 정부 AX 수주",
+                "source_card_ids": ["CN-1"],
+            },
+            # 출처 없는 조용한 날은 무시
+            {"report_date": "2026-06-15", "headline": "조용", "source_card_ids": []},
+        ],
+    }
+    today_module._apply_insight_state(base, context, anchor_date=date(2026, 6, 17))
+    assert base["state"] == "recent_signal"
+    assert base["signal_date"] == "2026-06-16"
+    assert base["recent_headline"] == "LG CNS 정부 AX 수주"
+    assert base["week_synthesis"]
+
+
+def test_apply_insight_state_quiet_when_recent_too_old(monkeypatch) -> None:
+    """최근 실제 신호가 영업일 윈도우 밖이면 recent_signal 아닌 quiet."""
+    monkeypatch.setattr(today_module, "_build_coverage_stats", lambda **kw: {"reviewed_last_7d": 5})
+    base: dict[str, Any] = {
+        "report_date": "2026-06-17",
+        "comparison_facts": {},
+        "provenance": {"is_status_placeholder": True, "result_kind": "no_current_signals"},
+    }
+    context = {
+        "has_current_signal": False,
+        "prior_today_insight_memory": [
+            {"report_date": "2026-06-02", "headline": "옛 신호", "source_card_ids": ["CN-9"]},
+        ],
+    }
+    today_module._apply_insight_state(base, context, anchor_date=date(2026, 6, 17))
+    assert base["state"] == "quiet"
+    assert base["signal_date"] is None

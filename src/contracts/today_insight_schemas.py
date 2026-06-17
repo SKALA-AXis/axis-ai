@@ -207,6 +207,7 @@ class TodayInsightGenerateResponse(BaseModel):
     # 홈 3상태 렌더(today_signal | recent_signal | quiet) 지원 필드.
     state: str = "today_signal"
     signal_date: Optional[str] = None
+    recent_headline: Optional[str] = None
     week_synthesis: Optional[str] = None
     coverage_stats: dict[str, Any] = Field(default_factory=dict)
     provenance: dict[str, Any] = Field(default_factory=dict)
