@@ -738,6 +738,7 @@ class MixerAnalysisAgent:
         ratios: dict | None = None,
         user_context: str | None = None,
         analysis_mode: str = "quick",
+        user_id: str | None = None,
         progress: "ProgressFn | None" = None,
     ) -> dict:
         """N 카드 선택 → 저장된 분석 payload 기반 6축 radar + cross-issue 분석.
@@ -792,11 +793,22 @@ class MixerAnalysisAgent:
 
         _emit_progress(progress, "prepare")
         if requested_integrated_issue_ids:
-            analysis_units = load_analysis_units_by_integrated_issue_ids(
-                requested_integrated_issue_ids
-            )
+            if user_id is not None:
+                analysis_units = load_analysis_units_by_integrated_issue_ids(
+                    requested_integrated_issue_ids,
+                    user_id=user_id,
+                )
+            else:
+                analysis_units = load_analysis_units_by_integrated_issue_ids(
+                    requested_integrated_issue_ids
+                )
         else:
-            analysis_units = load_analysis_units_by_card_ids(requested_card_ids)
+            if user_id is not None:
+                analysis_units = load_analysis_units_by_card_ids(
+                    requested_card_ids, user_id=user_id
+                )
+            else:
+                analysis_units = load_analysis_units_by_card_ids(requested_card_ids)
         if len(analysis_units) < _MIN_CARDS:
             return _error_response(
                 "분석 단위 조회 실패",

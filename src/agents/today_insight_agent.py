@@ -247,7 +247,10 @@ class TodayInsightAgent:
             return _scheduled_cache_pending_result(anchor_date)
 
         context = _build_context(req, anchor_date)
-        if not context["current_issues"] and not context["recent_cards"]:
+        # anchor_date(오늘) 기준 current 신호(현재 이슈 또는 당일 카드)가 없으면,
+        # 과거 카드로 active 리포트를 만들지 않고 '신규 신호 없음' 플레이스홀더를 반환한다.
+        # (recent_cards 폴백이 과거 카드를 채워도 그것을 오늘 헤드라인으로 내보내지 않음.)
+        if not context.get("has_current_signal", True):
             result = _fallback_result(
                 anchor_date=anchor_date,
                 context=context,
@@ -328,6 +331,9 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
             if _is_domestic_card(card) and not _is_self_company_card(card)
         ]
         cards = [*cards, *supplemental_cards][: req.max_cards]
+    # anchor_date(오늘) 기준 current 카드(현재 이슈 카드 또는 당일 카드) 존재 여부 —
+    # 아래 _fetch_recent_cards 폴백(과거 카드)으로 채워지기 전에 확정해 둔다.
+    has_anchor_cards = bool(cards)
     if not cards:
         cards = _fetch_recent_cards(
             anchor_date=anchor_date,
@@ -388,6 +394,7 @@ def _build_context(req: TodayInsightGenerateRequest, anchor_date: date) -> dict[
     return {
         "report_date": anchor_date.isoformat(),
         "window_days": req.window_days,
+        "has_current_signal": bool(current_issues) or has_anchor_cards,
         "current_issues": [_issue_for_prompt(row) for row in current_issues],
         "history_issues": [_issue_for_prompt(row) for row in history_issues],
         "recent_cards": [_card_for_prompt(card) for card in cards[: req.max_cards]],
@@ -1562,6 +1569,33 @@ def _section_actions(
     return actions[:1]
 
 
+def _norm_id_set(values: Any) -> set[str]:
+    """출처 id 비교용 정규화 집합.
+
+    대소문자 무시 + raw 원문 id 의 ``raw-123`` ↔ ``123`` 표기 차이를 흡수한다.
+    (integrated issue 의 source_ids 는 숫자 raw id 인데 source 메타의 id 는 ``raw-N``
+    으로 갈려 있어, LLM 이 어느 표기로 인용하든 매칭되도록 양방향 보강.) ``cn-``/``ic-``
+    같은 prefix 는 그대로 두어 서로 다른 타입(raw vs card vs issue)이 우연히
+    교차 매칭되지 않게 한다.
+    """
+    if isinstance(values, (set, frozenset, list, tuple)):
+        items = list(values)
+    else:
+        items = _list(values)
+    out: set[str] = set()
+    for value in items:
+        token = str(value or "").strip().lower()
+        if not token:
+            continue
+        out.add(token)
+        raw_match = re.match(r"^raw-(\d+)$", token)
+        if raw_match:
+            out.add(raw_match.group(1))
+        elif token.isdigit():
+            out.add(f"raw-{token}")
+    return out
+
+
 def _match_sources_by_ids(
     sources: list[dict[str, Any]],
     source_ids: set[str],
@@ -1573,17 +1607,18 @@ def _match_sources_by_ids(
     ]
     if not source_ids:
         return (url_sources or sources)[:4]
+    cited = _norm_id_set(source_ids)
     matched = [
-        source
-        for source in sources
-        if str(source.get("id") or "") in source_ids or str(source.get("url") or "") in source_ids
+        source for source in sources if _norm_id_set([source.get("id"), source.get("url")]) & cited
     ]
     matched_url_sources = [
         source
         for source in matched
         if str(source.get("url") or "").startswith(("http://", "https://"))
     ]
-    return matched_url_sources or matched or url_sources[:2] or sources[:2]
+    # 인용된 source_id 와 실제로 매칭된 출처만 노출한다. 매칭 실패 시 임의의 다른
+    # 출처를 붙이지 않는다 — 본문과 무관한 "출처 링크"(오링크) 방지.
+    return matched_url_sources or matched
 
 
 def _match_trace_by_ids(
@@ -1592,16 +1627,20 @@ def _match_trace_by_ids(
 ) -> list[dict[str, Any]]:
     if not source_ids:
         return trace[:6]
+    cited = _norm_id_set(source_ids)
     matched = []
     for row in trace:
-        values = {
-            str(row.get("source_integrated_issue_id") or ""),
-            str(row.get("source_card_id") or ""),
-            *[str(raw_id) for raw_id in _list(row.get("source_raw_article_ids"))],
-        }
-        if values.intersection(source_ids):
+        values = _norm_id_set(
+            [
+                row.get("source_integrated_issue_id"),
+                row.get("source_card_id"),
+                *_list(row.get("source_raw_article_ids")),
+            ]
+        )
+        if values & cited:
             matched.append(row)
-    return matched or trace[:3]
+    # 매칭 실패 시 임의 trace 를 붙이지 않는다(오링크 방지).
+    return matched
 
 
 def _source_trace_from_context(context: dict[str, Any]) -> list[dict[str, Any]]:
