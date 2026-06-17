@@ -416,21 +416,6 @@ class RelevanceEvaluator:
         text_body = _join_text(title, subtitle, content)
         matched_company_candidates = _match_companies(text_body, company)
         matched_sector_candidates = match_sectors(text_body)
-        if _is_industry_trend_news(row, company):
-            sectors = [sector for sector in matched_sector_candidates if sector != "other"]
-            if not sectors:
-                sectors = _industry_metadata_sectors(metadata)
-            return _result(
-                label="relevant",
-                score=0.82,
-                companies=[],
-                sectors=sectors or ["other"],
-                reason=(
-                    "industry fast-pass: naver_industry_news/industry_trend로 수집된 "
-                    "산업 방향성 기사"
-                ),
-            )
-
         noise_result = _noise_reject_result(
             title=title,
             content=analysis_content,
@@ -445,6 +430,21 @@ class RelevanceEvaluator:
                 noise_result["reason"],
             )
             return noise_result
+
+        if _is_industry_trend_news(row, company):
+            sectors = [sector for sector in matched_sector_candidates if sector != "other"]
+            if not sectors:
+                sectors = _industry_metadata_sectors(metadata)
+            return _result(
+                label="relevant",
+                score=0.82,
+                companies=[],
+                sectors=sectors or ["other"],
+                reason=(
+                    "industry fast-pass: naver_industry_news/industry_trend로 수집된 "
+                    "산업 방향성 기사"
+                ),
+            )
 
         precheck = _precheck(
             company=company,
@@ -1002,6 +1002,15 @@ def _noise_reject_result(
             companies=matched_companies,
             sectors=matched_sectors,
             reason="한국어 뉴스 모니터링 대상에서 제외: 제목에 한글이 없는 외국어 기사",
+        )
+
+    if _is_single_company_certification_notice(title):
+        return _result(
+            label="irrelevant",
+            score=0.20,
+            companies=matched_companies,
+            sectors=matched_sectors,
+            reason="개별 기업 인증 획득 단신 성격이 강해 전략 동향 근거에서 제외",
         )
 
     has_peer_strategy_signal = _has_peer_strategy_signal(
@@ -1785,6 +1794,15 @@ def _is_low_value_news_noise(*, title: str, content: str) -> bool:
         return True
 
     return False
+
+
+def _is_single_company_certification_notice(title: str) -> bool:
+    title_text = str(title or "").strip()
+    if not title_text:
+        return False
+    if re.search(r"ISO\s*\d{4,5}.*인증\s*(?:획득|취득|받)", title_text, re.IGNORECASE):
+        return True
+    return bool(re.search(r"(?:국제표준|정보보호|보안)?\s*인증\s*(?:획득|취득|받)", title_text))
 
 
 def _is_roundup_news_title(title: str) -> bool:
