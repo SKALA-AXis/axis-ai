@@ -1967,6 +1967,7 @@ async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsRespons
             "sk_ax_business_lines": request.sk_ax_business_lines,
             "peer_company_ids": request.peer_company_ids,
             "include_peer_alignment": request.include_peer_alignment,
+            "global_only": request.global_only,
             "min_mention_count": request.min_mention_count,
             "max_trend_count": request.max_trend_count,
         },

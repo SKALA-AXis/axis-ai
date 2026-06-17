@@ -53,6 +53,7 @@ from src.db.article_store import (
 )
 from src.llm import LLMSpec, build_chat_llm
 from src.observability.langfuse_client import tracing_config
+from src.services.llm_env import ensure_llm_env_loaded
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +68,15 @@ _DEFAULT_SK_AX_BUSINESS_LINES: tuple[str, ...] = (
     "manufacturing_ax",
     "data_platform",
     "smart_factory",
+)
+
+_GLOBAL_PEER_MOVEMENT_COMPANIES: tuple[str, ...] = (
+    "nvidia",
+    "microsoft",
+    "google",
+    "amazon",
+    "meta",
+    "apple",
 )
 
 # Walking Skeleton: 사전 정의된 글로벌 IT 트렌드 keyword 후보군.
@@ -160,6 +170,7 @@ _llm: ChatOpenAI | None = None
 def _get_llm() -> ChatOpenAI:
     global _llm
     if _llm is None:
+        ensure_llm_env_loaded()
         _llm = build_chat_llm(
             LLMSpec(model=_LLM_MODEL, temperature=0.15, max_tokens=3000, json_object=True)
         )
@@ -269,6 +280,7 @@ class ITTrendAgent:
             meta.get("sk_ax_business_lines") or list(_DEFAULT_SK_AX_BUSINESS_LINES)
         )
         include_peer_alignment: bool = bool(meta.get("include_peer_alignment", True))
+        global_only: bool = bool(meta.get("global_only", False))
         min_mention_count: int = int(meta.get("min_mention_count", 3) or 3)
         max_trend_count: int = int(meta.get("max_trend_count", 8) or 8)
         focus_themes: list[str] = [t.lower() for t in (meta.get("focus_themes") or [])]
@@ -361,7 +373,7 @@ class ITTrendAgent:
             )
 
         # 4) Phase 3 — Peer Alignment (deterministic 점수 + LLM batch strategic_note).
-        if include_peer_alignment:
+        if include_peer_alignment and not global_only:
             alignment = _phase3_peer_alignment(
                 detections=detections,
                 snapshots=snapshots,
@@ -374,24 +386,43 @@ class ITTrendAgent:
             {
                 "step_idx": 3,
                 "phase": "peer_alignment",
-                "question": "AX 와 peer 4 사의 동향이 글로벌 트렌드와 같은 결로 가는가?",
-                "answer": _summarize_alignment(alignment),
-                "confidence": 0.7 if alignment else 0.0,
+                "question": (
+                    "AX 와 peer 4 사의 동향이 글로벌 트렌드와 같은 결로 가는가?"
+                    if not global_only
+                    else "글로벌 전용 모드에서 국내 peer 정렬 분석을 생략하는가?"
+                ),
+                "answer": (
+                    _summarize_alignment(alignment)
+                    if not global_only
+                    else "global_only=true 이므로 peer alignment 생략"
+                ),
+                "confidence": 0.7 if alignment else (1.0 if global_only else 0.0),
             }
         )
 
         # 5) Phase 4 — Impact Mapping (LLM).
-        impact_matrix = _phase4_impact(
-            detections=detections,
-            sk_ax_business_lines=sk_ax_business_lines,
-        )
+        if global_only:
+            impact_matrix = []
+        else:
+            impact_matrix = _phase4_impact(
+                detections=detections,
+                sk_ax_business_lines=sk_ax_business_lines,
+            )
         reasoning_steps.append(
             {
                 "step_idx": 4,
                 "phase": "impact_map",
-                "question": "각 trend 가 SK AX 사업라인에 어떤 영향을 주는가?",
-                "answer": _summarize_impact(impact_matrix),
-                "confidence": 0.65 if impact_matrix else 0.0,
+                "question": (
+                    "각 trend 가 SK AX 사업라인에 어떤 영향을 주는가?"
+                    if not global_only
+                    else "글로벌 전용 모드에서 SK AX 영향도 분석을 생략하는가?"
+                ),
+                "answer": (
+                    _summarize_impact(impact_matrix)
+                    if not global_only
+                    else "global_only=true 이므로 impact mapping 생략"
+                ),
+                "confidence": 0.65 if impact_matrix else (1.0 if global_only else 0.0),
             }
         )
 
@@ -400,11 +431,14 @@ class ITTrendAgent:
             detections=detections,
             alignment=alignment,
             impact_matrix=impact_matrix,
+            snapshots=snapshots,
+            global_only=global_only,
         )
         forecasts = synthesis.get("forecasts", [])
         final_one_liner: str = synthesis.get("final_one_liner", "") or ""
         overall_summary: str = synthesis.get("overall_summary", "") or ""
         sk_ax_implication: str = synthesis.get("sk_ax_implication", "") or ""
+        company_movements: list[dict[str, Any]] = synthesis.get("company_movements", []) or []
         per_keyword_title: dict[str, str] = synthesis.get("per_keyword_title", {}) or {}
         per_keyword_summary: dict[str, str] = synthesis.get("per_keyword_summary", {}) or {}
         per_keyword_implication: dict[str, str] = synthesis.get("per_keyword_implication", {}) or {}
@@ -413,7 +447,11 @@ class ITTrendAgent:
             {
                 "step_idx": 5,
                 "phase": "synthesis",
-                "question": "SK AX 가 다음 1Q / 6M / 1Y 에 어떤 자세를 가져야 하는가?",
+                "question": (
+                    "SK AX 가 다음 1Q / 6M / 1Y 에 어떤 자세를 가져야 하는가?"
+                    if not global_only
+                    else "글로벌 6사 흐름을 한 줄과 키워드별 요약으로 어떻게 정리할 것인가?"
+                ),
                 "answer": final_one_liner or "(synthesis empty)",
                 "confidence": llm_batch_confidence,
             }
@@ -437,6 +475,7 @@ class ITTrendAgent:
             sk_ax_implication=sk_ax_implication,
             final_one_liner=final_one_liner,
             overall_summary=overall_summary,
+            company_movements=company_movements,
         )
         persisted = 0
         try:
@@ -508,6 +547,7 @@ class ITTrendAgent:
                 "domestic_representative_row_count": len(domestic_rows),
                 "peer_company_ids": peer_company_ids,
                 "sk_ax_business_lines": sk_ax_business_lines,
+                "global_only": global_only,
             },
         }
 
@@ -961,6 +1001,8 @@ def _phase5_forecast_synthesis(
     detections: list[dict[str, Any]],
     alignment: dict[str, list[dict[str, Any]]],
     impact_matrix: list[dict[str, Any]],
+    snapshots: list[dict[str, Any]],
+    global_only: bool = False,
 ) -> dict[str, Any]:
     if not detections:
         return {}
@@ -975,12 +1017,40 @@ def _phase5_forecast_synthesis(
             }
             for p in peers
         ]
+    company_inputs = _company_movement_inputs(snapshots)
+    company_ids_required = [item["company_id"] for item in company_inputs]
+    if global_only:
+        role_line = "당신은 글로벌 IT 기업 뉴스룸 동향을 한국어로 편집하는 전략 리서처입니다.\n"
+        sk_ax_instruction = ""
+        response_shape = (
+            '{"final_one_liner":"...","overall_summary":"...","confidence":0.7,'
+            '"per_keyword":[{"theme":"...","title":"...","summary":"...","implication":""}],'
+            '"company_movements":[{"company_id":"nvidia","headline":"...","summary":"...",'
+            '"evidence_titles":["..."]}]}\n\n'
+        )
+    else:
+        role_line = "당신은 SK AX 의 글로벌 IT 트렌드 편집자이자 시나리오 분석가입니다.\n"
+        sk_ax_instruction = (
+            "4. sk_ax_implication — SK AX 가 가져야 할 자세 / 행동 권고 (3 문장 이하)\n"
+        )
+        response_shape = (
+            '{"forecasts": [{"horizon":"1Q","scenario":"baseline","narrative":"...",'
+            '"sk_ax_impact":"...","drivers":["..."],"risk_level":"medium","recommended_response":"..."}],'
+            '"final_one_liner":"...","overall_summary":"...","sk_ax_implication":"...","confidence":0.7,'
+            '"per_keyword":[{"theme":"...","title":"...","summary":"...","implication":"..."}],'
+            '"company_movements":[{"company_id":"nvidia","headline":"...","summary":"...",'
+            '"evidence_titles":["..."]}]}\n\n'
+        )
     prompt = (
-        "당신은 SK AX 의 글로벌 IT 트렌드 편집자이자 시나리오 분석가입니다.\n"
-        "다음 입력으로 다음 항목을 산출하세요:\n"
-        "1. forecasts — 각 horizon (1Q, 6M, 1Y) 별 baseline narrative + "
-        "sk_ax_impact + drivers + risk_level + recommended_response\n"
-        "2. final_one_liner — 개별 keyword 요약이 아니라 글로벌 6사 뉴스룸 전체를 "
+        role_line
+        + "다음 입력으로 다음 항목을 산출하세요:\n"
+        + (
+            "1. forecasts — 각 horizon (1Q, 6M, 1Y) 별 baseline narrative + "
+            "sk_ax_impact + drivers + risk_level + recommended_response\n"
+            if not global_only
+            else ""
+        )
+        + "2. final_one_liner — 개별 keyword 요약이 아니라 글로벌 6사 뉴스룸 전체를 "
         "관통하는 최신 IT 흐름 "
         "한 줄. 45~90자 한국어, 1문장, '뉴스룸', '공통적으로', '모델 성능' 같은 모호한 표현 금지. "
         "제품 경험, 업무 실행, AI 인프라 운영, 산업 적용 중 실제 입력에서 강한 축을 묶어 쓰세요.\n"
@@ -988,17 +1058,25 @@ def _phase5_forecast_synthesis(
         "1~2문장 한국어 줄글, 120~220자. 상위 키워드를 단순 나열하지 말고, "
         "무엇이 반복되고 강조되는지와 관심사가 어디로 이동하는지 설명하세요. "
         "'신호가 함께 나타나며' 같은 템플릿 문장 금지.\n"
-        "4. sk_ax_implication — SK AX 가 가져야 할 자세 / 행동 권고 (3 문장 이하)\n"
-        "5. per_keyword — 각 trend 별 title (한 줄) + summary (1문장) + implication (한 줄). "
+        + sk_ax_instruction
+        + "5. per_keyword — 각 trend 별 title (한 줄) + summary (1문장) + implication (한 줄). "
         "summary는 변화 신호 카드에 들어가므로 final_one_liner와 같은 문장을 반복하지 마세요.\n"
-        "6. confidence — 전반적 자신감 (0.0~1.0)\n\n"
+        "6. company_movements — company_inputs 의 각 company_id 별 최신 움직임. "
+        f"반드시 다음 company_id 를 빠짐없이 정확히 한 번씩 포함하세요: "
+        f"{', '.join(company_ids_required)}. "
+        "반드시 해당 회사의 top_themes 와 최근 30일 headlines 전체 흐름에 근거해 "
+        "headline 과 summary 를 한국어로 작성하세요. "
+        "headline 은 대표 기사 제목 번역이 아니라 회사의 전략/기술 축을 표현하세요. "
+        "summary 는 '무슨 전략/기술을 강화하는지'가 드러나는 1문장으로 쓰고, "
+        "근거 없는 일반론이나 모든 회사에 같은 문장 반복은 금지합니다. "
+        "evidence_titles 에 실제 입력 headline 제목 1~2개를 그대로 넣으세요.\n"
+        "7. confidence — 전반적 자신감 (0.0~1.0)\n\n"
         "응답 JSON object:\n"
-        '{"forecasts": [{"horizon":"1Q","scenario":"baseline","narrative":"...",'
-        '"sk_ax_impact":"...","drivers":["..."],"risk_level":"medium","recommended_response":"..."}],'
-        '"final_one_liner":"...","overall_summary":"...","sk_ax_implication":"...","confidence":0.7,'
-        '"per_keyword":[{"theme":"...","title":"...","summary":"...","implication":"..."}]}\n\n'
-        "입력 trends:\n"
+        + response_shape
+        + "입력 trends:\n"
         + json.dumps(detections, ensure_ascii=False, indent=2)
+        + "\n\n입력 company_inputs:\n"
+        + json.dumps(company_inputs, ensure_ascii=False, indent=2)
         + "\n\n입력 alignment (요약):\n"
         + json.dumps(alignment_compact, ensure_ascii=False, indent=2)
         + "\n\n입력 impact_matrix:\n"
@@ -1053,9 +1131,19 @@ def _phase5_forecast_synthesis(
         theme = str(item.get("theme") or "").strip().lower()
         if theme not in valid_themes:
             continue
-        per_keyword_title[theme] = str(item.get("title") or "")[:200]
-        per_keyword_summary[theme] = str(item.get("summary") or "")[:500]
-        per_keyword_implication[theme] = str(item.get("implication") or "")[:300]
+        title = _sanitize_per_keyword_text(item.get("title"), max_length=200)
+        summary = _sanitize_per_keyword_text(item.get("summary"), max_length=500)
+        implication = _sanitize_per_keyword_text(item.get("implication"), max_length=300)
+        if title:
+            per_keyword_title[theme] = title
+        if summary:
+            per_keyword_summary[theme] = summary
+        if implication:
+            per_keyword_implication[theme] = implication
+    company_movements = _sanitize_company_movements(
+        data.get("company_movements"),
+        company_inputs=company_inputs,
+    )
 
     return {
         "forecasts": forecasts,
@@ -1069,6 +1157,117 @@ def _phase5_forecast_synthesis(
         "per_keyword_title": per_keyword_title,
         "per_keyword_summary": per_keyword_summary,
         "per_keyword_implication": per_keyword_implication,
+        "company_movements": company_movements,
+    }
+
+
+def _company_movement_inputs(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    inputs: list[dict[str, Any]] = []
+    for snap in snapshots:
+        company_id = str(snap.get("company_id") or "").strip().lower()
+        if company_id not in set(_GLOBAL_PEER_MOVEMENT_COMPANIES):
+            continue
+        headlines = []
+        for ann in snap.get("headline_announcements", []) or []:
+            if not isinstance(ann, dict):
+                continue
+            title = str(ann.get("title") or "").strip()
+            if not title:
+                continue
+            headlines.append(
+                {
+                    "title": title[:180],
+                    "url": ann.get("url"),
+                    "published_at": ann.get("published_at"),
+                }
+            )
+            if len(headlines) >= 12:
+                break
+        inputs.append(
+            {
+                "company_id": company_id,
+                "top_themes": [str(theme) for theme in (snap.get("top_themes") or [])[:6]],
+                "headlines": headlines,
+            }
+        )
+    return inputs
+
+
+def _sanitize_company_movements(
+    raw: Any,
+    *,
+    company_inputs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    allowed_inputs = {item["company_id"]: item for item in company_inputs}
+    movements_by_company: dict[str, dict[str, Any]] = {}
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            company_id = str(item.get("company_id") or "").strip().lower()
+            if company_id not in allowed_inputs:
+                continue
+            headline = _sanitize_per_keyword_text(item.get("headline"), max_length=120)
+            summary = _sanitize_per_keyword_text(item.get("summary"), max_length=260)
+            evidence_titles = _allowed_evidence_titles(
+                item.get("evidence_titles"),
+                allowed_inputs[company_id],
+            )
+            if not headline or not summary:
+                continue
+            movements_by_company[company_id] = {
+                "company_id": company_id,
+                "headline": headline,
+                "summary": summary,
+                "evidence_titles": evidence_titles,
+                "top_themes": allowed_inputs[company_id].get("top_themes", []),
+            }
+
+    return [
+        movements_by_company.get(company_id)
+        or _fallback_company_movement(company_id, allowed_inputs)
+        for company_id in _GLOBAL_PEER_MOVEMENT_COMPANIES
+        if company_id in allowed_inputs
+    ]
+
+
+def _allowed_evidence_titles(raw: Any, company_input: dict[str, Any]) -> list[str]:
+    allowed = {
+        str(headline.get("title") or "").strip()
+        for headline in company_input.get("headlines", [])
+        if isinstance(headline, dict)
+    }
+    out: list[str] = []
+    if isinstance(raw, list):
+        for title in raw:
+            normalized = str(title or "").strip()
+            if normalized in allowed and normalized not in out:
+                out.append(normalized[:180])
+            if len(out) >= 2:
+                break
+    if out:
+        return out
+    return [title[:180] for title in list(allowed)[:2]]
+
+
+def _fallback_company_movement(
+    company_id: str,
+    company_inputs: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    company_input = company_inputs.get(company_id, {})
+    themes = [str(theme) for theme in (company_input.get("top_themes") or [])[:2] if theme]
+    evidence_titles = _allowed_evidence_titles([], company_input)
+    headline = " · ".join(themes) if themes else "최근 원문 기반 움직임"
+    if evidence_titles:
+        summary = f"최근 원문에서는 '{evidence_titles[0]}' 중심의 움직임이 확인됩니다."
+    else:
+        summary = "최근 30일 원문 근거가 충분하지 않아 회사별 요약을 보류합니다."
+    return {
+        "company_id": company_id,
+        "headline": headline,
+        "summary": summary,
+        "evidence_titles": evidence_titles,
+        "top_themes": themes,
     }
 
 
@@ -1095,6 +1294,7 @@ def _build_persistence_rows(
     sk_ax_implication: str,
     final_one_liner: str,
     overall_summary: str,
+    company_movements: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     trend_date = generated_at.date()
     rows: list[dict[str, Any]] = []
@@ -1144,6 +1344,7 @@ def _build_persistence_rows(
                     "forecasts": forecasts,
                     "final_one_liner": final_one_liner,
                     "overall_summary": overall_summary,
+                    "company_movements": company_movements or [],
                     "leading_companies": det.get("leading_companies", []),
                     "evidence_source_links": evidence_source_links,
                     "domestic_representative_issues": domestic_representative_issues,
@@ -1314,17 +1515,30 @@ def _industry_for_category(category: str) -> str:
 
 
 def _fallback_title(keyword: str, det: dict[str, Any]) -> str:
-    # "strong 강도" 같은 영어·jargon 대신 구체 수치 — 글로벌 6사 newsroom 언급 건수.
     n = det.get("mention_count", 0)
     return f"{keyword} — 글로벌 {n}건 언급"
 
 
 def _fallback_summary(keyword: str, det: dict[str, Any]) -> str:
-    leading = ", ".join(det.get("leading_companies", []) or []) or "-"
-    return (
-        f"글로벌 6사 newsroom 에서 '{keyword}' 가 {det.get('mention_count', 0)} 건 등장. "
-        f"주도 기업: {leading}. intensity={det.get('intensity')}."
+    return ""
+
+
+def _sanitize_per_keyword_text(value: Any, *, max_length: int) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    banned_patterns = (
+        r"global\s*6\s*사\s*newsroom",
+        r"글로벌\s*6\s*사\s*newsroom",
+        r"intensity\s*=",
+        r"주도\s*기업\s*:\s*-",
+        r"^\s*[-–—]?\s*(strong|moderate|weak)\s*강도",
     )
+    if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in banned_patterns):
+        return ""
+    return (text.replace("newsroom", "자료").replace("Newsroom", "자료").replace("뉴스룸", "자료"))[
+        :max_length
+    ]
 
 
 def _clean_global_headline(value: str) -> str:

@@ -20,8 +20,7 @@ def test_normalize_result_rebuilds_internal_evidence_line() -> None:
                 "source_type": "newsroom",
                 "title": "삼성SDS, AI 플랫폼 FabriX 적용 확대",
                 "summary": (
-                    "삼성SDS는 FabriX와 Brity Copilot을 "
-                    "기업 업무 자동화에 적용한다고 밝혔다."
+                    "삼성SDS는 FabriX와 Brity Copilot을 기업 업무 자동화에 적용한다고 밝혔다."
                 ),
                 "url": "https://example.com/news",
             }
@@ -45,8 +44,7 @@ def test_normalize_result_rebuilds_internal_evidence_line() -> None:
             "evidence_refs": ["signal:101"],
             "source_urls": ["https://example.com/news"],
             "evidence_summary": (
-                "삼성SDS 뉴스룸에서 FabriX와 Brity Copilot을 "
-                "기업 업무 자동화에 적용한다고 밝혔다."
+                "삼성SDS 뉴스룸에서 FabriX와 Brity Copilot을 기업 업무 자동화에 적용한다고 밝혔다."
             ),
         },
         "top_keyword_evidence": [
@@ -157,8 +155,7 @@ def test_judgment_reason_does_not_copy_source_sentence() -> None:
     assert "지속적으로 성장하고 있습니다" not in business_line
     assert "진행하고 있습니다 때문에" not in judgment_reason
     assert (
-        "AI와 클라우드 기술을 결합해 기업의 디지털 전환을 "
-        "지원하는 사업 흐름이 확인됩니다"
+        "AI와 클라우드 기술을 결합해 기업의 디지털 전환을 지원하는 사업 흐름이 확인됩니다"
     ) in judgment_reason
     assert "SK AX" not in judgment_reason
     assert "기존 사업 축인 클라우드 기반 AX 전환" in judgment_reason

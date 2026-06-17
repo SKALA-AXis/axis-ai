@@ -21,6 +21,7 @@ from src.agents.it_trend_agent import (
     _domestic_representative_issues,
     _empty_result,
     _extract_keywords_from_rows,
+    _fallback_summary,
     _fallback_title,
     _gate_diverging_on_evidence,
     _is_global_newsroom_row,
@@ -29,6 +30,7 @@ from src.agents.it_trend_agent import (
     _phase2_trends,
     _reference_issue_ids,
     _resolve_previous_trend_context,
+    _sanitize_per_keyword_text,
     _slugify,
     _trend_confidence_for_keyword,
     alignment_match_terms,
@@ -84,6 +86,24 @@ def test_make_source_analysis_id_unique_when_slug_collides() -> None:
     assert a != b
     assert a.endswith("-001-generative-ai")
     assert b.endswith("-002-generative-ai")
+
+
+def test_fallback_summary_is_display_ready_without_internal_jargon() -> None:
+    summary = _fallback_summary(
+        "llm",
+        {
+            "mention_count": 82,
+            "intensity": "strong",
+            "leading_companies": ["nvidia", "microsoft"],
+        },
+    )
+
+    assert summary == ""
+
+
+def test_sanitize_per_keyword_text_rejects_internal_fallback_sentence() -> None:
+    text = "글로벌 6사 newsroom 에서 'llm' 가 82 건 등장. 주도 기업: -. intensity=strong."
+    assert _sanitize_per_keyword_text(text, max_length=500) == ""
 
 
 # ──────────────────────────────────────────────────────────────────────────

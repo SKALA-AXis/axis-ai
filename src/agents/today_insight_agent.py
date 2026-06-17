@@ -582,10 +582,24 @@ def _fetch_cards_for_issues(
                            sources,
                            integrated_issue_id::text AS integrated_issue_id,
                            created_at,
-                           ((created_at AT TIME ZONE 'Asia/Seoul')::date)::text AS created_date_kst
+                           COALESCE(
+                               src.earliest_source_date,
+                               (created_at AT TIME ZONE 'Asia/Seoul')::date
+                           )::text AS created_date_kst
                      FROM card_news
+                     LEFT JOIN LATERAL (
+                         SELECT MIN((
+                                    COALESCE(ra.published_at, ra.created_at)
+                                    AT TIME ZONE 'Asia/Seoul'
+                                )::date) AS earliest_source_date
+                           FROM raw_articles ra
+                          WHERE ra.id = ANY(COALESCE(source_raw_article_ids, '{{}}'::bigint[]))
+                     ) src ON TRUE
                      WHERE integrated_issue_id IN ({placeholders})
-                       AND (created_at AT TIME ZONE 'Asia/Seoul')::date = CAST(:anchor_date AS date)
+                       AND COALESCE(
+                               src.earliest_source_date,
+                               (created_at AT TIME ZONE 'Asia/Seoul')::date
+                           ) = CAST(:anchor_date AS date)
                        AND COALESCE(peer_company_id, company, '') <> 'sk_ax'
                        AND (
                            COALESCE(cardinality(source_raw_article_ids), 0) = 0
@@ -599,7 +613,13 @@ def _fetch_cards_for_issues(
                                   )::date = CAST(:anchor_date AS date)
                            )
                        )
-                     ORDER BY importance_score DESC NULLS LAST, created_at DESC
+                     ORDER BY
+                       COALESCE(
+                           src.earliest_source_date,
+                           (created_at AT TIME ZONE 'Asia/Seoul')::date
+                       ) DESC,
+                       importance_score DESC NULLS LAST,
+                       created_at DESC
                      LIMIT :limit
                     """
                     ),
@@ -659,9 +679,23 @@ def _fetch_anchor_date_cards(
                            sources,
                            integrated_issue_id::text AS integrated_issue_id,
                            created_at,
-                           ((created_at AT TIME ZONE 'Asia/Seoul')::date)::text AS created_date_kst
+                           COALESCE(
+                               src.earliest_source_date,
+                               (created_at AT TIME ZONE 'Asia/Seoul')::date
+                           )::text AS created_date_kst
                       FROM card_news
-                     WHERE (created_at AT TIME ZONE 'Asia/Seoul')::date = CAST(:anchor_date AS date)
+                      LEFT JOIN LATERAL (
+                          SELECT MIN((
+                                     COALESCE(ra.published_at, ra.created_at)
+                                     AT TIME ZONE 'Asia/Seoul'
+                                 )::date) AS earliest_source_date
+                            FROM raw_articles ra
+                           WHERE ra.id = ANY(COALESCE(source_raw_article_ids, '{{}}'::bigint[]))
+                      ) src ON TRUE
+                     WHERE COALESCE(
+                               src.earliest_source_date,
+                               (created_at AT TIME ZONE 'Asia/Seoul')::date
+                           ) = CAST(:anchor_date AS date)
                        AND COALESCE(peer_company_id, company, '') <> 'sk_ax'
                        AND (
                            COALESCE(cardinality(source_raw_article_ids), 0) = 0
@@ -676,7 +710,13 @@ def _fetch_anchor_date_cards(
                            )
                        )
                        {exclude_clause}
-                     ORDER BY importance_score DESC NULLS LAST, created_at DESC
+                     ORDER BY
+                       COALESCE(
+                           src.earliest_source_date,
+                           (created_at AT TIME ZONE 'Asia/Seoul')::date
+                       ) DESC,
+                       importance_score DESC NULLS LAST,
+                       created_at DESC
                      LIMIT :limit
                     """
                     ),
@@ -720,10 +760,23 @@ def _fetch_recent_cards(
                            sources,
                            integrated_issue_id::text AS integrated_issue_id,
                            created_at,
-                           ((created_at AT TIME ZONE 'Asia/Seoul')::date)::text
-                               AS created_date_kst
+                           COALESCE(
+                               src.earliest_source_date,
+                               (created_at AT TIME ZONE 'Asia/Seoul')::date
+                           )::text AS created_date_kst
                       FROM card_news
-                     WHERE (created_at AT TIME ZONE 'Asia/Seoul')::date
+                      LEFT JOIN LATERAL (
+                          SELECT MIN((
+                                     COALESCE(ra.published_at, ra.created_at)
+                                     AT TIME ZONE 'Asia/Seoul'
+                                 )::date) AS earliest_source_date
+                            FROM raw_articles ra
+                           WHERE ra.id = ANY(COALESCE(source_raw_article_ids, '{}'::bigint[]))
+                      ) src ON TRUE
+                     WHERE COALESCE(
+                               src.earliest_source_date,
+                               (created_at AT TIME ZONE 'Asia/Seoul')::date
+                           )
                            BETWEEN CAST(:anchor_date AS date)
                                - (:window_days * INTERVAL '1 day')
                                AND CAST(:anchor_date AS date)
@@ -742,7 +795,13 @@ def _fetch_recent_cards(
                                       AND CAST(:anchor_date AS date)
                            )
                        )
-                     ORDER BY importance_score DESC NULLS LAST, created_at DESC
+                     ORDER BY
+                       COALESCE(
+                           src.earliest_source_date,
+                           (created_at AT TIME ZONE 'Asia/Seoul')::date
+                       ) DESC,
+                       importance_score DESC NULLS LAST,
+                       created_at DESC
                      LIMIT :limit
                     """
                     ),
