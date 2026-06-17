@@ -37,8 +37,11 @@ FRONTEND_READY_REPAIR_USER_PROMPT_TEMPLATE_LEGACY = """\
    - action_basis: skax_question, check_target, evaluation_basis,
      execution_angle, required_condition
 4. 그 다음 basis를 바탕으로 sentence/evidence_sentence를 작성합니다.
-   sentence는 결론만 담은 짧은 1문장이고, evidence_sentence는 그 결론을
-   뒷받침하는 구체 근거/설명 1문장입니다.
+   sentence는 결론만 담은 짧은 1문장입니다.
+   evidence_sentence는 보통 그 결론을 뒷받침하는 구체 근거/설명 1문장입니다.
+   다만 사용자별 SK AX 보강 프로필이 현재 사건과 직접 맞물려 suggested_action을
+   공통 대응방향보다 구체화하는 경우에는 suggested_action.evidence_sentence를
+   3~4문장으로 써도 됩니다.
    suggested_action.sentence는 action_basis 조각을 이어 붙이지 말고,
    현재 사건이 SK AX의 후속 판단에 남기는 변화를 자연스러운 문장으로 씁니다.
    입력 fact에서 직접 확인된 대상·수치·기능·적용 방식·관계 구조를 사용해
@@ -89,6 +92,28 @@ FRONTEND_READY_REPAIR_USER_PROMPT_TEMPLATE_LEGACY = """\
    현재 사건에서 드러난 업무·시스템·운영 구조와 연결해 SK AX식 대응 관점으로 재해석합니다.
    overlay에 있는 내부 initiative, 현재 범위, 목표 방향, 운영 조건은 현재 사건과 겹칠 때만
    suggested_action의 구체화 근거로 사용하고, key_implication에는 넣지 않습니다.
+   overlay를 쓰는 경우 suggested_action.sentence는 한 줄 핵심 대응으로 유지하고,
+   suggested_action.evidence_sentence는 왜 그 대응이 공통 대응보다 구체화되는지 설명합니다.
+   overlay의 목표 방향이나 제품/운영 범위가 현재 사건과 직접 겹치면,
+   suggested_action.sentence는 "점검/검토/필요" 수준으로 끝내지 말고
+   SK AX가 기존 범위에 머물지 않고 overlay에 실제로 제시된 목표 방향으로
+   어떻게 나아가야 하는지 한 문장으로 씁니다.
+   핵심 대응은 준비나 구체화 작업 자체가 아니라,
+   현재 범위에서 목표 방향으로 나아가야 한다는 방향 전환 문장으로 씁니다.
+   명명이나 재정의 자체를 결론으로 삼지 말고,
+   현재 범위에 머물지 않고 목표 방향으로 나아가는 대응을 결론으로 씁니다.
+   설명에는 현재 사건이 높인 고객 기대/경쟁 기준, overlay의 현재 범위가 그대로이면 부족해지는 지점,
+   overlay에 실제로 있는 목표 방향과 실행 조건, 그렇게 조정할 때의 사업적 의미를
+   현재 입력 안에서 확인되는 근거만으로 연결합니다.
+   근거/설명 중간 문장은 "필요가 있다" 같은 일반 표현보다
+   기존 범위에 머물면 어떤 고객 기대나 실행 범위를 설명하기 어려운지,
+   그래서 overlay의 어떤 목표 방향과 실행 조건으로 묶어야 하는지를 말합니다.
+   마지막 설명은 단순 확인 과제로 끝내지 말고, 그렇게 접근했을 때 SK AX 제안이
+   overlay에 실제로 제시된 고객 도입 기준이나 차별화 근거 중 무엇을
+   확보하거나 강화할 수 있는지 입력 근거 안에서 정리합니다.
+   특히 overlay에 차별화 기준이 있으면 피어 기능을 단순 추격하는 것이 아니라
+   고객 도입 기준에서 어떤 차별화 근거를 만들 수 있는지까지 설명합니다.
+   overlay 내용을 요약해 붙이지 말고, 현재 사건과 맞닿는 부분을 SK AX 대응 논리로 다시 구성합니다.
    특히 협력/MOU/공동개발 이슈에서는 각 참여자가 보유한 역량이 어떻게 맞물리는지
    먼저 읽습니다. 기사에 한쪽의 현장·시스템·운영 역량과 다른 쪽의 AI 모델·기술
    역량이 함께 나오면, 두 역량이 어떤 적용 단계에서 맞물리는지 해석하고,
@@ -300,7 +325,7 @@ FRONTEND_READY_REPAIR_USER_PROMPT_TEMPLATE_LEGACY = """\
       "skax_anchor_terms": [],
       "unsupported_claims_removed": [],
       "sentence": "SK AX 대응방향 1문장",
-      "evidence_sentence": "현재 사건 신호가 왜 그 대응방향으로 이어지는지 1문장"
+      "evidence_sentence": "현재 사건 신호와 대응방향의 연결 설명. overlay 구체화 시 3~4문장 가능"
     }}
   }}
 }}
@@ -332,7 +357,38 @@ frontend_ready 객체 하나만 작성합니다.
 ## 작성 원칙
 - IntegratedIssue에서 확인된 사실을 근거로 씁니다.
 - key_implication은 피어사/시장 관점, suggested_action은 SK AX 관점으로 분리합니다.
-- 각 block은 결론 sentence 1문장과 근거 evidence_sentence 1문장으로 씁니다.
+- 각 block은 결론 sentence 1문장과 근거 evidence_sentence를 씁니다.
+  evidence_sentence는 보통 1문장이지만, user_strategy_overlays가 현재 사건과 직접 맞물려
+  suggested_action을 구체화하는 경우 suggested_action.evidence_sentence는 3~4문장까지 허용합니다.
+- ProfileContext.skax_profile.user_strategy_overlays는 사용자별 SK AX 보강 프로필입니다.
+  현재 사건 fact와 직접 관련되는 의미 단위만 suggested_action에 사용하고,
+  관련이 없으면 overlay를 사용하지 않습니다.
+  관련 있더라도 overlay 문장을 그대로 반복하지 말고,
+  현재 사건에서 드러난 업무·시스템·운영 구조와 연결해 SK AX식 대응 관점으로 재해석합니다.
+  overlay에 있는 내부 initiative, 현재 범위, 목표 방향, 운영 조건은 현재 사건과 겹칠 때만
+  suggested_action의 구체화 근거로 사용하고, key_implication에는 넣지 않습니다.
+  overlay를 쓰는 경우 suggested_action.sentence는 한 줄 핵심 대응으로 유지하고,
+  suggested_action.evidence_sentence는 왜 그 대응이 공통 대응보다 구체화되는지 설명합니다.
+  overlay의 목표 방향이나 제품/운영 범위가 현재 사건과 직접 겹치면,
+  suggested_action.sentence는 "점검/검토/필요" 수준으로 끝내지 말고
+  SK AX가 기존 범위에 머물지 않고 overlay에 실제로 제시된 목표 방향으로
+  어떻게 나아가야 하는지 한 문장으로 씁니다.
+  핵심 대응은 준비나 구체화 작업 자체가 아니라,
+  현재 범위에서 목표 방향으로 나아가야 한다는 방향 전환 문장으로 씁니다.
+  명명이나 재정의 자체를 결론으로 삼지 말고,
+  현재 범위에 머물지 않고 목표 방향으로 나아가는 대응을 결론으로 씁니다.
+  설명에는 현재 사건이 높인 고객 기대/경쟁 기준, overlay의 현재 범위가 그대로이면 부족해지는 지점,
+  overlay에 실제로 있는 목표 방향과 실행 조건, 그렇게 조정할 때의 사업적 의미를
+  현재 입력 안에서 확인되는 근거만으로 연결합니다.
+  근거/설명 중간 문장은 "필요가 있다" 같은 일반 표현보다
+  기존 범위에 머물면 어떤 고객 기대나 실행 범위를 설명하기 어려운지,
+  그래서 overlay의 어떤 목표 방향과 실행 조건으로 묶어야 하는지를 말합니다.
+  마지막 설명은 단순 확인 과제로 끝내지 말고, 그렇게 접근했을 때 SK AX 제안이
+  overlay에 실제로 제시된 고객 도입 기준이나 차별화 근거 중 무엇을
+  확보하거나 강화할 수 있는지 입력 근거 안에서 정리합니다.
+  특히 overlay에 차별화 기준이 있으면 피어 기능을 단순 추격하는 것이 아니라
+  고객 도입 기준에서 어떤 차별화 근거를 만들 수 있는지까지 설명합니다.
+  overlay 내용을 요약해 붙이지 말고, 현재 사건과 맞닿는 부분을 SK AX 대응 논리로 다시 구성합니다.
 - ProfileContext 접점이 약하면 evidence_mode를 event_based 또는 generic_monitoring으로 둡니다.
 - source와 각 block.source는 "frontend_repair_direct"입니다.
 
@@ -376,7 +432,7 @@ frontend_ready 객체 하나만 작성합니다.
       "skax_anchor_terms": ["문장에 실제로 쓴 SK AX/ProfileContext 표현"],
       "unsupported_claims_removed": [],
       "sentence": "SK AX 대응방향 1문장",
-      "evidence_sentence": "현재 사건 신호가 왜 그 대응방향으로 이어지는지 1문장"
+      "evidence_sentence": "현재 사건 신호와 대응방향의 연결 설명. overlay 구체화 시 3~4문장 가능"
     }},
     "needs_review": false,
     "reason": ""
