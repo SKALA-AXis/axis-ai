@@ -531,8 +531,12 @@ action_details:
 
 radar_axis_interpretations:
 - 결정적 산식 결과의 6개 축을 그대로 사용하세요.
+- radar_axis_interpretations에는 6개 축을 모두 포함하세요. 축 누락은 금지입니다.
 - 각 axis가 본문 근거에서 무엇을 확인하게 하는 분석 질문인지 analysis_prompt에 쓰세요.
 - interpretation에는 현재 카드 묶음의 본문 근거를 통해 그 축을 어떻게 읽어야 하는지 답하세요.
+- interpretation은 점수, 퍼센트, 카드 개수만 반복하지 말고 근거 카드의 사실과 연결해 쓰세요.
+- 해당 축을 지지하는 근거 카드가 없으면 "근거 부족"이라고 명시하고,
+  어떤 후속 신호를 확인해야 하는지 쓰세요.
 - 점수가 낮은 축도 “없음”으로 끝내지 말고, 왜 이번 묶음에서 약한 신호인지 설명하세요.
 - axis 값은 peer_strategic_shift, tech_investment, market_position, partnership_momentum,
   regulatory_risk, talent_movement 중 하나만 사용하세요.
@@ -1167,29 +1171,6 @@ def _radar_axis_analysis_prompt(axis: str) -> str:
     return _RADAR_AXIS_PROMPTS.get(axis, "본문 근거가 이 신호 축을 어떻게 지지하거나 약화하는가?")
 
 
-def _fallback_radar_prompted_interpretation(axis: dict) -> str:
-    axis_id = str(axis.get("axis") or "")
-    label = _RADAR_AXIS_LABELS.get(axis_id, axis_id or "해당 축")
-    score = float(axis.get("score") or 0.0)
-    support_count = int(axis.get("support_count") or 0)
-    total_count = int(axis.get("total_count") or 0)
-    explanation = str(axis.get("explanation") or "").strip()
-    meaning = str(axis.get("meaning") or "").strip()
-    if support_count <= 0:
-        return (
-            f"{label}은 이번 카드 묶음에서 직접 근거가 약한 축입니다. "
-            "따라서 핵심 결론보다는 공백 신호로 보고, 관련 후속 카드가 반복되는지 확인해야 합니다."
-        )
-    return clip_string(
-        (
-            f"{label}은 {total_count}개 중 {support_count}개 카드가 지지하고 "
-            f"점수는 {score:.2f}입니다. "
-            f"{explanation} {meaning}"
-        ).strip(),
-        360,
-    )
-
-
 def _merge_radar_axis_interpretations(radar: list[dict], interpretations: object) -> list[dict]:
     by_axis: dict[str, dict[str, object]] = {}
     for item in _json_list(interpretations):
@@ -1212,15 +1193,13 @@ def _merge_radar_axis_interpretations(radar: list[dict], interpretations: object
             ).strip(),
             220,
         )
-        next_axis["prompted_interpretation"] = clip_string(
-            str(
-                interpretation.get("interpretation")
-                or interpretation.get("prompted_interpretation")
-                or interpretation.get("answer")
-                or _fallback_radar_prompted_interpretation(radar_axis)
-            ).strip(),
-            420,
-        )
+        interpretation_text = str(
+            interpretation.get("interpretation")
+            or interpretation.get("prompted_interpretation")
+            or interpretation.get("answer")
+            or ""
+        ).strip()
+        next_axis["prompted_interpretation"] = clip_string(interpretation_text, 420)
         enriched.append(next_axis)
     return enriched
 
