@@ -835,8 +835,8 @@ async def _run_collection_track(
         source_name = record["source_name"]
         source_types = _preprocess_source_types(track, source_name)
         preprocessing_service = PreprocessingService(
-            relevance_evaluator=RelevanceEvaluator(enable_llm="news" in source_types),
-            classifier=ClusterClassifier(enable_llm="news" in source_types),
+            relevance_evaluator=RelevanceEvaluator(),
+            classifier=ClusterClassifier(),
         )
         return await asyncio.to_thread(
             preprocessing_service.run,
@@ -889,8 +889,8 @@ async def _run_collection_track(
         if not results:
             source_types = _preprocess_source_types(track, None)
             preprocessing_service = PreprocessingService(
-                relevance_evaluator=RelevanceEvaluator(enable_llm="news" in source_types),
-                classifier=ClusterClassifier(enable_llm="news" in source_types),
+                relevance_evaluator=RelevanceEvaluator(),
+                classifier=ClusterClassifier(),
             )
             results = [
                 await asyncio.to_thread(
@@ -903,10 +903,6 @@ async def _run_collection_track(
                     limit=SCHEDULED_PREPROCESS_LIMIT,
                 )
             ]
-
-        news_postprocess = None
-        if track in {"a", "all"}:
-            news_postprocess = await asyncio.to_thread(_run_recent_news_cluster_postprocess)
 
         if not delivery_results:
             for result in results:
@@ -924,47 +920,13 @@ async def _run_collection_track(
             _sum_result_ints(results, "analysis_metric_count"),
             _sum_result_ints(results, "analysis_signal_count"),
             _count_result_items(results, "classified_clusters"),
-            news_postprocess,
+            "cron_only",
             _count_result_items(delivery_results, "card_news"),
             _count_result_items(delivery_results, "indexed_vector_ids"),
             _count_result_items(delivery_results, "errors"),
         )
     except Exception:
         log.exception("수집 파이프라인 실패 | task_id=%s track=%s", task_id, track)
-
-
-def _run_recent_news_cluster_postprocess() -> dict:
-    from scripts.postprocess_singleton_clusters import run_postprocess
-    from src.db.postgres import SessionLocal
-
-    with SessionLocal() as db:
-        result = run_postprocess(
-            db=db,
-            source_type="news",
-            lookback_hours=24,
-            time_field="published_at",
-            max_source_size=0,
-            min_target_size=2,
-            min_new_cluster_size=2,
-            max_time_gap_hours=72,
-            min_score=0.45,
-            apply=True,
-            skip_noise=True,
-        )
-        db.commit()
-        summary = {
-            "clusters": result["cluster_count"],
-            "sources": result["source_count"],
-            "targets": result["target_count"],
-            "merge_candidates": len(result["candidates"]),
-            "group_merge_candidates": len(result["group_candidates"]),
-            "noise_candidates": len(result["noise_ids"]),
-            "updated": result["updated"],
-            "group_updated": result["group_updated"],
-            "noise_updated": result["noise_updated"],
-        }
-    log.info("뉴스 클러스터 후처리 완료 | %s", summary)
-    return summary
 
 
 def _preprocess_source_types(track: str, source_name: str | None) -> list[str]:

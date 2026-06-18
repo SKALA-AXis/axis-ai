@@ -150,9 +150,9 @@ class PreprocessingService:
         verify_news_links: bool | None = None,
         link_checker: Callable[[str], LinkCheckResult] | None = None,
     ) -> None:
-        self.relevance_evaluator = relevance_evaluator or RelevanceEvaluator(enable_llm=False)
+        self.relevance_evaluator = relevance_evaluator or RelevanceEvaluator()
         self.deduplicator = deduplicator or ArticleDeduplicator()
-        self.classifier = classifier or ClusterClassifier(enable_llm=False)
+        self.classifier = classifier or ClusterClassifier()
         self.max_workers = max_workers
         self.verify_news_links = (
             verify_news_links

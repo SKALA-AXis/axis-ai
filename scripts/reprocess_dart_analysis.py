@@ -37,7 +37,6 @@ from src.extractors.dart_analysis_extractor import (
     business_signals_from_dart,
     financial_metrics_from_dart,
 )
-from src.extractors.dart_llm_analysis_extractor import analyze_dart_with_llm
 from src.parsers.dart_parser import DartParser, extract_dart_storage_content
 from src.parsers.parser_quality import analyze_parser_quality_article
 
@@ -93,17 +92,6 @@ def _parse_args() -> argparse.Namespace:
         help="처리 대상 DART 문서의 기존 business signals를 삭제한 뒤 다시 적재",
     )
     parser.add_argument(
-        "--llm-analysis",
-        action="store_true",
-        help="OPENAI_API_KEY를 사용해 DART 회사/사업 섹션 LLM 보조 분석을 실행",
-    )
-    parser.add_argument(
-        "--llm-max-chunks",
-        type=int,
-        default=0,
-        help="LLM 보조 분석에 보낼 최대 DART chunk 수. 0이면 DART_LLM_MAX_CHUNKS 환경값 사용",
-    )
-    parser.add_argument(
         "--index-vector",
         action="store_true",
         help="DART I/II document chunks를 Qdrant axis_documents에 upsert",
@@ -150,22 +138,6 @@ def main() -> None:
         parser_result = (
             _reparse_dart_article(article) if args.reparse else _stored_parser_result(article)
         )
-        if args.llm_analysis:
-            parser_result = _attach_llm_analysis(
-                article,
-                parser_result,
-                llm_max_chunks=args.llm_max_chunks or None,
-            )
-            article["extra"] = {**article["extra"], "parser_result": parser_result}
-            update_preprocess_status(
-                int(article["id"]),
-                "PROCESSED",
-                {
-                    "parser_result": _compact_parser_result_for_storage(parser_result),
-                    "status_detail": "parsed_document",
-                    "dart_llm_business_signals": parser_result.get("llm_business_signals"),
-                },
-            )
 
         if args.upsert_metrics:
             metrics = financial_metrics_from_dart(article, parser_result)
@@ -517,19 +489,10 @@ def _ensure_business_signals_schema() -> None:
 
 
 def _reparse_dart_article(article: dict[str, Any]) -> dict[str, Any]:
-    preserved_llm_signals = _preserved_llm_business_signals(article)
     parser = DartParser()
     parsed = parser.parse_article(article)
     item, ok, reason = analyze_parser_quality_article(article)
     parser_result = item.get("parser_result") or parsed
-    if preserved_llm_signals:
-        parser_result = {
-            **parser_result,
-            "llm_business_signals": _merge_llm_business_signals(
-                parser_result.get("llm_business_signals"),
-                preserved_llm_signals,
-            ),
-        }
     storage_parser_result = _compact_parser_result_for_storage(parser_result)
 
     metadata_patch = {
@@ -565,86 +528,6 @@ def _reparse_dart_article(article: dict[str, Any]) -> dict[str, Any]:
     return parser_result
 
 
-def _preserved_llm_business_signals(article: dict[str, Any]) -> list[dict[str, Any]]:
-    signals: list[dict[str, Any]] = []
-    metadata = article.get("extra") or {}
-    parser_result = metadata.get("parser_result")
-    if isinstance(parser_result, dict):
-        signals.extend(_llm_signal_dicts(parser_result.get("llm_business_signals")))
-    signals.extend(_llm_signal_dicts(metadata.get("dart_llm_business_signals")))
-    signals.extend(_stored_llm_business_signal_rows(int(article["id"])))
-    return _merge_llm_business_signals([], signals)
-
-
-def _stored_llm_business_signal_rows(raw_article_id: int) -> list[dict[str, Any]]:
-    if not _business_signals_table_exists():
-        return []
-    with SessionLocal() as db:
-        rows = db.execute(
-            text("""
-                SELECT business_area, signal_type, sentiment, summary,
-                       evidence_text, confidence, payload
-                FROM raw_article_business_signals
-                WHERE raw_article_id = :raw_article_id
-                  AND source_type = 'dart'
-                  AND extraction_method = 'dart_llm.analysis'
-                ORDER BY id
-            """),
-            {"raw_article_id": raw_article_id},
-        ).fetchall()
-
-    signals: list[dict[str, Any]] = []
-    for row in rows:
-        data = dict(row._mapping)
-        payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
-        llm_signal = payload.get("llm_signal") if isinstance(payload, dict) else None
-        if isinstance(llm_signal, dict):
-            signals.append(llm_signal)
-            continue
-        signals.append(
-            {
-                "business_area": data.get("business_area"),
-                "signal_type": data.get("signal_type"),
-                "sentiment": data.get("sentiment"),
-                "summary": data.get("summary"),
-                "evidence_text": data.get("evidence_text"),
-                "confidence": data.get("confidence"),
-            }
-        )
-    return signals
-
-
-def _business_signals_table_exists() -> bool:
-    with SessionLocal() as db:
-        return _table_exists(db, "raw_article_business_signals")
-
-
-def _llm_signal_dicts(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, dict)]
-
-
-def _merge_llm_business_signals(
-    current: Any,
-    preserved: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    merged: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for signal in [*_llm_signal_dicts(current), *preserved]:
-        business_area = str(signal.get("business_area") or "company_total")
-        signal_type = str(signal.get("signal_type") or "")
-        evidence_text = str(signal.get("evidence_text") or "").strip()
-        if not signal_type or not evidence_text:
-            continue
-        key = (business_area, signal_type, evidence_text[:180])
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(signal)
-    return merged
-
-
 def _compact_parser_result_for_storage(parser_result: dict[str, Any]) -> dict[str, Any]:
     compact = dict(parser_result)
     chunks = compact.get("document_chunks")
@@ -660,20 +543,6 @@ def _chunk_without_text(chunk: Any) -> dict[str, Any]:
     return {key: value for key, value in chunk.items() if key != "text"} | {
         "text_chars": len(text) or chunk.get("text_chars"),
         "text_omitted_for_metadata": True,
-    }
-
-
-def _attach_llm_analysis(
-    article: dict[str, Any],
-    parser_result: dict[str, Any],
-    *,
-    llm_max_chunks: int | None = None,
-) -> dict[str, Any]:
-    analysis = analyze_dart_with_llm(article, parser_result, max_chunks=llm_max_chunks)
-    llm_signals = analysis.get("llm_business_signals") or []
-    return {
-        **parser_result,
-        "llm_business_signals": llm_signals,
     }
 
 

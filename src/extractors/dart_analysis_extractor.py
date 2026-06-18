@@ -293,19 +293,6 @@ def business_signals_from_dart(
 
     signals: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    signals.extend(
-        _llm_business_signals_from_dart(
-            article=article,
-            parser_result=parser_result,
-            article_id=article_id,
-            peer_id=peer_id,
-            period=period,
-            period_year=period_year,
-            period_quarter=period_quarter,
-            period_type=period_type,
-            seen=seen,
-        )
-    )
     for chunk in chunks:
         if not isinstance(chunk, dict):
             continue
@@ -378,79 +365,6 @@ def business_signals_from_dart(
             )
 
     return signals
-
-
-def _llm_business_signals_from_dart(
-    *,
-    article: dict[str, Any],
-    parser_result: dict[str, Any],
-    article_id: int,
-    peer_id: str | None,
-    period: Any,
-    period_year: Any,
-    period_quarter: Any,
-    period_type: Any,
-    seen: set[tuple[str, str]],
-) -> list[dict[str, Any]]:
-    llm_signals = parser_result.get("llm_business_signals")
-    if not isinstance(llm_signals, list):
-        return []
-
-    rows_by_key: dict[tuple[str, str], dict[str, Any]] = {}
-    for index, signal in enumerate(llm_signals, start=1):
-        if not isinstance(signal, dict):
-            continue
-        business_area = str(signal.get("business_area") or "company_total")
-        signal_type = str(signal.get("signal_type") or "")
-        evidence_text = str(signal.get("evidence_text") or "").strip()
-        if not signal_type or not evidence_text:
-            continue
-        if peer_id == "sk_ax" and not _is_sk_ax_relevant_sentence(evidence_text):
-            continue
-        business_area = _business_area_from_evidence_override(
-            peer_id=peer_id,
-            business_area=business_area,
-            evidence_text=evidence_text,
-        )
-        dedupe_key = (business_area, evidence_text[:180])
-        if dedupe_key in seen:
-            continue
-        row = {
-            "raw_article_id": article_id,
-            "signal_uid": f"dart-llm:{business_area}:{signal_type}:{index}",
-            "source_type": "dart",
-            "source_name": article.get("source_name"),
-            "peer_id": peer_id,
-            "period": period,
-            "period_year": period_year,
-            "period_quarter": period_quarter,
-            "period_type": period_type,
-            "business_area": business_area,
-            "signal_type": signal_type,
-            "sentiment": signal.get("sentiment") or _sentiment(evidence_text),
-            "summary": signal.get("summary") or _summary(evidence_text),
-            "evidence_text": evidence_text,
-            "source_page": None,
-            "source_chunk_uid": None,
-            "confidence": signal.get("confidence") or 0.78,
-            "extraction_method": "dart_llm.analysis",
-            "payload": {
-                "title": article.get("title"),
-                "url": article.get("url"),
-                "rcept_no": parser_result.get("rcept_no") or article["extra"].get("rcept_no"),
-                "llm_signal": signal,
-            },
-        }
-        existing = rows_by_key.get(dedupe_key)
-        if existing and _signal_type_priority(existing["signal_type"]) <= _signal_type_priority(
-            signal_type
-        ):
-            continue
-        rows_by_key[dedupe_key] = row
-    rows = list(rows_by_key.values())
-    for row in rows:
-        seen.add((row["business_area"], row["evidence_text"][:180]))
-    return rows
 
 
 def _metrics_from_statement(

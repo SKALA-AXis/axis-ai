@@ -108,10 +108,9 @@ def main() -> int:
     total_analysis_signals = 0
 
     for group_name, source_types in _source_type_groups(args.track):
-        enable_llm = "news" in source_types
         service = PreprocessingService(
-            relevance_evaluator=RelevanceEvaluator(enable_llm=enable_llm),
-            classifier=ClusterClassifier(enable_llm=enable_llm),
+            relevance_evaluator=RelevanceEvaluator(),
+            classifier=ClusterClassifier(),
         )
         batch = 0
 
