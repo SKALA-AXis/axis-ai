@@ -920,9 +920,6 @@ def _cluster_relation(
     left_tokens = set().union(*(_event_tokens(title) for title in left_titles))
     right_tokens = set().union(*(_event_tokens(title) for title in right_titles))
     shared_tokens = left_tokens & right_tokens
-    left_context_tokens = _cluster_context_tokens(left_titles, left_snippets)
-    right_context_tokens = _cluster_context_tokens(right_titles, right_snippets)
-    shared_context_tokens = left_context_tokens & right_context_tokens
     left_title_key = _title_event_issue_key(left_titles)
     right_title_key = _title_event_issue_key(right_titles)
 

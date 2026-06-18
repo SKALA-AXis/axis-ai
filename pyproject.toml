@@ -38,7 +38,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-# Dockerfile.cron (axis-ai-cron) — card-evaluator 전용. torch/Playwright 미포함.
+# Dockerfile.cron (axis-ai-cron) — 경량 cron 전용. torch/Playwright 미포함.
 cron = [
     "langchain-core>=0.2",
     "langchain-openai>=0.1",
