@@ -22,7 +22,6 @@ from src.analysis.summarize.article_selection import (  # noqa: F401
     _same_event_title_groups,
     _same_title_event,
     _select_analysis_articles,
-    _snippet_score,
     _title_event_tokens,
     _title_group_features,
     _useful_title_event_token,
@@ -37,6 +36,7 @@ from src.analysis.summarize.config import (  # noqa: F401
     _EVENT_TYPES,
     _FACT_EXTRACTION_BATCH_SIZE,
     _FACT_EXTRACTION_MAX_TOKENS,
+    _FACT_EXTRACTION_MODE,
     _FACT_ID_SUMMARY_PROMPT,
     _FACT_TYPES,
     _FULL_TEXT_ARTICLE_LIMIT,
@@ -60,7 +60,9 @@ from src.analysis.summarize.config import (  # noqa: F401
     _SUMMARY_MAX_TOKENS,
     _SUMMARY_ROLES,
     _SUPPORTING_ARTICLE_CONTENT_CHARS,
+    _USE_FACT_EXTRACTION_LLM,
     _VALIDATION_MAX_TOKENS,
+    _env_bool,
     _env_float,
     _env_int,
     _get_llm,
@@ -68,14 +70,10 @@ from src.analysis.summarize.config import (  # noqa: F401
 )
 from src.analysis.summarize.fact_assembly import (  # noqa: F401
     _add_article_fallback_facts,
-    _article_company_alias_mentioned,
-    _article_similarity_tokens,
-    _article_topic_tokens,
     _build_cluster_fact_intelligence,
     _build_extracted_facts,
     _classify_cluster_event_type,
     _classify_event_type_from_text,
-    _fact_is_off_topic_for_article,
     _is_duplicate_extracted_fact,
     _soften_uncertain_sentence,
     _title_to_fact_sentence,
@@ -113,14 +111,19 @@ from src.analysis.summarize.rule_based_facts import (  # noqa: F401
     _contract_fact_sentence,
     _dedupe_contract_facts,
     _first_sentence_matching,
+    _is_article_context_detail_snippet,
+    _is_article_relevant_snippet,
     _rule_based_article_fact_notes,
     _rule_based_entities,
     _rule_based_event_type,
+    _rule_based_fact_notes_need_llm,
     _rule_based_fact_type_and_role,
     _scope_fact_sentence,
     _select_rule_based_sentences,
+    _snippet_score,
 )
 from src.analysis.summarize.summary_lines import (  # noqa: F401
+    _additional_facts_for_prompt,
     _clean_summary_line,
     _compact_fact_for_prompt,
     _compact_facts_for_prompt,
@@ -163,10 +166,17 @@ from src.analysis.summarize.summary_lines import (  # noqa: F401
 )
 from src.analysis.summarize.text_utils import (  # noqa: F401
     _append_reason,
+    _article_company_alias_mentioned,
     _article_ids,
     _article_numeric_id,
+    _article_similarity_tokens,
+    _article_target_company_alias_mentioned,
+    _article_topic_tokens,
+    _articles_text,
     _as_int_list,
     _as_list,
+    _body_peer_companies,
+    _candidate_peer_companies,
     _chunked,
     _clamp_float,
     _clean_domain_term,
@@ -185,6 +195,7 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _escape_json_string_newlines,
     _event_verbs_in_text,
     _extract_json_object_text,
+    _fact_is_off_topic_for_article,
     _fact_key,
     _has_bad_korean_join,
     _has_business_scope_terms,
@@ -192,6 +203,9 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _has_uncertain_fact_marker,
     _has_unique_fact_importance,
     _is_article_ui_boilerplate,
+    _is_company_neutral_context_detail,
+    _is_industry_trend_cluster,
+    _is_peer_comparison_issue,
     _join_warnings,
     _matched_companies,
     _metadata,
@@ -214,80 +228,6 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _text_similarity,
     normalize_korean_spacing,
 )
-from src.config.company_tiers import company_tier
-
-
-def _candidate_peer_companies(articles: list[dict[str, Any]]) -> list[str]:
-    """Return the actual target companies for this cluster.
-
-    Use preprocessing outputs by default. When the cluster itself is an explicit
-    peer-comparison issue, preserve the peer aliases in the article body so the
-    IntegratedIssue does not collapse to a single representative company.
-    """
-    if _is_industry_trend_cluster(articles):
-        return [_INDUSTRY_TREND_COMPANY_ID]
-
-    candidates: list[str] = []
-    for article in articles:
-        candidates.extend(_company_list(article))
-        candidates.extend(_matched_companies(article))
-    if _is_peer_comparison_issue(articles):
-        candidates.extend(_body_peer_companies(articles))
-
-    return [
-        company_id
-        for company_id in _dedupe_keep_order(candidates)
-        if company_id in _PEER_ALIASES and company_tier(company_id) != "self"
-    ]
-
-
-def _is_industry_trend_cluster(articles: list[dict[str, Any]]) -> bool:
-    for article in articles:
-        if _INDUSTRY_TREND_COMPANY_ID in _company_list(article):
-            return True
-        if str(article.get("source_name") or "").strip() == "naver_industry_news":
-            return True
-        metadata = _metadata(article)
-        if metadata.get("topic_scope") == _INDUSTRY_TREND_COMPANY_ID:
-            return True
-        if metadata.get("company_scope") == "industry":
-            return True
-    return False
-
-
-def _body_peer_companies(articles: list[dict[str, Any]]) -> list[str]:
-    text = _articles_text(articles)
-    mentioned: list[str] = []
-    for company_id, aliases in _PEER_ALIASES.items():
-        if company_tier(company_id) == "self":
-            continue
-        if any(
-            alias and re.search(re.escape(str(alias)), text, re.IGNORECASE) for alias in aliases
-        ):
-            mentioned.append(company_id)
-    return mentioned
-
-
-def _is_peer_comparison_issue(articles: list[dict[str, Any]]) -> bool:
-    text = _articles_text(articles)
-    if not text:
-        return False
-    mentioned_count = len(_body_peer_companies(articles))
-    if mentioned_count < 2:
-        return False
-    comparison_signal = re.search(
-        r"비교|대조|엇갈|반면|내부거래|의존도|비중|증가|감소|상승|하락",
-        text,
-    )
-    metric_signal = len(_number_tokens(text)) >= 2
-    return bool(comparison_signal and metric_signal)
-
-
-def _articles_text(articles: list[dict[str, Any]]) -> str:
-    return " ".join(
-        normalize_korean_spacing(f"{article.get('title') or ''}. {article.get('content') or ''}")
-        for article in articles
-    )
 
 
 def _enrich_peer_comparison_issue(

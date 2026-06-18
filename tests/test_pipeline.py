@@ -3,6 +3,7 @@
 # 변경이력:
 #   2026-04-21 최종민 — axis-ai 베이스라인 구축, issue_cards→card_news 리네임
 #   2026-04-28 박지원 — 크롤러 구현 및 전처리·클러스터링 파이프라인 개선
+#   2026-06-18 최종민 — 코드 변경
 """파이프라인 단위 테스트"""
 
 import numpy as np
@@ -1069,6 +1070,67 @@ def test_nc_physical_ai_subissues_do_not_collapse_into_one_cluster():
     assert _rule_prefilter_key(posco_robot) == _rule_prefilter_key(hanwha_welding)
     assert _should_merge_articles(posco_robot, hanwha_welding, 0.99, 0.80) is False
     assert _should_merge_articles(posco_robot, jensen_meeting, 0.99, 0.80) is False
+
+
+def test_same_company_ax_event_variants_merge_by_generic_content_features():
+    agent_push = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "matched_sectors": ["ax"],
+        "title": "포스코DX, ‘1인 N에이전트’ 시대 대비…전사 AX 혁신 가속",
+        "content": (
+            "전사 AX 혁신 프로그램의 일환으로 임직원 대상 해커톤을 열고 "
+            "업무별 AI 에이전트 활용 역량을 강화했다."
+        ),
+        "published_at": "2026-06-18T00:38:00+00:00",
+    }
+    event_angle = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "matched_sectors": ["ax"],
+        "title": "포스코DX, ‘AX 해커톤’ 개최해 AI 역량 강화",
+        "content": (
+            "전사 AX 혁신 프로그램에서 임직원이 업무별 AI 에이전트 활용 과제를 "
+            "해커톤 형태로 발표했다."
+        ),
+        "published_at": "2026-06-18T02:06:00+00:00",
+    }
+    broad_title = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "matched_sectors": ["ax"],
+        "title": "포스코DX, '1인 N에이전트 시대' 연다…전사 AI 역량 강화",
+        "content": (
+            "임직원 해커톤과 업무별 AI 에이전트 활용을 통해 전사 AX 혁신을 "
+            "확대하는 프로그램이다."
+        ),
+        "published_at": "2026-06-18T00:29:00+00:00",
+    }
+
+    assert _should_merge_articles(agent_push, event_angle, 0.74, 0.80) is True
+    assert _should_merge_articles(agent_push, broad_title, 0.74, 0.80) is True
+    assert _should_merge_articles(event_angle, broad_title, 0.74, 0.80) is True
+
+
+def test_same_company_generic_ax_theme_does_not_merge_when_object_features_differ():
+    event_program = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "matched_sectors": ["ax"],
+        "title": "포스코DX, 전사 AX 역량 강화 프로그램 확대",
+        "content": "임직원 대상 업무 자동화 교육과 실습 프로그램을 확대했다.",
+        "published_at": "2026-06-18T00:38:00+00:00",
+    }
+    product_release = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "matched_sectors": ["ax"],
+        "title": "포스코DX, 제조 현장 데이터 분석 플랫폼 공개",
+        "content": "제조 현장의 품질 데이터를 분석하는 신규 플랫폼을 공개했다.",
+        "published_at": "2026-06-18T02:06:00+00:00",
+    }
+
+    assert _should_merge_articles(event_program, product_release, 0.90, 0.80) is False
 
 
 def test_core_role_rejects_alumni_personnel_article():

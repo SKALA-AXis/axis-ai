@@ -18,6 +18,7 @@ from src.analysis.summarize.config import (  # noqa: F401
     _EVENT_TYPES,
     _FACT_EXTRACTION_BATCH_SIZE,
     _FACT_EXTRACTION_MAX_TOKENS,
+    _FACT_EXTRACTION_MODE,
     _FACT_ID_SUMMARY_PROMPT,
     _FACT_TYPES,
     _FULL_TEXT_ARTICLE_LIMIT,
@@ -41,7 +42,9 @@ from src.analysis.summarize.config import (  # noqa: F401
     _SUMMARY_MAX_TOKENS,
     _SUMMARY_ROLES,
     _SUPPORTING_ARTICLE_CONTENT_CHARS,
+    _USE_FACT_EXTRACTION_LLM,
     _VALIDATION_MAX_TOKENS,
+    _env_bool,
     _env_float,
     _env_int,
     _get_llm,
@@ -54,19 +57,30 @@ from src.analysis.summarize.rule_based_facts import (  # noqa: F401
     _contract_fact_sentence,
     _dedupe_contract_facts,
     _first_sentence_matching,
+    _is_article_context_detail_snippet,
+    _is_article_relevant_snippet,
     _rule_based_article_fact_notes,
     _rule_based_entities,
     _rule_based_event_type,
+    _rule_based_fact_notes_need_llm,
     _rule_based_fact_type_and_role,
     _scope_fact_sentence,
     _select_rule_based_sentences,
+    _snippet_score,
 )
 from src.analysis.summarize.text_utils import (  # noqa: F401
     _append_reason,
+    _article_company_alias_mentioned,
     _article_ids,
     _article_numeric_id,
+    _article_similarity_tokens,
+    _article_target_company_alias_mentioned,
+    _article_topic_tokens,
+    _articles_text,
     _as_int_list,
     _as_list,
+    _body_peer_companies,
+    _candidate_peer_companies,
     _chunked,
     _clamp_float,
     _clean_domain_term,
@@ -85,6 +99,7 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _escape_json_string_newlines,
     _event_verbs_in_text,
     _extract_json_object_text,
+    _fact_is_off_topic_for_article,
     _fact_key,
     _has_bad_korean_join,
     _has_business_scope_terms,
@@ -92,6 +107,9 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _has_uncertain_fact_marker,
     _has_unique_fact_importance,
     _is_article_ui_boilerplate,
+    _is_company_neutral_context_detail,
+    _is_industry_trend_cluster,
+    _is_peer_comparison_issue,
     _join_warnings,
     _matched_companies,
     _metadata,
@@ -438,6 +456,26 @@ def _article_prompt_snippets(
         ]
     )
     sentences = [sentence for sentence in sentences if not _is_article_ui_boilerplate(sentence)]
+    relevant_sentences: list[str] = []
+    previous_was_relevant = False
+    for sentence in sentences:
+        is_relevant = _is_article_relevant_snippet(
+            sentence,
+            article=article,
+            target_companies=target_companies,
+            title=title,
+        )
+        if is_relevant or (
+            previous_was_relevant
+            and _is_article_context_detail_snippet(
+                sentence,
+                article=article,
+                target_companies=target_companies,
+            )
+        ):
+            relevant_sentences.append(sentence)
+        previous_was_relevant = is_relevant
+    sentences = relevant_sentences
     scored = sorted(
         (
             (_snippet_score(sentence, article=article, target_companies=target_companies), sentence)
@@ -461,37 +499,6 @@ def _article_prompt_snippets(
     if not selected and title and not _is_near_duplicate_snippet(title, seen_snippets):
         selected.append(title)
     return selected
-
-
-def _snippet_score(
-    sentence: str,
-    *,
-    article: dict[str, Any],
-    target_companies: list[str],
-) -> float:
-    text = str(sentence or "")
-    compact_text = _compact(text)
-    score = 0.0
-    title = normalize_korean_spacing(article.get("title") or "")
-    if text == title:
-        score += 3.0
-    aliases = _target_company_aliases(target_companies)
-    if any(_compact(alias) in compact_text for alias in aliases):
-        score += 3.0
-    if any(_compact(company) in compact_text for company in _matched_companies(article)):
-        score += 1.0
-    event_type = _rule_based_event_type([text])
-    if event_type != "general_update":
-        score += 2.0
-    score += min(2.0, 0.5 * len(_number_tokens(text)))
-    score += min(1.0, 0.5 * len(_date_tokens(text)))
-    if _rule_based_entities([text]):
-        score += 1.0
-    if _has_detail_preservation_terms(text):
-        score += 1.5
-    if _has_business_scope_terms(text):
-        score += 1.0
-    return score
 
 
 def _is_near_duplicate_snippet(text: str, selected_texts: list[str]) -> bool:

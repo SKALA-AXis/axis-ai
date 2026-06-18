@@ -4,6 +4,7 @@
 #   2026-05-19 박지원 — 파서·에이전트 수정으로 시작, 카드 뉴스 품질·근거(provenance)
 #   2026-06-05 심유정 — strategic insight grounding 및 카드 dry run 개선
 #   2026-06-11 최종민 — ChatOpenAI lazy-import 적용, LLM gen-search 이행 및 summarizer 예외 명문화
+#   2026-06-18 최종민 — 코드 변경
 """소스 사실 요약 컴포넌트.
 
 클러스터에 묶인 기사들을 바탕으로 분석 가능한 사실 요약을 생성한다.
@@ -36,7 +37,6 @@ from src.analysis.summarize.article_selection import (  # noqa: F401
     _same_event_title_groups,
     _same_title_event,
     _select_analysis_articles,
-    _snippet_score,
     _title_event_tokens,
     _title_group_features,
     _useful_title_event_token,
@@ -51,6 +51,7 @@ from src.analysis.summarize.config import (  # noqa: F401
     _EVENT_TYPES,
     _FACT_EXTRACTION_BATCH_SIZE,
     _FACT_EXTRACTION_MAX_TOKENS,
+    _FACT_EXTRACTION_MODE,
     _FACT_ID_SUMMARY_PROMPT,
     _FACT_TYPES,
     _FULL_TEXT_ARTICLE_LIMIT,
@@ -74,7 +75,9 @@ from src.analysis.summarize.config import (  # noqa: F401
     _SUMMARY_MAX_TOKENS,
     _SUMMARY_ROLES,
     _SUPPORTING_ARTICLE_CONTENT_CHARS,
+    _USE_FACT_EXTRACTION_LLM,
     _VALIDATION_MAX_TOKENS,
+    _env_bool,
     _env_float,
     _env_int,
     _get_llm,
@@ -82,14 +85,10 @@ from src.analysis.summarize.config import (  # noqa: F401
 )
 from src.analysis.summarize.fact_assembly import (  # noqa: F401
     _add_article_fallback_facts,
-    _article_company_alias_mentioned,
-    _article_similarity_tokens,
-    _article_topic_tokens,
     _build_cluster_fact_intelligence,
     _build_extracted_facts,
     _classify_cluster_event_type,
     _classify_event_type_from_text,
-    _fact_is_off_topic_for_article,
     _is_duplicate_extracted_fact,
     _soften_uncertain_sentence,
     _title_to_fact_sentence,
@@ -127,26 +126,25 @@ from src.analysis.summarize.rule_based_facts import (  # noqa: F401
     _contract_fact_sentence,
     _dedupe_contract_facts,
     _first_sentence_matching,
+    _is_article_context_detail_snippet,
+    _is_article_relevant_snippet,
     _rule_based_article_fact_notes,
     _rule_based_entities,
     _rule_based_event_type,
+    _rule_based_fact_notes_need_llm,
     _rule_based_fact_type_and_role,
     _scope_fact_sentence,
     _select_rule_based_sentences,
+    _snippet_score,
 )
 from src.analysis.summarize.strategic_evidence import (  # noqa: F401
     _actionable_questions_from_inventory,
-    _articles_text,
-    _body_peer_companies,
-    _candidate_peer_companies,
     _clean_inventory_sentence,
     _comparison_axis_from_facts,
     _comparison_core_fact_lines,
     _comparison_summary_lines,
     _enrich_peer_comparison_issue,
     _inventory_fact_key,
-    _is_industry_trend_cluster,
-    _is_peer_comparison_issue,
     _market_structure_facts_from_articles,
     _mentioned_peer_ids_in_text,
     _nearby_percentage,
@@ -160,6 +158,7 @@ from src.analysis.summarize.strategic_evidence import (  # noqa: F401
     _strategic_tension_facts,
 )
 from src.analysis.summarize.summary_lines import (  # noqa: F401
+    _additional_facts_for_prompt,
     _clean_summary_line,
     _compact_fact_for_prompt,
     _compact_facts_for_prompt,
@@ -202,10 +201,17 @@ from src.analysis.summarize.summary_lines import (  # noqa: F401
 )
 from src.analysis.summarize.text_utils import (  # noqa: F401
     _append_reason,
+    _article_company_alias_mentioned,
     _article_ids,
     _article_numeric_id,
+    _article_similarity_tokens,
+    _article_target_company_alias_mentioned,
+    _article_topic_tokens,
+    _articles_text,
     _as_int_list,
     _as_list,
+    _body_peer_companies,
+    _candidate_peer_companies,
     _chunked,
     _clamp_float,
     _clean_domain_term,
@@ -224,6 +230,7 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _escape_json_string_newlines,
     _event_verbs_in_text,
     _extract_json_object_text,
+    _fact_is_off_topic_for_article,
     _fact_key,
     _has_bad_korean_join,
     _has_business_scope_terms,
@@ -231,6 +238,9 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _has_uncertain_fact_marker,
     _has_unique_fact_importance,
     _is_article_ui_boilerplate,
+    _is_company_neutral_context_detail,
+    _is_industry_trend_cluster,
+    _is_peer_comparison_issue,
     _join_warnings,
     _matched_companies,
     _metadata,
@@ -363,6 +373,7 @@ class SourceSummarizer:
             article_fact_notes=article_fact_notes,
             articles=articles_for_analysis,
             cluster_event_type=cluster_event_type,
+            target_companies=target_companies,
         )
         selected_fact_ids = _select_fact_ids_for_summary_lines(
             extracted_facts=extracted_facts,

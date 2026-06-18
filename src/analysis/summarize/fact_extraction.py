@@ -27,7 +27,6 @@ from src.analysis.summarize.article_selection import (  # noqa: F401
     _same_event_title_groups,
     _same_title_event,
     _select_analysis_articles,
-    _snippet_score,
     _title_event_tokens,
     _title_group_features,
     _useful_title_event_token,
@@ -42,6 +41,7 @@ from src.analysis.summarize.config import (  # noqa: F401
     _EVENT_TYPES,
     _FACT_EXTRACTION_BATCH_SIZE,
     _FACT_EXTRACTION_MAX_TOKENS,
+    _FACT_EXTRACTION_MODE,
     _FACT_ID_SUMMARY_PROMPT,
     _FACT_TYPES,
     _FULL_TEXT_ARTICLE_LIMIT,
@@ -65,7 +65,9 @@ from src.analysis.summarize.config import (  # noqa: F401
     _SUMMARY_MAX_TOKENS,
     _SUMMARY_ROLES,
     _SUPPORTING_ARTICLE_CONTENT_CHARS,
+    _USE_FACT_EXTRACTION_LLM,
     _VALIDATION_MAX_TOKENS,
+    _env_bool,
     _env_float,
     _env_int,
     _get_llm,
@@ -78,19 +80,30 @@ from src.analysis.summarize.rule_based_facts import (  # noqa: F401
     _contract_fact_sentence,
     _dedupe_contract_facts,
     _first_sentence_matching,
+    _is_article_context_detail_snippet,
+    _is_article_relevant_snippet,
     _rule_based_article_fact_notes,
     _rule_based_entities,
     _rule_based_event_type,
+    _rule_based_fact_notes_need_llm,
     _rule_based_fact_type_and_role,
     _scope_fact_sentence,
     _select_rule_based_sentences,
+    _snippet_score,
 )
 from src.analysis.summarize.text_utils import (  # noqa: F401
     _append_reason,
+    _article_company_alias_mentioned,
     _article_ids,
     _article_numeric_id,
+    _article_similarity_tokens,
+    _article_target_company_alias_mentioned,
+    _article_topic_tokens,
+    _articles_text,
     _as_int_list,
     _as_list,
+    _body_peer_companies,
+    _candidate_peer_companies,
     _chunked,
     _clamp_float,
     _clean_domain_term,
@@ -109,6 +122,7 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _escape_json_string_newlines,
     _event_verbs_in_text,
     _extract_json_object_text,
+    _fact_is_off_topic_for_article,
     _fact_key,
     _has_bad_korean_join,
     _has_business_scope_terms,
@@ -116,6 +130,9 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _has_uncertain_fact_marker,
     _has_unique_fact_importance,
     _is_article_ui_boilerplate,
+    _is_company_neutral_context_detail,
+    _is_industry_trend_cluster,
+    _is_peer_comparison_issue,
     _join_warnings,
     _matched_companies,
     _metadata,
@@ -149,8 +166,29 @@ def _extract_article_fact_notes_batch(
     target_companies: list[str],
     representative_id: int,
 ) -> tuple[list[dict[str, Any]], list[str], bool]:
+    rule_based_notes = _rule_based_article_fact_notes(
+        articles,
+        reason="rule_based_fact_extraction",
+        target_companies=target_companies,
+    )
+    mode = _FACT_EXTRACTION_MODE
+    if mode not in {"adaptive", "rule", "llm"}:
+        mode = "adaptive"
+    if mode == "rule":
+        return (
+            rule_based_notes,
+            ["fact_extraction_llm_skipped_rule_based_default"],
+            False,
+        )
+    if mode == "adaptive" and not _rule_based_fact_notes_need_llm(
+        rule_based_notes,
+        articles=articles,
+        target_companies=target_companies,
+    ):
+        return rule_based_notes, ["fact_extraction_rule_based_sufficient"], False
+
     notes: list[dict[str, Any]] = []
-    warnings: list[str] = []
+    warnings: list[str] = ["fact_extraction_adaptive_llm_used"] if mode == "adaptive" else []
     extraction_failed = False
     for batch in _chunked(articles, _FACT_EXTRACTION_BATCH_SIZE):
         batch_article_ids = [_article_numeric_id(article) for article in batch]
@@ -176,7 +214,11 @@ def _extract_article_fact_notes_batch(
             extraction_failed = True
         values = parsed.get("article_facts", []) if isinstance(parsed, dict) else []
         if not values:
-            values = _rule_based_article_fact_notes(batch, reason="empty_fact_extraction_result")
+            values = _rule_based_article_fact_notes(
+                batch,
+                reason="empty_fact_extraction_result",
+                target_companies=target_companies,
+            )
             warnings.append("fact_extraction_rule_based_candidates_created")
             extraction_failed = True
         for index, item in enumerate(values):

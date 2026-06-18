@@ -17,6 +17,7 @@ from src.analysis.summarize.config import (  # noqa: F401
     _EVENT_TYPES,
     _FACT_EXTRACTION_BATCH_SIZE,
     _FACT_EXTRACTION_MAX_TOKENS,
+    _FACT_EXTRACTION_MODE,
     _FACT_ID_SUMMARY_PROMPT,
     _FACT_TYPES,
     _FULL_TEXT_ARTICLE_LIMIT,
@@ -40,16 +41,27 @@ from src.analysis.summarize.config import (  # noqa: F401
     _SUMMARY_MAX_TOKENS,
     _SUMMARY_ROLES,
     _SUPPORTING_ARTICLE_CONTENT_CHARS,
+    _USE_FACT_EXTRACTION_LLM,
     _VALIDATION_MAX_TOKENS,
+    _env_bool,
     _env_float,
     _env_int,
     _get_llm,
     _llm,
 )
+from src.config.companies import COMPANY_ALIASES
+from src.config.company_tiers import company_tier
 
 
 def _join_warnings(*values: str) -> str:
     return "; ".join(value for value in values if value)
+
+
+def _is_company_neutral_context_detail(text: str) -> bool:
+    value = normalize_korean_spacing(text)
+    if re.search(r"업계|시장|경쟁사|타사|제3자|다른\s*회사|별도\s*사례", value):
+        return False
+    return bool(re.search(r"기능|업무|자동화|고객|서비스|플랫폼|제품|기술|적용|도입|활용", value))
 
 
 def _ensure_sentence(text: str) -> str:
@@ -81,6 +93,107 @@ def _has_detail_preservation_terms(text: str) -> bool:
             re.I,
         )
     )
+
+
+def _fact_is_off_topic_for_article(
+    text: str,
+    *,
+    article: dict[str, Any],
+    target_companies: list[str] | None = None,
+) -> bool:
+    title = str(article.get("title") or "").strip()
+    if not title:
+        return False
+    title_tokens = _article_topic_tokens(title)
+    if len(title_tokens) < 2:
+        return False
+    value = str(text or "")
+    fact_tokens = _article_topic_tokens(value)
+    if title_tokens & fact_tokens:
+        return False
+    if target_companies and _article_target_company_alias_mentioned(
+        value, article, target_companies
+    ):
+        return False
+    if _article_company_alias_mentioned(value, article) and _has_business_scope_terms(value):
+        return False
+    return True
+
+
+def _article_topic_tokens(text: str) -> set[str]:
+    stopwords = {
+        "속보",
+        "단독",
+        "특징주",
+        "정부",
+        "사업",
+        "참여",
+        "선정",
+        "체결",
+        "규모",
+        "지원",
+        "구축",
+        "확보",
+        "운용",
+        "관련",
+        "오늘",
+        "이번",
+    }
+    return {
+        token
+        for token in _article_similarity_tokens(text)
+        if len(token) >= 2 and token not in stopwords and not token.isdigit()
+    }
+
+
+def _article_similarity_tokens(text: str) -> set[str]:
+    return {
+        token.lower()
+        for token in re.findall(r"[가-힣A-Za-z0-9]{2,}", str(text or ""))
+        if len(token) >= 2
+    }
+
+
+def _article_company_alias_mentioned(text: str, article: dict[str, Any]) -> bool:
+    companies = [
+        *_normalize_string_list(article.get("company")),
+        *_normalize_string_list(article.get("matched_companies")),
+        *_normalize_string_list(article.get("matched_company")),
+    ]
+    value = str(text or "")
+    for company_id in companies:
+        aliases = _PEER_ALIASES.get(company_id) or COMPANY_ALIASES.get(company_id) or []
+        if any(
+            alias and re.search(re.escape(str(alias)), value, re.IGNORECASE) for alias in aliases
+        ):
+            return True
+    return False
+
+
+def _article_target_company_alias_mentioned(
+    text: str,
+    article: dict[str, Any],
+    target_companies: list[str] | None,
+) -> bool:
+    company_ids = _dedupe_keep_order(
+        [
+            *(_normalize_string_list(target_companies) if target_companies else []),
+            *_company_list(article),
+            *_matched_companies(article),
+        ]
+    )
+    value = str(text or "")
+    for company_id in company_ids:
+        aliases = (
+            _INDUSTRY_TREND_ALIASES
+            if company_id == _INDUSTRY_TREND_COMPANY_ID
+            else _PEER_ALIASES.get(company_id) or COMPANY_ALIASES.get(company_id) or []
+        )
+        if any(
+            alias and re.search(re.escape(str(alias)), value, re.IGNORECASE) for alias in aliases
+        ):
+            return True
+    return False
 
 
 def _date_tokens(text: str) -> list[str]:
@@ -207,6 +320,79 @@ def normalize_korean_spacing(value: Any) -> str:
     text = re.sub(r"(를|을|은|는|이|가|와|과|에|에서|로|으로)(?=[A-Z][A-Za-z])", r"\1 ", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def _candidate_peer_companies(articles: list[dict[str, Any]]) -> list[str]:
+    """Return the actual target companies for this cluster.
+
+    Use preprocessing outputs by default. When the cluster itself is an explicit
+    peer-comparison issue, preserve the peer aliases in the article body so the
+    IntegratedIssue does not collapse to a single representative company.
+    """
+    if _is_industry_trend_cluster(articles):
+        return [_INDUSTRY_TREND_COMPANY_ID]
+
+    candidates: list[str] = []
+    for article in articles:
+        candidates.extend(_company_list(article))
+        candidates.extend(_matched_companies(article))
+    if _is_peer_comparison_issue(articles):
+        candidates.extend(_body_peer_companies(articles))
+
+    return [
+        company_id
+        for company_id in _dedupe_keep_order(candidates)
+        if company_id in _PEER_ALIASES and company_tier(company_id) != "self"
+    ]
+
+
+def _is_industry_trend_cluster(articles: list[dict[str, Any]]) -> bool:
+    for article in articles:
+        if _INDUSTRY_TREND_COMPANY_ID in _company_list(article):
+            return True
+        if str(article.get("source_name") or "").strip() == "naver_industry_news":
+            return True
+        metadata = _metadata(article)
+        if metadata.get("topic_scope") == _INDUSTRY_TREND_COMPANY_ID:
+            return True
+        if metadata.get("company_scope") == "industry":
+            return True
+    return False
+
+
+def _body_peer_companies(articles: list[dict[str, Any]]) -> list[str]:
+    text = _articles_text(articles)
+    mentioned: list[str] = []
+    for company_id, aliases in _PEER_ALIASES.items():
+        if company_tier(company_id) == "self":
+            continue
+        if any(
+            alias and re.search(re.escape(str(alias)), text, re.IGNORECASE) for alias in aliases
+        ):
+            mentioned.append(company_id)
+    return mentioned
+
+
+def _is_peer_comparison_issue(articles: list[dict[str, Any]]) -> bool:
+    text = _articles_text(articles)
+    if not text:
+        return False
+    mentioned_count = len(_body_peer_companies(articles))
+    if mentioned_count < 2:
+        return False
+    comparison_signal = re.search(
+        r"비교|대조|엇갈|반면|내부거래|의존도|비중|증가|감소|상승|하락",
+        text,
+    )
+    metric_signal = len(_number_tokens(text)) >= 2
+    return bool(comparison_signal and metric_signal)
+
+
+def _articles_text(articles: list[dict[str, Any]]) -> str:
+    return " ".join(
+        normalize_korean_spacing(f"{article.get('title') or ''}. {article.get('content') or ''}")
+        for article in articles
+    )
 
 
 def _company_display_name(company_id: Any) -> str:

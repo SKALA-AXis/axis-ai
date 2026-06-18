@@ -4,6 +4,7 @@
 #   2026-05-19 박지원 — BGE-M3 임베딩 기반 유사 기사 클러스터링/전처리 구축
 #   2026-05-27 최종민 — BGE-M3 OOM 방지 가드, 제목 dedup 키 유니코드 정규화, Langfuse 추적 누수 차단
 #   2026-06-11 심유정 — dedup 제목 키 정규화 관련 develop 브랜치 머지
+#   2026-06-18 최종민 — 코드 변경
 """Gate 3: BGE-M3 임베딩 기반 유사 기사 클러스터링 전처리.
 
 RelevanceEvaluator를 통과한 기사들을 대상으로 유사 기사 클러스터를 만든다.
@@ -706,6 +707,9 @@ def _should_merge_articles(
     if _same_company_related_full_topic(left, right):
         return True
 
+    if _same_company_generic_event_theme(left, right, similarity, threshold):
+        return True
+
     if not _event_signatures_compatible(left, right):
         if _same_company_title_fallback(left, right, similarity, threshold):
             return True
@@ -851,6 +855,7 @@ def _event_split_keys_compatible(
         or _same_company_signature_or_concept(left, right)
         or _same_company_action_topic(left, right)
         or _same_company_related_full_topic(left, right)
+        or _same_company_generic_event_theme(left, right)
         or _same_company_title_theme(left, right)
     ):
         return True
@@ -1168,6 +1173,161 @@ def _same_company_related_full_topic(left: dict[str, Any], right: dict[str, Any]
     if not left_topics or not right_topics:
         return False
     return _topic_sets_related(left_topics, right_topics)
+
+
+def _same_company_generic_event_theme(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    similarity: float | None = None,
+    threshold: float = DEDUP_THRESHOLD,
+) -> bool:
+    """Merge same-company event variants by generic feature overlap, not named cases."""
+    if not _same_company_context(left, right):
+        return False
+    if not _generic_theme_bucket_scope(left, right):
+        return False
+    if _has_topic_conflict(left, right):
+        return False
+    if similarity is not None and similarity < min(threshold, 0.72):
+        return False
+
+    left_features = _generic_event_features(left)
+    right_features = _generic_event_features(right)
+    if len(left_features) < 2 or len(right_features) < 2:
+        return False
+
+    shared = left_features & right_features
+    if len(shared) < 2:
+        return False
+
+    union_size = len(left_features | right_features)
+    min_size = min(len(left_features), len(right_features))
+    jaccard = len(shared) / union_size
+    coverage = len(shared) / min_size
+    return len(shared) >= 3 and (jaccard >= 0.24 or coverage >= 0.45)
+
+
+def _generic_theme_bucket_scope(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    buckets = {_event_bucket(left), _event_bucket(right)}
+    blocked = {
+        "market_reaction",
+        "investment_deal",
+        "security",
+        "industry_theme",
+    }
+    if buckets & blocked:
+        return False
+    if buckets == {"contract_deal"}:
+        return False
+    return buckets <= {"ax_strategy", "cloud_infra", "general", "contract_deal"}
+
+
+def _generic_event_features(article: dict[str, Any]) -> set[str]:
+    company_tokens = _company_title_tokens(article)
+    tokens = _event_text_tokens(article) - company_tokens - _GENERIC_EVENT_WEAK_TOKENS
+
+    features = {f"tok:{token}" for token in tokens if _is_generic_event_feature_token(token)}
+    features.update(f"topic:{_topic_value(term)}" for term in _full_topic_terms(article))
+    features.update(f"action:{family}" for family in _action_families(article))
+    features.update(f"sector:{sector}" for sector in _article_sector_ids(article))
+    return {feature for feature in features if feature and not feature.endswith(":")}
+
+
+_GENERIC_EVENT_WEAK_TOKENS = {
+    "ai",
+    "ax",
+    "dx",
+    "강화",
+    "가속",
+    "공개",
+    "구축",
+    "국내",
+    "기반",
+    "기술",
+    "기업",
+    "나서",
+    "대비",
+    "등",
+    "만든다",
+    "사업",
+    "시대",
+    "시장",
+    "역량",
+    "연다",
+    "위해",
+    "전략",
+    "전사",
+    "전환",
+    "지원",
+    "추진",
+    "혁신",
+}
+
+
+def _event_text_tokens(article: dict[str, Any]) -> set[str]:
+    text = f"{article.get('title') or ''} {_content_text(article)[:_TITLE_LEAD_CHARS]}".lower()
+    tokens = {
+        _normalize_title_token(token)
+        for token in re.findall(r"[가-힣A-Za-z0-9]+", text)
+        if token.strip()
+    }
+    return {token for token in tokens if _useful_title_token(token)}
+
+
+def _is_generic_event_feature_token(token: str) -> bool:
+    if token in _WEAK_TITLE_BRIDGE_TOKENS:
+        return False
+    if len(token) < 3:
+        return False
+    return True
+
+
+def _action_families(article: dict[str, Any]) -> set[str]:
+    text = _compact_text(
+        f"{article.get('title') or ''} {_content_text(article)[:_TITLE_LEAD_CHARS]}"
+    )
+    families: set[str] = set()
+    action_markers: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("contract", ("수주", "계약", "공급계약", "사업자선정", "우선협상")),
+        ("partnership", ("협약", "업무협약", "mou", "협력", "협업", "맞손", "손잡")),
+        ("launch", ("출시", "공개", "선봬", "오픈", "개소")),
+        ("adoption", ("도입", "적용", "전환", "구축", "확산")),
+        ("investment", ("투자", "인수", "지분", "m&a")),
+        ("event", ("행사", "세미나", "회의", "포럼", "워크숍", "컨퍼런스", "발표")),
+        ("expansion", ("확대", "강화", "고도화", "가속", "공략")),
+        ("regulation", ("규제", "정책", "제도", "시행령", "하위법령", "법안")),
+        ("personnel", ("대표", "사장", "임원", "선임", "승진", "인사")),
+    )
+    for family, markers in action_markers:
+        if any(marker in text for marker in markers):
+            families.add(family)
+    return families
+
+
+def _article_sector_ids(article: dict[str, Any]) -> set[str]:
+    values = _string_values(article.get("matched_sectors"))
+    metadata = article.get("metadata")
+    if isinstance(metadata, dict):
+        values.extend(_string_values(metadata.get("matched_sectors")))
+        values.extend(_string_values(metadata.get("sector")))
+    return {value for value in values if value and value != "other"}
+
+
+def _string_values(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return [stripped]
+        return _string_values(parsed)
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    return [str(value).strip()] if str(value or "").strip() else []
 
 
 def _same_company_title_theme(left: dict[str, Any], right: dict[str, Any]) -> bool:

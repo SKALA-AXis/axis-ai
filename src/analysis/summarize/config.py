@@ -35,10 +35,30 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 _LLM_MODEL = os.getenv("OPENAI_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o"
 
 
 _PROMPT_VERSION = "summary-v4.0"
+
+
+_USE_FACT_EXTRACTION_LLM = _env_bool("NEWS_SUMMARY_USE_FACT_EXTRACTION_LLM", False)
+
+
+_FACT_EXTRACTION_MODE = (
+    os.getenv(
+        "NEWS_SUMMARY_FACT_EXTRACTION_MODE",
+        "llm" if _USE_FACT_EXTRACTION_LLM else "adaptive",
+    )
+    .strip()
+    .lower()
+)
 
 
 _FACT_EXTRACTION_BATCH_SIZE = 10
@@ -71,7 +91,7 @@ _FULL_TEXT_ARTICLE_LIMIT = _env_int("NEWS_SUMMARY_FULL_TEXT_ARTICLE_LIMIT", 3)
 _MIN_ANALYZED_ARTICLES = _env_int("NEWS_SUMMARY_MIN_ANALYZED_ARTICLES", 8)
 
 
-_MAX_ANALYZED_ARTICLES = _env_int("NEWS_SUMMARY_MAX_ANALYZED_ARTICLES", 20)
+_MAX_ANALYZED_ARTICLES = _env_int("NEWS_SUMMARY_MAX_ANALYZED_ARTICLES", 10)
 
 
 _MAJORITY_THRESHOLD = _env_float("NEWS_SUMMARY_MAJORITY_THRESHOLD", 0.70)
@@ -89,7 +109,7 @@ _NEAR_DUPLICATE_SIMILARITY = _env_float("NEWS_SUMMARY_NEAR_DUPLICATE_SIMILARITY"
 _SNIPPETS_PER_ARTICLE = _env_int("NEWS_SUMMARY_SNIPPETS_PER_ARTICLE", 4)
 
 
-_SNIPPET_CANDIDATE_SENTENCES = _env_int("NEWS_SUMMARY_SNIPPET_CANDIDATE_SENTENCES", 80)
+_SNIPPET_CANDIDATE_SENTENCES = _env_int("NEWS_SUMMARY_SNIPPET_CANDIDATE_SENTENCES", 40)
 
 
 _SNIPPET_DEDUP_SIMILARITY = _env_float("NEWS_SUMMARY_SNIPPET_DEDUP_SIMILARITY", 0.88)
@@ -364,7 +384,7 @@ cluster_event_type:
 selected_facts_by_line:
 {selected_facts_json}
 
-all_available_facts:
+additional_available_facts:
 {all_facts_json}
 
 다음 JSON 형식으로만 응답하세요.

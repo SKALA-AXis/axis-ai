@@ -15,6 +15,7 @@ from src.analysis.summarize.config import (  # noqa: F401
     _EVENT_TYPES,
     _FACT_EXTRACTION_BATCH_SIZE,
     _FACT_EXTRACTION_MAX_TOKENS,
+    _FACT_EXTRACTION_MODE,
     _FACT_ID_SUMMARY_PROMPT,
     _FACT_TYPES,
     _FULL_TEXT_ARTICLE_LIMIT,
@@ -38,7 +39,9 @@ from src.analysis.summarize.config import (  # noqa: F401
     _SUMMARY_MAX_TOKENS,
     _SUMMARY_ROLES,
     _SUPPORTING_ARTICLE_CONTENT_CHARS,
+    _USE_FACT_EXTRACTION_LLM,
     _VALIDATION_MAX_TOKENS,
+    _env_bool,
     _env_float,
     _env_int,
     _get_llm,
@@ -46,10 +49,17 @@ from src.analysis.summarize.config import (  # noqa: F401
 )
 from src.analysis.summarize.text_utils import (  # noqa: F401
     _append_reason,
+    _article_company_alias_mentioned,
     _article_ids,
     _article_numeric_id,
+    _article_similarity_tokens,
+    _article_target_company_alias_mentioned,
+    _article_topic_tokens,
+    _articles_text,
     _as_int_list,
     _as_list,
+    _body_peer_companies,
+    _candidate_peer_companies,
     _chunked,
     _clamp_float,
     _clean_domain_term,
@@ -68,6 +78,7 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _escape_json_string_newlines,
     _event_verbs_in_text,
     _extract_json_object_text,
+    _fact_is_off_topic_for_article,
     _fact_key,
     _has_bad_korean_join,
     _has_business_scope_terms,
@@ -75,6 +86,9 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _has_uncertain_fact_marker,
     _has_unique_fact_importance,
     _is_article_ui_boilerplate,
+    _is_company_neutral_context_detail,
+    _is_industry_trend_cluster,
+    _is_peer_comparison_issue,
     _join_warnings,
     _matched_companies,
     _metadata,
@@ -99,25 +113,216 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
 )
 
 
+def _snippet_score(
+    sentence: str,
+    *,
+    article: dict[str, Any],
+    target_companies: list[str],
+) -> float:
+    text = str(sentence or "")
+    compact_text = _compact(text)
+    score = 0.0
+    title = normalize_korean_spacing(article.get("title") or "")
+    if text == title:
+        score += 3.0
+    aliases = _target_company_aliases(target_companies)
+    if any(_compact(alias) in compact_text for alias in aliases):
+        score += 3.0
+    if any(_compact(company) in compact_text for company in _matched_companies(article)):
+        score += 1.0
+    event_type = _rule_based_event_type([text])
+    if event_type != "general_update":
+        score += 2.0
+    score += min(2.0, 0.5 * len(_number_tokens(text)))
+    score += min(1.0, 0.5 * len(_date_tokens(text)))
+    if _rule_based_entities([text]):
+        score += 1.0
+    if _has_detail_preservation_terms(text):
+        score += 1.5
+    if _has_business_scope_terms(text):
+        score += 1.0
+    return score
+
+
+def _is_article_relevant_snippet(
+    sentence: str,
+    *,
+    article: dict[str, Any],
+    target_companies: list[str],
+    title: str | None = None,
+) -> bool:
+    text = normalize_korean_spacing(sentence)
+    if not text:
+        return False
+    title_text = normalize_korean_spacing(
+        title if title is not None else article.get("title") or ""
+    )
+    if title_text and text == title_text:
+        return True
+    if _fact_is_off_topic_for_article(text, article=article, target_companies=target_companies):
+        return False
+    title_tokens = _article_topic_tokens(title_text)
+    text_tokens = _article_topic_tokens(text)
+    has_title_overlap = bool(title_tokens & text_tokens) if title_tokens else True
+    has_target_company = _article_target_company_alias_mentioned(text, article, target_companies)
+    has_article_company = _article_company_alias_mentioned(text, article)
+    is_industry_trend = _INDUSTRY_TREND_COMPANY_ID in target_companies
+    if is_industry_trend:
+        return (
+            has_title_overlap
+            or _has_business_scope_terms(text)
+            or _has_detail_preservation_terms(text)
+        )
+    if has_target_company and (has_title_overlap or _has_business_scope_terms(text)):
+        return True
+    if (
+        has_article_company
+        and has_title_overlap
+        and (_has_business_scope_terms(text) or _rule_based_event_type([text]) != "general_update")
+    ):
+        return True
+    return False
+
+
+def _is_article_context_detail_snippet(
+    sentence: str,
+    *,
+    article: dict[str, Any],
+    target_companies: list[str],
+) -> bool:
+    text = normalize_korean_spacing(sentence)
+    if not text:
+        return False
+    is_off_topic = _fact_is_off_topic_for_article(
+        text,
+        article=article,
+        target_companies=target_companies,
+    )
+    if is_off_topic and not _is_company_neutral_context_detail(text):
+        return False
+    if _rule_based_event_type([text]) != "general_update":
+        return True
+    if re.search(r"기능|업무|자동화|고객|산업|서비스|플랫폼|제품|기술|적용|도입|활용", text):
+        return True
+    if _has_business_scope_terms(text) or _has_detail_preservation_terms(text):
+        return True
+    return bool(_number_tokens(text) or _date_tokens(text) or _rule_based_entities([text]))
+
+
+def _rule_based_fact_notes_need_llm(
+    notes: list[dict[str, Any]],
+    *,
+    articles: list[dict[str, Any]],
+    target_companies: list[str],
+) -> bool:
+    facts: list[tuple[int, dict[str, Any]]] = [
+        (_safe_int(note.get("article_id")), fact)
+        for note in notes
+        for fact in _as_list(note.get("core_facts"))
+        if isinstance(fact, dict) and str(fact.get("fact") or "").strip()
+    ]
+    if len(facts) < _SUMMARY_LINE_MIN:
+        return True
+
+    article_by_id = {
+        _article_numeric_id(article): article
+        for article in articles
+        if _article_numeric_id(article) > 0
+    }
+    title_by_id = {
+        article_id: normalize_korean_spacing(article.get("title") or "")
+        for article_id, article in article_by_id.items()
+    }
+    body_facts = [
+        (article_id, fact)
+        for article_id, fact in facts
+        if normalize_korean_spacing(fact.get("fact") or "") != title_by_id.get(article_id, "")
+    ]
+    if not body_facts:
+        return True
+    if _INDUSTRY_TREND_COMPANY_ID in target_companies:
+        return False
+
+    return not any(
+        _article_target_company_alias_mentioned(
+            " ".join(
+                [
+                    str(fact.get("fact") or ""),
+                    str(fact.get("evidence_text") or ""),
+                ]
+            ),
+            article_by_id.get(article_id) or {},
+            target_companies,
+        )
+        for article_id, fact in facts
+    )
+
+
 def _rule_based_article_fact_notes(
     articles: list[dict[str, Any]],
     *,
     reason: str,
+    target_companies: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     notes: list[dict[str, Any]] = []
     for article in articles:
         article_id = _article_numeric_id(article)
         title = normalize_korean_spacing(article.get("title") or "")
-        sentences = [
-            sentence
-            for sentence in _dedupe_keep_order(
+        if target_companies:
+            candidates = [
+                sentence
+                for sentence in _dedupe_keep_order(
+                    [
+                        title,
+                        *_split_evidence_sentences(
+                            article.get("content") or "",
+                            limit=_SNIPPET_CANDIDATE_SENTENCES,
+                        ),
+                    ]
+                )
+                if sentence
+                and not _is_article_ui_boilerplate(sentence)
+                and _is_article_relevant_snippet(
+                    sentence,
+                    article=article,
+                    target_companies=target_companies,
+                    title=title,
+                )
+            ]
+            sentences = _dedupe_keep_order(
                 [
-                    title,
-                    *_split_evidence_sentences(article.get("content") or "", limit=8),
+                    sentence
+                    for _, sentence in sorted(
+                        (
+                            (
+                                _snippet_score(
+                                    sentence,
+                                    article=article,
+                                    target_companies=target_companies,
+                                ),
+                                sentence,
+                            )
+                            for sentence in candidates
+                        ),
+                        key=lambda item: item[0],
+                        reverse=True,
+                    )
                 ]
             )
-            if sentence and not _is_article_ui_boilerplate(sentence)
-        ]
+        else:
+            sentences = [
+                sentence
+                for sentence in _dedupe_keep_order(
+                    [
+                        title,
+                        *_split_evidence_sentences(
+                            article.get("content") or "",
+                            limit=_SNIPPET_CANDIDATE_SENTENCES,
+                        ),
+                    ]
+                )
+                if sentence and not _is_article_ui_boilerplate(sentence)
+            ]
         if not article_id or not sentences:
             continue
 
@@ -189,8 +394,6 @@ def _select_rule_based_sentences(sentences: list[str]) -> list[str]:
             selected.append(sentence)
         if len(selected) >= 3:
             break
-    while selected and len(selected) < 3:
-        selected.append(selected[-1])
     return selected[:3]
 
 

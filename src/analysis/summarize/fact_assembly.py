@@ -23,7 +23,6 @@ from src.analysis.summarize.article_selection import (  # noqa: F401
     _same_event_title_groups,
     _same_title_event,
     _select_analysis_articles,
-    _snippet_score,
     _title_event_tokens,
     _title_group_features,
     _useful_title_event_token,
@@ -38,6 +37,7 @@ from src.analysis.summarize.config import (  # noqa: F401
     _EVENT_TYPES,
     _FACT_EXTRACTION_BATCH_SIZE,
     _FACT_EXTRACTION_MAX_TOKENS,
+    _FACT_EXTRACTION_MODE,
     _FACT_ID_SUMMARY_PROMPT,
     _FACT_TYPES,
     _FULL_TEXT_ARTICLE_LIMIT,
@@ -61,7 +61,9 @@ from src.analysis.summarize.config import (  # noqa: F401
     _SUMMARY_MAX_TOKENS,
     _SUMMARY_ROLES,
     _SUPPORTING_ARTICLE_CONTENT_CHARS,
+    _USE_FACT_EXTRACTION_LLM,
     _VALIDATION_MAX_TOKENS,
+    _env_bool,
     _env_float,
     _env_int,
     _get_llm,
@@ -100,19 +102,30 @@ from src.analysis.summarize.rule_based_facts import (  # noqa: F401
     _contract_fact_sentence,
     _dedupe_contract_facts,
     _first_sentence_matching,
+    _is_article_context_detail_snippet,
+    _is_article_relevant_snippet,
     _rule_based_article_fact_notes,
     _rule_based_entities,
     _rule_based_event_type,
+    _rule_based_fact_notes_need_llm,
     _rule_based_fact_type_and_role,
     _scope_fact_sentence,
     _select_rule_based_sentences,
+    _snippet_score,
 )
 from src.analysis.summarize.text_utils import (  # noqa: F401
     _append_reason,
+    _article_company_alias_mentioned,
     _article_ids,
     _article_numeric_id,
+    _article_similarity_tokens,
+    _article_target_company_alias_mentioned,
+    _article_topic_tokens,
+    _articles_text,
     _as_int_list,
     _as_list,
+    _body_peer_companies,
+    _candidate_peer_companies,
     _chunked,
     _clamp_float,
     _clean_domain_term,
@@ -131,6 +144,7 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _escape_json_string_newlines,
     _event_verbs_in_text,
     _extract_json_object_text,
+    _fact_is_off_topic_for_article,
     _fact_key,
     _has_bad_korean_join,
     _has_business_scope_terms,
@@ -138,6 +152,9 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _has_uncertain_fact_marker,
     _has_unique_fact_importance,
     _is_article_ui_boilerplate,
+    _is_company_neutral_context_detail,
+    _is_industry_trend_cluster,
+    _is_peer_comparison_issue,
     _join_warnings,
     _matched_companies,
     _metadata,
@@ -160,7 +177,6 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _text_similarity,
     normalize_korean_spacing,
 )
-from src.config.companies import COMPANY_ALIASES
 
 
 def _build_cluster_fact_intelligence(merged_facts: dict[str, Any]) -> dict[str, Any]:
@@ -235,8 +251,10 @@ def _build_extracted_facts(
     article_fact_notes: list[dict[str, Any]],
     articles: list[dict[str, Any]],
     cluster_event_type: str,
+    target_companies: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """기사 fact note에 안정적인 fact_id를 붙여 요약 가능한 fact 목록으로 변환한다."""
+    target_companies = target_companies or _candidate_peer_companies(articles)
     facts: list[dict[str, Any]] = []
     counters: dict[int, int] = {}
     article_by_id = {
@@ -264,6 +282,7 @@ def _build_extracted_facts(
         if _fact_is_off_topic_for_article(
             f"{text} {evidence}",
             article=article_by_id.get(article_id) or {},
+            target_companies=target_companies,
         ):
             return
         activity = activity_type or cluster_event_type
@@ -462,72 +481,6 @@ def _add_article_fallback_facts(
                     "confidence": "low",
                 }
             )
-
-
-def _fact_is_off_topic_for_article(text: str, *, article: dict[str, Any]) -> bool:
-    title = str(article.get("title") or "").strip()
-    if not title:
-        return False
-    title_tokens = _article_topic_tokens(title)
-    if len(title_tokens) < 2:
-        return False
-    value = str(text or "")
-    fact_tokens = _article_topic_tokens(value)
-    if title_tokens & fact_tokens:
-        return False
-    if _article_company_alias_mentioned(value, article):
-        return False
-    return True
-
-
-def _article_topic_tokens(text: str) -> set[str]:
-    stopwords = {
-        "속보",
-        "단독",
-        "특징주",
-        "정부",
-        "사업",
-        "참여",
-        "선정",
-        "체결",
-        "규모",
-        "지원",
-        "구축",
-        "확보",
-        "운용",
-        "관련",
-        "오늘",
-        "이번",
-    }
-    return {
-        token
-        for token in _article_similarity_tokens(text)
-        if len(token) >= 2 and token not in stopwords and not token.isdigit()
-    }
-
-
-def _article_similarity_tokens(text: str) -> set[str]:
-    return {
-        token.lower()
-        for token in re.findall(r"[가-힣A-Za-z0-9]{2,}", str(text or ""))
-        if len(token) >= 2
-    }
-
-
-def _article_company_alias_mentioned(text: str, article: dict[str, Any]) -> bool:
-    companies = [
-        *_normalize_string_list(article.get("company")),
-        *_normalize_string_list(article.get("matched_companies")),
-        *_normalize_string_list(article.get("matched_company")),
-    ]
-    value = str(text or "")
-    for company_id in companies:
-        aliases = _PEER_ALIASES.get(company_id) or COMPANY_ALIASES.get(company_id) or []
-        if any(
-            alias and re.search(re.escape(str(alias)), value, re.IGNORECASE) for alias in aliases
-        ):
-            return True
-    return False
 
 
 def _soften_uncertain_sentence(text: str) -> str:

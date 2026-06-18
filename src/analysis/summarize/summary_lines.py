@@ -24,7 +24,6 @@ from src.analysis.summarize.article_selection import (  # noqa: F401
     _same_event_title_groups,
     _same_title_event,
     _select_analysis_articles,
-    _snippet_score,
     _title_event_tokens,
     _title_group_features,
     _useful_title_event_token,
@@ -39,6 +38,7 @@ from src.analysis.summarize.config import (  # noqa: F401
     _EVENT_TYPES,
     _FACT_EXTRACTION_BATCH_SIZE,
     _FACT_EXTRACTION_MAX_TOKENS,
+    _FACT_EXTRACTION_MODE,
     _FACT_ID_SUMMARY_PROMPT,
     _FACT_TYPES,
     _FULL_TEXT_ARTICLE_LIMIT,
@@ -62,7 +62,9 @@ from src.analysis.summarize.config import (  # noqa: F401
     _SUMMARY_MAX_TOKENS,
     _SUMMARY_ROLES,
     _SUPPORTING_ARTICLE_CONTENT_CHARS,
+    _USE_FACT_EXTRACTION_LLM,
     _VALIDATION_MAX_TOKENS,
+    _env_bool,
     _env_float,
     _env_int,
     _get_llm,
@@ -70,14 +72,10 @@ from src.analysis.summarize.config import (  # noqa: F401
 )
 from src.analysis.summarize.fact_assembly import (  # noqa: F401
     _add_article_fallback_facts,
-    _article_company_alias_mentioned,
-    _article_similarity_tokens,
-    _article_topic_tokens,
     _build_cluster_fact_intelligence,
     _build_extracted_facts,
     _classify_cluster_event_type,
     _classify_event_type_from_text,
-    _fact_is_off_topic_for_article,
     _is_duplicate_extracted_fact,
     _soften_uncertain_sentence,
     _title_to_fact_sentence,
@@ -115,19 +113,30 @@ from src.analysis.summarize.rule_based_facts import (  # noqa: F401
     _contract_fact_sentence,
     _dedupe_contract_facts,
     _first_sentence_matching,
+    _is_article_context_detail_snippet,
+    _is_article_relevant_snippet,
     _rule_based_article_fact_notes,
     _rule_based_entities,
     _rule_based_event_type,
+    _rule_based_fact_notes_need_llm,
     _rule_based_fact_type_and_role,
     _scope_fact_sentence,
     _select_rule_based_sentences,
+    _snippet_score,
 )
 from src.analysis.summarize.text_utils import (  # noqa: F401
     _append_reason,
+    _article_company_alias_mentioned,
     _article_ids,
     _article_numeric_id,
+    _article_similarity_tokens,
+    _article_target_company_alias_mentioned,
+    _article_topic_tokens,
+    _articles_text,
     _as_int_list,
     _as_list,
+    _body_peer_companies,
+    _candidate_peer_companies,
     _chunked,
     _clamp_float,
     _clean_domain_term,
@@ -146,6 +155,7 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _escape_json_string_newlines,
     _event_verbs_in_text,
     _extract_json_object_text,
+    _fact_is_off_topic_for_article,
     _fact_key,
     _has_bad_korean_join,
     _has_business_scope_terms,
@@ -153,6 +163,9 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _has_uncertain_fact_marker,
     _has_unique_fact_importance,
     _is_article_ui_boilerplate,
+    _is_company_neutral_context_detail,
+    _is_industry_trend_cluster,
+    _is_peer_comparison_issue,
     _join_warnings,
     _matched_companies,
     _metadata,
@@ -355,6 +368,11 @@ def _summarize_from_fact_ids(
     try:
         from src.observability import tracing_config
 
+        selected_prompt_facts = _selected_facts_by_line(selected_fact_ids, extracted_facts)
+        additional_prompt_facts = _additional_facts_for_prompt(
+            extracted_facts,
+            selected_fact_ids=selected_fact_ids,
+        )
         prompt = _render_prompt(_FACT_ID_SUMMARY_PROMPT)
         prompt = (
             prompt.replace("{main_company}", main_company)
@@ -362,17 +380,11 @@ def _summarize_from_fact_ids(
             .replace("{cluster_event_type}", cluster_event_type)
             .replace(
                 "{selected_facts_json}",
-                json.dumps(
-                    _selected_facts_by_line(selected_fact_ids, extracted_facts),
-                    ensure_ascii=False,
-                    indent=2,
-                ),
+                json.dumps(selected_prompt_facts, ensure_ascii=False, separators=(",", ":")),
             )
             .replace(
                 "{all_facts_json}",
-                json.dumps(
-                    _compact_facts_for_prompt(extracted_facts), ensure_ascii=False, indent=2
-                ),
+                json.dumps(additional_prompt_facts, ensure_ascii=False, separators=(",", ":")),
             )
         )
         response = (
@@ -1104,35 +1116,73 @@ def _selected_facts_by_line(
     extracted_facts: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
     fact_by_id = {str(fact.get("fact_id")): fact for fact in extracted_facts}
-    return {
-        str(index): [
-            _compact_fact_for_prompt(fact_by_id[fact_id])
+    result: dict[str, list[dict[str, Any]]] = {}
+    for index in range(1, _SUMMARY_LINE_MAX + 1):
+        facts = [
+            _compact_fact_for_prompt(fact_by_id[fact_id], include_evidence=True)
             for fact_id in selected_fact_ids.get(str(index), [])
             if fact_id in fact_by_id
         ]
-        for index in range(1, _SUMMARY_LINE_MAX + 1)
+        if facts:
+            result[str(index)] = facts
+    return result
+
+
+def _additional_facts_for_prompt(
+    facts: list[dict[str, Any]],
+    *,
+    selected_fact_ids: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    selected_ids = {
+        fact_id
+        for values in selected_fact_ids.values()
+        for fact_id in _normalize_string_list(values)
+        if fact_id
     }
+    selected_texts = [
+        _fact_similarity_text(fact)
+        for fact in facts
+        if str(fact.get("fact_id") or "") in selected_ids and _fact_similarity_text(fact)
+    ]
+    remaining = [fact for fact in facts if str(fact.get("fact_id") or "") not in selected_ids]
+    ranked = sorted(remaining, key=_fact_selection_score, reverse=True)
+    selected: list[dict[str, Any]] = []
+    seen_texts = list(selected_texts)
+    for fact in ranked:
+        text = _fact_similarity_text(fact)
+        if text and any(_text_similarity(text, existing) >= 0.88 for existing in seen_texts):
+            continue
+        selected.append(fact)
+        if text:
+            seen_texts.append(text)
+        if len(selected) >= 12:
+            break
+    return [_compact_fact_for_prompt(fact, include_evidence=False) for fact in selected]
 
 
 def _compact_facts_for_prompt(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [_compact_fact_for_prompt(fact) for fact in facts]
+    return [_compact_fact_for_prompt(fact, include_evidence=True) for fact in facts]
 
 
-def _compact_fact_for_prompt(fact: dict[str, Any]) -> dict[str, Any]:
-    return {
+def _compact_fact_for_prompt(
+    fact: dict[str, Any],
+    *,
+    include_evidence: bool,
+) -> dict[str, Any]:
+    item = {
         "fact_id": fact.get("fact_id"),
-        "article_id": fact.get("article_id"),
         "fact_type": fact.get("fact_type"),
         "summary_role": fact.get("summary_role"),
-        "role_priority": fact.get("role_priority"),
-        "evidence_text": fact.get("evidence_text"),
         "normalized_fact": fact.get("normalized_fact"),
-        "entities": fact.get("entities", []),
-        "numbers": fact.get("numbers", []),
-        "dates": fact.get("dates", []),
-        "event_verbs": fact.get("event_verbs", []),
         "confidence": fact.get("confidence"),
     }
+    if include_evidence:
+        item["evidence_text"] = fact.get("evidence_text")
+    for key in ("entities", "numbers", "dates"):
+        values = fact.get(key, [])
+        if values:
+            item[key] = values
+    return {key: value for key, value in item.items() if value not in (None, "", [])}
 
 
 def _facts_for_line(
