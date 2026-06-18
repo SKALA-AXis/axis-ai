@@ -127,7 +127,6 @@ from src.agents.briefing.prompts import (  # noqa: F401  — 분리 모듈 re-ex
     _briefing_synthesis_context,
     _briefing_synthesis_system_prompt,
     _briefing_synthesis_user_prompt,
-    _display_copy_revision_prompt,
     _display_copy_schema_hint,
     _display_copy_system_prompt,
     _display_copy_user_prompt,
@@ -139,6 +138,7 @@ from src.agents.briefing.support import (  # noqa: F401  — 분리 모듈 re-ex
     _compact_analysis_package,
     _compact_analysis_unit_for_display,
     _company_label,
+    _dedupe_cards_for_prompt,
     _first_from_list,
     _first_int,
     _first_text,
@@ -153,6 +153,7 @@ from src.agents.briefing.support import (  # noqa: F401  — 분리 모듈 re-ex
     _str_values,
 )
 
+# parents[3]: this module is one dir deeper than the facade; same repo-root value.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 

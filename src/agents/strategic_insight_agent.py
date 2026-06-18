@@ -4,6 +4,7 @@
 #   2026-06-02 심유정 — 전략 인사이트 에이전트 신규 구현 및 카드뉴스 grounding·한국어 출력 개선
 #   2026-06-02 박지원 — 분석 파이프라인 에이전트 재구성·뉴스 통합, 카드뉴스 시사점 grounding
 #   2026-06-11 최종민 — lazy-import 적용, RAG 선례 검색 주입
+#   2026-06-18 최종민 — 코드 변경
 """StrategicInsightAgent — analysis + implication in one LLM call.
 
 기존 ``StrategicAnalyzer`` 와 ``ImplicationAgent`` 를 하나의 LLM agent 로 통합하되,
@@ -834,6 +835,7 @@ class StrategicInsightAgent:
                     include_financial_profile_context=include_financial_profile_context,
                     profile_linkage_evaluation=profile_linkage_evaluation,
                     action_artifact_plan=action_artifact_plan,
+                    allow_quality_repair=False,
                 )
                 return _attach_generation_phase_diagnostics(
                     _attach_sentence_grounding(
@@ -851,34 +853,26 @@ class StrategicInsightAgent:
                 initial_violations,
                 result=result,
             ):
-                repaired = self._repair_quality_violations(
+                failed = _mark_quality_gate_failed(
                     result,
-                    violations=initial_violations,
-                    integrated_issue=integrated_issue,
-                    classification=classification,
-                    profile_context=profile_dict,
-                    analysis_context=context_for_model,
-                    bundle_id=str(
-                        bundle_dict.get("bundle_id")
-                        or integrated_issue.get("bundle_id")
-                        or cluster_metadata.get("bundle_id")
-                        or ""
+                    initial_violations,
+                    preserve_frontend_ready=_has_displayable_frontend_ready(
+                        result,
+                        integrated_issue=integrated_issue,
+                        profile_context=profile_dict,
+                        profile_linkage_evaluation=profile_linkage_evaluation,
                     ),
-                    profile_relevance_text=profile_relevance_text,
-                    include_financial_profile_context=include_financial_profile_context,
-                    profile_linkage_evaluation=profile_linkage_evaluation,
-                    action_artifact_plan=action_artifact_plan,
                 )
                 return _attach_generation_phase_diagnostics(
                     _attach_sentence_grounding(
-                        repaired,
+                        failed,
                         integrated_issue=integrated_issue,
                         profile_context=profile_dict,
                     ),
                     decisions=[
                         "generate_result_schema_or_copy_violation",
                         "self_review_skipped",
-                        "quality_repair_attempted",
+                        "quality_repair_skipped_call_cap",
                     ],
                 )
             reviewed = self._review_and_revise(
@@ -904,37 +898,17 @@ class StrategicInsightAgent:
                 integrated_issue=integrated_issue,
                 action_artifact_plan=action_artifact_plan,
             )
-            if "quality_gate_failed" in _json_dumps(reviewed):
-                if not _has_displayable_frontend_ready(
+            return _attach_generation_phase_diagnostics(
+                _attach_sentence_grounding(
                     reviewed,
                     integrated_issue=integrated_issue,
                     profile_context=profile_dict,
-                    profile_linkage_evaluation=profile_linkage_evaluation,
-                ):
-                    if _frontend_ready_repair_already_attempted(reviewed):
-                        return _attach_sentence_grounding(
-                            reviewed,
-                            integrated_issue=integrated_issue,
-                            profile_context=profile_dict,
-                        )
-                    return self._finalize_quality_gate(
-                        reviewed,
-                        integrated_issue=integrated_issue,
-                        profile_context=profile_dict,
-                        profile_linkage_evaluation=profile_linkage_evaluation,
-                        action_artifact_plan=action_artifact_plan,
-                    )
-                return _attach_sentence_grounding(
-                    reviewed,
-                    integrated_issue=integrated_issue,
-                    profile_context=profile_dict,
-                )
-            return self._finalize_quality_gate(
-                reviewed,
-                integrated_issue=integrated_issue,
-                profile_context=profile_dict,
-                profile_linkage_evaluation=profile_linkage_evaluation,
-                action_artifact_plan=action_artifact_plan,
+                ),
+                decisions=[
+                    "generate_result_self_reviewed",
+                    "self_review_attempted",
+                    "post_review_repair_skipped_call_cap",
+                ],
             )
         except Exception as exc:  # noqa: BLE001 - fallback preserves pipeline availability.
             log.warning(
@@ -1366,18 +1340,15 @@ class StrategicInsightAgent:
             )
             if not violations:
                 return revised
-            return self._repair_quality_violations(
+            return _mark_quality_gate_failed(
                 revised,
-                violations=violations,
-                integrated_issue=integrated_issue,
-                classification=classification,
-                profile_context=profile_context,
-                analysis_context=analysis_context,
-                bundle_id=bundle_id,
-                profile_relevance_text=profile_relevance_text,
-                include_financial_profile_context=include_financial_profile_context,
-                profile_linkage_evaluation=profile_linkage_evaluation,
-                action_artifact_plan=action_artifact_plan,
+                violations,
+                preserve_frontend_ready=_has_displayable_frontend_ready(
+                    revised,
+                    integrated_issue=integrated_issue,
+                    profile_context=profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - review is quality layer, not availability gate.
             log.warning(
@@ -1393,18 +1364,15 @@ class StrategicInsightAgent:
                 action_artifact_plan=action_artifact_plan,
             )
             if violations:
-                return self._repair_quality_violations(
+                return _mark_quality_gate_failed(
                     result,
-                    violations=violations,
-                    integrated_issue=integrated_issue,
-                    classification=classification,
-                    profile_context=profile_context,
-                    analysis_context=analysis_context,
-                    bundle_id=bundle_id,
-                    profile_relevance_text=profile_relevance_text,
-                    include_financial_profile_context=include_financial_profile_context,
-                    profile_linkage_evaluation=profile_linkage_evaluation,
-                    action_artifact_plan=action_artifact_plan,
+                    violations,
+                    preserve_frontend_ready=_has_displayable_frontend_ready(
+                        result,
+                        integrated_issue=integrated_issue,
+                        profile_context=profile_context,
+                        profile_linkage_evaluation=profile_linkage_evaluation,
+                    ),
                 )
             return result
 
@@ -1422,6 +1390,7 @@ class StrategicInsightAgent:
         include_financial_profile_context: bool = False,
         profile_linkage_evaluation: dict[str, Any] | None = None,
         action_artifact_plan: dict[str, Any] | None = None,
+        allow_quality_repair: bool = True,
     ) -> dict[str, Any]:
         current = result
         current_violations = violations
@@ -1572,8 +1541,19 @@ class StrategicInsightAgent:
                 removed_reason="IntegratedIssue에 카드뉴스용 문장을 만들 사실 근거가 부족합니다.",
             )
             return _mark_quality_gate_failed(current, current_violations)
+        if not allow_quality_repair:
+            return _mark_quality_gate_failed(
+                current,
+                current_violations,
+                preserve_frontend_ready=_has_displayable_frontend_ready(
+                    current,
+                    integrated_issue=integrated_issue,
+                    profile_context=profile_context,
+                    profile_linkage_evaluation=profile_linkage_evaluation,
+                ),
+            )
         try:
-            for attempt in range(2):
+            for attempt in range(1):
                 prompt = REPAIR_USER_PROMPT_TEMPLATE.format(
                     integrated_issue_json=_json_dumps(
                         _integrated_issue_for_prompt(integrated_issue)
@@ -1994,7 +1974,7 @@ class StrategicInsightAgent:
         )
         repaired = result
         retry_notes: list[str] = []
-        for attempt in range(2):
+        for attempt in range(1):
             prompt = base_prompt
             if retry_notes:
                 prompt = (

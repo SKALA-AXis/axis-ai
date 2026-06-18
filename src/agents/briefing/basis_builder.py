@@ -3,6 +3,7 @@
 # 변경이력:
 #   2026-06-12 최종민 — 브리핑 분해 2단계로 basis_builder 분리
 #   2026-06-14 안가은 — 브리핑 생성 카피와 기간 표기 개선 (#187)
+#   2026-06-18 최종민 — 코드 변경
 """basis_builder — briefing_generation_agent 에서 분리 (이동만, 동작 불변).
 
 분리 근거: axis-infra docs/structure-tasks/agent-split-design.md
@@ -534,28 +535,11 @@ def _refine_briefing_basis_with_llm(
         return briefing_basis
     issues = _briefing_synthesis_quality_issues(parsed, selected_cards)
     if issues:
-        revision_messages = [
-            ("system", _briefing_synthesis_system_prompt()),
-            ("human", _briefing_synthesis_revision_prompt(context, parsed, issues)),
-        ]
-        try:
-            revision_response = (llm or _get_llm()).invoke(
-                revision_messages,
-                config=tracing_config(agent="BriefingBasisBuilder", phase="synthesis_revision"),
-            )
-        except Exception as exc:  # pragma: no cover - external API safety net
-            log.warning("Briefing basis synthesis revision failed | error=%s", exc)
-        else:
-            revised = _parse_json_object(getattr(revision_response, "content", revision_response))
-            if revised:
-                parsed = revised
-        remaining_issues = _briefing_synthesis_quality_issues(parsed, selected_cards)
-        if remaining_issues:
-            log.info(
-                "Briefing basis synthesis rejected | issues=%s",
-                remaining_issues,
-            )
-            return briefing_basis
+        log.info(
+            "Briefing basis synthesis rejected | issues=%s",
+            issues,
+        )
+        return briefing_basis
     return _merge_briefing_basis_synthesis(briefing_basis, parsed, selected_cards)
 
 

@@ -5,6 +5,7 @@
 #   2026-04-28 박지원 — 크롤러 로직 개선 및 뉴스 전처리/클러스터링 품질 개선
 #   2026-05-11 심유정 — 카드뉴스 openapi 스키마 정합
 #   2026-06-04 박진 — 통합 이슈 기반 mixer/브리핑 플로우
+#   2026-06-18 최종민 — 코드 변경
 import asyncio
 import base64
 import binascii
@@ -998,7 +999,12 @@ async def search(request: SearchRequest):
 
 @app.post("/gen-search", response_model=GenSearchResult)
 async def gen_search(request: GenSearchRequest):
-    """Generative Search — RAG + GPT-4o + SC 검증"""
+    """Generative Search — RAG + GPT-4o 답변 생성.
+
+    주의: sc_score/sc_passed 는 실제 Self-Consistency(다회 생성 일치율) 측정값이
+    아니라 답변 경로 기반 휴리스틱 신뢰도다(LLM 답변=0.72 / 결정적 폴백=0.42 /
+    무근거=0.0). 계약 필드명은 보존하되 의미를 여기 명시해 둔다.
+    """
     log.info("Generative Search | query=%s", request.query)
     search_request = SearchRequest(
         query=request.query,
@@ -1021,14 +1027,14 @@ async def gen_search(request: GenSearchRequest):
             answer=llm_answer,
             sources=hits,
             sc_passed=True,
-            sc_score=0.72,
+            sc_score=0.72,  # 휴리스틱 신뢰도(LLM 답변 성공) — 실제 SC 일치율 아님
         )
 
     return GenSearchResult(
         answer=_deterministic_gen_search_answer(request.query, hits),
         sources=hits,
         sc_passed=False,
-        sc_score=0.42,
+        sc_score=0.42,  # 휴리스틱 신뢰도(결정적 폴백) — 실제 SC 일치율 아님
     )
 
 

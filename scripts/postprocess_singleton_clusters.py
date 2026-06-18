@@ -2,6 +2,7 @@
 # 작성자: 박지원
 # 변경이력:
 #   2026-06-09 박지원 — 싱글톤/소규모 뉴스 클러스터 후처리 스크립트 작성 및 다수 클러스터링 품질
+#   2026-06-18 최종민 — 코드 변경
 """Conservative post-processing for singleton/small news clusters.
 
 The script merges singleton/small clusters into nearby larger clusters, and can
@@ -920,9 +921,6 @@ def _cluster_relation(
     left_tokens = set().union(*(_event_tokens(title) for title in left_titles))
     right_tokens = set().union(*(_event_tokens(title) for title in right_titles))
     shared_tokens = left_tokens & right_tokens
-    left_context_tokens = _cluster_context_tokens(left_titles, left_snippets)
-    right_context_tokens = _cluster_context_tokens(right_titles, right_snippets)
-    shared_context_tokens = left_context_tokens & right_context_tokens
     left_title_key = _title_event_issue_key(left_titles)
     right_title_key = _title_event_issue_key(right_titles)
 

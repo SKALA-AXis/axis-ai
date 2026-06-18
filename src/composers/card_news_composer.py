@@ -4,6 +4,7 @@
 #   2026-06-02 박지원 — 카드뉴스 생성/클러스터링·품질·근거(provenance) 보강 및 카드 검증 완화
 #   2026-06-05 심유정 — 카드뉴스 전략 인사이트 근거 강화 및 frontend-ready 처리 개선
 #   2026-06-11 최종민 — ChatOpenAI lazy-import 적용, card_news_composer LLM gen-search 이행 리팩터
+#   2026-06-18 최종민 — 코드 변경
 """카드뉴스 생성 에이전트.
 
 AnalysisPackage를 사용자에게 보여줄 카드뉴스/API 응답 형태로 재가공한다.
@@ -86,8 +87,6 @@ from src.composers.card_news.schema import (  # noqa: F401
     _FACT_BASIS_EVIDENCE_TYPES,
     _FRONTEND_EVENT_TYPES,
     _FRONTEND_SECTOR_IDS,
-    _ISSUE_CARD_PROMPT,
-    _PROMPT_VERSION,
     _SUMMARY_ACTION_TOKENS,
     _SUMMARY_LINE_MAX,
     _SUMMARY_LINE_MIN,
@@ -115,6 +114,7 @@ from src.composers.card_news.text_utils0 import (  # noqa: F401
     _dedupe_keep_order,
     _detail_line_candidates,
     _detail_line_key,
+    _display_company_name,
     _display_token_pieces,
     _first_amount_like_term,
     _first_list_item,
@@ -122,7 +122,6 @@ from src.composers.card_news.text_utils0 import (  # noqa: F401
     _first_sentence_is_too_thin,
     _first_text,
     _follow_up_action_from_statement,
-    _format_articles,
     _format_numeric_text,
     _get_llm,
     _grounding_path_matches,
@@ -568,66 +567,11 @@ class CardNewsComposer:
             )
             return summary_card
 
-        articles_text = _format_articles(articles)
-        prompt = _ISSUE_CARD_PROMPT.replace("{articles_text}", articles_text)
-        generated_at = _now_iso()
-        published_date = _published_date(articles, generated_at)
-
-        try:
-            from src.observability import tracing_config
-
-            response = _get_llm().invoke(
-                prompt,
-                config=tracing_config(
-                    agent="CardNewsComposer",
-                    prompt_version=_PROMPT_VERSION,
-                    company=company,
-                    cluster_id=cluster_id,
-                ),
-            )
-            content = (
-                response.content if isinstance(response.content, str) else str(response.content)
-            )
-            card_data = _parse_json(content)
-
-            card = {
-                "id": _card_news_id(cluster_id, published_date),
-                "company": company,
-                "cluster_id": cluster_id,
-                "representative_id": representative_id,
-                "published_date": published_date,
-                "title": card_data.get("title", articles[0]["title"][:100]),
-                "summary_lines": card_data.get("summary_lines", []),
-                "event_type": card_data.get(
-                    "event_type",
-                    classification.get("event_type", "tech"),
-                ),
-                # v3: 분류 결과의 sector·exposure 정보를 카드에 그대로 전파
-                "sector": classification.get("sector", "other"),
-                "sectors": classification.get("sectors", ["other"]),
-                "exposure_score": classification.get("exposure_score", 0.0),
-                "exposure_band": classification.get("exposure_band", "low"),
-                "signals": classification.get("signals", {}),
-                # 등급 자체는 v3에서 폐기되었으나, DB 컬럼 호환을 위해 노출도 밴드를 저장
-                "importance": classification.get("importance", "low"),
-                "importance_score": classification.get("importance_score", 0.0),
-                "sources": _default_sources(articles),
-            }
-            _attach_card_news_schema_fields(card)
-
-            log.info(
-                "카드뉴스 생성 완료 | id=%s sector=%s band=%s event=%s sources=%d",
-                card["id"],
-                card["sector"],
-                card["exposure_band"],
-                card["event_type"],
-                len(articles),
-            )
-            return card
-
-        except Exception as e:
-            log.error("카드뉴스 생성 실패 | cluster=%d error=%s", cluster_id, e)
-            return {}
+        log.warning(
+            "카드뉴스 생성 스킵 | cluster=%d reason=summary_card_unavailable llm_fallback=disabled",
+            cluster_id,
+        )
+        return {}
 
 
 __all__ = [

@@ -3,6 +3,7 @@
 # 변경이력:
 #   2026-06-12 최종민 — briefing_generation_agent 분해 1단계로 prompts 분리
 #   2026-06-14 안가은 — 브리핑 생성 카피와 기간 표기 개선 (#187)
+#   2026-06-18 최종민 — 코드 변경
 """prompts — strategic_insight_agent 에서 분리 (이동만, 동작 불변).
 
 분리 근거: axis-infra docs/structure-tasks/agent-split-design.md (Phase 2 1단계)
@@ -19,6 +20,7 @@ from src.agents.briefing.support import (  # noqa: F401  — 분리 모듈 re-ex
     _compact_analysis_package,
     _compact_analysis_unit_for_display,
     _company_label,
+    _dedupe_cards_for_prompt,
     _first_from_list,
     _first_int,
     _first_text,
@@ -41,6 +43,7 @@ def _briefing_synthesis_context(
     period: dict[str, Any],
     user_context: str | None,
 ) -> dict[str, Any]:
+    prompt_cards = _dedupe_cards_for_prompt(selected_cards)
     return {
         "period": {
             "date_from": period["date_from"].isoformat(),
@@ -52,7 +55,7 @@ def _briefing_synthesis_context(
         "source_integrated_issue_ids": briefing_basis.get("source_integrated_issue_ids") or [],
         "current_deterministic_basis": _briefing_basis_synthesis_view(briefing_basis),
         "frontend_contract_target": _briefing_contract_schema_hint(),
-        "analysis_units": [_compact_analysis_unit_for_display(card) for card in selected_cards],
+        "analysis_units": [_compact_analysis_unit_for_display(card) for card in prompt_cards],
     }
 
 
@@ -261,6 +264,20 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
                 "한 카드에 쏠리지 않도록 이 목록을 먼저 확인합니다."
             ),
             (
+                "- 시장/산업 신호와 피어사 움직임 사이에 공통 축이 있으면 함께 엮어 "
+                "설명합니다. 예: AI 인프라·규제 대응 수요가 커지고, 피어사는 이를 "
+                "고객 적용형 AI나 현장 운영형 AI 사업으로 구체화하고 있습니다."
+            ),
+            (
+                "- industry_trend 또는 산업/규제/보안/인프라 성격의 카드가 있으면 "
+                "market_signal에서 시장 맥락으로 활용합니다. 단, 관련성이 약하면 "
+                "억지로 대표 결론으로 올리지 말고 피어사 실행 신호를 보완하는 배경으로 씁니다."
+            ),
+            (
+                "- 단, 공통 축이 약하면 억지로 하나의 결론으로 묶지 말고 "
+                "서로 다른 신호로 분리해 씁니다."
+            ),
+            (
                 "- classification과 validation은 신뢰도와 분류 참고용이며 "
                 "화면 문장에 그대로 노출하지 않습니다."
             ),
@@ -289,6 +306,21 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
             (
                 "- competitor_move.title은 특정 기술명 하나가 아니라 경쟁사들이 "
                 "무엇을 어떤 경쟁 방식으로 묶는지 보여줘야 합니다."
+            ),
+            (
+                "- briefing_lead와 briefingSummaryLine 역할의 문장은 같은 내용을 반복하지 "
+                "않습니다. 하나는 가장 중요한 시장/산업 신호를, 다른 하나는 피어사 "
+                "움직임과 공통 방향을 설명하되 연결 가능한 축이 있으면 자연스럽게 엮습니다."
+            ),
+            (
+                "- 특히 weekly/monthly 브리핑에서 여러 피어사가 입력되면 "
+                "briefing_lead 또는 briefingSummaryLine 중 최소 하나에는 대표 피어사 "
+                "2곳 이상과 각 움직임을 구체적으로 씁니다."
+            ),
+            (
+                "- 피어사 움직임을 '경쟁사들이 강화하고 있습니다'처럼 뭉뚱그리지 말고, "
+                "'LG CNS는 금융권 현대화, 포스코DX는 로봇 자율작업'처럼 회사별 실행 축을 "
+                "드러냅니다."
             ),
             (
                 "- interpretation_flow는 관찰된 변화, 평가축의 이동, 경쟁 구도 영향, "
@@ -497,6 +529,17 @@ def _display_copy_user_prompt(context: dict[str, Any]) -> str:
                 "시장 변화, competitor_move는 각 경쟁사 움직임이 하나의 경쟁 방식 변화로 "
                 "묶이는 이유를 설명합니다."
             ),
+            (
+                "Good 연결 pattern: 시장에서는 AI 인프라와 규제 대응 요구가 커지고, "
+                "피어사들은 이를 중소기업 적용 지원이나 현장 운영형 AI 사업으로 "
+                "구체화하고 있습니다."
+            ),
+            (
+                "Good industry 활용: AI 보안 위협 증가 같은 산업 카드는 단독 결론으로 "
+                "과대 포장하지 말고, 금융권 AX·로봇 자동화 같은 피어사 실행 움직임이 "
+                "왜 보안·거버넌스 기준과 함께 읽혀야 하는지 설명합니다."
+            ),
+            ("Bad 연결 pattern: 관련성이 약한 카드들을 모두 같은 흐름이라고 단정합니다."),
             (
                 "Bad key_change description: 한 회사의 역할만 설명하고 전체 시장 신호처럼 "
                 "확대합니다."

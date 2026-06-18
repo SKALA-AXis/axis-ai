@@ -3,6 +3,7 @@
 # 변경이력:
 #   2026-05-26 최종민 — ITTrendAgent 단위 테스트 추가 및 global-trends reference id 우선순위
 #   2026-06-02 박지원 — it-trend confidence 편집, 카드뉴스 클러스터 범위 유지, 글로벌 기업 동향 추가
+#   2026-06-18 최종민 — 코드 변경
 """ITTrendAgent (PR #68, 5-phase pipeline) deterministic helper 단위 테스트.
 
 외부 LLM 리뷰의 R-2 (reference id 우선순위) 및 R-5 (테스트 없음) 항목 보강.
@@ -33,8 +34,8 @@ from src.agents.it_trend_agent import (
     _is_global_newsroom_row,
     _is_research_row,
     _make_source_analysis_id,
-    _phase4_impact,
     _phase2_trends,
+    _phase4_impact,
     _reference_issue_ids,
     _resolve_previous_trend_context,
     _sanitize_per_keyword_text,
@@ -539,8 +540,8 @@ def test_deterministic_strategic_note_uses_evidence_title_and_event_type() -> No
     )
 
     assert (
-        note
-        == "samsung_sds는 '삼성SDS, 생성형 AI 운영 플랫폼 출시' 기술·제품 공개 신호로 agentic ai 흐름에 대응 중"
+        note == "samsung_sds는 '삼성SDS, 생성형 AI 운영 플랫폼 출시' 기술·제품 공개 신호로 "
+        "agentic ai 흐름에 대응 중"
     )
 
 

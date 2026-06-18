@@ -9,9 +9,6 @@ from zoneinfo import ZoneInfo
 _DISPLAY_ZONE = ZoneInfo("Asia/Seoul")
 
 
-_PROMPT_VERSION = "card-news-v1.0"
-
-
 _CARD_PROMPT_VERSION = "card-news-v1.0"
 
 
@@ -118,41 +115,6 @@ _EVENT_TO_FACT_BASIS_TYPE = {
     "risk": "risk_fact",
     "unknown": "reported_fact",
 }
-
-
-_ISSUE_CARD_PROMPT = """\
-당신은 SK AX 전략기획팀의 AI 어시스턴트입니다.
-아래 기사들을 종합하여 이슈 카드를 작성해주세요.
-여러 기사가 있을 경우 교차 검증하여 가장 신뢰도 높은 사실만 포함하세요.
-
-## 기사 정보
-{articles_text}
-
-## 작성 규칙
-- 제목: 핵심 사실을 담은 한 문장 (40자 이내)
-- 요약: 최소 3줄, 최대 5줄. 각 줄은 순번 없이 사실 문장만 작성
-- 출처 목록: 사용한 기사의 title, source_name, url 포함
-
-## 이벤트 타입 (하나만 선택, 가장 두드러진 성격 기준)
-- partnership: 기업간 협력·MOU·공동사업·파운드리 제공계약
-- ma: 인수·합병·지분 인수·투자 유치
-- personnel: 채용·인사·임원 선임·조직 개편
-- tech: 신기술·신제품·플랫폼 출시·기술 실증
-- regulation: 법규·가이드라인·정부 정책
-- new_biz: 신사업 진출·수주·실적 발표·시장 확장
-
-복수 해당 시 본문이 가장 크게 다루는 측면을 선택.
-애매하면 tech 대신 personnel/new_biz/partnership 우선.
-
-다음 JSON 형식으로만 응답하세요 (추가 텍스트 금지):
-{{
-  "title": "이슈 제목",
-  "summary_lines": ["...", "...", "...", "...", "..."],
-  "event_type": "tech",
-  "sources": [
-    {{"index": 1, "title": "...", "source_name": "...", "url": "...", "credibility_score": 0.0}}
-  ]
-}}"""
 
 
 def _attach_card_news_schema_fields(card: dict[str, Any]) -> None:

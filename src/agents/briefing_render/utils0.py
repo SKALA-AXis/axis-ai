@@ -128,7 +128,6 @@ from src.agents.briefing.prompts import (  # noqa: F401  — 분리 모듈 re-ex
     _briefing_synthesis_context,
     _briefing_synthesis_system_prompt,
     _briefing_synthesis_user_prompt,
-    _display_copy_revision_prompt,
     _display_copy_schema_hint,
     _display_copy_system_prompt,
     _display_copy_user_prompt,
@@ -140,6 +139,7 @@ from src.agents.briefing.support import (  # noqa: F401  — 분리 모듈 re-ex
     _compact_analysis_package,
     _compact_analysis_unit_for_display,
     _company_label,
+    _dedupe_cards_for_prompt,
     _first_from_list,
     _first_int,
     _first_text,
@@ -233,6 +233,7 @@ def _sanitize_internal_display_terms(value: str) -> str:
         ("프로필 역량", "기존 사업 역량"),
         ("프로필의", "기존 사업 정보의"),
         ("프로필", "기존 사업 정보"),
+        ("industry_trend", "산업 동향"),
     )
     for old, new in replacements:
         text = text.replace(old, new)
@@ -1083,6 +1084,15 @@ def _front_limited_step_items(
         fallback_item["seq"] = 1
         items.append(fallback_item)
     return items
+
+
+def _front_briefing_lead_prefix(result: dict[str, Any]) -> str:
+    briefing_type = str(result.get("briefing_type") or "").strip()
+    if briefing_type == "weekly":
+        return "이번 주 경쟁사와 산업 신호에서는"
+    if briefing_type == "monthly":
+        return "이번 달 경쟁사와 산업 신호에서는"
+    return "오늘 수집된 경쟁사 신호에서는"
 
 
 def _front_business_signals(integrated: dict[str, Any]) -> list[dict[str, str]]:

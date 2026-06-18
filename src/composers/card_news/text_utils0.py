@@ -22,8 +22,6 @@ from src.composers.card_news.schema import (  # noqa: F401
     _FACT_BASIS_EVIDENCE_TYPES,
     _FRONTEND_EVENT_TYPES,
     _FRONTEND_SECTOR_IDS,
-    _ISSUE_CARD_PROMPT,
-    _PROMPT_VERSION,
     _SUMMARY_ACTION_TOKENS,
     _SUMMARY_LINE_MAX,
     _SUMMARY_LINE_MIN,
@@ -35,6 +33,7 @@ from src.llm import LLMSpec, build_chat_llm
 
 if TYPE_CHECKING:
     from langchain_openai import ChatOpenAI
+
 
 _llm: ChatOpenAI | None = None
 
@@ -91,6 +90,13 @@ def _first_non_empty(*values: Any) -> str:
     return "피어사 주요 뉴스"
 
 
+def _display_company_name(company_id: Any) -> str:
+    value = str(company_id or "").strip()
+    if value in {"industry_trend", "industry"}:
+        return ""
+    return company_name_ko(value) or value
+
+
 def _looks_like_sentence_title(title: str) -> bool:
     value = re.sub(r"\s+", " ", str(title or "")).strip()
     if len(value) > 60 and value.endswith(("다", "다.", "했다", "했다.", "됐다", "됐다.")):
@@ -138,20 +144,6 @@ def _is_financial_only_title(title: str) -> bool:
         text,
         re.I,
     )
-
-
-def _format_articles(articles: list[dict[str, Any]]) -> str:
-    lines = []
-    for i, a in enumerate(articles, 1):
-        credibility_score = a.get("credibility_score")
-        credibility_text = f"{credibility_score:.2f}" if credibility_score is not None else "미계산"
-        lines.append(
-            f"[{i}] 제목: {a['title']}\n"
-            f"    출처: {a['source_name']} (신뢰도: {credibility_text})"
-            f" | URL: {a['url']}\n"
-            f"    내용: {' '.join((a.get('content') or '').split())}"
-        )
-    return "\n\n".join(lines)
 
 
 def _parse_json(text: str) -> dict[str, Any]:

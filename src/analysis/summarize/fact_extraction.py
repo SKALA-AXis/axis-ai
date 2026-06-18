@@ -1,7 +1,6 @@
 """summarize fact_extraction — extracted from facade (move-only)."""
 
-# ruff: noqa: E501  — long lines inherited from E501-exempt facade
-
+# ruff: noqa: E501
 from __future__ import annotations
 
 import logging
@@ -123,17 +122,25 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _event_verbs_in_text,
     _extract_json_object_text,
     _fact_is_off_topic_for_article,
+    _fact_is_peer_related,
     _fact_key,
     _has_bad_korean_join,
     _has_business_scope_terms,
     _has_detail_preservation_terms,
+    _has_effect_or_outcome_terms,
+    _has_peer_owned_asset_terms,
+    _has_risk_or_signal_terms,
+    _has_technology_mechanism_terms,
     _has_uncertain_fact_marker,
     _has_unique_fact_importance,
     _is_article_ui_boilerplate,
     _is_company_neutral_context_detail,
+    _is_customer_site_example_without_mechanism,
     _is_industry_trend_cluster,
     _is_peer_comparison_issue,
     _join_warnings,
+    _looks_like_customer_site_case,
+    _looks_like_industry_background_or_third_party,
     _matched_companies,
     _metadata,
     _normalize_content,

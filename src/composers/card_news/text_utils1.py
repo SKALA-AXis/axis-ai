@@ -19,8 +19,6 @@ from src.composers.card_news.schema import (  # noqa: F401
     _FACT_BASIS_EVIDENCE_TYPES,
     _FRONTEND_EVENT_TYPES,
     _FRONTEND_SECTOR_IDS,
-    _ISSUE_CARD_PROMPT,
-    _PROMPT_VERSION,
     _SUMMARY_ACTION_TOKENS,
     _SUMMARY_LINE_MAX,
     _SUMMARY_LINE_MIN,
@@ -48,6 +46,7 @@ from src.composers.card_news.text_utils0 import (  # noqa: F401
     _dedupe_keep_order,
     _detail_line_candidates,
     _detail_line_key,
+    _display_company_name,
     _display_token_pieces,
     _first_amount_like_term,
     _first_list_item,
@@ -55,7 +54,6 @@ from src.composers.card_news.text_utils0 import (  # noqa: F401
     _first_sentence_is_too_thin,
     _first_text,
     _follow_up_action_from_statement,
-    _format_articles,
     _format_numeric_text,
     _get_llm,
     _grounding_path_matches,
@@ -84,6 +82,7 @@ from src.composers.card_news.text_utils0 import (  # noqa: F401
     _list_dicts,
     _list_string,
     _list_value,
+    _llm,
     _looks_like_action,
     _looks_like_article_boilerplate,
     _looks_like_non_summary_line,
@@ -133,14 +132,11 @@ def _business_context_title(title: str, *, summary: dict[str, Any], event_type: 
     }:
         return value
     focus = _business_focus_from_summary(summary)
-    peer_name = company_name_ko(str(summary.get("main_company") or "")) or _first_non_empty(
-        summary.get("main_company"),
-        "",
-    )
+    peer_name = _display_company_name(summary.get("main_company"))
     if focus:
         if "전망" in value or "목표" in value:
-            return f"{peer_name}, {focus} 성장 전망"
-        return f"{peer_name}, {focus} 중심 실적 변화"
+            return f"{peer_name}, {focus} 성장 전망" if peer_name else f"{focus} 성장 전망"
+        return f"{peer_name}, {focus} 중심 실적 변화" if peer_name else f"{focus} 중심 실적 변화"
     return value
 
 

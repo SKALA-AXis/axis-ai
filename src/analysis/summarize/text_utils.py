@@ -95,6 +95,58 @@ def _has_detail_preservation_terms(text: str) -> bool:
     )
 
 
+def _has_technology_mechanism_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"학습|검증|관제|운영|제어|배치|수집|처리|분석|예측|자동화|"
+            r"통합\s*관리|시뮬레이션|오케스트레이션|워크플로|데이터\s*연계|"
+            r"플랫폼|솔루션|엔진|모델|에이전트|로봇|AMR|AI|AX|RX",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _has_effect_or_outcome_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"효과|개선|단축|감소|절감|증가|확대|고도화|정확도|수행\s*속도|"
+            r"효율|생산성|안정성|가시성|자동화\s*율|처리\s*시간|리드타임|"
+            r"성과|적용\s*범위|현장\s*적합성|사업\s*확장|검증",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _has_risk_or_signal_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"리스크|위험|제약|불확실|한계|장애|고장|중단|보안|규제|"
+            r"긍정\s*신호|수요|관심|주목|전략\s*거점|테스트베드|"
+            r"후속|본사업|상용화|확산|도입\s*검토",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _is_customer_site_example_without_mechanism(text: str) -> bool:
+    value = str(text or "")
+    if not re.search(r"고객|공장|센터|현장|매장|사업장|고객사", value):
+        return False
+    if _has_technology_mechanism_terms(value) or _has_effect_or_outcome_terms(value):
+        return False
+    return bool(re.search(r"계약|구축|도입|적용|협약|공급", value))
+
+
+def _looks_like_customer_site_case(text: str) -> bool:
+    return bool(
+        re.search(r"고객|공장|센터|현장|매장|사업장|고객사|물류센터", str(text or ""))
+        and re.search(r"계약|구축|도입|적용|협약|공급|실증", str(text or ""))
+    )
+
+
 def _fact_is_off_topic_for_article(
     text: str,
     *,
@@ -118,6 +170,59 @@ def _fact_is_off_topic_for_article(
     if _article_company_alias_mentioned(value, article) and _has_business_scope_terms(value):
         return False
     return True
+
+
+def _fact_is_peer_related(
+    text: str,
+    *,
+    article: dict[str, Any],
+    target_companies: list[str] | None = None,
+) -> bool:
+    value = str(text or "")
+    if target_companies and _article_target_company_alias_mentioned(
+        value, article, target_companies
+    ):
+        return True
+    if _article_company_alias_mentioned(value, article):
+        return True
+    matched_targets = [
+        company
+        for company in _matched_companies(article)
+        if not target_companies or company in set(target_companies)
+    ]
+    if len(matched_targets) == 1 and (
+        _has_peer_owned_asset_terms(value)
+        or _has_business_scope_terms(value)
+        or _has_technology_mechanism_terms(value)
+    ):
+        return True
+    return False
+
+
+def _has_peer_owned_asset_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"플랫폼|솔루션|서비스|제품|시스템|사업|프로젝트|계약|협약|MOU|"
+            r"RX|AX|AI|피지컬웍스|AgenticWorks|Brity|FabriX",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _looks_like_industry_background_or_third_party(text: str) -> bool:
+    value = str(text or "")
+    if _has_peer_owned_asset_terms(value):
+        return False
+    return bool(
+        re.search(
+            r"업계에\s*따르면|시장에서는|관심이\s*집중|주목받고\s*있|"
+            r"젠슨\s*황|엔비디아|삼성전자|SK하이닉스|노조|성과급|"
+            r"일반\s*사무|제3자|타사|경쟁사",
+            value,
+            re.I,
+        )
+    )
 
 
 def _article_topic_tokens(text: str) -> set[str]:

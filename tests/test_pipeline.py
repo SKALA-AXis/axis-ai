@@ -1101,8 +1101,7 @@ def test_same_company_ax_event_variants_merge_by_generic_content_features():
         "matched_sectors": ["ax"],
         "title": "포스코DX, '1인 N에이전트 시대' 연다…전사 AI 역량 강화",
         "content": (
-            "임직원 해커톤과 업무별 AI 에이전트 활용을 통해 전사 AX 혁신을 "
-            "확대하는 프로그램이다."
+            "임직원 해커톤과 업무별 AI 에이전트 활용을 통해 전사 AX 혁신을 확대하는 프로그램이다."
         ),
         "published_at": "2026-06-18T00:29:00+00:00",
     }

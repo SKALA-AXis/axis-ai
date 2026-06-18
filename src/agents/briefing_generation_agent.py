@@ -4,6 +4,7 @@
 #   2026-05-27 심유정 — 브리핑 생성 에이전트 신설, 포맷
 #   2026-05-29 최종민 — 분석/브리핑 조회에서 DELETED 카드 제외
 #   2026-06-04 박진 — 통합 이슈 기반 mixer·executive 브리핑 플로우 추가
+#   2026-06-18 최종민 — 코드 변경
 """BriefingGenerationAgent.
 
 기간별 integrated_issues를 선택한 뒤, 통합 이슈 저장소의 사실 근거와
@@ -14,8 +15,7 @@ card_news는 화면과 저장 매핑에 필요한 card id anchor로 사용하고
 참조한다.
 """
 
-# ruff: noqa: E402  — sys.path 설정 후 import 필요(원본 패턴)
-
+# ruff: noqa: E402
 from __future__ import annotations
 
 import asyncio
@@ -149,7 +149,6 @@ from src.agents.briefing.prompts import (  # noqa: F401  — 분리 모듈 re-ex
     _briefing_synthesis_context,
     _briefing_synthesis_system_prompt,
     _briefing_synthesis_user_prompt,
-    _display_copy_revision_prompt,
     _display_copy_schema_hint,
     _display_copy_system_prompt,
     _display_copy_user_prompt,
@@ -161,6 +160,7 @@ from src.agents.briefing.support import (  # noqa: F401  — 분리 모듈 re-ex
     _compact_analysis_package,
     _compact_analysis_unit_for_display,
     _company_label,
+    _dedupe_cards_for_prompt,
     _first_from_list,
     _first_int,
     _first_text,
@@ -179,7 +179,6 @@ if TYPE_CHECKING:
     pass
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -278,6 +277,7 @@ from src.agents.briefing_render.utils0 import (  # noqa: F401
     _front_briefing_benchmark,
     _front_briefing_count,
     _front_briefing_label,
+    _front_briefing_lead_prefix,
     _front_briefing_signal_cards,
     _front_business_signals,
     _front_company_signal_phrase,
@@ -484,7 +484,7 @@ class BriefingGenerationAgent:
 
         ``reuse_saved=True`` 이고 필터 없는 기본형 요청이면 ``briefing_reports`` 에
         저장된 동일 기간 브리핑을 재사용한다 (과거 기간은 무기한, 진행 중 기간은
-        TTL 30분). LLM 정제(최대 4회 GPT 호출)를 매 조회마다 반복하지 않기 위한
+        TTL 30분). LLM 정제(최대 2회 GPT 호출)를 매 조회마다 반복하지 않기 위한
         read-through 캐시 — 기본형 요청은 생성 후 항상 저장해 캐시를 채운다.
         """
 
@@ -702,30 +702,11 @@ def _refine_display_copy_with_llm(
         return report
     issues = _display_copy_quality_issues(parsed, selected_cards)
     if issues:
-        revision_messages = [
-            ("system", _display_copy_system_prompt()),
-            ("human", _display_copy_revision_prompt(context, parsed, issues)),
-        ]
-        try:
-            revision_response = (llm or _get_llm()).invoke(
-                revision_messages,
-                config=tracing_config(
-                    agent="BriefingGenerationAgent", phase="refine_display_copy_revision"
-                ),
-            )
-        except Exception as exc:  # pragma: no cover - external API safety net
-            log.warning("Briefing display copy revision failed | error=%s", exc)
-        else:
-            revised = _parse_json_object(getattr(revision_response, "content", revision_response))
-            if revised:
-                parsed = revised
-        remaining_issues = _display_copy_quality_issues(parsed, selected_cards)
-        if remaining_issues:
-            log.info(
-                "Briefing display copy refinement rejected | issues=%s",
-                remaining_issues,
-            )
-            return report
+        log.info(
+            "Briefing display copy refinement rejected | issues=%s",
+            issues,
+        )
+        return report
     return _merge_display_copy(report, parsed, selected_cards=selected_cards)
 
 
@@ -733,6 +714,7 @@ def _display_copy_context(
     report: dict[str, Any],
     selected_cards: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    prompt_cards = _dedupe_cards_for_prompt(selected_cards)
     return {
         "period": {
             "title": report.get("title"),
@@ -744,8 +726,8 @@ def _display_copy_context(
         "source_card_ids": report.get("related_card_ids") or [],
         "source_integrated_issue_ids": report.get("source_integrated_issue_ids") or [],
         "current_display_structure": _display_payload_structure(_frontend_display_payload(report)),
-        "card_signal_index": _display_card_signal_index(selected_cards),
-        "analysis_units": [_compact_analysis_unit_for_display(card) for card in selected_cards],
+        "card_signal_index": _display_card_signal_index(prompt_cards),
+        "analysis_units": [_compact_analysis_unit_for_display(card) for card in prompt_cards],
     }
 
 

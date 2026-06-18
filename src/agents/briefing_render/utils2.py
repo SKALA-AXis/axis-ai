@@ -127,7 +127,6 @@ from src.agents.briefing.prompts import (  # noqa: F401  — 분리 모듈 re-ex
     _briefing_synthesis_context,
     _briefing_synthesis_system_prompt,
     _briefing_synthesis_user_prompt,
-    _display_copy_revision_prompt,
     _display_copy_schema_hint,
     _display_copy_system_prompt,
     _display_copy_user_prompt,
@@ -139,6 +138,7 @@ from src.agents.briefing.support import (  # noqa: F401  — 분리 모듈 re-ex
     _compact_analysis_package,
     _compact_analysis_unit_for_display,
     _company_label,
+    _dedupe_cards_for_prompt,
     _first_from_list,
     _first_int,
     _first_text,
@@ -206,6 +206,7 @@ from src.agents.briefing_render.utils0 import (  # noqa: F401
     _front_briefing_benchmark,
     _front_briefing_count,
     _front_briefing_label,
+    _front_briefing_lead_prefix,
     _front_briefing_signal_cards,
     _front_business_signals,
     _front_company_signal_phrase,
@@ -317,6 +318,8 @@ from src.agents.briefing_render.utils1 import (  # noqa: F401
 
 def _apply_period_perspective_to_report(report: dict[str, Any]) -> dict[str, Any]:
     updated = copy.deepcopy(report)
+    if _nested_get(updated, "provenance", "display_copy_prompt_version"):
+        return updated
     entries = _front_evidence_entries(updated)
     for items in (
         _json_list(updated.get("key_change_cards")),

@@ -126,7 +126,6 @@ from src.agents.briefing.prompts import (  # noqa: F401  — 분리 모듈 re-ex
     _briefing_synthesis_context,
     _briefing_synthesis_system_prompt,
     _briefing_synthesis_user_prompt,
-    _display_copy_revision_prompt,
     _display_copy_schema_hint,
     _display_copy_system_prompt,
     _display_copy_user_prompt,
@@ -138,6 +137,7 @@ from src.agents.briefing.support import (  # noqa: F401  — 분리 모듈 re-ex
     _compact_analysis_package,
     _compact_analysis_unit_for_display,
     _company_label,
+    _dedupe_cards_for_prompt,
     _first_from_list,
     _first_int,
     _first_text,
@@ -216,6 +216,7 @@ from src.agents.briefing_render.utils0 import (  # noqa: F401
     _front_briefing_benchmark,
     _front_briefing_count,
     _front_briefing_label,
+    _front_briefing_lead_prefix,
     _front_briefing_signal_cards,
     _front_business_signals,
     _front_company_signal_phrase,
@@ -369,14 +370,16 @@ def _refresh_front_briefing_report(
     selected_cards: list[dict[str, Any]],
 ) -> dict[str, Any]:
     updated = copy.deepcopy(report)
-    grounded_key_changes = _grounded_front_key_change_cards(updated)
-    if grounded_key_changes:
-        updated["key_change_cards"] = grounded_key_changes
-        updated["core_change"] = {"items": copy.deepcopy(grounded_key_changes)}
-    grounded_lead = _grounded_front_briefing_lead(updated)
-    if grounded_lead:
-        updated["briefing_lead"] = grounded_lead
-        updated["executive_summary"] = grounded_lead
+    has_display_copy = bool(_nested_get(updated, "provenance", "display_copy_prompt_version"))
+    if not has_display_copy:
+        grounded_key_changes = _grounded_front_key_change_cards(updated)
+        if grounded_key_changes:
+            updated["key_change_cards"] = grounded_key_changes
+            updated["core_change"] = {"items": copy.deepcopy(grounded_key_changes)}
+        grounded_lead = _grounded_front_briefing_lead(updated)
+        if grounded_lead:
+            updated["briefing_lead"] = grounded_lead
+            updated["executive_summary"] = grounded_lead
     briefing_report = _front_briefing_report_payload(
         result=updated,
         briefing_type=briefing_type,
@@ -534,7 +537,8 @@ def _grounded_front_briefing_lead(result: dict[str, Any]) -> str:
         return ""
     clauses = _front_join_company_signal_clauses(entries)
     summary = _front_primary_signal_summary(entries)
-    return f"오늘 수집된 경쟁사 신호에서는 {summary} {clauses}".strip()
+    prefix = _front_briefing_lead_prefix(result)
+    return f"{prefix} {summary} {clauses}".strip()
 
 
 def _front_market_change_title(entries: list[dict[str, Any]]) -> str:

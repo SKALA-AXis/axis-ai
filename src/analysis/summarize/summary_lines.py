@@ -156,17 +156,25 @@ from src.analysis.summarize.text_utils import (  # noqa: F401
     _event_verbs_in_text,
     _extract_json_object_text,
     _fact_is_off_topic_for_article,
+    _fact_is_peer_related,
     _fact_key,
     _has_bad_korean_join,
     _has_business_scope_terms,
     _has_detail_preservation_terms,
+    _has_effect_or_outcome_terms,
+    _has_peer_owned_asset_terms,
+    _has_risk_or_signal_terms,
+    _has_technology_mechanism_terms,
     _has_uncertain_fact_marker,
     _has_unique_fact_importance,
     _is_article_ui_boilerplate,
     _is_company_neutral_context_detail,
+    _is_customer_site_example_without_mechanism,
     _is_industry_trend_cluster,
     _is_peer_comparison_issue,
     _join_warnings,
+    _looks_like_customer_site_case,
+    _looks_like_industry_background_or_third_party,
     _matched_companies,
     _metadata,
     _normalize_content,
@@ -226,11 +234,43 @@ def _select_fact_ids_for_summary_lines(
         return [fact_id]
 
     preferences = _line_summary_role_preferences(cluster_event_type)
-    desired_count = min(_SUMMARY_LINE_MAX, max(_SUMMARY_LINE_MIN, len(available)))
+    desired_count = _desired_summary_line_count(available)
     return {
         str(index): choose(index, preferences[min(index - 1, len(preferences) - 1)])
         for index in range(1, desired_count + 1)
     }
+
+
+def _desired_summary_line_count(facts: list[dict[str, Any]]) -> int:
+    if len(facts) <= _SUMMARY_LINE_MIN:
+        return min(_SUMMARY_LINE_MAX, max(_SUMMARY_LINE_MIN, len(facts)))
+    extension_candidates = sorted(facts, key=_fact_selection_score, reverse=True)[
+        _SUMMARY_LINE_MIN:
+    ]
+    extension_count = 0
+    for fact in extension_candidates:
+        if not _is_summary_extension_worthy(fact):
+            continue
+        extension_count += 1
+        if _SUMMARY_LINE_MIN + extension_count >= _SUMMARY_LINE_MAX:
+            break
+    return min(_SUMMARY_LINE_MAX, _SUMMARY_LINE_MIN + extension_count)
+
+
+def _is_summary_extension_worthy(fact: dict[str, Any]) -> bool:
+    text = f"{fact.get('normalized_fact') or ''} {fact.get('evidence_text') or ''}"
+    if _is_customer_site_example_without_mechanism(text):
+        return False
+    role = str(fact.get("summary_role") or "")
+    if role in {"risk_detail", "uncertainty_detail"}:
+        return True
+    if role == "numeric_effect" and not _is_financial_only_fact(text):
+        return True
+    return (
+        _has_effect_or_outcome_terms(text)
+        or _has_risk_or_signal_terms(text)
+        or (_has_technology_mechanism_terms(text) and not _looks_like_customer_site_case(text))
+    )
 
 
 def _line_summary_role_preferences(
@@ -257,9 +297,22 @@ def _line_summary_role_preferences(
         return (
             ("main_event",),
             ("service_function", "product_definition", "application_case"),
-            ("application_case", "service_function", "product_definition"),
-            ("service_function", "application_case", "numeric_effect"),
-            ("service_function", "application_case", "uncertainty_detail", "numeric_effect"),
+            (
+                "service_function",
+                "product_definition",
+                "risk_detail",
+                "uncertainty_detail",
+                "numeric_effect",
+                "application_case",
+            ),
+            ("service_function", "product_definition", "application_case", "numeric_effect"),
+            (
+                "service_function",
+                "product_definition",
+                "application_case",
+                "uncertainty_detail",
+                "numeric_effect",
+            ),
         )
     if event_type == "earnings":
         return (
@@ -317,12 +370,24 @@ def _fact_selection_score(fact: dict[str, Any]) -> int:
     if fact.get("event_verbs"):
         score += 1
     text = f"{fact.get('normalized_fact') or ''} {fact.get('evidence_text') or ''}"
-    if re.search(r"업무|시스템|고객|서비스|솔루션|플랫폼|에이전트|코딩|협업|문서", text):
+    if re.search(r"업무|시스템|서비스|솔루션|플랫폼|에이전트|코딩|협업|문서", text):
         score += 3
+    if _has_technology_mechanism_terms(text):
+        score += 5
+    if _has_effect_or_outcome_terms(text):
+        score += 4
+    if _has_risk_or_signal_terms(text):
+        score += 3
+    if fact.get("peer_related"):
+        score += 3
+    elif _looks_like_industry_background_or_third_party(text):
+        score -= 6
     if re.search(r"외부|확대|고도화|제공|지원|활용|적용|연계", text):
         score += 2
-    if re.search(r"외부\s*기업|기업\s*고객|사업\s*영역|사업\s*확장|고객으로|고객에게", text):
+    if re.search(r"외부\s*기업|사업\s*영역|사업\s*확장", text):
         score += 5
+    if _is_customer_site_example_without_mechanism(text):
+        score -= 4
     if role == "numeric_effect" and _is_financial_only_fact(text):
         score -= 8
     score += min(len(str(fact.get("normalized_fact") or "")) // 30, 3)
@@ -1178,6 +1243,8 @@ def _compact_fact_for_prompt(
     }
     if include_evidence:
         item["evidence_text"] = fact.get("evidence_text")
+    if fact.get("peer_related") is not None:
+        item["peer_related"] = bool(fact.get("peer_related"))
     for key in ("entities", "numbers", "dates"):
         values = fact.get(key, [])
         if values:
