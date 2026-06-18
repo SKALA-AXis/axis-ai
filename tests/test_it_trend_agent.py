@@ -23,6 +23,7 @@ from src.agents.it_trend_agent import (
     _build_trend_context,
     _classify_intensity,
     _dedupe_items_by_id,
+    _deterministic_strategic_note,
     _domestic_representative_issues,
     _empty_result,
     _extract_keywords_from_rows,
@@ -32,6 +33,7 @@ from src.agents.it_trend_agent import (
     _is_global_newsroom_row,
     _is_research_row,
     _make_source_analysis_id,
+    _phase4_impact,
     _phase2_trends,
     _reference_issue_ids,
     _resolve_previous_trend_context,
@@ -524,105 +526,49 @@ def test_empty_result_returns_safe_dict_with_validation_false() -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# strategic_note 근거 기반 생성 + 한국어 강제 (사용자 리포트: 영어·막연 서술)
+# strategic_note 근거 기반 deterministic 생성
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def test_strategic_note_prompt_injects_evidence_titles_and_korean_directive(monkeypatch):
-    import json as _json
+def test_deterministic_strategic_note_uses_evidence_title_and_event_type() -> None:
+    note = _deterministic_strategic_note(
+        peer_id="samsung_sds",
+        keyword="agentic ai",
+        alignment_type="aligned",
+        evidence=[{"title": "삼성SDS, 생성형 AI 운영 플랫폼 출시", "event_type": "tech"}],
+    )
 
-    from src.agents import it_trend_agent as mod
-
-    captured: dict[str, str] = {}
-
-    class _FakeLLM:
-        def invoke(self, prompt, config=None):  # noqa: ANN001
-            captured["prompt"] = prompt
-
-            class _R:
-                content = _json.dumps(
-                    {
-                        "notes": [
-                            {
-                                "theme": "agentic ai",
-                                "peer_id": "samsung_sds",
-                                "strategic_note": "삼성SDS는 운영 플랫폼 동향으로 따라가는 중",
-                            }
-                        ]
-                    },
-                    ensure_ascii=False,
-                )
-
-            return _R()
-
-    monkeypatch.setattr(mod, "_get_llm", lambda: _FakeLLM())
-
-    result = {
-        "agentic ai": [
-            {
-                "peer_id": "samsung_sds",
-                "alignment_type": "aligned",
-                "peer_mention_count": 3,
-                "global_mention_count": 10,
-                "_evidence": [
-                    {"title": "삼성SDS, 생성형 AI 운영 플랫폼 출시", "event_type": "tech"}
-                ],
-                "strategic_note": "",
-            }
-        ]
-    }
-    detections = [
-        {"theme": "agentic ai", "intensity": "strong", "leading_companies": ["microsoft"]}
-    ]
-
-    out = mod._llm_fill_strategic_notes(result, detections)
-
-    # 실제 수집 제목이 프롬프트 근거로 주입됐는가
-    assert "삼성SDS, 생성형 AI 운영 플랫폼 출시" in captured["prompt"]
-    # event_type 까지 근거로 주입됐는가 (수주/인수/출시 구분용)
-    assert '"event_type"' in captured["prompt"]
-    # 한국어 강제 + 모호 표현 금지 지시가 있는가
-    assert "반드시 한국어로" in captured["prompt"]
-    assert "독자적인 방향을 추구" in captured["prompt"]  # 금지 표현으로 명시
-    # note 가 채워졌는가
-    assert out["agentic ai"][0]["strategic_note"] == "삼성SDS는 운영 플랫폼 동향으로 따라가는 중"
+    assert (
+        note
+        == "samsung_sds는 '삼성SDS, 생성형 AI 운영 플랫폼 출시' 기술·제품 공개 신호로 agentic ai 흐름에 대응 중"
+    )
 
 
-def test_strategic_note_payload_marks_missing_evidence(monkeypatch):
-    from src.agents import it_trend_agent as mod
+def test_deterministic_strategic_note_marks_missing_without_evidence() -> None:
+    note = _deterministic_strategic_note(
+        peer_id="posco_dx",
+        keyword="quantum",
+        alignment_type="missing",
+        evidence=[],
+    )
 
-    captured: dict[str, str] = {}
+    assert note == "관련 공개 동향 미확인"
 
-    class _FakeLLM:
-        def invoke(self, prompt, config=None):  # noqa: ANN001
-            captured["prompt"] = prompt
 
-            class _R:
-                content = '{"notes": []}'
+def test_phase4_impact_is_deterministic_without_llm() -> None:
+    cells = _phase4_impact(
+        detections=[
+            {"theme": "cloud", "mention_count": 6, "intensity": "moderate"},
+            {"theme": "quantum", "mention_count": 2, "intensity": "weak"},
+        ],
+        sk_ax_business_lines=["클라우드 전환", "AI 플랫폼"],
+    )
 
-            return _R()
-
-    monkeypatch.setattr(mod, "_get_llm", lambda: _FakeLLM())
-
-    result = {
-        "quantum": [
-            {
-                "peer_id": "posco_dx",
-                "alignment_type": "missing",
-                "peer_mention_count": 0,
-                "global_mention_count": 5,
-                "_evidence": [],
-                "strategic_note": "",
-            }
-        ]
-    }
-    detections = [{"theme": "quantum", "intensity": "weak", "leading_companies": ["ibm"]}]
-
-    mod._llm_fill_strategic_notes(result, detections)
-
-    # 근거 없을 때 추측 금지 규칙이 프롬프트에 명시돼 있는가
-    assert "관련 공개 동향 미확인" in captured["prompt"]
-    assert '"evidence": []' in captured["prompt"]
+    assert cells[0]["trend_theme"] == "cloud"
+    assert cells[0]["sk_ax_line"] == "클라우드 전환"
+    assert cells[0]["magnitude"] == "medium"
+    assert cells[0]["source_marker"] == "deterministic_phase4_impact"
+    assert cells[1]["magnitude"] == "low"
 
 
 def test_fallback_title_uses_concrete_count_not_intensity_jargon() -> None:
