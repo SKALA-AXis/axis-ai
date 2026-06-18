@@ -4,9 +4,17 @@
 """
 
 from src.observability.langfuse_client import (
+    flush,
     get_langfuse_handler,
     git_sha,
     tracing_config,
+    with_session,
 )
 
-__all__ = ["get_langfuse_handler", "git_sha", "tracing_config"]
+__all__ = [
+    "flush",
+    "get_langfuse_handler",
+    "git_sha",
+    "tracing_config",
+    "with_session",
+]
