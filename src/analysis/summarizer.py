@@ -967,7 +967,9 @@ def _is_article_relevant_snippet(
     text = normalize_korean_spacing(sentence)
     if not text:
         return False
-    title_text = normalize_korean_spacing(title if title is not None else article.get("title") or "")
+    title_text = normalize_korean_spacing(
+        title if title is not None else article.get("title") or ""
+    )
     if title_text and text == title_text:
         return True
     if _fact_is_off_topic_for_article(text, article=article, target_companies=target_companies):
@@ -979,11 +981,17 @@ def _is_article_relevant_snippet(
     has_article_company = _article_company_alias_mentioned(text, article)
     is_industry_trend = _INDUSTRY_TREND_COMPANY_ID in target_companies
     if is_industry_trend:
-        return has_title_overlap or _has_business_scope_terms(text) or _has_detail_preservation_terms(text)
+        return (
+            has_title_overlap
+            or _has_business_scope_terms(text)
+            or _has_detail_preservation_terms(text)
+        )
     if has_target_company and (has_title_overlap or _has_business_scope_terms(text)):
         return True
-    if has_article_company and has_title_overlap and (
-        _has_business_scope_terms(text) or _rule_based_event_type([text]) != "general_update"
+    if (
+        has_article_company
+        and has_title_overlap
+        and (_has_business_scope_terms(text) or _rule_based_event_type([text]) != "general_update")
     ):
         return True
     return False
@@ -2531,7 +2539,9 @@ def _fact_is_off_topic_for_article(
     fact_tokens = _article_topic_tokens(value)
     if title_tokens & fact_tokens:
         return False
-    if target_companies and _article_target_company_alias_mentioned(value, article, target_companies):
+    if target_companies and _article_target_company_alias_mentioned(
+        value, article, target_companies
+    ):
         return False
     if _article_company_alias_mentioned(value, article) and _has_business_scope_terms(value):
         return False
