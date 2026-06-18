@@ -422,7 +422,12 @@ def _embed_bge(texts: list[str]) -> np.ndarray:
 def _embed_openai(texts: list[str]) -> np.ndarray:
     import os
 
-    from openai import OpenAI
+    # langfuse.openai 드롭인 래퍼로 BGE-M3 fallback 임베딩 호출을 자동 추적
+    # (없으면 원시 openai 폴백). dedup judge(_invoke_cluster_llm_judge)와 동일 패턴.
+    try:
+        from langfuse.openai import OpenAI
+    except Exception:
+        from openai import OpenAI
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
     all_vecs = []
