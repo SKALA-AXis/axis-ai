@@ -398,6 +398,31 @@ def _embed_bge(texts: list[str]) -> np.ndarray:
     return _normalize_vectors(vecs)
 
 
+def _embed_openai(texts: list[str]) -> np.ndarray:
+    import os
+
+    # langfuse.openai 드롭인 래퍼로 BGE-M3 fallback 임베딩 호출을 자동 추적
+    # (없으면 원시 openai 폴백). dedup judge(_invoke_cluster_llm_judge)와 동일 패턴.
+    try:
+        from langfuse.openai import OpenAI
+    except Exception:
+        from openai import OpenAI
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+    all_vecs = []
+
+    for i in range(0, len(texts), 100):
+        batch = texts[i : i + 100]
+        resp = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=batch,
+        )
+        all_vecs.extend([d.embedding for d in resp.data])
+
+    vecs = np.array(all_vecs, dtype=np.float32)
+    return _normalize_vectors(vecs)
+
+
 def _normalize_vectors(vecs: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(vecs, axis=1, keepdims=True)
     return vecs / np.maximum(norms, 1e-9)

@@ -433,6 +433,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.warning("startup langchain preload skipped: %s", e)
     yield
+    # graceful shutdown 시 SDK 버퍼에 남은 Langfuse trace 를 teardown 전에 명시 flush.
+    # (handler 미초기화/비활성이면 no-op, 내부적으로 예외 흡수 — 종료를 막지 않음.)
+    from src.observability import flush as _langfuse_flush
+
+    _langfuse_flush()
     log.info("AXIS AI 서버 종료")
 
 
