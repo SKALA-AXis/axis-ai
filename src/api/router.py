@@ -998,7 +998,12 @@ async def search(request: SearchRequest):
 
 @app.post("/gen-search", response_model=GenSearchResult)
 async def gen_search(request: GenSearchRequest):
-    """Generative Search — RAG + GPT-4o + SC 검증"""
+    """Generative Search — RAG + GPT-4o 답변 생성.
+
+    주의: sc_score/sc_passed 는 실제 Self-Consistency(다회 생성 일치율) 측정값이
+    아니라 답변 경로 기반 휴리스틱 신뢰도다(LLM 답변=0.72 / 결정적 폴백=0.42 /
+    무근거=0.0). 계약 필드명은 보존하되 의미를 여기 명시해 둔다.
+    """
     log.info("Generative Search | query=%s", request.query)
     search_request = SearchRequest(
         query=request.query,
@@ -1021,14 +1026,14 @@ async def gen_search(request: GenSearchRequest):
             answer=llm_answer,
             sources=hits,
             sc_passed=True,
-            sc_score=0.72,
+            sc_score=0.72,  # 휴리스틱 신뢰도(LLM 답변 성공) — 실제 SC 일치율 아님
         )
 
     return GenSearchResult(
         answer=_deterministic_gen_search_answer(request.query, hits),
         sources=hits,
         sc_passed=False,
-        sc_score=0.42,
+        sc_score=0.42,  # 휴리스틱 신뢰도(결정적 폴백) — 실제 SC 일치율 아님
     )
 
 
