@@ -1,3 +1,9 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인 도입과 함께 테스트 추가
+#   2026-05-28 박지원 — Profile Agent 변경 반영
+#   2026-06-16 최종민 — 백필 기반 point-in-time 컨텍스트 빌더 대응
 """W4-2 — AnalysisContextBuilder 압축 / token budget 단위 테스트.
 
 DB query 는 mock 처리. compression 로직 위주.

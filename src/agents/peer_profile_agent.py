@@ -1,3 +1,9 @@
+# 작성일: 2026-05-18
+# 작성자: 심유정
+# 변경이력:
+#   2026-05-18 심유정 — 기업 프로필 에이전트 추가
+#   2026-05-19 박지원 — 파서·에이전트 수정, 전처리 보완 및 피어 프로필 스냅샷 파이프라인 추가
+#   2026-05-21 최종민 — Layer B 분석 파이프라인 반영, env-model 공용 LLM 팩토리 이행
 """PeerProfileAgent — orchestrates peer profile snapshot generation."""
 
 from __future__ import annotations

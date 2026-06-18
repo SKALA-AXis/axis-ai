@@ -1,3 +1,7 @@
+# 작성일: 2026-06-02
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-02 박지원 — 분석 파이프라인 에이전트 재구성 작업의 일부로 추가
 """W5-1 — Evaluator rule-based 4 metric 단위 테스트.
 
 Phase 1 metric: context_hit_ratio / evidence_claim_ratio / specificity_score /

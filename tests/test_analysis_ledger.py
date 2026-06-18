@@ -1,3 +1,7 @@
+# 작성일: 2026-06-09
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-09 최종민 — ContextPackAssembler
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch

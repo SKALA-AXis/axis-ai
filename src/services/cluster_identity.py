@@ -1,3 +1,7 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인(컨텍스트 엔지니어링·LLM 추론·평가)의 일부로 추가
 """Card 의 stable identity 추출 — P3-CRIT-1/2 대응.
 
 `card_news.cluster_id` 는 ephemeral seq (distinct 21, max 90,001) 이므로 join key

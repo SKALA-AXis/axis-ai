@@ -1,3 +1,9 @@
+# 작성일: 2026-05-12
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-12 박지원 — DART 파서 작성 및 전처리·분석 필드 다수 수정
+#   2026-05-12 심유정 — feature 머지분 lint·mypy 정리 및 소스 포맷
+#   2026-05-15 최종민 — mixer v2 프롬프트 및 Playwright chromium 설치 작업 반영
 """DART 크롤링 결과를 재무 후보 레코드로 변환하는 파서 에이전트."""
 
 from __future__ import annotations

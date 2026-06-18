@@ -1,3 +1,7 @@
+# 작성일: 2026-06-12
+# 작성자: 안가은
+# 변경이력:
+#   2026-06-12 안가은 — 대시보드 키워드 트렌드 파이프라인 갱신과 함께 추가
 """Generate and save one Today's Insight report.
 
 Usage:

@@ -1,3 +1,10 @@
+# 작성일: 2026-04-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-21 최종민 — axis-ai 라우터 베이스라인 구축
+#   2026-04-28 박지원 — 크롤러 로직 개선 및 뉴스 전처리/클러스터링 품질 개선
+#   2026-05-11 심유정 — 카드뉴스 openapi 스키마 정합
+#   2026-06-04 박진 — 통합 이슈 기반 mixer/브리핑 플로우
 import asyncio
 import base64
 import binascii
@@ -426,6 +433,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.warning("startup langchain preload skipped: %s", e)
     yield
+    # graceful shutdown 시 SDK 버퍼에 남은 Langfuse trace 를 teardown 전에 명시 flush.
+    # (handler 미초기화/비활성이면 no-op, 내부적으로 예외 흡수 — 종료를 막지 않음.)
+    from src.observability import flush as _langfuse_flush
+
+    _langfuse_flush()
     log.info("AXIS AI 서버 종료")
 
 

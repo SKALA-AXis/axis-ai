@@ -1,3 +1,8 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인(W1-W5) 통합 e2e 테스트 작성
+#   2026-05-26 박지원 — 링크 포맷 점검·프로파일 에이전트 반영 및 분석 러너 에이전트 명칭 변경 반영
 """W1-W5 통합 e2e — cluster postgres + 실 OpenAI 호출 1 cluster."""
 
 from __future__ import annotations

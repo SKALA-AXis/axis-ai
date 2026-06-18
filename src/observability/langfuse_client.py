@@ -1,7 +1,14 @@
-"""Langfuse self-host (team13) 통합 — LangChain CallbackHandler factory + helpers.
+# 작성일: 2026-05-13
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-13 최종민 — Langfuse CallbackHandler 통합 신설, 2.x→4.x 마이그레이션
+#   2026-05-18 심유정 — 카드뉴스 에이전트 플로우 개선 반영
+#   2026-06-02 박지원 — 분석 파이프라인 에이전트 재구성 및 뉴스 통합 흐름 개선 반영
+"""Langfuse Cloud (v4) 통합 — LangChain CallbackHandler factory + helpers.
 
 설계: axis-infra/docs/OBSERVABILITY_LANGFUSE.md §6
-배포: axis-infra/k8s/argocd/langfuse-application.yaml (chart 0.8.0, v2)
+배포: Langfuse Cloud (https://jp.cloud.langfuse.com). LANGFUSE_* 는 secret.skala.yaml 주입.
+      (self-host langfuse-application.yaml(chart 0.8.0 v2)은 PVC 쿼터로 미배포 orphan)
 
 핵심 책임
 ---------
@@ -36,6 +43,7 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 import subprocess
@@ -126,6 +134,10 @@ def _init_handler() -> Any | None:
         # client 사용.) flush 설정은 client-level (langfuse.get_client()) 에서 조정.
         _handler = CallbackHandler()
         _enabled = True
+        # 단명 프로세스(cron 스크립트 등) + graceful shutdown 에서 SDK 버퍼에 남은 trace
+        # 유실 방지 — 정상 종료 시 1회 flush 보장. handler 초기화 성공 시 1회만 등록
+        # (init 은 singleton guard 로 1회만 실행). FastAPI 는 lifespan 종료부에서도 명시 flush.
+        atexit.register(flush)
         log.info("Langfuse CallbackHandler v3+ initialized | host=%s", host)
     except Exception as e:
         log.warning("Langfuse handler 초기화 실패: %s — trace 송신 비활성", e)

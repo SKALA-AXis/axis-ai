@@ -1,3 +1,8 @@
+# 작성일: 2026-06-02
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-02 박지원 — 분석 파이프라인 에이전트 재구성
+#   2026-06-05 심유정 — strategic insight 및 카드뉴스 frontend-ready 그라운딩 개선
 """AnalysisInputBundle 기반 통합 Agent.
 
 IntegrationAgent는 source_type별 dispatcher가 아니다. 데이터 유형별 차이는

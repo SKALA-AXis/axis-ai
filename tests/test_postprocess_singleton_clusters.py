@@ -1,3 +1,7 @@
+# 작성일: 2026-06-09
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-09 박지원 — 싱글톤 클러스터 후처리·병합 및 품질 감사 추가, LLM 폴백 제거
 import scripts.postprocess_singleton_clusters as postprocess
 from scripts.postprocess_singleton_clusters import (
     Cluster,

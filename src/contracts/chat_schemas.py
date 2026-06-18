@@ -1,3 +1,7 @@
+# 작성일: 2026-06-12
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-12 최종민 — 공용 스키마를 src/contracts 로 이동해 agents→api 의존 절단 (2-A1)
 from __future__ import annotations
 
 from typing import Any, Literal

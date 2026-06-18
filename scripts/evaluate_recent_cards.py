@@ -1,3 +1,9 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인(평가 포함) 신설 및 evidence_payload 기준으로
+#   2026-05-26 박지원 — 링크 체크 포맷 보정
+#   2026-06-04 박지원 — 분석 파이프라인 컴포넌트 명명 리팩터링 반영
 """W5-2 CardEvaluatorSidecar — LLM-as-Judge 4 score 평가.
 
 5분 주기 CronJob (`axis-cron-card-evaluator`) 에서 호출. cluster 처리 critical

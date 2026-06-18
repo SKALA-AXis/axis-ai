@@ -1,3 +1,7 @@
+# 작성일: 2026-06-15
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-15 박지원 — 카드뉴스 인사이트 업데이트 보호 수정에 대한 테스트 추가
 from __future__ import annotations
 
 from scripts.backfill_card_news import _has_direct_frontend_ready

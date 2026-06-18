@@ -1,3 +1,8 @@
+# 작성일: 2026-04-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-21 최종민 — axis-ai 베이스라인 작성 및 ruff format 적용
+#   2026-04-30 박지원 — crawler v1 및 크롤러 구현/전처리 agent 수정
 """크롤러 공통 부모 클래스."""
 
 from abc import ABC, abstractmethod

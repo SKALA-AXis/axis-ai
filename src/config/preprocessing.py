@@ -1,3 +1,7 @@
+# 작성일: 2026-05-20
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-20 박지원 — 전처리 source routing/status 설정 추가 및 크롤러 catch 처리 보강
 """전처리 source routing/status 설정."""
 
 from __future__ import annotations

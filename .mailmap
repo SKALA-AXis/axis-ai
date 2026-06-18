@@ -1,0 +1,15 @@
+# 작성자 정체성 정규화 (git --use-mailmap)
+# 한 사람이 여러 git 핸들/이메일로 커밋 → 실명 단일화
+박진 <elevenses-ing@naver.com>
+박진 <102868292+Jinlevenses@users.noreply.github.com>
+박지원 <jiwon@A3071.local>
+박지원 <a45047385@gmail.com>
+심유정 <tladbwjd04899@gmail.com>
+심유정 <shim-yujeong@A3079.local>
+심유정 <yj01yj@users.noreply.github.com>
+안가은 <142371338+dksrkn@users.noreply.github.com>
+안가은 <ppopik35@gmail.com>
+김가은 <kgaeun0118@gmail.com>
+최종민 <41253247+ickell@users.noreply.github.com>
+최종민 <meniscus220@gmail.com>
+dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>

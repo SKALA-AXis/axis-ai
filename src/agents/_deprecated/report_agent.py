@@ -1,3 +1,7 @@
+# 작성일: 2026-06-17
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-17 박지원 — AI 에이전트 동기화 과정에서 deprecated 리포트 에이전트 추가
 """Deprecated report agent structure.
 
 ReportAgent belongs to the 2단계 data-usage pipeline. It will generate daily,

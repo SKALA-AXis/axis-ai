@@ -1,3 +1,7 @@
+# 작성일: 2026-05-29
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-29 박지원 — peer 프로필 스냅샷 저장 전 검증 모듈 추가
 """ProfileSnapshotValidator — lightweight profile snapshot validation."""
 
 from __future__ import annotations

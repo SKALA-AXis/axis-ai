@@ -1,3 +1,9 @@
+# 작성일: 2026-04-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-21 최종민 — axis-ai 베이스라인 작성
+#   2026-04-28 박지원 — 크롤러 로직 개선 및 데이터 수집 안정성 향상 후 해당 변경 되돌림
+#   2026-06-02 심유정 — strategic insight 에이전트 구현
 import os
 
 from sqlalchemy import create_engine

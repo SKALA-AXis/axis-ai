@@ -1,3 +1,7 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인(W1~W5) 구축의 일부로 추가
 """W1-1 — ImplicationAgent LLM 기반 시사점 Agent 테스트.
 
 LLM 호출은 mock 처리하여 deterministic. fallback 경로도 함께 검증.

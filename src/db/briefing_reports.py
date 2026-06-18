@@ -1,3 +1,9 @@
+# 작성일: 2026-05-27
+# 작성자: 심유정
+# 변경이력:
+#   2026-05-27 심유정 — 브리핑 생성 agent 추가 및 포맷 정리
+#   2026-06-12 최종민 — 브리핑 read-through 재사용으로 페이지 로딩 시 LLM 반복 호출 제거
+#   2026-06-12 박진 — 목업 삭제 및 챗봇 고도화
 """Persistence helpers for generated briefing reports."""
 
 from __future__ import annotations

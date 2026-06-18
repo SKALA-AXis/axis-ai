@@ -1,3 +1,9 @@
+# 작성일: 2026-06-09
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-09 최종민 — Today's Insight dual-lane 비교 엔진 구축 및 카피/모델(gpt-5.5) 개선
+#   2026-06-10 박진 — mixer 챗봇 today insight 플로우 개선
+#   2026-06-12 안가은 — 대시보드 키워드 트렌드 파이프라인 반영
 """Deterministic comparison facts for Today's Insight (dual-lane: salience + volume).
 
 Lane 1 — Event salience: definite strategic triggers (M&A, DART/IR, high-impact keywords)

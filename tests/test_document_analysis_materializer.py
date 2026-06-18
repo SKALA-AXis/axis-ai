@@ -1,3 +1,7 @@
+# 작성일: 2026-05-20
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-20 박지원 — 스케줄러 크롤러 수정 작업의 일부로 추가
 from __future__ import annotations
 
 from types import SimpleNamespace

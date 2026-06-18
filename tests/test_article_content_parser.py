@@ -1,3 +1,7 @@
+# 작성일: 2026-05-28
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-28 박지원 — Profile Agent 수정 작업의 일부로 본문 이미지 추출 테스트 추가
 from src.crawler.parsers.article_content import extract_image_urls
 
 

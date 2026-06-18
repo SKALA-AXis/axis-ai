@@ -1,3 +1,7 @@
+# 작성일: 2026-05-12
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-12 박지원 — 문서형 article 파서 라우터 작성 및 peer profile 스냅샷 파이프라인 반영
 """수집된 문서형 article을 source별 deterministic parser로 라우팅한다."""
 
 from __future__ import annotations

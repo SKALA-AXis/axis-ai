@@ -1,3 +1,7 @@
+# 작성일: 2026-06-11
+# 작성자: 안가은
+# 변경이력:
+#   2026-06-11 안가은 — peer 키워드·SWOT 프리뷰 파이프라인 추가 및 ruff 포맷
 """Sector-based Naver DataLab keyword runner.
 
 This runner keeps the existing keyword crawler helpers untouched and executes a flow where:

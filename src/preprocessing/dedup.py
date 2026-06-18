@@ -1,3 +1,9 @@
+# 작성일: 2026-05-19
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-19 박지원 — BGE-M3 임베딩 기반 유사 기사 클러스터링/전처리 구축
+#   2026-05-27 최종민 — BGE-M3 OOM 방지 가드, 제목 dedup 키 유니코드 정규화, Langfuse 추적 누수 차단
+#   2026-06-11 심유정 — dedup 제목 키 정규화 관련 develop 브랜치 머지
 """Gate 3: BGE-M3 임베딩 기반 유사 기사 클러스터링 전처리.
 
 RelevanceEvaluator를 통과한 기사들을 대상으로 유사 기사 클러스터를 만든다.
@@ -389,6 +395,31 @@ def _embed_bge(texts: list[str]) -> np.ndarray:
         all_vecs.append(result["dense_vecs"])
 
     vecs = np.vstack(all_vecs)
+    return _normalize_vectors(vecs)
+
+
+def _embed_openai(texts: list[str]) -> np.ndarray:
+    import os
+
+    # langfuse.openai 드롭인 래퍼로 BGE-M3 fallback 임베딩 호출을 자동 추적
+    # (없으면 원시 openai 폴백). dedup judge(_invoke_cluster_llm_judge)와 동일 패턴.
+    try:
+        from langfuse.openai import OpenAI
+    except Exception:
+        from openai import OpenAI
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+    all_vecs = []
+
+    for i in range(0, len(texts), 100):
+        batch = texts[i : i + 100]
+        resp = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=batch,
+        )
+        all_vecs.extend([d.embedding for d in resp.data])
+
+    vecs = np.array(all_vecs, dtype=np.float32)
     return _normalize_vectors(vecs)
 
 

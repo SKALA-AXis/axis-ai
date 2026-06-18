@@ -1,3 +1,8 @@
+# 작성일: 2026-06-16
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-16 박지원 — 카드뉴스 통합/요약/시사점 생성 품질 개선
+#   2026-06-16 심유정 — 사용자 전략 오버레이 액션 문구 보강 및 오버레이 브랜치 병합
 """Main generation prompt templates for StrategicInsightAgent."""
 
 SYSTEM_PROMPT = """\

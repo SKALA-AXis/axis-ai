@@ -1,3 +1,7 @@
+# 작성일: 2026-05-29
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-29 박지원 — peer 프로필 스냅샷 파이프라인의 입력 evidence pack 빌더 추가
 """ProfileInputBuilder — DB schema-first evidence pack builder.
 
 PeerProfileAgent 의 첫 단계에서 사용하는 입력 조립기다. DB에 이미 구조화된
