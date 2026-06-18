@@ -1,4 +1,4 @@
-# axis-ai-cron — card-evaluator 등 LLM+DB 전용 CronJob (Playwright/torch 제외).
+# axis-ai-cron — lightweight DB cron image (Playwright/torch 제외).
 # pyproject.toml 의 dependency-group "cron" 만 설치 (~수백 MB vs full ~6GB).
 
 # ── builder ──────────────────────────────────────────────────────────────────
@@ -41,13 +41,11 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # CronJob 별 최소 src/scripts 만 복사 (Playwright/torch 제외).
 COPY src/config ./src/config
 COPY src/db ./src/db
-COPY src/evaluators ./src/evaluators
 COPY scripts/__init__.py ./scripts/__init__.py
-COPY scripts/evaluate_recent_cards.py ./scripts/evaluate_recent_cards.py
 COPY scripts/postprocess_singleton_clusters.py ./scripts/postprocess_singleton_clusters.py
 
 ENV PYTHONPATH=/app
 
 USER 65534
 
-CMD ["python", "-m", "scripts.evaluate_recent_cards"]
+CMD ["python", "-c", "print('axis-ai-cron image ready')"]

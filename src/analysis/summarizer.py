@@ -50,8 +50,24 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 _LLM_MODEL = os.getenv("OPENAI_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o"
 _PROMPT_VERSION = "summary-v4.0"
+_USE_FACT_EXTRACTION_LLM = _env_bool("NEWS_SUMMARY_USE_FACT_EXTRACTION_LLM", False)
+_FACT_EXTRACTION_MODE = (
+    os.getenv(
+        "NEWS_SUMMARY_FACT_EXTRACTION_MODE",
+        "llm" if _USE_FACT_EXTRACTION_LLM else "adaptive",
+    )
+    .strip()
+    .lower()
+)
 _FACT_EXTRACTION_BATCH_SIZE = 10
 _FACT_EXTRACTION_MAX_TOKENS = _env_int("FACT_EXTRACTION_MAX_TOKENS", 3000)
 _SUMMARY_MAX_TOKENS = _env_int("SUMMARY_MAX_TOKENS", 1500)
@@ -62,13 +78,13 @@ _ARTICLE_CONTENT_CHARS = _env_int("NEWS_SUMMARY_ARTICLE_CONTENT_CHARS", 2400)
 _COMPACT_ARTICLE_CONTENT_CHARS = _env_int("NEWS_SUMMARY_COMPACT_ARTICLE_CONTENT_CHARS", 1200)
 _FULL_TEXT_ARTICLE_LIMIT = _env_int("NEWS_SUMMARY_FULL_TEXT_ARTICLE_LIMIT", 3)
 _MIN_ANALYZED_ARTICLES = _env_int("NEWS_SUMMARY_MIN_ANALYZED_ARTICLES", 8)
-_MAX_ANALYZED_ARTICLES = _env_int("NEWS_SUMMARY_MAX_ANALYZED_ARTICLES", 20)
+_MAX_ANALYZED_ARTICLES = _env_int("NEWS_SUMMARY_MAX_ANALYZED_ARTICLES", 10)
 _MAJORITY_THRESHOLD = _env_float("NEWS_SUMMARY_MAJORITY_THRESHOLD", 0.70)
 _MIXED_THRESHOLD = _env_float("NEWS_SUMMARY_MIXED_THRESHOLD", 0.50)
 _SUPPORTING_ARTICLE_CONTENT_CHARS = _env_int("NEWS_SUMMARY_SUPPORTING_ARTICLE_CONTENT_CHARS", 0)
 _NEAR_DUPLICATE_SIMILARITY = _env_float("NEWS_SUMMARY_NEAR_DUPLICATE_SIMILARITY", 0.86)
 _SNIPPETS_PER_ARTICLE = _env_int("NEWS_SUMMARY_SNIPPETS_PER_ARTICLE", 4)
-_SNIPPET_CANDIDATE_SENTENCES = _env_int("NEWS_SUMMARY_SNIPPET_CANDIDATE_SENTENCES", 80)
+_SNIPPET_CANDIDATE_SENTENCES = _env_int("NEWS_SUMMARY_SNIPPET_CANDIDATE_SENTENCES", 40)
 _SNIPPET_DEDUP_SIMILARITY = _env_float("NEWS_SUMMARY_SNIPPET_DEDUP_SIMILARITY", 0.88)
 _EVENT_TYPES = (
     "contract",
@@ -181,6 +197,8 @@ _ARTICLE_FACT_EXTRACTION_PROMPT = """\
    예정·계획 정보처럼 뉴스 사실 요약에 필요한 사실을 우선하세요.
    계약/수주 기사에서는 계약 상대방, 정확한 사업명·프로젝트명, 계약 금액,
    계약 기간, 최근 매출 대비 비율, 전환·구축 대상 시스템/업무 범위를 우선 추출하세요.
+   AI/AX/플랫폼/자동화 기사에서는 주요 기술이 무엇인지, 어떤 업무를 어떻게 처리하는지,
+   운영·학습·관제·검증·연계 방식, 확인된 효과·개선 수치, 긍정 신호, 위험·제약을 분리해 추출하세요.
    "코어뱅킹 현대화 웹단말 전환 사업"처럼 업무·시스템 범위가 들어간 명칭을
    "웹단말 공급"처럼 단순 납품으로 축약하지 마세요.
    SPC·컨소시엄·민관 합작·센터 구축 기사에서는 주도 기업, 지분율, 대표/운영 주체,
@@ -202,9 +220,14 @@ _ARTICLE_FACT_EXTRACTION_PROMPT = """\
 11. 제3자 회사·서비스·고객 사례는 피어사와 직접 계약/협약/도입/수주/공급/공동개발 관계로
     연결된 경우에만 핵심 사실로 추출하세요. 기사 배경이나 시장 예시로만 언급된 제3자 사례는
     application_fact/main_event 후보에서 제외하세요.
+    단, 고객명 자체를 중요 신호로 과대평가하지 말고, 그 고객 사례가 어떤 기술·업무·운영 방식이나
+    효과를 입증하는지 함께 드러나는 경우에만 요약 후보로 보존하세요.
 12. 한 기사 안에 여러 회사가 나오면 fact의 주어를 원문 주체 그대로 유지하세요.
     삼성전자/삼성SDS/SK하이닉스/LG CNS처럼 서로 다른 회사의 도입·검증·계약 사실을
     main_company나 다른 피어사 사실로 바꿔 쓰지 마세요.
+13. 기술 작동 방식·효과·리스크·긍정 신호를 추출할 때도 반드시 피어사의 제품·플랫폼·계약·운영 범위와
+    직접 연결된 사실만 핵심으로 보세요. 시장 배경, 유명인 언급, 제3자 일반 사례는 피어사 움직임을
+    설명하는 보조 맥락일 뿐이면 core_facts에서 제외하세요.
 
 기사 클러스터:
 {articles_text}
@@ -271,7 +294,9 @@ _FACT_ID_SUMMARY_PROMPT = """\
 9. 특정 기사 키워드를 규칙처럼 추가하지 말고, 제품명/서비스명/플랫폼명/프로젝트명/이벤트명/기술명 같은 정보 유형을 기준으로 작성하세요.
 10. 같은 회사명으로 시작하는 문장은 최대 1개만 두세요. 이후 문장은 의미가 분명하면 제품명/플랫폼명/서비스명/해당 기술 등으로 이어가세요.
     "기사에서는", "사실이 확인됐다" 같은 보고서체 표현은 쓰지 마세요.
-11. fact에 구체 수치·개수·기간·범위·장소·현장이 있으면 3~5문장에 우선 반영하되, 연결된 fact evidence_text에서 검증되는 경우에만 쓰세요.
+11. fact에 구체 수치·개수·기간·범위·장소·현장이 있으면 3~5문장에 반영할 수 있지만,
+    장소·고객명만으로 중요도를 올리지 마세요. 기술이 무엇인지, AI/AX가 어떤 작업을 어떻게 처리하는지,
+    어떤 효과·긍정 신호·위험·제약이 확인되는지를 더 우선하세요.
 12. 주어와 서술어의 의미 관계를 맞추세요. 회사/기관 주어는 행동·발표·공개를, 제품/서비스/플랫폼/기술 주어는 기능·역할·적용 범위를, 기사/보도/자료 주어는 소개·설명·언급처럼 전달 행위를 서술하세요.
 13. 계약/수주 요약에서는 정확한 사업명·프로젝트명과 계약 금액을 가능하면 1문장에 보존하세요.
     2문장은 단순 공급 여부보다 고객 업무/시스템 전환 범위를 보존하세요.
@@ -286,14 +311,19 @@ _FACT_ID_SUMMARY_PROMPT = """\
 15. 제3자 회사·서비스·고객 사례는 피어사와 직접 계약/협약/도입/수주/공급/공동개발 관계로 연결된
     fact_id가 있을 때만 summary_lines에 넣으세요. 본문 배경이나 시장 사례로만 나온 제3자 서비스는
     핵심 변화 3줄 요약에 넣지 말고, 피어사의 발표·제품·계약·고객 업무 범위로 문장을 구성하세요.
+    고객명은 대표 사례가 아니라 근거의 일부입니다. 고객 사례를 쓰더라도 "누구에게"보다
+    "어떤 기술/플랫폼이 어떤 업무를 처리했고 어떤 효과나 적용 범위를 보였는지"가 문장의 중심이어야 합니다.
 16. 연결된 fact_id의 normalized_fact/evidence_text에 있는 회사 주체를 바꾸지 마세요.
     다른 회사의 수치·검증 규모·서비스 선정 사실을 main_company 문장으로 귀속시키면 안 됩니다.
     다중 회사 기사에서는 "A사는 …, B사는 …"처럼 각 사실의 주체가 분명하게 드러나야 합니다.
+17. 기술·효과·리스크 문장은 main_company 또는 피어사의 제품/플랫폼/계약/운영 범위와 직접 연결된 경우만
+    핵심 요약으로 사용하세요. 피어사와 무관한 업계 일반론은 additional_candidate_facts에 있어도
+    summary_lines에 쓰지 마세요.
 
 문장별 역할:
 - 1문장: 핵심 사건·상태·평가
-- 2문장: 연결된 제품·서비스·플랫폼·기술·업무·고객·산업 영역
-- 3문장: 시연·적용 사례·수치·범위·일정·후속 단계·시장 반응·불확실성 중 가장 구체적인 사실
+- 2문장: 연결된 제품·서비스·플랫폼·기술·업무·산업 영역과 작동 방식
+- 3문장: 효과·개선 수치·적용 범위·운영 방식·긍정 신호·위험·불확실성 중 가장 중요한 사실
 - 4문장: 별도 근거가 있을 때만 추가되는 보강 사실·고객/산업 범위·운영 단계
 - 5문장: 별도 근거가 있을 때만 추가되는 수치·기간·후속 단계·불확실성
 
@@ -318,7 +348,7 @@ cluster_event_type:
 selected_facts_by_line:
 {selected_facts_json}
 
-all_available_facts:
+additional_available_facts:
 {all_facts_json}
 
 다음 JSON 형식으로만 응답하세요.
@@ -467,6 +497,7 @@ class SourceSummarizer:
             article_fact_notes=article_fact_notes,
             articles=articles_for_analysis,
             cluster_event_type=cluster_event_type,
+            target_companies=target_companies,
         )
         selected_fact_ids = _select_fact_ids_for_summary_lines(
             extracted_facts=extracted_facts,
@@ -864,6 +895,26 @@ def _article_prompt_snippets(
         ]
     )
     sentences = [sentence for sentence in sentences if not _is_article_ui_boilerplate(sentence)]
+    relevant_sentences: list[str] = []
+    previous_was_relevant = False
+    for sentence in sentences:
+        is_relevant = _is_article_relevant_snippet(
+            sentence,
+            article=article,
+            target_companies=target_companies,
+            title=title,
+        )
+        if is_relevant or (
+            previous_was_relevant
+            and _is_article_context_detail_snippet(
+                sentence,
+                article=article,
+                target_companies=target_companies,
+            )
+        ):
+            relevant_sentences.append(sentence)
+        previous_was_relevant = is_relevant
+    sentences = relevant_sentences
     scored = sorted(
         (
             (_snippet_score(sentence, article=article, target_companies=target_companies), sentence)
@@ -918,6 +969,78 @@ def _snippet_score(
     if _has_business_scope_terms(text):
         score += 1.0
     return score
+
+
+def _is_article_relevant_snippet(
+    sentence: str,
+    *,
+    article: dict[str, Any],
+    target_companies: list[str],
+    title: str | None = None,
+) -> bool:
+    text = normalize_korean_spacing(sentence)
+    if not text:
+        return False
+    title_text = normalize_korean_spacing(
+        title if title is not None else article.get("title") or ""
+    )
+    if title_text and text == title_text:
+        return True
+    if _fact_is_off_topic_for_article(text, article=article, target_companies=target_companies):
+        return False
+    title_tokens = _article_topic_tokens(title_text)
+    text_tokens = _article_topic_tokens(text)
+    has_title_overlap = bool(title_tokens & text_tokens) if title_tokens else True
+    has_target_company = _article_target_company_alias_mentioned(text, article, target_companies)
+    has_article_company = _article_company_alias_mentioned(text, article)
+    is_industry_trend = _INDUSTRY_TREND_COMPANY_ID in target_companies
+    if is_industry_trend:
+        return (
+            has_title_overlap
+            or _has_business_scope_terms(text)
+            or _has_detail_preservation_terms(text)
+        )
+    if has_target_company and (has_title_overlap or _has_business_scope_terms(text)):
+        return True
+    if (
+        has_article_company
+        and has_title_overlap
+        and (_has_business_scope_terms(text) or _rule_based_event_type([text]) != "general_update")
+    ):
+        return True
+    return False
+
+
+def _is_article_context_detail_snippet(
+    sentence: str,
+    *,
+    article: dict[str, Any],
+    target_companies: list[str],
+) -> bool:
+    text = normalize_korean_spacing(sentence)
+    if not text:
+        return False
+    is_off_topic = _fact_is_off_topic_for_article(
+        text,
+        article=article,
+        target_companies=target_companies,
+    )
+    if is_off_topic and not _is_company_neutral_context_detail(text):
+        return False
+    if _rule_based_event_type([text]) != "general_update":
+        return True
+    if re.search(r"기능|업무|자동화|고객|산업|서비스|플랫폼|제품|기술|적용|도입|활용", text):
+        return True
+    if _has_business_scope_terms(text) or _has_detail_preservation_terms(text):
+        return True
+    return bool(_number_tokens(text) or _date_tokens(text) or _rule_based_entities([text]))
+
+
+def _is_company_neutral_context_detail(text: str) -> bool:
+    value = normalize_korean_spacing(text)
+    if re.search(r"업계|시장|경쟁사|타사|제3자|다른\s*회사|별도\s*사례", value):
+        return False
+    return bool(re.search(r"기능|업무|자동화|고객|서비스|플랫폼|제품|기술|적용|도입|활용", value))
 
 
 def _is_near_duplicate_snippet(text: str, selected_texts: list[str]) -> bool:
@@ -1014,8 +1137,29 @@ def _extract_article_fact_notes_batch(
     target_companies: list[str],
     representative_id: int,
 ) -> tuple[list[dict[str, Any]], list[str], bool]:
+    rule_based_notes = _rule_based_article_fact_notes(
+        articles,
+        reason="rule_based_fact_extraction",
+        target_companies=target_companies,
+    )
+    mode = _FACT_EXTRACTION_MODE
+    if mode not in {"adaptive", "rule", "llm"}:
+        mode = "adaptive"
+    if mode == "rule":
+        return (
+            rule_based_notes,
+            ["fact_extraction_llm_skipped_rule_based_default"],
+            False,
+        )
+    if mode == "adaptive" and not _rule_based_fact_notes_need_llm(
+        rule_based_notes,
+        articles=articles,
+        target_companies=target_companies,
+    ):
+        return rule_based_notes, ["fact_extraction_rule_based_sufficient"], False
+
     notes: list[dict[str, Any]] = []
-    warnings: list[str] = []
+    warnings: list[str] = ["fact_extraction_adaptive_llm_used"] if mode == "adaptive" else []
     extraction_failed = False
     for batch in _chunked(articles, _FACT_EXTRACTION_BATCH_SIZE):
         batch_article_ids = [_article_numeric_id(article) for article in batch]
@@ -1041,7 +1185,11 @@ def _extract_article_fact_notes_batch(
             extraction_failed = True
         values = parsed.get("article_facts", []) if isinstance(parsed, dict) else []
         if not values:
-            values = _rule_based_article_fact_notes(batch, reason="empty_fact_extraction_result")
+            values = _rule_based_article_fact_notes(
+                batch,
+                reason="empty_fact_extraction_result",
+                target_companies=target_companies,
+            )
             warnings.append("fact_extraction_rule_based_candidates_created")
             extraction_failed = True
         for index, item in enumerate(values):
@@ -1051,6 +1199,55 @@ def _extract_article_fact_notes_batch(
                     note["article_id"] = batch_article_ids[index]
                 notes.append(note)
     return notes, _dedupe_keep_order(warnings), extraction_failed
+
+
+def _rule_based_fact_notes_need_llm(
+    notes: list[dict[str, Any]],
+    *,
+    articles: list[dict[str, Any]],
+    target_companies: list[str],
+) -> bool:
+    facts: list[tuple[int, dict[str, Any]]] = [
+        (_safe_int(note.get("article_id")), fact)
+        for note in notes
+        for fact in _as_list(note.get("core_facts"))
+        if isinstance(fact, dict) and str(fact.get("fact") or "").strip()
+    ]
+    if len(facts) < _SUMMARY_LINE_MIN:
+        return True
+
+    article_by_id = {
+        _article_numeric_id(article): article
+        for article in articles
+        if _article_numeric_id(article) > 0
+    }
+    title_by_id = {
+        article_id: normalize_korean_spacing(article.get("title") or "")
+        for article_id, article in article_by_id.items()
+    }
+    body_facts = [
+        (article_id, fact)
+        for article_id, fact in facts
+        if normalize_korean_spacing(fact.get("fact") or "") != title_by_id.get(article_id, "")
+    ]
+    if not body_facts:
+        return True
+    if _INDUSTRY_TREND_COMPANY_ID in target_companies:
+        return False
+
+    return not any(
+        _article_target_company_alias_mentioned(
+            " ".join(
+                [
+                    str(fact.get("fact") or ""),
+                    str(fact.get("evidence_text") or ""),
+                ]
+            ),
+            article_by_id.get(article_id) or {},
+            target_companies,
+        )
+        for article_id, fact in facts
+    )
 
 
 def _extract_article_fact_notes(
@@ -1300,21 +1497,67 @@ def _rule_based_article_fact_notes(
     articles: list[dict[str, Any]],
     *,
     reason: str,
+    target_companies: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     notes: list[dict[str, Any]] = []
     for article in articles:
         article_id = _article_numeric_id(article)
         title = normalize_korean_spacing(article.get("title") or "")
-        sentences = [
-            sentence
-            for sentence in _dedupe_keep_order(
+        if target_companies:
+            candidates = [
+                sentence
+                for sentence in _dedupe_keep_order(
+                    [
+                        title,
+                        *_split_evidence_sentences(
+                            article.get("content") or "",
+                            limit=_SNIPPET_CANDIDATE_SENTENCES,
+                        ),
+                    ]
+                )
+                if sentence
+                and not _is_article_ui_boilerplate(sentence)
+                and _is_article_relevant_snippet(
+                    sentence,
+                    article=article,
+                    target_companies=target_companies,
+                    title=title,
+                )
+            ]
+            sentences = _dedupe_keep_order(
                 [
-                    title,
-                    *_split_evidence_sentences(article.get("content") or "", limit=8),
+                    sentence
+                    for _, sentence in sorted(
+                        (
+                            (
+                                _snippet_score(
+                                    sentence,
+                                    article=article,
+                                    target_companies=target_companies,
+                                ),
+                                sentence,
+                            )
+                            for sentence in candidates
+                        ),
+                        key=lambda item: item[0],
+                        reverse=True,
+                    )
                 ]
             )
-            if sentence and not _is_article_ui_boilerplate(sentence)
-        ]
+        else:
+            sentences = [
+                sentence
+                for sentence in _dedupe_keep_order(
+                    [
+                        title,
+                        *_split_evidence_sentences(
+                            article.get("content") or "",
+                            limit=_SNIPPET_CANDIDATE_SENTENCES,
+                        ),
+                    ]
+                )
+                if sentence and not _is_article_ui_boilerplate(sentence)
+            ]
         if not article_id or not sentences:
             continue
 
@@ -1386,8 +1629,6 @@ def _select_rule_based_sentences(sentences: list[str]) -> list[str]:
             selected.append(sentence)
         if len(selected) >= 3:
             break
-    while selected and len(selected) < 3:
-        selected.append(selected[-1])
     return selected[:3]
 
 
@@ -1621,8 +1862,10 @@ def _build_extracted_facts(
     article_fact_notes: list[dict[str, Any]],
     articles: list[dict[str, Any]],
     cluster_event_type: str,
+    target_companies: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """기사 fact note에 안정적인 fact_id를 붙여 요약 가능한 fact 목록으로 변환한다."""
+    target_companies = target_companies or _candidate_peer_companies(articles)
     facts: list[dict[str, Any]] = []
     counters: dict[int, int] = {}
     article_by_id = {
@@ -1650,6 +1893,7 @@ def _build_extracted_facts(
         if _fact_is_off_topic_for_article(
             f"{text} {evidence}",
             article=article_by_id.get(article_id) or {},
+            target_companies=target_companies,
         ):
             return
         activity = activity_type or cluster_event_type
@@ -1673,6 +1917,12 @@ def _build_extracted_facts(
             text=f"{text} {evidence}",
             activity_type=activity,
         )
+        article = article_by_id.get(article_id) or {}
+        peer_related = _fact_is_peer_related(
+            f"{text} {evidence}",
+            article=article,
+            target_companies=target_companies,
+        )
         facts.append(
             {
                 "fact_id": f"c{cluster_id}_a{article_id}_f{counters[article_id]}",
@@ -1689,6 +1939,7 @@ def _build_extracted_facts(
                 "dates": _date_tokens(evidence),
                 "event_verbs": _event_verbs_in_text(f"{text} {evidence}"),
                 "confidence": confidence if confidence in {"high", "medium", "low"} else "medium",
+                "peer_related": peer_related,
             }
         )
 
@@ -2065,6 +2316,58 @@ def _has_detail_preservation_terms(text: str) -> bool:
     )
 
 
+def _has_technology_mechanism_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"학습|검증|관제|운영|제어|배치|수집|처리|분석|예측|자동화|"
+            r"통합\s*관리|시뮬레이션|오케스트레이션|워크플로|데이터\s*연계|"
+            r"플랫폼|솔루션|엔진|모델|에이전트|로봇|AMR|AI|AX|RX",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _has_effect_or_outcome_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"효과|개선|단축|감소|절감|증가|확대|고도화|정확도|수행\s*속도|"
+            r"효율|생산성|안정성|가시성|자동화\s*율|처리\s*시간|리드타임|"
+            r"성과|적용\s*범위|현장\s*적합성|사업\s*확장|검증",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _has_risk_or_signal_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"리스크|위험|제약|불확실|한계|장애|고장|중단|보안|규제|"
+            r"긍정\s*신호|수요|관심|주목|전략\s*거점|테스트베드|"
+            r"후속|본사업|상용화|확산|도입\s*검토",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _is_customer_site_example_without_mechanism(text: str) -> bool:
+    value = str(text or "")
+    if not re.search(r"고객|공장|센터|현장|매장|사업장|고객사", value):
+        return False
+    if _has_technology_mechanism_terms(value) or _has_effect_or_outcome_terms(value):
+        return False
+    return bool(re.search(r"계약|구축|도입|적용|협약|공급", value))
+
+
+def _looks_like_customer_site_case(text: str) -> bool:
+    return bool(
+        re.search(r"고객|공장|센터|현장|매장|사업장|고객사|물류센터", str(text or ""))
+        and re.search(r"계약|구축|도입|적용|협약|공급|실증", str(text or ""))
+    )
+
+
 def _is_financial_only_fact(text: str) -> bool:
     value = str(text or "")
     if _has_business_scope_terms(value):
@@ -2169,11 +2472,43 @@ def _select_fact_ids_for_summary_lines(
         return [fact_id]
 
     preferences = _line_summary_role_preferences(cluster_event_type)
-    desired_count = min(_SUMMARY_LINE_MAX, max(_SUMMARY_LINE_MIN, len(available)))
+    desired_count = _desired_summary_line_count(available)
     return {
         str(index): choose(index, preferences[min(index - 1, len(preferences) - 1)])
         for index in range(1, desired_count + 1)
     }
+
+
+def _desired_summary_line_count(facts: list[dict[str, Any]]) -> int:
+    if len(facts) <= _SUMMARY_LINE_MIN:
+        return min(_SUMMARY_LINE_MAX, max(_SUMMARY_LINE_MIN, len(facts)))
+    extension_candidates = sorted(facts, key=_fact_selection_score, reverse=True)[
+        _SUMMARY_LINE_MIN:
+    ]
+    extension_count = 0
+    for fact in extension_candidates:
+        if not _is_summary_extension_worthy(fact):
+            continue
+        extension_count += 1
+        if _SUMMARY_LINE_MIN + extension_count >= _SUMMARY_LINE_MAX:
+            break
+    return min(_SUMMARY_LINE_MAX, _SUMMARY_LINE_MIN + extension_count)
+
+
+def _is_summary_extension_worthy(fact: dict[str, Any]) -> bool:
+    text = f"{fact.get('normalized_fact') or ''} {fact.get('evidence_text') or ''}"
+    if _is_customer_site_example_without_mechanism(text):
+        return False
+    role = str(fact.get("summary_role") or "")
+    if role in {"risk_detail", "uncertainty_detail"}:
+        return True
+    if role == "numeric_effect" and not _is_financial_only_fact(text):
+        return True
+    return (
+        _has_effect_or_outcome_terms(text)
+        or _has_risk_or_signal_terms(text)
+        or (_has_technology_mechanism_terms(text) and not _looks_like_customer_site_case(text))
+    )
 
 
 def _line_summary_role_preferences(
@@ -2200,9 +2535,22 @@ def _line_summary_role_preferences(
         return (
             ("main_event",),
             ("service_function", "product_definition", "application_case"),
-            ("application_case", "service_function", "product_definition"),
-            ("service_function", "application_case", "numeric_effect"),
-            ("service_function", "application_case", "uncertainty_detail", "numeric_effect"),
+            (
+                "service_function",
+                "product_definition",
+                "risk_detail",
+                "uncertainty_detail",
+                "numeric_effect",
+                "application_case",
+            ),
+            ("service_function", "product_definition", "application_case", "numeric_effect"),
+            (
+                "service_function",
+                "product_definition",
+                "application_case",
+                "uncertainty_detail",
+                "numeric_effect",
+            ),
         )
     if event_type == "earnings":
         return (
@@ -2260,12 +2608,24 @@ def _fact_selection_score(fact: dict[str, Any]) -> int:
     if fact.get("event_verbs"):
         score += 1
     text = f"{fact.get('normalized_fact') or ''} {fact.get('evidence_text') or ''}"
-    if re.search(r"업무|시스템|고객|서비스|솔루션|플랫폼|에이전트|코딩|협업|문서", text):
+    if re.search(r"업무|시스템|서비스|솔루션|플랫폼|에이전트|코딩|협업|문서", text):
         score += 3
+    if _has_technology_mechanism_terms(text):
+        score += 5
+    if _has_effect_or_outcome_terms(text):
+        score += 4
+    if _has_risk_or_signal_terms(text):
+        score += 3
+    if fact.get("peer_related"):
+        score += 3
+    elif _looks_like_industry_background_or_third_party(text):
+        score -= 6
     if re.search(r"외부|확대|고도화|제공|지원|활용|적용|연계", text):
         score += 2
-    if re.search(r"외부\s*기업|기업\s*고객|사업\s*영역|사업\s*확장|고객으로|고객에게", text):
+    if re.search(r"외부\s*기업|사업\s*영역|사업\s*확장", text):
         score += 5
+    if _is_customer_site_example_without_mechanism(text):
+        score -= 4
     if role == "numeric_effect" and _is_financial_only_fact(text):
         score -= 8
     score += min(len(str(fact.get("normalized_fact") or "")) // 30, 3)
@@ -2293,7 +2653,12 @@ def _fact_similarity_text(fact: dict[str, Any]) -> str:
     return str(fact.get("normalized_fact") or fact.get("evidence_text") or "").strip()
 
 
-def _fact_is_off_topic_for_article(text: str, *, article: dict[str, Any]) -> bool:
+def _fact_is_off_topic_for_article(
+    text: str,
+    *,
+    article: dict[str, Any],
+    target_companies: list[str] | None = None,
+) -> bool:
     title = str(article.get("title") or "").strip()
     if not title:
         return False
@@ -2304,9 +2669,66 @@ def _fact_is_off_topic_for_article(text: str, *, article: dict[str, Any]) -> boo
     fact_tokens = _article_topic_tokens(value)
     if title_tokens & fact_tokens:
         return False
-    if _article_company_alias_mentioned(value, article):
+    if target_companies and _article_target_company_alias_mentioned(
+        value, article, target_companies
+    ):
+        return False
+    if _article_company_alias_mentioned(value, article) and _has_business_scope_terms(value):
         return False
     return True
+
+
+def _fact_is_peer_related(
+    text: str,
+    *,
+    article: dict[str, Any],
+    target_companies: list[str] | None = None,
+) -> bool:
+    value = str(text or "")
+    if target_companies and _article_target_company_alias_mentioned(
+        value, article, target_companies
+    ):
+        return True
+    if _article_company_alias_mentioned(value, article):
+        return True
+    matched_targets = [
+        company
+        for company in _matched_companies(article)
+        if not target_companies or company in set(target_companies)
+    ]
+    if len(matched_targets) == 1 and (
+        _has_peer_owned_asset_terms(value)
+        or _has_business_scope_terms(value)
+        or _has_technology_mechanism_terms(value)
+    ):
+        return True
+    return False
+
+
+def _has_peer_owned_asset_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"플랫폼|솔루션|서비스|제품|시스템|사업|프로젝트|계약|협약|MOU|"
+            r"RX|AX|AI|피지컬웍스|AgenticWorks|Brity|FabriX",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _looks_like_industry_background_or_third_party(text: str) -> bool:
+    value = str(text or "")
+    if _has_peer_owned_asset_terms(value):
+        return False
+    return bool(
+        re.search(
+            r"업계에\s*따르면|시장에서는|관심이\s*집중|주목받고\s*있|"
+            r"젠슨\s*황|엔비디아|삼성전자|SK하이닉스|노조|성과급|"
+            r"일반\s*사무|제3자|타사|경쟁사",
+            value,
+            re.I,
+        )
+    )
 
 
 def _article_topic_tokens(text: str) -> set[str]:
@@ -2359,6 +2781,32 @@ def _article_company_alias_mentioned(text: str, article: dict[str, Any]) -> bool
     return False
 
 
+def _article_target_company_alias_mentioned(
+    text: str,
+    article: dict[str, Any],
+    target_companies: list[str] | None,
+) -> bool:
+    company_ids = _dedupe_keep_order(
+        [
+            *(_normalize_string_list(target_companies) if target_companies else []),
+            *_company_list(article),
+            *_matched_companies(article),
+        ]
+    )
+    value = str(text or "")
+    for company_id in company_ids:
+        aliases = (
+            _INDUSTRY_TREND_ALIASES
+            if company_id == _INDUSTRY_TREND_COMPANY_ID
+            else _PEER_ALIASES.get(company_id) or COMPANY_ALIASES.get(company_id) or []
+        )
+        if any(
+            alias and re.search(re.escape(str(alias)), value, re.IGNORECASE) for alias in aliases
+        ):
+            return True
+    return False
+
+
 def _summarize_from_fact_ids(
     *,
     cluster_event_type: str,
@@ -2377,6 +2825,11 @@ def _summarize_from_fact_ids(
     try:
         from src.observability import tracing_config
 
+        selected_prompt_facts = _selected_facts_by_line(selected_fact_ids, extracted_facts)
+        additional_prompt_facts = _additional_facts_for_prompt(
+            extracted_facts,
+            selected_fact_ids=selected_fact_ids,
+        )
         prompt = _render_prompt(_FACT_ID_SUMMARY_PROMPT)
         prompt = (
             prompt.replace("{main_company}", main_company)
@@ -2384,17 +2837,11 @@ def _summarize_from_fact_ids(
             .replace("{cluster_event_type}", cluster_event_type)
             .replace(
                 "{selected_facts_json}",
-                json.dumps(
-                    _selected_facts_by_line(selected_fact_ids, extracted_facts),
-                    ensure_ascii=False,
-                    indent=2,
-                ),
+                json.dumps(selected_prompt_facts, ensure_ascii=False, separators=(",", ":")),
             )
             .replace(
                 "{all_facts_json}",
-                json.dumps(
-                    _compact_facts_for_prompt(extracted_facts), ensure_ascii=False, indent=2
-                ),
+                json.dumps(additional_prompt_facts, ensure_ascii=False, separators=(",", ":")),
             )
         )
         response = (
@@ -3159,35 +3606,75 @@ def _selected_facts_by_line(
     extracted_facts: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
     fact_by_id = {str(fact.get("fact_id")): fact for fact in extracted_facts}
-    return {
-        str(index): [
-            _compact_fact_for_prompt(fact_by_id[fact_id])
+    result: dict[str, list[dict[str, Any]]] = {}
+    for index in range(1, _SUMMARY_LINE_MAX + 1):
+        facts = [
+            _compact_fact_for_prompt(fact_by_id[fact_id], include_evidence=True)
             for fact_id in selected_fact_ids.get(str(index), [])
             if fact_id in fact_by_id
         ]
-        for index in range(1, _SUMMARY_LINE_MAX + 1)
+        if facts:
+            result[str(index)] = facts
+    return result
+
+
+def _additional_facts_for_prompt(
+    facts: list[dict[str, Any]],
+    *,
+    selected_fact_ids: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    selected_ids = {
+        fact_id
+        for values in selected_fact_ids.values()
+        for fact_id in _normalize_string_list(values)
+        if fact_id
     }
+    selected_texts = [
+        _fact_similarity_text(fact)
+        for fact in facts
+        if str(fact.get("fact_id") or "") in selected_ids and _fact_similarity_text(fact)
+    ]
+    remaining = [fact for fact in facts if str(fact.get("fact_id") or "") not in selected_ids]
+    ranked = sorted(remaining, key=_fact_selection_score, reverse=True)
+    selected: list[dict[str, Any]] = []
+    seen_texts = list(selected_texts)
+    for fact in ranked:
+        text = _fact_similarity_text(fact)
+        if text and any(_text_similarity(text, existing) >= 0.88 for existing in seen_texts):
+            continue
+        selected.append(fact)
+        if text:
+            seen_texts.append(text)
+        if len(selected) >= 12:
+            break
+    return [_compact_fact_for_prompt(fact, include_evidence=False) for fact in selected]
 
 
 def _compact_facts_for_prompt(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [_compact_fact_for_prompt(fact) for fact in facts]
+    return [_compact_fact_for_prompt(fact, include_evidence=True) for fact in facts]
 
 
-def _compact_fact_for_prompt(fact: dict[str, Any]) -> dict[str, Any]:
-    return {
+def _compact_fact_for_prompt(
+    fact: dict[str, Any],
+    *,
+    include_evidence: bool,
+) -> dict[str, Any]:
+    item = {
         "fact_id": fact.get("fact_id"),
-        "article_id": fact.get("article_id"),
         "fact_type": fact.get("fact_type"),
         "summary_role": fact.get("summary_role"),
-        "role_priority": fact.get("role_priority"),
-        "evidence_text": fact.get("evidence_text"),
         "normalized_fact": fact.get("normalized_fact"),
-        "entities": fact.get("entities", []),
-        "numbers": fact.get("numbers", []),
-        "dates": fact.get("dates", []),
-        "event_verbs": fact.get("event_verbs", []),
         "confidence": fact.get("confidence"),
     }
+    if include_evidence:
+        item["evidence_text"] = fact.get("evidence_text")
+    if fact.get("peer_related") is not None:
+        item["peer_related"] = bool(fact.get("peer_related"))
+    for key in ("entities", "numbers", "dates"):
+        values = fact.get(key, [])
+        if values:
+            item[key] = values
+    return {key: value for key, value in item.items() if value not in (None, "", [])}
 
 
 def _facts_for_line(

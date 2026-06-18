@@ -42,7 +42,7 @@ axis-ai/
 │   ├── config/                  ← companies·sectors·event_types·openai_policy·env_loader
 │   ├── middleware/ observability/
 │   └── schemas.py
-├── scripts/                     ← cron 진입점 (evaluate_recent_cards, postprocess_singleton_clusters) 외
+├── scripts/                     ← cron/운영 스크립트 진입점
 └── tests/                       ← 36+ 파일. 표적 실행 권장 (전체는 CI)
 ```
 

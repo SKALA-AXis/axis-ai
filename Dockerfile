@@ -1,6 +1,6 @@
 # axis-ai API 서버 — multi-stage (builder 에서 compile-only deps 제거).
 # Playwright + FlagEmbedding(torch ~2GB) 는 runtime 에만 유지.
-# card-evaluator 등 경량 CronJob 은 Dockerfile.cron (axis-ai-cron 이미지) 사용.
+# 경량 CronJob 은 Dockerfile.cron (axis-ai-cron 이미지) 사용.
 
 # ── builder: compile deps + Python wheels ────────────────────────────────────
 FROM python:3.11-slim AS builder
