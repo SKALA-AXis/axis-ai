@@ -33,8 +33,8 @@ from src.agents.it_trend_agent import (
     _is_global_newsroom_row,
     _is_research_row,
     _make_source_analysis_id,
-    _phase4_impact,
     _phase2_trends,
+    _phase4_impact,
     _reference_issue_ids,
     _resolve_previous_trend_context,
     _sanitize_per_keyword_text,
@@ -539,8 +539,8 @@ def test_deterministic_strategic_note_uses_evidence_title_and_event_type() -> No
     )
 
     assert (
-        note
-        == "samsung_sds는 '삼성SDS, 생성형 AI 운영 플랫폼 출시' 기술·제품 공개 신호로 agentic ai 흐름에 대응 중"
+        note == "samsung_sds는 '삼성SDS, 생성형 AI 운영 플랫폼 출시' 기술·제품 공개 신호로 "
+        "agentic ai 흐름에 대응 중"
     )
 
 

@@ -197,6 +197,8 @@ _ARTICLE_FACT_EXTRACTION_PROMPT = """\
    예정·계획 정보처럼 뉴스 사실 요약에 필요한 사실을 우선하세요.
    계약/수주 기사에서는 계약 상대방, 정확한 사업명·프로젝트명, 계약 금액,
    계약 기간, 최근 매출 대비 비율, 전환·구축 대상 시스템/업무 범위를 우선 추출하세요.
+   AI/AX/플랫폼/자동화 기사에서는 주요 기술이 무엇인지, 어떤 업무를 어떻게 처리하는지,
+   운영·학습·관제·검증·연계 방식, 확인된 효과·개선 수치, 긍정 신호, 위험·제약을 분리해 추출하세요.
    "코어뱅킹 현대화 웹단말 전환 사업"처럼 업무·시스템 범위가 들어간 명칭을
    "웹단말 공급"처럼 단순 납품으로 축약하지 마세요.
    SPC·컨소시엄·민관 합작·센터 구축 기사에서는 주도 기업, 지분율, 대표/운영 주체,
@@ -218,9 +220,14 @@ _ARTICLE_FACT_EXTRACTION_PROMPT = """\
 11. 제3자 회사·서비스·고객 사례는 피어사와 직접 계약/협약/도입/수주/공급/공동개발 관계로
     연결된 경우에만 핵심 사실로 추출하세요. 기사 배경이나 시장 예시로만 언급된 제3자 사례는
     application_fact/main_event 후보에서 제외하세요.
+    단, 고객명 자체를 중요 신호로 과대평가하지 말고, 그 고객 사례가 어떤 기술·업무·운영 방식이나
+    효과를 입증하는지 함께 드러나는 경우에만 요약 후보로 보존하세요.
 12. 한 기사 안에 여러 회사가 나오면 fact의 주어를 원문 주체 그대로 유지하세요.
     삼성전자/삼성SDS/SK하이닉스/LG CNS처럼 서로 다른 회사의 도입·검증·계약 사실을
     main_company나 다른 피어사 사실로 바꿔 쓰지 마세요.
+13. 기술 작동 방식·효과·리스크·긍정 신호를 추출할 때도 반드시 피어사의 제품·플랫폼·계약·운영 범위와
+    직접 연결된 사실만 핵심으로 보세요. 시장 배경, 유명인 언급, 제3자 일반 사례는 피어사 움직임을
+    설명하는 보조 맥락일 뿐이면 core_facts에서 제외하세요.
 
 기사 클러스터:
 {articles_text}
@@ -287,7 +294,9 @@ _FACT_ID_SUMMARY_PROMPT = """\
 9. 특정 기사 키워드를 규칙처럼 추가하지 말고, 제품명/서비스명/플랫폼명/프로젝트명/이벤트명/기술명 같은 정보 유형을 기준으로 작성하세요.
 10. 같은 회사명으로 시작하는 문장은 최대 1개만 두세요. 이후 문장은 의미가 분명하면 제품명/플랫폼명/서비스명/해당 기술 등으로 이어가세요.
     "기사에서는", "사실이 확인됐다" 같은 보고서체 표현은 쓰지 마세요.
-11. fact에 구체 수치·개수·기간·범위·장소·현장이 있으면 3~5문장에 우선 반영하되, 연결된 fact evidence_text에서 검증되는 경우에만 쓰세요.
+11. fact에 구체 수치·개수·기간·범위·장소·현장이 있으면 3~5문장에 반영할 수 있지만,
+    장소·고객명만으로 중요도를 올리지 마세요. 기술이 무엇인지, AI/AX가 어떤 작업을 어떻게 처리하는지,
+    어떤 효과·긍정 신호·위험·제약이 확인되는지를 더 우선하세요.
 12. 주어와 서술어의 의미 관계를 맞추세요. 회사/기관 주어는 행동·발표·공개를, 제품/서비스/플랫폼/기술 주어는 기능·역할·적용 범위를, 기사/보도/자료 주어는 소개·설명·언급처럼 전달 행위를 서술하세요.
 13. 계약/수주 요약에서는 정확한 사업명·프로젝트명과 계약 금액을 가능하면 1문장에 보존하세요.
     2문장은 단순 공급 여부보다 고객 업무/시스템 전환 범위를 보존하세요.
@@ -302,14 +311,19 @@ _FACT_ID_SUMMARY_PROMPT = """\
 15. 제3자 회사·서비스·고객 사례는 피어사와 직접 계약/협약/도입/수주/공급/공동개발 관계로 연결된
     fact_id가 있을 때만 summary_lines에 넣으세요. 본문 배경이나 시장 사례로만 나온 제3자 서비스는
     핵심 변화 3줄 요약에 넣지 말고, 피어사의 발표·제품·계약·고객 업무 범위로 문장을 구성하세요.
+    고객명은 대표 사례가 아니라 근거의 일부입니다. 고객 사례를 쓰더라도 "누구에게"보다
+    "어떤 기술/플랫폼이 어떤 업무를 처리했고 어떤 효과나 적용 범위를 보였는지"가 문장의 중심이어야 합니다.
 16. 연결된 fact_id의 normalized_fact/evidence_text에 있는 회사 주체를 바꾸지 마세요.
     다른 회사의 수치·검증 규모·서비스 선정 사실을 main_company 문장으로 귀속시키면 안 됩니다.
     다중 회사 기사에서는 "A사는 …, B사는 …"처럼 각 사실의 주체가 분명하게 드러나야 합니다.
+17. 기술·효과·리스크 문장은 main_company 또는 피어사의 제품/플랫폼/계약/운영 범위와 직접 연결된 경우만
+    핵심 요약으로 사용하세요. 피어사와 무관한 업계 일반론은 additional_candidate_facts에 있어도
+    summary_lines에 쓰지 마세요.
 
 문장별 역할:
 - 1문장: 핵심 사건·상태·평가
-- 2문장: 연결된 제품·서비스·플랫폼·기술·업무·고객·산업 영역
-- 3문장: 시연·적용 사례·수치·범위·일정·후속 단계·시장 반응·불확실성 중 가장 구체적인 사실
+- 2문장: 연결된 제품·서비스·플랫폼·기술·업무·산업 영역과 작동 방식
+- 3문장: 효과·개선 수치·적용 범위·운영 방식·긍정 신호·위험·불확실성 중 가장 중요한 사실
 - 4문장: 별도 근거가 있을 때만 추가되는 보강 사실·고객/산업 범위·운영 단계
 - 5문장: 별도 근거가 있을 때만 추가되는 수치·기간·후속 단계·불확실성
 
@@ -1903,6 +1917,12 @@ def _build_extracted_facts(
             text=f"{text} {evidence}",
             activity_type=activity,
         )
+        article = article_by_id.get(article_id) or {}
+        peer_related = _fact_is_peer_related(
+            f"{text} {evidence}",
+            article=article,
+            target_companies=target_companies,
+        )
         facts.append(
             {
                 "fact_id": f"c{cluster_id}_a{article_id}_f{counters[article_id]}",
@@ -1919,6 +1939,7 @@ def _build_extracted_facts(
                 "dates": _date_tokens(evidence),
                 "event_verbs": _event_verbs_in_text(f"{text} {evidence}"),
                 "confidence": confidence if confidence in {"high", "medium", "low"} else "medium",
+                "peer_related": peer_related,
             }
         )
 
@@ -2295,6 +2316,58 @@ def _has_detail_preservation_terms(text: str) -> bool:
     )
 
 
+def _has_technology_mechanism_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"학습|검증|관제|운영|제어|배치|수집|처리|분석|예측|자동화|"
+            r"통합\s*관리|시뮬레이션|오케스트레이션|워크플로|데이터\s*연계|"
+            r"플랫폼|솔루션|엔진|모델|에이전트|로봇|AMR|AI|AX|RX",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _has_effect_or_outcome_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"효과|개선|단축|감소|절감|증가|확대|고도화|정확도|수행\s*속도|"
+            r"효율|생산성|안정성|가시성|자동화\s*율|처리\s*시간|리드타임|"
+            r"성과|적용\s*범위|현장\s*적합성|사업\s*확장|검증",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _has_risk_or_signal_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"리스크|위험|제약|불확실|한계|장애|고장|중단|보안|규제|"
+            r"긍정\s*신호|수요|관심|주목|전략\s*거점|테스트베드|"
+            r"후속|본사업|상용화|확산|도입\s*검토",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _is_customer_site_example_without_mechanism(text: str) -> bool:
+    value = str(text or "")
+    if not re.search(r"고객|공장|센터|현장|매장|사업장|고객사", value):
+        return False
+    if _has_technology_mechanism_terms(value) or _has_effect_or_outcome_terms(value):
+        return False
+    return bool(re.search(r"계약|구축|도입|적용|협약|공급", value))
+
+
+def _looks_like_customer_site_case(text: str) -> bool:
+    return bool(
+        re.search(r"고객|공장|센터|현장|매장|사업장|고객사|물류센터", str(text or ""))
+        and re.search(r"계약|구축|도입|적용|협약|공급|실증", str(text or ""))
+    )
+
+
 def _is_financial_only_fact(text: str) -> bool:
     value = str(text or "")
     if _has_business_scope_terms(value):
@@ -2399,11 +2472,43 @@ def _select_fact_ids_for_summary_lines(
         return [fact_id]
 
     preferences = _line_summary_role_preferences(cluster_event_type)
-    desired_count = min(_SUMMARY_LINE_MAX, max(_SUMMARY_LINE_MIN, len(available)))
+    desired_count = _desired_summary_line_count(available)
     return {
         str(index): choose(index, preferences[min(index - 1, len(preferences) - 1)])
         for index in range(1, desired_count + 1)
     }
+
+
+def _desired_summary_line_count(facts: list[dict[str, Any]]) -> int:
+    if len(facts) <= _SUMMARY_LINE_MIN:
+        return min(_SUMMARY_LINE_MAX, max(_SUMMARY_LINE_MIN, len(facts)))
+    extension_candidates = sorted(facts, key=_fact_selection_score, reverse=True)[
+        _SUMMARY_LINE_MIN:
+    ]
+    extension_count = 0
+    for fact in extension_candidates:
+        if not _is_summary_extension_worthy(fact):
+            continue
+        extension_count += 1
+        if _SUMMARY_LINE_MIN + extension_count >= _SUMMARY_LINE_MAX:
+            break
+    return min(_SUMMARY_LINE_MAX, _SUMMARY_LINE_MIN + extension_count)
+
+
+def _is_summary_extension_worthy(fact: dict[str, Any]) -> bool:
+    text = f"{fact.get('normalized_fact') or ''} {fact.get('evidence_text') or ''}"
+    if _is_customer_site_example_without_mechanism(text):
+        return False
+    role = str(fact.get("summary_role") or "")
+    if role in {"risk_detail", "uncertainty_detail"}:
+        return True
+    if role == "numeric_effect" and not _is_financial_only_fact(text):
+        return True
+    return (
+        _has_effect_or_outcome_terms(text)
+        or _has_risk_or_signal_terms(text)
+        or (_has_technology_mechanism_terms(text) and not _looks_like_customer_site_case(text))
+    )
 
 
 def _line_summary_role_preferences(
@@ -2430,9 +2535,22 @@ def _line_summary_role_preferences(
         return (
             ("main_event",),
             ("service_function", "product_definition", "application_case"),
-            ("application_case", "service_function", "product_definition"),
-            ("service_function", "application_case", "numeric_effect"),
-            ("service_function", "application_case", "uncertainty_detail", "numeric_effect"),
+            (
+                "service_function",
+                "product_definition",
+                "risk_detail",
+                "uncertainty_detail",
+                "numeric_effect",
+                "application_case",
+            ),
+            ("service_function", "product_definition", "application_case", "numeric_effect"),
+            (
+                "service_function",
+                "product_definition",
+                "application_case",
+                "uncertainty_detail",
+                "numeric_effect",
+            ),
         )
     if event_type == "earnings":
         return (
@@ -2490,12 +2608,24 @@ def _fact_selection_score(fact: dict[str, Any]) -> int:
     if fact.get("event_verbs"):
         score += 1
     text = f"{fact.get('normalized_fact') or ''} {fact.get('evidence_text') or ''}"
-    if re.search(r"업무|시스템|고객|서비스|솔루션|플랫폼|에이전트|코딩|협업|문서", text):
+    if re.search(r"업무|시스템|서비스|솔루션|플랫폼|에이전트|코딩|협업|문서", text):
         score += 3
+    if _has_technology_mechanism_terms(text):
+        score += 5
+    if _has_effect_or_outcome_terms(text):
+        score += 4
+    if _has_risk_or_signal_terms(text):
+        score += 3
+    if fact.get("peer_related"):
+        score += 3
+    elif _looks_like_industry_background_or_third_party(text):
+        score -= 6
     if re.search(r"외부|확대|고도화|제공|지원|활용|적용|연계", text):
         score += 2
-    if re.search(r"외부\s*기업|기업\s*고객|사업\s*영역|사업\s*확장|고객으로|고객에게", text):
+    if re.search(r"외부\s*기업|사업\s*영역|사업\s*확장", text):
         score += 5
+    if _is_customer_site_example_without_mechanism(text):
+        score -= 4
     if role == "numeric_effect" and _is_financial_only_fact(text):
         score -= 8
     score += min(len(str(fact.get("normalized_fact") or "")) // 30, 3)
@@ -2546,6 +2676,59 @@ def _fact_is_off_topic_for_article(
     if _article_company_alias_mentioned(value, article) and _has_business_scope_terms(value):
         return False
     return True
+
+
+def _fact_is_peer_related(
+    text: str,
+    *,
+    article: dict[str, Any],
+    target_companies: list[str] | None = None,
+) -> bool:
+    value = str(text or "")
+    if target_companies and _article_target_company_alias_mentioned(
+        value, article, target_companies
+    ):
+        return True
+    if _article_company_alias_mentioned(value, article):
+        return True
+    matched_targets = [
+        company
+        for company in _matched_companies(article)
+        if not target_companies or company in set(target_companies)
+    ]
+    if len(matched_targets) == 1 and (
+        _has_peer_owned_asset_terms(value)
+        or _has_business_scope_terms(value)
+        or _has_technology_mechanism_terms(value)
+    ):
+        return True
+    return False
+
+
+def _has_peer_owned_asset_terms(text: str) -> bool:
+    return bool(
+        re.search(
+            r"플랫폼|솔루션|서비스|제품|시스템|사업|프로젝트|계약|협약|MOU|"
+            r"RX|AX|AI|피지컬웍스|AgenticWorks|Brity|FabriX",
+            str(text or ""),
+            re.I,
+        )
+    )
+
+
+def _looks_like_industry_background_or_third_party(text: str) -> bool:
+    value = str(text or "")
+    if _has_peer_owned_asset_terms(value):
+        return False
+    return bool(
+        re.search(
+            r"업계에\s*따르면|시장에서는|관심이\s*집중|주목받고\s*있|"
+            r"젠슨\s*황|엔비디아|삼성전자|SK하이닉스|노조|성과급|"
+            r"일반\s*사무|제3자|타사|경쟁사",
+            value,
+            re.I,
+        )
+    )
 
 
 def _article_topic_tokens(text: str) -> set[str]:
@@ -3485,6 +3668,8 @@ def _compact_fact_for_prompt(
     }
     if include_evidence:
         item["evidence_text"] = fact.get("evidence_text")
+    if fact.get("peer_related") is not None:
+        item["peer_related"] = bool(fact.get("peer_related"))
     for key in ("entities", "numbers", "dates"):
         values = fact.get(key, [])
         if values:
