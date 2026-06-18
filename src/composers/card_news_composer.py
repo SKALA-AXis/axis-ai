@@ -34,7 +34,6 @@ log = logging.getLogger(__name__)
 _DISPLAY_ZONE = ZoneInfo("Asia/Seoul")
 
 _llm: ChatOpenAI | None = None
-_PROMPT_VERSION = "card-news-v1.0"
 _CARD_PROMPT_VERSION = "card-news-v1.0"
 _DEFAULT_COVER_IMAGE_URL = "/png.png"
 _DEFAULT_COVER_IMAGE_ALT = "카드뉴스 대표 이미지"
@@ -117,40 +116,6 @@ _EVENT_TO_FACT_BASIS_TYPE = {
     "risk": "risk_fact",
     "unknown": "reported_fact",
 }
-
-_ISSUE_CARD_PROMPT = """\
-당신은 SK AX 전략기획팀의 AI 어시스턴트입니다.
-아래 기사들을 종합하여 이슈 카드를 작성해주세요.
-여러 기사가 있을 경우 교차 검증하여 가장 신뢰도 높은 사실만 포함하세요.
-
-## 기사 정보
-{articles_text}
-
-## 작성 규칙
-- 제목: 핵심 사실을 담은 한 문장 (40자 이내)
-- 요약: 최소 3줄, 최대 5줄. 각 줄은 순번 없이 사실 문장만 작성
-- 출처 목록: 사용한 기사의 title, source_name, url 포함
-
-## 이벤트 타입 (하나만 선택, 가장 두드러진 성격 기준)
-- partnership: 기업간 협력·MOU·공동사업·파운드리 제공계약
-- ma: 인수·합병·지분 인수·투자 유치
-- personnel: 채용·인사·임원 선임·조직 개편
-- tech: 신기술·신제품·플랫폼 출시·기술 실증
-- regulation: 법규·가이드라인·정부 정책
-- new_biz: 신사업 진출·수주·실적 발표·시장 확장
-
-복수 해당 시 본문이 가장 크게 다루는 측면을 선택.
-애매하면 tech 대신 personnel/new_biz/partnership 우선.
-
-다음 JSON 형식으로만 응답하세요 (추가 텍스트 금지):
-{{
-  "title": "이슈 제목",
-  "summary_lines": ["...", "...", "...", "...", "..."],
-  "event_type": "tech",
-  "sources": [
-    {{"index": 1, "title": "...", "source_name": "...", "url": "...", "credibility_score": 0.0}}
-  ]
-}}"""
 
 
 def _get_llm() -> ChatOpenAI:
@@ -480,66 +445,11 @@ class CardNewsComposer:
             )
             return summary_card
 
-        articles_text = _format_articles(articles)
-        prompt = _ISSUE_CARD_PROMPT.replace("{articles_text}", articles_text)
-        generated_at = _now_iso()
-        published_date = _published_date(articles, generated_at)
-
-        try:
-            from src.observability import tracing_config
-
-            response = _get_llm().invoke(
-                prompt,
-                config=tracing_config(
-                    agent="CardNewsComposer",
-                    prompt_version=_PROMPT_VERSION,
-                    company=company,
-                    cluster_id=cluster_id,
-                ),
-            )
-            content = (
-                response.content if isinstance(response.content, str) else str(response.content)
-            )
-            card_data = _parse_json(content)
-
-            card = {
-                "id": _card_news_id(cluster_id, published_date),
-                "company": company,
-                "cluster_id": cluster_id,
-                "representative_id": representative_id,
-                "published_date": published_date,
-                "title": card_data.get("title", articles[0]["title"][:100]),
-                "summary_lines": card_data.get("summary_lines", []),
-                "event_type": card_data.get(
-                    "event_type",
-                    classification.get("event_type", "tech"),
-                ),
-                # v3: 분류 결과의 sector·exposure 정보를 카드에 그대로 전파
-                "sector": classification.get("sector", "other"),
-                "sectors": classification.get("sectors", ["other"]),
-                "exposure_score": classification.get("exposure_score", 0.0),
-                "exposure_band": classification.get("exposure_band", "low"),
-                "signals": classification.get("signals", {}),
-                # 등급 자체는 v3에서 폐기되었으나, DB 컬럼 호환을 위해 노출도 밴드를 저장
-                "importance": classification.get("importance", "low"),
-                "importance_score": classification.get("importance_score", 0.0),
-                "sources": _default_sources(articles),
-            }
-            _attach_card_news_schema_fields(card)
-
-            log.info(
-                "카드뉴스 생성 완료 | id=%s sector=%s band=%s event=%s sources=%d",
-                card["id"],
-                card["sector"],
-                card["exposure_band"],
-                card["event_type"],
-                len(articles),
-            )
-            return card
-
-        except Exception as e:
-            log.error("카드뉴스 생성 실패 | cluster=%d error=%s", cluster_id, e)
-            return {}
+        log.warning(
+            "카드뉴스 생성 스킵 | cluster=%d reason=summary_card_unavailable llm_fallback=disabled",
+            cluster_id,
+        )
+        return {}
 
 
 def _build_cluster_fetch_ids(
@@ -714,15 +624,19 @@ def _business_context_title(title: str, *, summary: dict[str, Any], event_type: 
     }:
         return value
     focus = _business_focus_from_summary(summary)
-    peer_name = company_name_ko(str(summary.get("main_company") or "")) or _first_non_empty(
-        summary.get("main_company"),
-        "",
-    )
+    peer_name = _display_company_name(summary.get("main_company"))
     if focus:
         if "전망" in value or "목표" in value:
-            return f"{peer_name}, {focus} 성장 전망"
-        return f"{peer_name}, {focus} 중심 실적 변화"
+            return f"{peer_name}, {focus} 성장 전망" if peer_name else f"{focus} 성장 전망"
+        return f"{peer_name}, {focus} 중심 실적 변화" if peer_name else f"{focus} 중심 실적 변화"
     return value
+
+
+def _display_company_name(company_id: Any) -> str:
+    value = str(company_id or "").strip()
+    if value in {"industry_trend", "industry"}:
+        return ""
+    return company_name_ko(value) or value
 
 
 def _looks_like_sentence_title(title: str) -> bool:
@@ -786,20 +700,6 @@ def _business_focus_from_summary(summary: dict[str, Any]) -> str:
     )
     matches = [label for pattern, label in focus_rules if re.search(pattern, facts, re.I)]
     return "·".join(dict.fromkeys(matches[:2]))
-
-
-def _format_articles(articles: list[dict[str, Any]]) -> str:
-    lines = []
-    for i, a in enumerate(articles, 1):
-        credibility_score = a.get("credibility_score")
-        credibility_text = f"{credibility_score:.2f}" if credibility_score is not None else "미계산"
-        lines.append(
-            f"[{i}] 제목: {a['title']}\n"
-            f"    출처: {a['source_name']} (신뢰도: {credibility_text})"
-            f" | URL: {a['url']}\n"
-            f"    내용: {' '.join((a.get('content') or '').split())}"
-        )
-    return "\n\n".join(lines)
 
 
 def _parse_json(text: str) -> dict[str, Any]:

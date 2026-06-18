@@ -148,7 +148,6 @@ from src.agents.briefing.prompts import (  # noqa: F401  — 분리 모듈 re-ex
     _briefing_synthesis_context,
     _briefing_synthesis_system_prompt,
     _briefing_synthesis_user_prompt,
-    _display_copy_revision_prompt,
     _display_copy_schema_hint,
     _display_copy_system_prompt,
     _display_copy_user_prompt,
@@ -160,6 +159,7 @@ from src.agents.briefing.support import (  # noqa: F401  — 분리 모듈 re-ex
     _compact_analysis_package,
     _compact_analysis_unit_for_display,
     _company_label,
+    _dedupe_cards_for_prompt,
     _first_from_list,
     _first_int,
     _first_text,
@@ -253,7 +253,7 @@ class BriefingGenerationAgent:
 
         ``reuse_saved=True`` 이고 필터 없는 기본형 요청이면 ``briefing_reports`` 에
         저장된 동일 기간 브리핑을 재사용한다 (과거 기간은 무기한, 진행 중 기간은
-        TTL 30분). LLM 정제(최대 4회 GPT 호출)를 매 조회마다 반복하지 않기 위한
+        TTL 30분). LLM 정제(최대 2회 GPT 호출)를 매 조회마다 반복하지 않기 위한
         read-through 캐시 — 기본형 요청은 생성 후 항상 저장해 캐시를 채운다.
         """
 
@@ -513,6 +513,7 @@ def _sanitize_internal_display_terms(value: str) -> str:
         ("프로필 역량", "기존 사업 역량"),
         ("프로필의", "기존 사업 정보의"),
         ("프로필", "기존 사업 정보"),
+        ("industry_trend", "산업 동향"),
     )
     for old, new in replacements:
         text = text.replace(old, new)
@@ -580,14 +581,16 @@ def _refresh_front_briefing_report(
     selected_cards: list[dict[str, Any]],
 ) -> dict[str, Any]:
     updated = copy.deepcopy(report)
-    grounded_key_changes = _grounded_front_key_change_cards(updated)
-    if grounded_key_changes:
-        updated["key_change_cards"] = grounded_key_changes
-        updated["core_change"] = {"items": copy.deepcopy(grounded_key_changes)}
-    grounded_lead = _grounded_front_briefing_lead(updated)
-    if grounded_lead:
-        updated["briefing_lead"] = grounded_lead
-        updated["executive_summary"] = grounded_lead
+    has_display_copy = bool(_nested_get(updated, "provenance", "display_copy_prompt_version"))
+    if not has_display_copy:
+        grounded_key_changes = _grounded_front_key_change_cards(updated)
+        if grounded_key_changes:
+            updated["key_change_cards"] = grounded_key_changes
+            updated["core_change"] = {"items": copy.deepcopy(grounded_key_changes)}
+        grounded_lead = _grounded_front_briefing_lead(updated)
+        if grounded_lead:
+            updated["briefing_lead"] = grounded_lead
+            updated["executive_summary"] = grounded_lead
     briefing_report = _front_briefing_report_payload(
         result=updated,
         briefing_type=briefing_type,
@@ -601,6 +604,8 @@ def _refresh_front_briefing_report(
 
 def _apply_period_perspective_to_report(report: dict[str, Any]) -> dict[str, Any]:
     updated = copy.deepcopy(report)
+    if _nested_get(updated, "provenance", "display_copy_prompt_version"):
+        return updated
     entries = _front_evidence_entries(updated)
     for items in (
         _json_list(updated.get("key_change_cards")),
@@ -795,30 +800,11 @@ def _refine_display_copy_with_llm(
         return report
     issues = _display_copy_quality_issues(parsed, selected_cards)
     if issues:
-        revision_messages = [
-            ("system", _display_copy_system_prompt()),
-            ("human", _display_copy_revision_prompt(context, parsed, issues)),
-        ]
-        try:
-            revision_response = (llm or _get_llm()).invoke(
-                revision_messages,
-                config=tracing_config(
-                    agent="BriefingGenerationAgent", phase="refine_display_copy_revision"
-                ),
-            )
-        except Exception as exc:  # pragma: no cover - external API safety net
-            log.warning("Briefing display copy revision failed | error=%s", exc)
-        else:
-            revised = _parse_json_object(getattr(revision_response, "content", revision_response))
-            if revised:
-                parsed = revised
-        remaining_issues = _display_copy_quality_issues(parsed, selected_cards)
-        if remaining_issues:
-            log.info(
-                "Briefing display copy refinement rejected | issues=%s",
-                remaining_issues,
-            )
-            return report
+        log.info(
+            "Briefing display copy refinement rejected | issues=%s",
+            issues,
+        )
+        return report
     return _merge_display_copy(report, parsed, selected_cards=selected_cards)
 
 
@@ -826,6 +812,7 @@ def _display_copy_context(
     report: dict[str, Any],
     selected_cards: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    prompt_cards = _dedupe_cards_for_prompt(selected_cards)
     return {
         "period": {
             "title": report.get("title"),
@@ -837,8 +824,8 @@ def _display_copy_context(
         "source_card_ids": report.get("related_card_ids") or [],
         "source_integrated_issue_ids": report.get("source_integrated_issue_ids") or [],
         "current_display_structure": _display_payload_structure(_frontend_display_payload(report)),
-        "card_signal_index": _display_card_signal_index(selected_cards),
-        "analysis_units": [_compact_analysis_unit_for_display(card) for card in selected_cards],
+        "card_signal_index": _display_card_signal_index(prompt_cards),
+        "analysis_units": [_compact_analysis_unit_for_display(card) for card in prompt_cards],
     }
 
 
@@ -3339,7 +3326,17 @@ def _grounded_front_briefing_lead(result: dict[str, Any]) -> str:
         return ""
     clauses = _front_join_company_signal_clauses(entries)
     summary = _front_primary_signal_summary(entries)
-    return f"오늘 수집된 경쟁사 신호에서는 {summary} {clauses}".strip()
+    prefix = _front_briefing_lead_prefix(result)
+    return f"{prefix} {summary} {clauses}".strip()
+
+
+def _front_briefing_lead_prefix(result: dict[str, Any]) -> str:
+    briefing_type = str(result.get("briefing_type") or "").strip()
+    if briefing_type == "weekly":
+        return "이번 주 경쟁사와 산업 신호에서는"
+    if briefing_type == "monthly":
+        return "이번 달 경쟁사와 산업 신호에서는"
+    return "오늘 수집된 경쟁사 신호에서는"
 
 
 def _front_evidence_entries(result: dict[str, Any]) -> list[dict[str, Any]]:

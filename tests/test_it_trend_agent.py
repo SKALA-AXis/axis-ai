@@ -539,8 +539,8 @@ def test_deterministic_strategic_note_uses_evidence_title_and_event_type() -> No
     )
 
     assert (
-        note
-        == "samsung_sds는 '삼성SDS, 생성형 AI 운영 플랫폼 출시' 기술·제품 공개 신호로 agentic ai 흐름에 대응 중"  # noqa: E501
+        note == "samsung_sds는 '삼성SDS, 생성형 AI 운영 플랫폼 출시' 기술·제품 공개 신호로 "
+        "agentic ai 흐름에 대응 중"
     )
 
 

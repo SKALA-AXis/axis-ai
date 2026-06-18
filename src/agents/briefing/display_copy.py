@@ -156,32 +156,6 @@ def _display_copy_quality_issues(
             "'선택된 카드', '피어 프로필', '프로필', 'analysis_units', "
             "'card_signal_index'를 사용자 언어로 풀어 쓰세요."
         )
-    strong_terms = ("두각", "입지", "경쟁 우위", "주도하고", "선도하고")
-    if any(term in text for text in texts for term in strong_terms):
-        issues.append(
-            "근거보다 강한 평가 표현이 포함되어 있습니다. '두각', '시장 입지', "
-            "'경쟁 우위', '주도', '선도' 같은 표현은 analysis_units에 같은 "
-            "의미의 근거가 없으면 '확인됩니다', '부각되고 있습니다', "
-            "'중요성이 커지고 있습니다'처럼 낮춰 쓰세요."
-        )
-    weak_patterns = (
-        "중요성이 커지고",
-        "중요성을 부각",
-        "중요한 역할",
-        "핵심 요소로 자리",
-        "강조하고 있습니다",
-        "경쟁력을 강화",
-        "성장을 도모",
-        "전략적 포지셔닝",
-    )
-    weak_hits = [text for text in texts if any(pattern in text for pattern in weak_patterns)]
-    if weak_hits:
-        issues.append(
-            "화면 문장에 이유 없는 중요도/성과 표현이 포함되어 있습니다. "
-            "'중요성이 커지고 있습니다', '강조하고 있습니다', '경쟁력을 강화하고 있습니다' "
-            "같은 표현은 실제 근거와 고객 평가 변화, 오퍼링 변화, 경쟁 방식 변화로 "
-            "구체화하세요."
-        )
     for item in _display_copy_visible_items(draft):
         if not isinstance(item, dict):
             continue
@@ -194,10 +168,7 @@ def _display_copy_quality_issues(
                 "그 근거가 title을 지지하는 이유를 설명해야 합니다."
             )
             break
-        if why and (
-            _is_too_similar(why, [title, description], threshold=0.62)
-            or any(pattern in why for pattern in weak_patterns)
-        ):
+        if why and _is_too_similar(why, [title, description], threshold=0.62):
             issues.append(
                 "why_important가 title/description을 반복하거나 추상적으로 끝납니다. "
                 "고객 평가, 오퍼링 우선순위, 책임 조직, 자원 배분 중 무엇이 바뀌는지 "
@@ -231,32 +202,65 @@ def _key_change_card_coverage_issues(
     draft: dict[str, Any],
     selected_cards: list[dict[str, Any]],
 ) -> list[str]:
-    company_names = _dedupe_keep_order(
-        [name for name in (_company_label(card) for card in selected_cards) if name]
-    )
-    if len(company_names) < 2:
+    company_aliases = _key_change_company_aliases(selected_cards)
+    if len(company_aliases) < 2:
         return []
-    required_count = min(2, len(company_names))
-    issues: list[str] = []
-    for insight_type, label in (
-        ("market_signal", "시장 신호"),
-        ("competitor_move", "경쟁사 움직임"),
-    ):
+    required_count = min(2, len(company_aliases))
+    key_change_items = [
+        item for item in _json_list(draft.get("key_change_cards")) if isinstance(item, dict)
+    ]
+    if len(key_change_items) >= required_count:
+        return []
+    texts: list[str] = []
+    for insight_type in ("market_signal", "competitor_move"):
         item = _find_key_change_by_type(draft, insight_type)
+        if isinstance(item, dict):
+            texts.append(
+                " ".join(
+                    str(item.get(key) or "") for key in ("title", "description", "why_important")
+                )
+            )
+    text = " ".join(texts)
+    mentioned = [
+        aliases for aliases in company_aliases if any(alias and alias in text for alias in aliases)
+    ]
+    evidence_ids = _key_change_evidence_card_ids(draft)
+    if len(mentioned) >= required_count or len(evidence_ids) >= required_count:
+        return []
+    return [
+        "핵심 변화 카드가 입력 카드 전체를 충분히 반영하지 못했습니다. "
+        f"key_change_cards 전체에서 최소 {required_count}개 대표 회사/카드 신호를 "
+        "근거로 포함하고, 그 신호들이 왜 하나의 브리핑 판단으로 묶이는지 설명하세요."
+    ]
+
+
+def _key_change_evidence_card_ids(draft: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for item in _json_list(draft.get("key_change_cards")):
         if not isinstance(item, dict):
             continue
-        text = " ".join(
-            str(item.get(key) or "") for key in ("title", "description", "why_important")
+        for value in _json_list(item.get("evidence_card_ids")):
+            card_id = str(value or "").strip()
+            if card_id and card_id not in values:
+                values.append(card_id)
+    return values
+
+
+def _key_change_company_aliases(selected_cards: list[dict[str, Any]]) -> list[tuple[str, ...]]:
+    aliases_by_label: dict[str, tuple[str, ...]] = {}
+    for card in selected_cards:
+        label = _company_label(card)
+        if not label or label in aliases_by_label:
+            continue
+        aliases = _dedupe_keep_order(
+            [
+                label,
+                str(card.get("peer_id") or "").strip(),
+                str(card.get("company") or "").strip(),
+            ]
         )
-        mentioned = [name for name in company_names if name in text]
-        if len(mentioned) < required_count:
-            issues.append(
-                f"{label} 카드가 입력 카드 전체를 충분히 반영하지 못했습니다. "
-                f"description에 최소 {required_count}개 대표 회사/카드 신호를 "
-                "근거로 포함하고, 그 신호들이 왜 하나의 브리핑 판단으로 묶이는지 "
-                "설명하세요."
-            )
-    return issues
+        aliases_by_label[label] = tuple(alias for alias in aliases if alias)
+    return list(aliases_by_label.values())
 
 
 def _display_copy_visible_texts(value: object) -> list[str]:
