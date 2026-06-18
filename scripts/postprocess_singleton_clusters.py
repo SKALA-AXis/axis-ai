@@ -13,9 +13,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -31,7 +29,6 @@ if str(ROOT) not in sys.path:
 
 from src.config.companies import COMPANY_ALIASES  # noqa: E402
 from src.config.env_loader import load_profile  # noqa: E402
-from src.config.openai_policy import openai_calls_enabled  # noqa: E402
 from src.db.postgres import SessionLocal, reconfigure_from_env  # noqa: E402
 
 logging.basicConfig(
@@ -63,14 +60,6 @@ _LIST_LIKE_COMPACT_MARKERS = (
     "클라우드월드",
 )
 _MOJIBAKE_REPLACEMENT_CHAR = "\ufffd"
-_TITLE_LLM_JUDGE_ENABLED = (
-    os.getenv("POSTPROCESS_TITLE_LLM_JUDGE_ENABLED", "true").lower() == "true"
-)
-_TITLE_LLM_MAX_CALLS = int(os.getenv("POSTPROCESS_TITLE_LLM_MAX_CALLS", "80"))
-_TITLE_LLM_MODEL = os.getenv("POSTPROCESS_TITLE_LLM_MODEL", "gpt-4o-mini")
-_TITLE_LLM_MERGE_SCORE = float(os.getenv("POSTPROCESS_TITLE_LLM_MERGE_SCORE", "0.82"))
-_title_llm_calls = 0
-_title_llm_cache: dict[tuple[str, str], bool | None] = {}
 
 
 @dataclass(frozen=True)
@@ -950,22 +939,6 @@ def _cluster_relation(
     if anchor_relation is not None:
         return anchor_relation
 
-    title_llm_decision = _title_llm_same_event(
-        left_titles,
-        right_titles,
-        shared_context_tokens,
-        left_snippets,
-        right_snippets,
-    )
-    if title_llm_decision is True:
-        score = max(
-            _candidate_score(
-                left_context_tokens, right_context_tokens, shared_context_tokens, target_size
-            ),
-            _TITLE_LLM_MERGE_SCORE,
-        )
-        return "title_content_llm", shared_context_tokens, score
-
     if not _same_company_family(left_titles, right_titles):
         return None
     if not (_has_event_action(left_titles) and _has_event_action(right_titles)):
@@ -991,7 +964,6 @@ def _is_verified_event_key(event_key: str) -> bool:
     return (
         event_key.startswith("title_event:")
         or event_key.startswith("title_anchor:")
-        or event_key == "title_content_llm"
     )
 
 
@@ -1118,6 +1090,7 @@ def _has_event_action(titles: list[str]) -> bool:
             "지원",
             "공급",
             "구축",
+            "적용",
             "투자",
             "인수",
             "확대",
@@ -1207,145 +1180,6 @@ def _normalize_token(token: str) -> str:
         "한국전력공사": "한국전력",
     }
     return aliases.get(compact, compact)
-
-
-def _title_llm_same_event(
-    left_titles: list[str],
-    right_titles: list[str],
-    shared_tokens: set[str],
-    left_snippets: list[str] | None = None,
-    right_snippets: list[str] | None = None,
-) -> bool | None:
-    global _title_llm_calls
-
-    if not _should_consult_title_llm(
-        left_titles, right_titles, shared_tokens, left_snippets, right_snippets
-    ):
-        return None
-
-    left_key = " | ".join(sorted(left_titles))
-    right_key = " | ".join(sorted(right_titles))
-    cache_key: tuple[str, str] = (
-        (left_key, right_key) if left_key <= right_key else (right_key, left_key)
-    )
-    if cache_key in _title_llm_cache:
-        return _title_llm_cache[cache_key]
-    if _title_llm_calls >= _TITLE_LLM_MAX_CALLS:
-        _title_llm_cache[cache_key] = None
-        return None
-
-    _title_llm_calls += 1
-    payload = {
-        "instruction": (
-            "Decide whether these Korean news article groups describe the same narrow business "
-            "news issue and should be merged into one cluster. Use titles, lead snippets, and "
-            "shared keywords; ignore sector labels."
-        ),
-        "criteria": [
-            "same_event=true when titles use different wording for the same underlying "
-            "announcement, deal, launch, deployment, or collaboration.",
-            "same_event=true when title wording differs but lead snippets and keywords "
-            "indicate the same concrete event.",
-            "same_event=true when both articles are focused analysis/strategy coverage "
-            "of the same company and the same narrow set of anchors such as product "
-            "line, market, executive, partner, financial figures, or operational "
-            "initiative.",
-            "same_event=false when articles share only a broad theme, company, "
-            "technology category, earnings season, or industry trend.",
-            "same_event=false when the titles have different concrete anchors, even "
-            "if snippets share broad AI, cloud, platform, or business terms.",
-            "Do not require identical company labels if the titles indicate the same event.",
-        ],
-        "left_titles": left_titles[:5],
-        "right_titles": right_titles[:5],
-        "left_lead_snippets": (left_snippets or [])[:5],
-        "right_lead_snippets": (right_snippets or [])[:5],
-        "shared_keywords": sorted(shared_tokens)[:30],
-        "required_json_schema": {
-            "same_event": "boolean",
-            "confidence": "number between 0 and 1",
-            "reason": "short Korean explanation",
-        },
-    }
-
-    try:
-        from openai import OpenAI
-
-        response = OpenAI().chat.completions.create(
-            model=_TITLE_LLM_MODEL,
-            response_format={"type": "json_object"},
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a strict Korean news title clustering judge. Return JSON only."
-                    ),
-                },
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ],
-            temperature=0,
-        )
-        parsed = json.loads(response.choices[0].message.content or "{}")
-        confidence = float(parsed.get("confidence") or 0)
-        decision = bool(parsed.get("same_event")) and confidence >= 0.7
-        if decision and not (
-            confidence >= 0.85
-            or _has_title_anchor_overlap(left_titles, right_titles)
-            or _has_context_anchor_overlap(left_titles, right_titles, left_snippets, right_snippets)
-        ):
-            log.info(
-                "title LLM merge vetoed by title anchors | reason=%s",
-                parsed.get("reason", ""),
-            )
-            decision = False
-        _title_llm_cache[cache_key] = decision
-        log.info(
-            "title LLM merge judge | decision=%s confidence=%s reason=%s",
-            decision,
-            confidence,
-            parsed.get("reason", ""),
-        )
-        return decision
-    except Exception as e:
-        log.warning("title LLM merge judge failed | error=%s", e)
-        _title_llm_cache[cache_key] = None
-        return None
-
-
-def _should_consult_title_llm(
-    left_titles: list[str],
-    right_titles: list[str],
-    shared_tokens: set[str],
-    left_snippets: list[str] | None = None,
-    right_snippets: list[str] | None = None,
-) -> bool:
-    if not _TITLE_LLM_JUDGE_ENABLED or not openai_calls_enabled():
-        return False
-    if _TITLE_LLM_MAX_CALLS <= 0:
-        return False
-    same_company = _same_company_family(left_titles, right_titles)
-    has_event_action = _has_event_action(left_titles) or _has_event_action(right_titles)
-    has_context_overlap = _has_context_anchor_overlap(
-        left_titles,
-        right_titles,
-        left_snippets,
-        right_snippets,
-    )
-    if not (same_company or has_context_overlap):
-        return False
-    if not (has_event_action or has_context_overlap):
-        return False
-
-    left_tokens = _cluster_context_tokens(left_titles, left_snippets)
-    right_tokens = _cluster_context_tokens(right_titles, right_snippets)
-    if len(left_tokens) < 2 or len(right_tokens) < 2:
-        return False
-    if len(shared_tokens) >= 2:
-        return True
-
-    jaccard = len(shared_tokens) / max(1, len(left_tokens | right_tokens))
-    coverage = len(shared_tokens) / max(1, min(len(left_tokens), len(right_tokens)))
-    return jaccard >= 0.25 or coverage >= 0.40
 
 
 def _has_context_anchor_overlap(

@@ -109,8 +109,8 @@ def main() -> int:
 
     for group_name, source_types in _source_type_groups(args.track):
         service = PreprocessingService(
-            relevance_evaluator=RelevanceEvaluator(enable_llm=False),
-            classifier=ClusterClassifier(enable_llm=False),
+            relevance_evaluator=RelevanceEvaluator(),
+            classifier=ClusterClassifier(),
         )
         batch = 0
 

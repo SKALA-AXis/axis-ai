@@ -1,8 +1,4 @@
-"""Runtime guard for OpenAI calls.
-
-OpenAI calls are disabled by default. Track A relevance review can be enabled
-separately with ``ENABLE_RELEVANCE_LLM`` without opening every scheduled LLM job.
-"""
+"""Runtime guard for explicit OpenAI calls."""
 
 from __future__ import annotations
 
@@ -17,11 +13,6 @@ def openai_calls_enabled() -> bool:
     return _flag_enabled(flag) and _api_key_configured()
 
 
-def relevance_llm_enabled() -> bool:
-    flag = os.getenv("ENABLE_RELEVANCE_LLM")
-    return _flag_enabled(flag) and _api_key_configured()
-
-
 def openai_disabled_reason() -> str:
     flag = os.getenv("ENABLE_OPENAI_CALLS")
     if flag is not None and flag.strip().lower() in _FALSE_VALUES:
@@ -29,15 +20,6 @@ def openai_disabled_reason() -> str:
     if not _api_key_configured():
         return "OPENAI_API_KEY is not configured"
     return "ENABLE_OPENAI_CALLS is not enabled"
-
-
-def relevance_llm_disabled_reason() -> str:
-    flag = os.getenv("ENABLE_RELEVANCE_LLM")
-    if flag is not None and flag.strip().lower() in _FALSE_VALUES:
-        return "ENABLE_RELEVANCE_LLM explicitly disabled relevance LLM calls"
-    if not _api_key_configured():
-        return "OPENAI_API_KEY is not configured"
-    return "relevance LLM is available only when the caller enables Track A LLM"
 
 
 def _api_key_configured() -> bool:

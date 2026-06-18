@@ -420,8 +420,8 @@ def _run_realtime_pipeline_for_run(crawl_run_id: str, *, trigger_type: str) -> N
     from src.preprocessing.relevance import RelevanceEvaluator
 
     result = PreprocessingService(
-        relevance_evaluator=RelevanceEvaluator(enable_llm=False),
-        classifier=ClusterClassifier(enable_llm=False),
+        relevance_evaluator=RelevanceEvaluator(),
+        classifier=ClusterClassifier(),
     ).run(
         company=[],
         trigger_type=trigger_type,

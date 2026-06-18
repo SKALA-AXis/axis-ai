@@ -107,8 +107,8 @@ def main() -> None:
     log.info("%s 시작 | company=%s labels=%s", mode, company, company_labels)
 
     result = PreprocessingService(
-        relevance_evaluator=RelevanceEvaluator(enable_llm=True),
-        classifier=ClusterClassifier(enable_llm=True),
+        relevance_evaluator=RelevanceEvaluator(),
+        classifier=ClusterClassifier(),
     ).run(
         company=company,
         source_types=_args.source_type,

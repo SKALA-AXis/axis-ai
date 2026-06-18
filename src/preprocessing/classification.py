@@ -5,10 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from langchain_openai import ChatOpenAI
+from typing import Any
 
 from src.config.companies import company_aliases
 from src.config.event_types import (
@@ -17,51 +14,12 @@ from src.config.event_types import (
     EVENT_TYPES,
     HIGH_IMPACT_KEYWORDS,
     MEDIUM_IMPACT_KEYWORDS,
-    event_type_values,
 )
 from src.config.global_companies import global_company_aliases
-from src.config.openai_policy import openai_calls_enabled
 from src.config.sectors import SECTOR_IDS, match_sectors, primary_sector
 from src.db.article_store import get_articles_by_ids, update_classification
-from src.llm import LLMSpec, build_chat_llm
 
 log = logging.getLogger(__name__)
-
-_llm: ChatOpenAI | None = None
-_PROMPT_VERSION = "classify-v3.0"
-
-_CLASSIFY_PROMPT = """\
-당신은 SK AX 전략기획팀의 AI 어시스턴트입니다.
-아래 기사 클러스터의 이벤트 타입을 판단해주세요.
-※ 등급은 시스템이 노출도와 기사 내용 중요도로 결정하므로 판단하지 마세요.
-
-## 기사 정보
-ARTICLES_TEXT_PLACEHOLDER
-
-## 클러스터 신호
-- 동일 사건 보도 매체 수: CLUSTER_SIZE_PLACEHOLDER건
-- 회사 직접 언급: COMPANY_MENTION_PLACEHOLDER
-
-## 이벤트 타입 판단 기준
-- partnership: 기업 간 협력, MOU, 공동사업
-- ma: 인수, 합병, 지분 인수, 투자 유치
-- personnel: 채용, 인사, 임원, 조직개편
-- tech_release: 신기술, 신제품, 플랫폼, 솔루션 출시
-- regulation: 법규, 정책, 규제, 인증
-- contract: 수주, 고객 계약, 사업자 선정
-- financial: 실적, 매출, 영업이익, 투자계획
-- expansion: 해외 진출, 센터 설립, 시장 확대
-- company: 회사 전반의 경영 동향, 사업 방향, IR 해설, 재무 상태, 지배구조, 브랜드/비전 변화
-
-복수 해당 시 본문에서 가장 크게 다루는 측면 하나만 선택하세요.
-구체적 이벤트가 있으면 company보다 partnership, ma, personnel, tech_release,
-regulation, contract, financial, expansion을 우선하세요.
-애매하면 tech_release보다 partnership, contract, financial, expansion을 우선하세요.
-
-JSON으로만 응답:
-{"event_type": "EVENT_TYPES_PLACEHOLDER", "reasoning": "1줄 근거"}\
-""".replace("EVENT_TYPES_PLACEHOLDER", event_type_values())
-
 
 _HIGH_THRESHOLD = 0.65
 _MEDIUM_THRESHOLD = 0.40
@@ -211,9 +169,6 @@ def _zero_exposure() -> dict[str, Any]:
 class ClusterClassifier:
     """클러스터를 섹터, 노출도, 이벤트 타입 기준으로 분류한다."""
 
-    def __init__(self, *, enable_llm: bool = False) -> None:
-        self.enable_llm = enable_llm
-
     def classify(
         self,
         cluster_id: int,
@@ -299,58 +254,7 @@ class ClusterClassifier:
         if rule_event_type:
             return rule_event_type, rule_reasoning
 
-        if not self.enable_llm or not openai_calls_enabled():
-            return "company", "규칙 매칭 없음, company 기본값"
-
-        articles_text = _format_articles([rep_article])
-        company_mention_text = (
-            f"{exposure['company_mention_count']}건 (cluster_size={exposure['cluster_size']})"
-        )
-
-        prompt = (
-            _CLASSIFY_PROMPT.replace("ARTICLES_TEXT_PLACEHOLDER", articles_text)
-            .replace("CLUSTER_SIZE_PLACEHOLDER", str(exposure["cluster_size"]))
-            .replace("COMPANY_MENTION_PLACEHOLDER", company_mention_text)
-        )
-
-        try:
-            from src.observability import tracing_config
-
-            llm = _get_llm()
-            response = llm.invoke(
-                prompt,
-                config=tracing_config(
-                    agent="ClusterClassifier",
-                    prompt_version=_PROMPT_VERSION,
-                    cluster_size=exposure["cluster_size"],
-                ),
-            )
-            content = (
-                response.content if isinstance(response.content, str) else str(response.content)
-            )
-            data = _parse_json(content)
-
-            event_type = data.get("event_type", "company")
-            if event_type not in EVENT_TYPES:
-                event_type = "company"
-
-            return event_type, data.get("reasoning", "")
-
-        except Exception as e:
-            rule_event_type, rule_reasoning = _classify_event_type_rule_based(
-                title=str(rep_article.get("title") or ""),
-                content=str(rep_article.get("content") or ""),
-            )
-            if rule_event_type:
-                log.warning(
-                    "event_type LLM 분류 실패, 규칙 fallback 사용 | event_type=%s error=%s",
-                    rule_event_type,
-                    e,
-                )
-                return rule_event_type, rule_reasoning
-
-            log.warning("event_type 분류 실패, company 기본값 | error=%s", e)
-            return "company", ""
+        return "company", "규칙 매칭 없음, company 기본값"
 
 
 def classify_article_text(
@@ -359,20 +263,18 @@ def classify_article_text(
     company: str = "",
     *,
     source_type: str = "",
-    enable_llm: bool = False,
 ) -> dict[str, Any]:
     """단일 기사 텍스트를 운영과 동일한 로직으로 분류한다 (DB 미접근).
 
     ``ClusterClassifier.classify`` 의 텍스트 전용 버전 — 데모/외부 단발 분류용.
-    rule 우선 → GPT-4o fallback(enable_llm) 으로 event_type 판정, exposure/impact 산식
-    동일. 단일 기사이므로 cluster_size=1 (exposure 는 낮고, 큰 사건은 impact 로 보정됨).
+    rule 기반 event_type 판정, exposure/impact 산식 동일. 단일 기사이므로
+    cluster_size=1 (exposure 는 낮고, 큰 사건은 impact 로 보정됨).
 
     Args:
         title: 기사 제목
         content: 기사 본문
         company: peer id (회사 직접 언급 카운트용, 선택)
         source_type: 출처 유형(dart/ir/official 등, impact 보정용, 선택)
-        enable_llm: 규칙 미매칭 시 GPT-4o fallback 사용 여부
 
     Returns:
         event_type / sector(s) / exposure·impact·importance score+band / reasoning / signals
@@ -382,15 +284,11 @@ def classify_article_text(
         "content": content or "",
         "company": company or "",
         "source_type": source_type or "",
-        # GPT-4o 폴백 경로(_format_articles)가 a["source_name"] 을 bracket 접근하므로
-        # 합성 article 에도 키가 있어야 KeyError 가 안 난다(규칙 미매칭 기사 분류 시).
         "source_name": "",
     }
     matched_sectors = _matched_sectors(rep, title=rep["title"], content=rep["content"])
     exposure = compute_exposure([rep], company)
-    event_type, reasoning = ClusterClassifier(enable_llm=enable_llm)._classify_event_type(
-        rep, exposure
-    )
+    event_type, reasoning = ClusterClassifier()._classify_event_type(rep, exposure)
     impact = compute_article_impact(rep, event_type)
     importance_score = max(exposure["exposure_score"], impact["impact_score"])
 
@@ -412,13 +310,6 @@ def classify_article_text(
             "impact_signals": impact["impact_signals"],
         },
     }
-
-
-def _get_llm() -> ChatOpenAI:
-    global _llm
-    if _llm is None:
-        _llm = build_chat_llm(LLMSpec(model="gpt-4o", temperature=0.1, max_tokens=400))
-    return _llm
 
 
 def _classify_event_type_rule_based(
@@ -488,30 +379,6 @@ def _to_band(score: float) -> str:
         return "medium"
 
     return "low"
-
-
-def _format_articles(articles: list[dict[str, Any]]) -> str:
-    lines = []
-
-    for i, a in enumerate(articles, 1):
-        lines.append(
-            f"[{i}] 제목: {a['title']}\n"
-            f"    출처: {a['source_name']}\n"
-            f"    내용: {(a.get('content') or '')[:300]}"
-        )
-
-    return "\n\n".join(lines)
-
-
-def _parse_json(text: str) -> dict[str, Any]:
-    text = text.strip()
-
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-
-    return json.loads(text.strip())
 
 
 def _default_result() -> dict[str, Any]:

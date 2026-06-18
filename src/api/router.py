@@ -835,8 +835,8 @@ async def _run_collection_track(
         source_name = record["source_name"]
         source_types = _preprocess_source_types(track, source_name)
         preprocessing_service = PreprocessingService(
-            relevance_evaluator=RelevanceEvaluator(enable_llm=False),
-            classifier=ClusterClassifier(enable_llm=False),
+            relevance_evaluator=RelevanceEvaluator(),
+            classifier=ClusterClassifier(),
         )
         return await asyncio.to_thread(
             preprocessing_service.run,
@@ -889,8 +889,8 @@ async def _run_collection_track(
         if not results:
             source_types = _preprocess_source_types(track, None)
             preprocessing_service = PreprocessingService(
-                relevance_evaluator=RelevanceEvaluator(enable_llm=False),
-                classifier=ClusterClassifier(enable_llm=False),
+                relevance_evaluator=RelevanceEvaluator(),
+                classifier=ClusterClassifier(),
             )
             results = [
                 await asyncio.to_thread(

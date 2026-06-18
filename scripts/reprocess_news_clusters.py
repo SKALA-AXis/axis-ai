@@ -16,9 +16,7 @@ batch 단위로 끝까지 실행한다. card_news row는 기본적으로 삭제�
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-import os
 import re
 import sys
 from datetime import UTC, datetime, timedelta
@@ -126,38 +124,6 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--title-llm-cluster",
-        action="store_true",
-        help=(
-            "cluster-only에서 pairwise rule/BGE 대신 제목 목록을 LLM으로 한 번에 그룹핑한다. "
-            "본문은 보내지 않는다."
-        ),
-    )
-    parser.add_argument(
-        "--title-llm-pipeline",
-        action="store_true",
-        help=(
-            "대량 수동 재처리용 경량 경로. relevance를 저장한 뒤 BGE dedup 대신 "
-            "title LLM clustering으로 cluster_id/is_representative를 계산한다."
-        ),
-    )
-    parser.add_argument(
-        "--title-llm-batch-size",
-        type=int,
-        default=120,
-        help="title LLM clustering 1회 요청 article 수. 기본 120.",
-    )
-    parser.add_argument(
-        "--enable-relevance-llm",
-        action="store_true",
-        help="관련성 판단에서 LLM batch 보조를 켠다. 클러스터링 LLM judge와는 무관.",
-    )
-    parser.add_argument(
-        "--enable-classifier-llm",
-        action="store_true",
-        help="클러스터 분류에서 LLM 보조를 켠다. 기본은 비활성.",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="대상 row 수만 출력하고 DB를 수정하지 않음.",
@@ -167,11 +133,6 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    if args.enable_relevance_llm:
-        os.environ.setdefault("ENABLE_RELEVANCE_LLM", "true")
-    if args.enable_classifier_llm:
-        os.environ.setdefault("ENABLE_OPENAI_CALLS", "true")
-
     profile = load_profile(args.env)
     source_types = _normalize_source_types(args.source_type)
     statuses = _normalize_statuses(args.status, include_skipped=args.include_skipped)
@@ -221,18 +182,6 @@ def main() -> None:
 
     if args.cluster_only:
         cluster_statuses = _cluster_only_statuses(statuses)
-        if args.title_llm_cluster:
-            _run_title_llm_cluster_only(
-                source_types=source_types,
-                statuses=cluster_statuses,
-                companies=companies,
-                published_since=published_since,
-                published_until=published_until,
-                limit=max(1, args.limit),
-                batch_size=max(10, args.title_llm_batch_size),
-                reset_cluster_fields=not args.skip_reset,
-            )
-            return
         if not args.skip_reset:
             updated = _reset_cluster_fields(
                 source_types=source_types,
@@ -266,20 +215,6 @@ def main() -> None:
     if args.reset_only:
         return
 
-    if args.title_llm_pipeline:
-        _run_title_llm_pipeline(
-            source_types=source_types,
-            companies=companies,
-            published_since=published_since,
-            published_until=published_until,
-            limit=max(1, args.limit),
-            max_batches=max(0, args.max_batches),
-            batch_size=max(10, args.title_llm_batch_size),
-            enable_relevance_llm=bool(args.enable_relevance_llm),
-            enable_classifier_llm=bool(args.enable_classifier_llm),
-        )
-        return
-
     _run_batches(
         source_types=source_types,
         companies=companies,
@@ -287,8 +222,6 @@ def main() -> None:
         published_until=published_until,
         limit=max(1, args.limit),
         max_batches=max(0, args.max_batches),
-        enable_relevance_llm=bool(args.enable_relevance_llm),
-        enable_classifier_llm=bool(args.enable_classifier_llm),
     )
 
 
@@ -421,12 +354,10 @@ def _run_batches(
     published_until: str | None,
     limit: int,
     max_batches: int,
-    enable_relevance_llm: bool,
-    enable_classifier_llm: bool,
 ) -> None:
     service = PreprocessingService(
-        relevance_evaluator=RelevanceEvaluator(enable_llm=enable_relevance_llm),
-        classifier=ClusterClassifier(enable_llm=enable_classifier_llm),
+        relevance_evaluator=RelevanceEvaluator(),
+        classifier=ClusterClassifier(),
     )
     total_raw = 0
     total_relevant = 0
@@ -478,85 +409,6 @@ def _run_batches(
         total_relevant,
         total_clusters,
         total_classified,
-    )
-
-
-def _run_title_llm_pipeline(
-    *,
-    source_types: list[str],
-    companies: list[str],
-    published_since: str | None,
-    published_until: str | None,
-    limit: int,
-    max_batches: int,
-    batch_size: int,
-    enable_relevance_llm: bool,
-    enable_classifier_llm: bool,
-) -> None:
-    service = PreprocessingService(
-        relevance_evaluator=RelevanceEvaluator(enable_llm=enable_relevance_llm),
-        classifier=ClusterClassifier(enable_llm=enable_classifier_llm),
-    )
-    total_raw = 0
-    total_relevant = 0
-    batch = 0
-
-    while True:
-        if max_batches and batch >= max_batches:
-            break
-        batch += 1
-        raw_ids = service.load_raw_ids(
-            companies,
-            source_types=source_types,
-            limit=limit,
-            published_since=published_since,
-            published_until=published_until,
-        )
-        if not raw_ids:
-            batch -= 1
-            break
-
-        route_result = service.route_by_source(raw_ids)
-        service.analyze_documents(route_result.get("parsed_document_ids", []))
-        relevant_ids = route_result.get("relevant_ids", [])
-        if relevant_ids:
-            _mark_relevant_articles_processed(relevant_ids)
-
-        total_raw += len(raw_ids)
-        total_relevant += len(relevant_ids)
-        log.info(
-            "title-llm-pipeline relevance 완료 | batch=%d raw=%d relevant=%d skipped=%d",
-            batch,
-            len(raw_ids),
-            len(relevant_ids),
-            len(route_result.get("skipped_preprocess_ids", [])),
-        )
-
-        if len(raw_ids) < limit:
-            break
-
-    cluster_map = _run_title_llm_cluster_only(
-        source_types=source_types,
-        statuses=["PROCESSED", "CLASSIFIED"],
-        companies=companies,
-        published_since=published_since,
-        published_until=published_until,
-        limit=max(limit * max(batch, 1), limit),
-        batch_size=batch_size,
-        reset_cluster_fields=True,
-    )
-    classified = service.classify_clusters(
-        representative_ids=list(cluster_map),
-        cluster_map=cluster_map,
-        requested_companies=companies,
-    )
-    log.info(
-        ("title-llm-pipeline 완료 | batches=%d raw=%d relevant=%d clusters=%d classified=%d"),
-        batch,
-        total_raw,
-        total_relevant,
-        len(cluster_map),
-        len(classified),
     )
 
 
@@ -638,74 +490,6 @@ def _run_cluster_only(
     )
 
 
-def _run_title_llm_cluster_only(
-    *,
-    source_types: list[str],
-    statuses: list[str],
-    companies: list[str],
-    published_since: str | None,
-    published_until: str | None,
-    limit: int,
-    batch_size: int,
-    reset_cluster_fields: bool,
-) -> dict[int, list[int]]:
-    articles = _list_title_llm_cluster_articles(
-        source_types=source_types,
-        statuses=statuses,
-        companies=companies,
-        published_since=published_since,
-        published_until=published_until,
-        limit=limit,
-        unclustered_only=not reset_cluster_fields,
-    )
-    if not articles:
-        log.info("title-llm-cluster 대상 없음")
-        return {}
-
-    total_clusters = 0
-    total_articles = 0
-    combined_cluster_map: dict[int, list[int]] = {}
-    for batch_index, batch in enumerate(_title_llm_batches(articles, batch_size), start=1):
-        groups = _invoke_title_llm_cluster_resilient(batch)
-        cluster_map = _post_merge_title_llm_clusters(
-            _split_unrelated_title_groups(
-                _normalize_title_llm_groups(groups, batch),
-                batch,
-            ),
-            batch,
-            groups,
-        )
-        combined_cluster_map.update(cluster_map)
-        total_clusters += len(cluster_map)
-        total_articles += sum(len(article_ids) for article_ids in cluster_map.values())
-        log.info(
-            "title-llm-cluster batch 완료 | batch=%d articles=%d clusters=%d",
-            batch_index,
-            len(batch),
-            len(cluster_map),
-        )
-
-    if reset_cluster_fields:
-        updated = _replace_title_llm_clusters(
-            cluster_map=combined_cluster_map,
-            source_types=source_types,
-            statuses=statuses,
-            companies=companies,
-            published_since=published_since,
-            published_until=published_until,
-        )
-        log.info("title-llm-cluster 클러스터 필드 교체 완료 | reset_updated=%d", updated)
-    else:
-        _persist_title_llm_clusters(combined_cluster_map)
-
-    log.info(
-        "title-llm-cluster 완료 | articles=%d clusters=%d",
-        total_articles,
-        total_clusters,
-    )
-    return combined_cluster_map
-
-
 def _list_cluster_only_article_ids(
     *,
     source_types: list[str],
@@ -733,253 +517,6 @@ def _list_cluster_only_article_ids(
     return [int(row.id) for row in rows]
 
 
-def _list_title_llm_cluster_articles(
-    *,
-    source_types: list[str],
-    statuses: list[str],
-    companies: list[str],
-    published_since: str | None,
-    published_until: str | None,
-    limit: int,
-    unclustered_only: bool,
-) -> list[dict[str, Any]]:
-    params = _params(source_types, companies, statuses, published_since, published_until)
-    params["limit"] = limit
-    cluster_filter = "AND cluster_id IS NULL" if unclustered_only else ""
-    with SessionLocal() as db:
-        rows = db.execute(
-            text(f"""
-                SELECT
-                    id,
-                    title,
-                    content,
-                    published_at,
-                    matched_companies,
-                    matched_sectors
-                FROM raw_articles
-                WHERE {_target_where_sql()}
-                  AND relevance_label = 'relevant'
-                  {cluster_filter}
-                ORDER BY published_at DESC NULLS LAST, collected_at DESC, id DESC
-                LIMIT :limit
-            """),
-            params,
-        ).mappings()
-        return [
-            {
-                "id": int(row["id"]),
-                "title": str(row["title"] or ""),
-                "content_lead": _short_content_hint(row["content"]),
-                "published_at": str(row["published_at"] or ""),
-                "matched_companies": _jsonish_list(row["matched_companies"]),
-                "matched_sectors": _jsonish_list(row["matched_sectors"]),
-            }
-            for row in rows
-        ]
-
-
-def _title_llm_batches(
-    articles: list[dict[str, Any]],
-    batch_size: int,
-) -> list[list[dict[str, Any]]]:
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for article in articles:
-        key = "|".join(article.get("matched_companies") or ["unknown"])
-        grouped.setdefault(key, []).append(article)
-
-    batches: list[list[dict[str, Any]]] = []
-    for group in grouped.values():
-        for i in range(0, len(group), batch_size):
-            batches.append(group[i : i + batch_size])
-    return batches
-
-
-def _invoke_title_llm_cluster_resilient(
-    articles: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    try:
-        return _invoke_title_llm_cluster(articles)
-    except (json.JSONDecodeError, ValueError) as exc:
-        if len(articles) <= 10:
-            raise ValueError(f"title LLM cluster JSON 파싱 실패: articles={len(articles)}") from exc
-
-        mid = len(articles) // 2
-        log.warning(
-            "title LLM cluster JSON 파싱 실패, batch 분할 재시도 | "
-            "articles=%d left=%d right=%d error=%s",
-            len(articles),
-            mid,
-            len(articles) - mid,
-            exc,
-        )
-        return [
-            *_invoke_title_llm_cluster_resilient(articles[:mid]),
-            *_invoke_title_llm_cluster_resilient(articles[mid:]),
-        ]
-
-
-def _invoke_title_llm_cluster(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    from openai import OpenAI
-
-    payload = {
-        "instruction": (
-            "Group Korean news article titles into same underlying business-event clusters. "
-            "Use title as the primary signal. Use content_hint only when the title is too vague. "
-            "Do not group articles that are only broad themes, stock mood, or background context. "
-            "Return JSON only."
-        ),
-        "rules": [
-            (
-                "Same event: duplicate/syndicated titles, same deal, same partnership, "
-                "same product launch, same program announcement."
-            ),
-            (
-                "Group title variants even when wording differs, e.g. SKALA vs 스칼라, "
-                "예탁원 vs 예탁결제원, OpenAI vs 오픈AI."
-            ),
-            "Separate different counterparties, different projects, or different sub-events.",
-            (
-                "Do not create singleton clusters when multiple titles clearly describe "
-                "the same named event, product, program, deal, or press announcement."
-            ),
-            (
-                "For example, all titles mentioning LG CNS and 피지컬웍스/RX platform "
-                "public release/demonstration belong in one cluster."
-            ),
-            (
-                "Stock reaction titles should be grouped with the underlying concrete event "
-                "when they name the same project, e.g. 삼성SDS 온AI/모바일 업무환경 지원."
-            ),
-            (
-                "If a title is vague but content_hint names the same concrete event, group it. "
-                "Ignore content_hint when it only provides old background or related examples."
-            ),
-            "Each input article id must appear exactly once.",
-            (
-                "For each cluster, create a stable snake_case event_key from the concrete event, "
-                "not from wording style. The same event must reuse the same event_key."
-            ),
-        ],
-        "articles": [_title_llm_article_payload(article) for article in articles],
-        "required_json_schema": {
-            "clusters": [
-                {
-                    "event_key": "stable_snake_case_event_key",
-                    "label": "short Korean event label",
-                    "article_ids": ["integer ids in this cluster"],
-                }
-            ]
-        },
-    }
-    response = OpenAI().chat.completions.create(
-        model=os.getenv("TITLE_LLM_CLUSTER_MODEL", "gpt-4o-mini"),
-        response_format={
-            "type": "json_schema",
-            "json_schema": {
-                "name": "title_cluster_response",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "clusters": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": False,
-                                "properties": {
-                                    "event_key": {"type": "string"},
-                                    "label": {"type": "string"},
-                                    "article_ids": {
-                                        "type": "array",
-                                        "items": {"type": "integer"},
-                                    },
-                                },
-                                "required": ["event_key", "label", "article_ids"],
-                            },
-                        },
-                    },
-                    "required": ["clusters"],
-                },
-            },
-        },
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a strict Korean news title clustering engine. Return JSON only."
-                ),
-            },
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
-        ],
-        temperature=0,
-    )
-    finish_reason = response.choices[0].finish_reason
-    if finish_reason == "length":
-        raise ValueError("title LLM cluster response truncated")
-    content = response.choices[0].message.content or "{}"
-    parsed = json.loads(content)
-    clusters = parsed.get("clusters", [])
-    return clusters if isinstance(clusters, list) else []
-
-
-def _normalize_title_llm_groups(
-    groups: list[dict[str, Any]],
-    articles: list[dict[str, Any]],
-) -> dict[int, list[int]]:
-    valid_ids = {int(article["id"]) for article in articles}
-    assigned: set[int] = set()
-    cluster_map: dict[int, list[int]] = {}
-
-    for group in groups:
-        raw_ids = group.get("article_ids") if isinstance(group, dict) else []
-        article_ids = [
-            int(article_id)
-            for article_id in (raw_ids or [])
-            if _is_intish(article_id) and int(article_id) in valid_ids
-        ]
-        article_ids = list(dict.fromkeys(article_ids))
-        if not article_ids:
-            continue
-        representative_id = article_ids[0]
-        cluster_map[representative_id] = article_ids
-        assigned.update(article_ids)
-
-    for article_id in valid_ids - assigned:
-        cluster_map[article_id] = [article_id]
-
-    return cluster_map
-
-
-def _post_merge_title_llm_clusters(
-    cluster_map: dict[int, list[int]],
-    articles: list[dict[str, Any]],
-    groups: list[dict[str, Any]],
-) -> dict[int, list[int]]:
-    del groups
-    article_by_id = {int(article["id"]): article for article in articles}
-    split_cluster_map = _split_unrelated_title_groups(cluster_map, articles)
-    return _merge_title_related_clusters(split_cluster_map, article_by_id)
-
-
-def _title_llm_event_keys(
-    groups: list[dict[str, Any]],
-    valid_ids: set[int],
-) -> dict[int, str]:
-    event_keys: dict[int, str] = {}
-    for group in groups:
-        if not isinstance(group, dict):
-            continue
-        event_key = _normalize_llm_event_key(group.get("event_key"))
-        if event_key is None:
-            continue
-        raw_ids = group.get("article_ids") or []
-        for raw_id in raw_ids:
-            if _is_intish(raw_id) and int(raw_id) in valid_ids:
-                event_keys[int(raw_id)] = event_key
-    return event_keys
-
-
 def _split_unrelated_title_groups(
     cluster_map: dict[int, list[int]],
     articles: list[dict[str, Any]],
@@ -989,7 +526,7 @@ def _split_unrelated_title_groups(
     for article_ids in cluster_map.values():
         unique_ids = _unique_ints(article_ids)
         for component in _title_related_components(unique_ids, article_by_id):
-            representative_id = _representative_title_llm_id(component, article_by_id)
+            representative_id = _representative_title_rule_id(component, article_by_id)
             result[representative_id] = component
     return result
 
@@ -1080,7 +617,7 @@ def _merge_title_related_clusters(
     result: dict[int, list[int]] = {}
     for article_ids in merged.values():
         unique_ids = _unique_ints(article_ids)
-        result[_representative_title_llm_id(unique_ids, article_by_id)] = unique_ids
+        result[_representative_title_rule_id(unique_ids, article_by_id)] = unique_ids
     return result
 
 
@@ -1369,59 +906,7 @@ def _useful_title_merge_token(token: str) -> bool:
     return token not in stopwords
 
 
-def _llm_event_merge_key(
-    article: dict[str, Any] | None,
-    event_key: str | None,
-) -> tuple[str, str] | None:
-    if not article or not event_key:
-        return None
-    companies = "|".join(article.get("matched_companies") or ["unknown"])
-    return companies, event_key
-
-
-def _normalize_llm_event_key(value: Any) -> str | None:
-    raw = str(value or "").strip().lower()
-    if not raw:
-        return None
-    key = "".join(ch if ch.isalnum() else "_" for ch in raw)
-    key = "_".join(part for part in key.split("_") if part)
-    if not key or key in {"unknown", "misc", "other", "single", "singleton"}:
-        return None
-    return key[:96]
-
-
-def _title_llm_article_payload(article: dict[str, Any]) -> dict[str, Any]:
-    payload = {
-        "id": article["id"],
-        "title": article["title"],
-        "published_at": article["published_at"],
-        "matched_companies": article["matched_companies"],
-        "matched_sectors": article["matched_sectors"],
-    }
-    if _needs_content_hint(article):
-        payload["content_hint"] = article.get("content_lead", "")
-    return payload
-
-
-def _needs_content_hint(article: dict[str, Any]) -> bool:
-    title = _compact_title(article.get("title") or "")
-    if len(title) < 24:
-        return True
-    vague_markers = (
-        "공개",
-        "시연",
-        "강화",
-        "확대",
-        "정조준",
-        "공략",
-        "기대",
-        "수혜",
-        "본격화",
-    )
-    return any(marker in title for marker in vague_markers)
-
-
-def _representative_title_llm_id(
+def _representative_title_rule_id(
     article_ids: list[int],
     article_by_id: dict[int, dict[str, Any]],
 ) -> int:
@@ -1440,99 +925,6 @@ def _unique_ints(values: list[int]) -> list[int]:
 
 def _compact_title(value: str) -> str:
     return "".join(str(value or "").lower().split())
-
-
-def _short_content_hint(value: Any) -> str:
-    return " ".join(str(value or "").split())[:220]
-
-
-def _persist_title_llm_clusters(cluster_map: dict[int, list[int]]) -> None:
-    with SessionLocal() as db:
-        for representative_id, article_ids in cluster_map.items():
-            for article_id in article_ids:
-                db.execute(
-                    text("""
-                        UPDATE raw_articles
-                        SET cluster_id = :cluster_id,
-                            is_representative = :is_rep
-                        WHERE id = :id
-                    """),
-                    {
-                        "cluster_id": representative_id,
-                        "is_rep": article_id == representative_id,
-                        "id": article_id,
-                    },
-                )
-        db.commit()
-
-
-def _replace_title_llm_clusters(
-    *,
-    cluster_map: dict[int, list[int]],
-    source_types: list[str],
-    statuses: list[str],
-    companies: list[str],
-    published_since: str | None,
-    published_until: str | None,
-) -> int:
-    params = _params(source_types, companies, statuses, published_since, published_until)
-    with SessionLocal() as db:
-        result = db.execute(
-            text(f"""
-                UPDATE raw_articles
-                SET cluster_id = NULL,
-                    is_representative = FALSE
-                WHERE id IN (
-                    SELECT id
-                    FROM raw_articles
-                    WHERE {_target_where_sql()}
-                      AND relevance_label = 'relevant'
-                )
-            """),
-            params,
-        )
-        updated = int(getattr(result, "rowcount", 0) or 0)
-        for representative_id, article_ids in cluster_map.items():
-            for article_id in article_ids:
-                db.execute(
-                    text("""
-                        UPDATE raw_articles
-                        SET cluster_id = :cluster_id,
-                            is_representative = :is_rep
-                        WHERE id = :id
-                    """),
-                    {
-                        "cluster_id": representative_id,
-                        "is_rep": article_id == representative_id,
-                        "id": article_id,
-                    },
-                )
-        db.commit()
-    return updated
-
-
-def _jsonish_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item) for item in value if item]
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return [value] if value else []
-        if isinstance(parsed, list):
-            return [str(item) for item in parsed if item]
-        return [str(parsed)] if parsed else []
-    return [str(value)]
-
-
-def _is_intish(value: Any) -> bool:
-    try:
-        int(value)
-    except (TypeError, ValueError):
-        return False
-    return True
 
 
 def _cluster_only_statuses(statuses: list[str]) -> list[str]:

@@ -17,7 +17,6 @@ import numpy as np
 
 from src.config.companies import COMPANY_ALIASES
 from src.config.global_companies import GLOBAL_COMPANY_ALIASES
-from src.config.openai_policy import openai_calls_enabled
 from src.db.article_store import (
     get_articles_by_ids,
     list_existing_news_cluster_candidates,
@@ -43,10 +42,8 @@ _MAX_CLUSTER_PUBLISHED_GAP_DAYS = int(os.getenv("DEDUP_MAX_CLUSTER_PUBLISHED_GAP
 _MAX_BRIDGE_TOPIC_TERMS = 1
 _MIN_RELATED_TERM_LENGTH = 6
 _TERM_NGRAM_SIMILARITY = 0.40
-_CLUSTER_LLM_JUDGE_ENABLED = os.getenv("DEDUP_CLUSTER_LLM_JUDGE_ENABLED", "false").lower() == "true"
-_CLUSTER_LLM_MAX_CALLS = int(os.getenv("DEDUP_CLUSTER_LLM_MAX_CALLS", "80"))
-_CLUSTER_LLM_MODEL = os.getenv("DEDUP_CLUSTER_LLM_MODEL", "gpt-4o-mini")
-_CLUSTER_LLM_CONTENT_CHARS = int(os.getenv("DEDUP_CLUSTER_LLM_CONTENT_CHARS", "280"))
+_TITLE_LEAD_CHARS = int(os.getenv("DEDUP_TITLE_LEAD_CHARS", "280"))
+_WEAK_TITLE_BRIDGE_TOKENS = {"ai", "ax", "dx", "nc", "sk", "lg"}
 _ALL_COMPANY_ALIASES = {**COMPANY_ALIASES, **GLOBAL_COMPANY_ALIASES}
 _INDUSTRY_TREND_COMPANY = "industry_trend"
 _INDUSTRY_NEWS_SOURCE_NAME = "naver_industry_news"
@@ -166,11 +163,6 @@ _SINGLETON_FAST_PATH = os.getenv("DEDUP_SINGLETON_FAST_PATH", "true").lower() ==
 _CANONICAL_ISSUE_TERMS: Mapping[str, tuple[str, ...]] = {}
 
 
-_cluster_llm_calls = 0
-_cluster_llm_cache: dict[tuple[str, str, str], bool | None] = {}
-_cluster_llm_approved_pairs: set[frozenset[int]] = set()
-
-
 class ArticleDeduplicator:
     """article_ids → BGE-M3 임베딩 → 코사인 유사도 ≥ 0.80 클러스터링 → 대표 기사 선정."""
 
@@ -190,8 +182,6 @@ class ArticleDeduplicator:
         articles = get_articles_by_ids(article_ids)
         if not articles:
             return {}, []
-
-        _reset_cluster_llm_run_state()
 
         if _SINGLETON_FAST_PATH and len(articles) == 1:
             article_id = int(articles[0]["id"])
@@ -253,17 +243,14 @@ def deduplicate_articles(
     if not articles:
         return {}, []
 
-    _reset_cluster_llm_run_state()
-
     normalized = [_normalize_local_article(article, id_key) for article in articles]
 
     try:
         cluster_map = _cluster_rule_first(
             articles=normalized,
             threshold=DEDUP_THRESHOLD,
-            allow_openai_fallback=False,
         )
-        embeddings = _embed(normalized, allow_openai_fallback=False)
+        embeddings = _embed(normalized)
         representative_ids = _select_representatives(
             cluster_map=cluster_map,
             articles=normalized,
@@ -331,24 +318,10 @@ def _representative_score_fallback(article: dict[str, Any]) -> tuple[float, str,
     )
 
 
-def _embed(
-    articles: list[dict[str, Any]],
-    allow_openai_fallback: bool = True,
-) -> np.ndarray:
-    """BGE-M3 dense 벡터 배치 임베딩.
-
-    DB 파이프라인에서는 OpenAI fallback을 허용한다. 로컬 JSON 전처리에서는
-    비용/네트워크 호출을 피하기 위해 fallback을 끄고 제목 기반 dedup으로 넘어간다.
-    """
+def _embed(articles: list[dict[str, Any]]) -> np.ndarray:
+    """BGE-M3 dense 벡터 배치 임베딩."""
     texts = [_build_embedding_text(article) for article in articles]
-
-    try:
-        return _embed_bge(texts)
-    except Exception as e:
-        if not allow_openai_fallback or not openai_calls_enabled():
-            raise
-        log.warning("BGE-M3 임베딩 실패, OpenAI fallback | error=%s", e)
-        return _embed_openai(texts)
+    return _embed_bge(texts)
 
 
 def _build_embedding_text(article: dict[str, Any]) -> str:
@@ -419,26 +392,6 @@ def _embed_bge(texts: list[str]) -> np.ndarray:
     return _normalize_vectors(vecs)
 
 
-def _embed_openai(texts: list[str]) -> np.ndarray:
-    import os
-
-    from openai import OpenAI
-
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
-    all_vecs = []
-
-    for i in range(0, len(texts), 100):
-        batch = texts[i : i + 100]
-        resp = client.embeddings.create(
-            model="text-embedding-3-small",
-            input=batch,
-        )
-        all_vecs.extend([d.embedding for d in resp.data])
-
-    vecs = np.array(all_vecs, dtype=np.float32)
-    return _normalize_vectors(vecs)
-
-
 def _normalize_vectors(vecs: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(vecs, axis=1, keepdims=True)
     return vecs / np.maximum(norms, 1e-9)
@@ -448,7 +401,6 @@ def _cluster_rule_first(
     *,
     articles: list[dict[str, Any]],
     threshold: float,
-    allow_openai_fallback: bool = True,
 ) -> dict[int, list[int]]:
     """Rule-first clustering.
 
@@ -461,7 +413,7 @@ def _cluster_rule_first(
         if len(group_articles) == 1:
             final_values.append([int(group_articles[0]["id"])])
             continue
-        embeddings = _embed(group_articles, allow_openai_fallback=allow_openai_fallback)
+        embeddings = _embed(group_articles)
         local_map = _cluster(
             articles=group_articles,
             embeddings=embeddings,
@@ -499,9 +451,6 @@ def _cluster(
     threshold: float,
 ) -> dict[int, list[int]]:
     """Union-Find 기반 그리디 클러스터링."""
-    global _cluster_llm_approved_pairs
-    _cluster_llm_approved_pairs = set()
-
     n = len(articles)
     parent = list(range(n))
 
@@ -536,19 +485,6 @@ def _cluster(
     ]
 
     return {cluster_id: ids for cluster_id, ids in enumerate(cluster_values)}
-
-
-def _reset_cluster_llm_run_state() -> None:
-    """Reset LLM judge accounting for each dedup run.
-
-    The API server is long-lived. If call count/cache survives across scheduled
-    runs, one noisy batch can exhaust the cap and silently disable LLM review
-    for later batches.
-    """
-    global _cluster_llm_calls, _cluster_llm_cache, _cluster_llm_approved_pairs
-    _cluster_llm_calls = 0
-    _cluster_llm_cache = {}
-    _cluster_llm_approved_pairs = set()
 
 
 def _with_representative_cluster_ids(
@@ -715,17 +651,19 @@ def _should_merge_articles(
         return False
 
     same_cross_company_title_issue = _same_cross_company_title_issue(left, right)
-    title_llm_decision = _cluster_llm_same_event(left, right, similarity, "title_similarity")
-    if title_llm_decision is True:
+    if _rule_title_same_event_merge(
+        left,
+        right,
+        similarity,
+        threshold,
+        same_cross_company_title_issue=same_cross_company_title_issue,
+    ):
         return True
 
     if not _same_company_context(left, right) and not same_cross_company_title_issue:
         return False
 
     if not _event_buckets_compatible(left, right):
-        llm_decision = _cluster_llm_same_event(left, right, similarity, "event_bucket_conflict")
-        if llm_decision is not None:
-            return llm_decision
         return False
 
     if _same_issue(left, right):
@@ -734,12 +672,12 @@ def _should_merge_articles(
     if _same_company_signature_or_concept(left, right):
         return True
 
+    if _same_company_related_full_topic(left, right):
+        return True
+
     if not _event_signatures_compatible(left, right):
         if _same_company_title_fallback(left, right, similarity, threshold):
             return True
-        llm_decision = _cluster_llm_same_event(left, right, similarity, "event_signature_conflict")
-        if llm_decision is not None:
-            return llm_decision
         return False
 
     if same_cross_company_title_issue:
@@ -752,15 +690,55 @@ def _should_merge_articles(
         return False
 
     if _has_topic_conflict(left, right):
-        llm_decision = _cluster_llm_same_event(left, right, similarity, "topic_conflict")
-        if llm_decision is not None:
-            return llm_decision
+        if _event_bucket(left) == _event_bucket(right) == "ax_strategy":
+            return False
         return similarity >= _HIGH_CONFIDENCE_SIMILARITY
 
     if similarity < threshold:
         return False
 
     return True
+
+
+def _rule_title_same_event_merge(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    similarity: float,
+    threshold: float,
+    *,
+    same_cross_company_title_issue: bool,
+) -> bool:
+    """Merge clear same-event title variants by deterministic rules."""
+    if not (_same_company_context(left, right) or same_cross_company_title_issue):
+        return False
+    if _event_bucket(left) in {"market_reaction", "industry_theme"} or _event_bucket(right) in {
+        "market_reaction",
+        "industry_theme",
+    }:
+        return False
+    if not (_title_has_event_action(left) or _title_has_event_action(right)):
+        return False
+
+    company_tokens = _company_title_tokens(left) | _company_title_tokens(right)
+    left_tokens = _title_event_tokens(left) - company_tokens
+    right_tokens = _title_event_tokens(right) - company_tokens
+    shared_tokens = (left_tokens & right_tokens) - _WEAK_TITLE_BRIDGE_TOKENS
+    shared_anchors = _concrete_title_anchors(left) & _concrete_title_anchors(right)
+
+    has_clear_token_overlap = len(shared_tokens) >= 2
+    has_strong_anchor_overlap = bool(shared_tokens & shared_anchors) and similarity >= 0.78
+    if not (has_clear_token_overlap or has_strong_anchor_overlap):
+        return False
+    if (
+        not same_cross_company_title_issue
+        and _event_bucket(left) == _event_bucket(right) == "ax_strategy"
+        and _has_topic_conflict(left, right)
+    ):
+        return False
+
+    if same_cross_company_title_issue:
+        return similarity >= 0.55
+    return similarity >= min(threshold, 0.72)
 
 
 def _cluster_scope_compatible(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -811,17 +789,41 @@ def _split_cluster_value_by_event_key(
         parent[find(x)] = find(y)
 
     for i, left_id in enumerate(ids):
-        left_key = _event_split_key(id_to_article.get(left_id, {}))
+        left_article = id_to_article.get(left_id, {})
+        left_key = _event_split_key(left_article)
         for right_id in ids[i + 1 :]:
-            right_key = _event_split_key(id_to_article.get(right_id, {}))
-            approved_pair = frozenset({left_id, right_id}) in _cluster_llm_approved_pairs
-            if left_key == right_key or approved_pair:
+            right_article = id_to_article.get(right_id, {})
+            right_key = _event_split_key(right_article)
+            if _event_split_keys_compatible(left_article, right_article, left_key, right_key):
                 union(left_id, right_id)
 
     groups: dict[int, list[int]] = {}
     for article_id in ids:
         groups.setdefault(find(article_id), []).append(article_id)
     return list(groups.values())
+
+
+def _event_split_keys_compatible(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    left_key: str,
+    right_key: str,
+) -> bool:
+    if left_key == right_key:
+        return True
+    if not _same_company_context(left, right):
+        return False
+    if not _event_buckets_compatible(left, right):
+        return False
+    if (
+        _same_issue(left, right)
+        or _same_company_signature_or_concept(left, right)
+        or _same_company_action_topic(left, right)
+        or _same_company_related_full_topic(left, right)
+        or _same_company_title_theme(left, right)
+    ):
+        return True
+    return False
 
 
 def _event_buckets_compatible(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -1001,166 +1003,6 @@ def _has_contract_markers(compact_text: str) -> bool:
     )
 
 
-def _cluster_llm_same_event(
-    left: dict[str, Any],
-    right: dict[str, Any],
-    similarity: float,
-    reason: str,
-) -> bool | None:
-    """Use LLM only for ambiguous same-event clustering decisions."""
-    if not _should_consult_cluster_llm(left, right, similarity, reason):
-        return None
-
-    decision = _invoke_cluster_llm_judge(left, right, similarity, reason)
-    if decision is True:
-        _remember_cluster_pair_approval(left, right)
-    return decision
-
-
-def _should_consult_cluster_llm(
-    left: dict[str, Any],
-    right: dict[str, Any],
-    similarity: float,
-    reason: str,
-) -> bool:
-    if reason == "title_similarity":
-        return (
-            _CLUSTER_LLM_JUDGE_ENABLED
-            and openai_calls_enabled()
-            and _CLUSTER_LLM_MAX_CALLS > 0
-            and similarity >= 0.55
-            and _within_cluster_time_window(left, right)
-            and _title_llm_candidate(left, right)
-        )
-    if reason == "event_signature_conflict" and _security_signature_conflict_without_action(
-        left, right
-    ):
-        return False
-    if not _CLUSTER_LLM_JUDGE_ENABLED or not openai_calls_enabled():
-        return False
-    if _CLUSTER_LLM_MAX_CALLS <= 0:
-        return False
-    if similarity < 0.72:
-        return False
-    if not _within_cluster_time_window(left, right):
-        return False
-    return _same_company_context(left, right) or _same_cross_company_title_issue(left, right)
-
-
-def _invoke_cluster_llm_judge(
-    left: dict[str, Any],
-    right: dict[str, Any],
-    similarity: float,
-    reason: str,
-) -> bool | None:
-    global _cluster_llm_calls
-
-    cache_key = _cluster_llm_cache_key(left, right, reason)
-    if cache_key in _cluster_llm_cache:
-        return _cluster_llm_cache[cache_key]
-    if _cluster_llm_calls >= _CLUSTER_LLM_MAX_CALLS:
-        log.info("cluster LLM judge cap reached | cap=%d reason=%s", _CLUSTER_LLM_MAX_CALLS, reason)
-        _cluster_llm_cache[cache_key] = None
-        return None
-
-    _cluster_llm_calls += 1
-    payload = {
-        "instruction": (
-            "Decide whether the two Korean news articles describe the same underlying business "
-            "event and should be in one card-news cluster. Respond as JSON only."
-        ),
-        "criteria": [
-            "same_event=true when one article is a market reaction to the same contract/deal/news.",
-            "For reason=title_similarity, judge from titles first; do not require same sector.",
-            (
-                "same_event=false when they are only broad themes, background mentions, "
-                "or different deals."
-            ),
-            "Ignore minor amount wording differences if the business event is the same.",
-        ],
-        "reason": reason,
-        "embedding_similarity": round(similarity, 4),
-        "left": _cluster_llm_article_payload(left),
-        "right": _cluster_llm_article_payload(right),
-        "required_json_schema": {
-            "same_event": "boolean",
-            "confidence": "number between 0 and 1",
-            "reason": "short Korean explanation",
-        },
-    }
-
-    try:
-        # langfuse.openai 드롭인 래퍼로 LLM judge 호출을 자동 추적 (없으면 원시 openai 폴백).
-        try:
-            from langfuse.openai import OpenAI
-        except Exception:
-            from openai import OpenAI
-
-        response = OpenAI().chat.completions.create(
-            model=_CLUSTER_LLM_MODEL,
-            response_format={"type": "json_object"},
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a strict Korean news clustering judge. Return JSON only.",
-                },
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
-            ],
-            temperature=0,
-        )
-        content = response.choices[0].message.content or "{}"
-        parsed = json.loads(content)
-        confidence = _safe_float(parsed.get("confidence"), 0.0)
-        decision = bool(parsed.get("same_event")) and confidence >= 0.7
-        _cluster_llm_cache[cache_key] = decision
-        log.info(
-            "cluster LLM judge | decision=%s confidence=%.2f reason=%s",
-            decision,
-            confidence,
-            parsed.get("reason", ""),
-        )
-        return decision
-    except Exception as e:
-        log.warning("cluster LLM judge failed, using rule fallback | error=%s", e)
-        _cluster_llm_cache[cache_key] = None
-        return None
-
-
-def _cluster_llm_article_payload(article: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": article.get("id"),
-        "title": str(article.get("title") or "")[:240],
-        "published_at": str(article.get("published_at") or article.get("collected_at") or ""),
-        "companies": _company_key(article),
-        "event_bucket": _event_bucket(article),
-        "event_signature": _event_signature(article),
-    }
-
-
-def _cluster_llm_cache_key(
-    left: dict[str, Any],
-    right: dict[str, Any],
-    reason: str,
-) -> tuple[str, str, str]:
-    left_key = str(left.get("id") or left.get("title") or "")
-    right_key = str(right.get("id") or right.get("title") or "")
-    first, second = sorted((left_key, right_key))
-    return first, second, reason
-
-
-def _remember_cluster_pair_approval(left: dict[str, Any], right: dict[str, Any]) -> None:
-    left_raw_id = left.get("id")
-    right_raw_id = right.get("id")
-    if left_raw_id is None or right_raw_id is None:
-        return
-    try:
-        left_id = int(left_raw_id)
-        right_id = int(right_raw_id)
-    except (TypeError, ValueError):
-        return
-    _cluster_llm_approved_pairs.add(frozenset({left_id, right_id}))
-
-
 def _within_cluster_time_window(left: dict[str, Any], right: dict[str, Any]) -> bool:
     """오래 떨어진 반복 주제가 같은 클러스터로 묶이지 않도록 시간 간격을 제한한다."""
     left_dt = _parse_datetime(left.get("published_at") or left.get("collected_at"))
@@ -1280,6 +1122,51 @@ def _same_company_signature_or_concept(left: dict[str, Any], right: dict[str, An
     return False
 
 
+def _same_company_related_full_topic(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if not _same_company_context(left, right):
+        return False
+    if _event_bucket(left) != _event_bucket(right):
+        return False
+    if _event_bucket(left) in {"market_reaction", "industry_theme"}:
+        return False
+    if _has_topic_conflict(left, right):
+        return False
+
+    left_topics = _full_topic_terms(left)
+    right_topics = _full_topic_terms(right)
+    if not left_topics or not right_topics:
+        return False
+    return _topic_sets_related(left_topics, right_topics)
+
+
+def _same_company_title_theme(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if not _same_company_context(left, right):
+        return False
+    if _event_bucket(left) != _event_bucket(right):
+        return False
+    if _event_bucket(left) not in {"ax_strategy", "cloud_infra"}:
+        return False
+    if _has_topic_conflict(left, right):
+        return False
+
+    company_tokens = _company_title_tokens(left) | _company_title_tokens(right)
+    shared = (_title_event_tokens(left) & _title_event_tokens(right)) - company_tokens
+    if len(shared) < 2:
+        return False
+    market_theme_tokens = {
+        "북미",
+        "제조",
+        "제조특화",
+        "스마트팩토리",
+        "공장",
+        "지능화",
+        "시장",
+        "공략",
+        "플랫폼",
+    }
+    return bool(shared & market_theme_tokens)
+
+
 def _has_weak_bridge_risk(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return _has_ambiguous_support_shape(left) or _has_ambiguous_support_shape(right)
 
@@ -1304,28 +1191,6 @@ def _title_tokens_related(left: dict[str, Any], right: dict[str, Any]) -> bool:
     jaccard = len(shared) / len(left_tokens | right_tokens)
     coverage = len(shared) / min(len(left_tokens), len(right_tokens))
     return jaccard >= 0.35 or coverage >= 0.55
-
-
-def _title_llm_candidate(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    left_bucket = _event_bucket(left)
-    right_bucket = _event_bucket(right)
-    if left_bucket != right_bucket or left_bucket in {"market_reaction", "industry_theme"}:
-        return False
-    if not (_title_has_event_action(left) or _title_has_event_action(right)):
-        return False
-
-    left_tokens = _title_event_tokens(left) - _company_title_tokens(left)
-    right_tokens = _title_event_tokens(right) - _company_title_tokens(right)
-    if len(left_tokens) < 2 or len(right_tokens) < 2:
-        return False
-
-    shared = left_tokens & right_tokens
-    if len(shared) >= 2:
-        return True
-
-    jaccard = len(shared) / max(1, len(left_tokens | right_tokens))
-    coverage = len(shared) / max(1, min(len(left_tokens), len(right_tokens)))
-    return jaccard >= 0.25 or coverage >= 0.40
 
 
 def _same_company_action_topic(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -1402,6 +1267,8 @@ def _title_has_event_action(article: dict[str, Any]) -> bool:
             "손잡",
             "수주",
             "선정",
+            "개발",
+            "추진",
             "출시",
             "공개",
             "공급",
@@ -1410,6 +1277,12 @@ def _title_has_event_action(article: dict[str, Any]) -> bool:
             "인수",
             "확대",
             "확보",
+            "공략",
+            "지원",
+            "실증",
+            "배치",
+            "선봬",
+            "나서",
         )
     )
 
@@ -1489,6 +1362,8 @@ def _normalize_title_token(token: str) -> str:
         "피지컬ai": "physicalai",
         "스칼라": "skala",
         "skala": "skala",
+        "브레인": "지능화",
+        "지능": "지능화",
         "예탁원": "예탁결제원",
         "예탁결제원": "예탁결제원",
         "sto": "토큰증권",
@@ -1497,10 +1372,10 @@ def _normalize_title_token(token: str) -> str:
 
 
 def _strip_korean_particle(token: str) -> str:
-    if len(token) < 4:
+    if len(token) < 3:
         return token
     for suffix in ("으로", "에게", "에서", "과", "와", "은", "는", "이", "가", "을", "를", "의"):
-        if token.endswith(suffix) and len(token) - len(suffix) >= 3:
+        if token.endswith(suffix) and len(token) - len(suffix) >= 2:
             return token[: -len(suffix)]
     return token
 
@@ -2103,7 +1978,7 @@ def _title_text(article: dict[str, Any]) -> str:
 
 
 def _title_with_short_lead_text(article: dict[str, Any]) -> str:
-    lead = _clean_space(_content_text(article))[:_CLUSTER_LLM_CONTENT_CHARS]
+    lead = _clean_space(_content_text(article))[:_TITLE_LEAD_CHARS]
     return _compact_text(f"{article.get('title') or ''} {lead}")
 
 
