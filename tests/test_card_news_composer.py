@@ -931,6 +931,76 @@ def test_financial_only_card_title_adds_business_context():
     assert card["display"]["background_asset_url"] == "/png.png"
 
 
+def test_industry_trend_financial_title_does_not_show_internal_company_id():
+    card = CardNewsComposer().generate(
+        summary={
+            "cluster_id": 53012,
+            "main_company": "industry_trend",
+            "cluster_event_type": "earnings",
+            "headline": "2030년까지 영업이익 두 배 확대",
+            "fact_summary": [
+                "AI를 조직 전반에 내재화한 기업은 영업이익을 높일 수 있다.",
+                "신약개발과 규제전략에 AX 적용이 확대되고 있다.",
+                "AI 기반 플랫폼으로 후보물질 발굴 효율을 높이고 있다.",
+            ],
+            "source_article_ids": [53012],
+            "is_valid_summary": True,
+        },
+        classification={"event_type": "earnings", "sector": "ax"},
+        articles=[
+            {
+                "id": 53012,
+                "title": "[AX 속도내는 제약] 신약개발 넘어 규제전략까지",
+                "content": "AI 기반 신약개발과 AX 적용이 확대되고 있다.",
+                "source_name": "naver_industry_news",
+                "url": "https://example.com/53012",
+                "published_at": "2026-06-18T07:32:00+00:00",
+            }
+        ],
+    )
+
+    assert card["title"] == "AI·AX 사업 중심 실적 변화"
+    assert "industry_trend" not in card["title"]
+
+
+def test_card_generation_skips_when_summary_card_unavailable(monkeypatch):
+    def fail_if_llm_called():
+        raise AssertionError("LLM fallback should not run for invalid summaries")
+
+    monkeypatch.setattr("src.composers.card_news_composer._get_llm", fail_if_llm_called)
+    monkeypatch.setattr(
+        "src.composers.card_news_composer.get_articles_by_ids",
+        lambda _ids: [
+            {
+                "id": 53100,
+                "title": "요약 실패 기사",
+                "content": "원문은 있지만 통합 요약이 실패했다.",
+                "source_name": "news",
+                "url": "https://example.com/53100",
+                "published_at": "2026-06-18T07:32:00+00:00",
+            }
+        ],
+    )
+
+    card = CardNewsComposer().generate_from_cluster(
+        cluster_id=53100,
+        representative_id=53100,
+        company="lg_cns",
+        summary={
+            "cluster_id": 53100,
+            "main_company": "lg_cns",
+            "cluster_event_type": "general_update",
+            "headline": "요약 실패 기사",
+            "fact_summary": [],
+            "source_article_ids": [53100],
+            "is_valid_summary": False,
+        },
+        classification={"event_type": "general_update", "sector": "ax"},
+    )
+
+    assert card == {}
+
+
 def test_card_cover_uses_best_cluster_image_not_first_placeholder():
     card = CardNewsComposer().generate(
         summary={
