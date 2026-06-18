@@ -41,7 +41,7 @@ def test_card_news_insert_params_preserve_integrated_issue_id():
 
 def test_card_news_insert_params_canonicalizes_id_and_date_from_source_articles(monkeypatch):
     monkeypatch.setattr(
-        "src.db.article_store.get_articles_by_ids",
+        "src.db.article_store_parts.helpers.get_articles_by_ids",
         lambda ids: [
             {
                 "id": 44755,
