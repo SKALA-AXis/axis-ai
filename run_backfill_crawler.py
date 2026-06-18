@@ -1,3 +1,7 @@
+# 작성일: 2026-05-11
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-11 박지원 — backfill 크롤러 추가, 이후 backfill 길이·JSON·링크 포맷 수정
 """Cursor 기반 backfill crawler 실행 스크립트."""
 
 from __future__ import annotations

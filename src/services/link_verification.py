@@ -1,3 +1,7 @@
+# 작성일: 2026-05-19
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-19 박지원 — parser·agent 수정과 함께 추가
 """HTTP HEAD/GET 기반 출처 링크 검증 서비스.
 
 design: ``axis-ai/design/30-analysis/link-verification.md``.

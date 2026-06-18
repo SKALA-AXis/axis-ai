@@ -1,3 +1,7 @@
+# 작성일: 2026-06-08
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-08 박지원 — RAW 기사 전처리 catch-up 스크립트 작성 및 수정(LLM fallback 제거 포함)
 """Catch up RAW articles that were collected but missed preprocessing.
 
 Scheduled ingestion triggers run preprocessing in an axis-ai background task.

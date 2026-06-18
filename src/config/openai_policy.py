@@ -1,3 +1,7 @@
+# 작성일: 2026-05-22
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-22 박지원 — 전처리·문서 파싱 통제 강화 과정에서 OpenAI 호출 정책 추가 및 수정
 """Runtime guard for explicit OpenAI calls."""
 
 from __future__ import annotations

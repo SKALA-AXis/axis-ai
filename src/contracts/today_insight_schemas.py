@@ -1,3 +1,8 @@
+# 작성일: 2026-06-12
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-12 최종민 — 공용 스키마를 src/contracts 로 이동해 agents→api 의존 절단 (2-A1)
+#   2026-06-17 최종민 — 홈 3상태 지원(state/signal_date/week_synthesis/coverage_stats) 추가
 """Today's Insight endpoint Pydantic models.
 
 Home dashboard 전용 요약이지만, 단순 UI fixture 가 아니라 매일의 통합 이슈와

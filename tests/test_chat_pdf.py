@@ -1,3 +1,7 @@
+# 작성일: 2026-06-10
+# 작성자: 박진
+# 변경이력:
+#   2026-06-10 박진 — 어시스턴트 PDF 내보내기 수정 및 챗봇 분석 워크플로 개선
 from __future__ import annotations
 
 import base64

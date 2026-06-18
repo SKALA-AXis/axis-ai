@@ -1,3 +1,8 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인 도입과 함께 implication v4 프롬프트 작성
+#   2026-06-11 박지원 — 근거 없는 일반 카드 액션 필터링 반영
 """ImplicationAgent v4.0 — P.C.R.O 프롬프트 (W1-1).
 
 설계: `design/01-analysis-pipeline-implementation-plan.md` §3.3.

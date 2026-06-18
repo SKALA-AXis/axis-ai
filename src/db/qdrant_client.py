@@ -1,3 +1,9 @@
+# 작성일: 2026-04-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-21 최종민 — axis-ai 베이스라인 작성, Supabase
+#   2026-05-26 박지원 — allaround 수정
+#   2026-06-08 박진 — 챗봇 에이전트 및 assistant RAG 추가
 import os
 from urllib.parse import urlparse, urlunparse
 

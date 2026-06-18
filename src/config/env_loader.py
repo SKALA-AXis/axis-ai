@@ -1,3 +1,7 @@
+# 작성일: 2026-04-28
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-28 최종민 — 프로파일 기반 .env 로더 추가(.env fallback 2-파일 구조)
 """프로파일 기반 .env 로더.
 
 run_pipeline_once.py / run_crawler_once.py 같은 단독 실행 스크립트에서 사용.

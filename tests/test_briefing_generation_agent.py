@@ -1,3 +1,10 @@
+# 작성일: 2026-06-04
+# 작성자: 박진
+# 변경이력:
+#   2026-06-04 박진 — 이슈 기반 믹서·임원 브리핑 플로우 도입 및 액션 강화
+#   2026-06-12 최종민 — briefing_generation_agent 분해 1단계(support/prompts/data_layer 분리) 반영
+#   2026-06-14 안가은 — 브리핑 생성 문구 및 마침표 개선(#187)
+#   2026-06-15 심유정 — 브리핑 테스트 임포트 순서 수정
 from __future__ import annotations
 
 import asyncio

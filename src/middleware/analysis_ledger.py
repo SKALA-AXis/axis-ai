@@ -1,3 +1,7 @@
+# 작성일: 2026-05-15
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-15 최종민 — AnalysisLedger backbone 신설, Layer B 분석 파이프라인 연동
 """KnowledgeCuration K1 — AnalysisLedger middleware.
 
 분석 agent (InsightCascade / MixerAnalysis / ITTrend /

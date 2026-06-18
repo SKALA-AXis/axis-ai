@@ -1,3 +1,7 @@
+# 작성일: 2026-06-11
+# 작성자: 안가은
+# 변경이력:
+#   2026-06-11 안가은 — peer 키워드 및 SWOT 프리뷰 파이프라인 추가
 """CLI wrapper for the custom Naver DataLab keyword runner.
 
 The file name is intentionally kept as ``keyword.py`` for manual execution.

@@ -1,3 +1,8 @@
+# 작성일: 2026-05-08
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-08 박지원 — 글로벌 peer 기업 모니터링 대상 추가 및 소스 포맷 정리
+#   2026-06-14 심유정 — 카드뉴스 frontend-ready grounding 개선 반영
 """글로벌 기업 RSS 모니터링 대상 설정."""
 
 from __future__ import annotations

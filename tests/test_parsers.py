@@ -1,3 +1,8 @@
+# 작성일: 2026-05-12
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-12 박지원 — DART/IR 파서 및 네이버 증권 리포트 파싱 구현·수정
+#   2026-05-21 최종민 — Layer B 분석 파이프라인(컨텍스트·LLM 추론·평가) 추가
 from datetime import datetime
 
 from scripts.reprocess_ir_analysis import (

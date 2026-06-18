@@ -1,3 +1,9 @@
+# 작성일: 2026-06-12
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-12 최종민 — prompts/utils 를 별도 패키지로 분리 (이동만, 동작 불변)
+#   2026-06-14 심유정 — 카드뉴스 frontend-ready 및 사용자 전략 오버레이 프롬프트 개선
+#   2026-06-15 박지원 — 카드뉴스 통합/요약/시사점 프롬프트 grounding 강화
 """prompts — strategic_insight_agent 에서 분리 (이동만, 동작 불변).
 
 분리 근거: axis-infra docs/structure-tasks/agent-split-design.md (Phase 2 1단계)

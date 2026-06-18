@@ -1,3 +1,7 @@
+# 작성일: 2026-06-02
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-02 박지원 — 분석 파이프라인 에이전트 재구성 및 뉴스 통합 플로우 개선
 """LLM-as-Judge 프롬프트 4종 (W5-2).
 
 설계: design/01-analysis-pipeline-implementation-plan.md §3.6.1.

@@ -1,3 +1,7 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인 일부로 에이전트 출력 검증 헬퍼 작성
 """Agent output validation helpers — design 의 prompt 제약 (length / enum / step
 count) 을 LLM 응답에 강제하기 위한 공용 유틸.
 

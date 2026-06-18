@@ -1,3 +1,8 @@
+# 작성일: 2026-05-12
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-12 박지원 — IR 파서 작성 및 전처리·peer profile·스코프 분석 보강
+#   2026-05-12 심유정 — feature 머지분 lint·mypy 정리 및 카드뉴스 에이전트 플로우 정리
 """IR PDF 크롤링 결과를 재무 후보 레코드로 변환하는 deterministic parser.
 
 IRCrawler는 PDF 파일을 직접 저장하지 않고 RawArticle 형태로 본문 텍스트와

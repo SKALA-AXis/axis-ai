@@ -1,3 +1,7 @@
+# 작성일: 2026-05-26
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-26 박지원 — 전처리 수정 및 전처리 LLM 폴백 제거
 from __future__ import annotations
 
 import pytest
@@ -39,4 +43,3 @@ def test_openai_calls_disabled_without_api_key(monkeypatch):
 
     assert openai_calls_enabled() is False
     assert openai_disabled_reason() == "OPENAI_API_KEY is not configured"
-

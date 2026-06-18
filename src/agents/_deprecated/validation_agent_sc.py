@@ -1,3 +1,7 @@
+# 작성일: 2026-04-27
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-27 최종민 — v3 전환(Evidence Chain)으로 SC 검증 에이전트 추가 및 ruff 포맷 적용
 """SC 검증 에이전트 — Self-Consistency 환각 방지."""
 
 import json

@@ -1,3 +1,7 @@
+# 작성일: 2026-06-18
+# 작성자: 심유정
+# 변경이력:
+#   2026-06-18 심유정 — 사용자 전략 컨텍스트 적용 시 액션만 재생성하는 로직 추가
 """Fast action-only regeneration for user strategy context apply."""
 
 from __future__ import annotations

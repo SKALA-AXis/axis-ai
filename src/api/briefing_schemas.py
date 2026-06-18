@@ -1,3 +1,10 @@
+# 작성일: 2026-06-02
+# 작성자: 심유정
+# 변경이력:
+#   2026-06-02 심유정 — 브리핑 생성 API 엔드포인트 추가
+#   2026-06-04 박진 — 통합 이슈 mixer
+#   2026-06-12 최종민 — 브리핑 read-through 재사용으로 페이지 로딩당 LLM 호출 제거
+#   2026-06-14 안가은 — 브리핑 생성 문구 및 기간 처리 개선
 """BriefingGenerationAgent endpoint request / response models.
 
 ``src/schemas.py`` 는 datamodel-codegen 자동 생성 대상이라, 브리핑 생성 prototype

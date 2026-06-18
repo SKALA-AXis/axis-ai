@@ -1,3 +1,8 @@
+# 작성일: 2026-05-20
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-20 박지원 — 전처리 수정 작업 중 matched_sector_details 백필 스크립트 추가
+#   2026-05-21 최종민 — Layer B 분석 파이프라인 작업에 따른 반영
 """기존 raw_articles.matched_sector_details 값을 채운다.
 
 기본은 dry-run이며, 실제 반영은 --apply를 붙인다.

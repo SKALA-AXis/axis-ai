@@ -1,3 +1,9 @@
+# 작성일: 2026-06-02
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-02 박지원 — 카드뉴스 생성/클러스터링·품질·근거(provenance) 보강 및 카드 검증 완화
+#   2026-06-05 심유정 — 카드뉴스 전략 인사이트 근거 강화 및 frontend-ready 처리 개선
+#   2026-06-11 최종민 — ChatOpenAI lazy-import 적용, card_news_composer LLM gen-search 이행 리팩터
 """카드뉴스 생성 에이전트.
 
 AnalysisPackage를 사용자에게 보여줄 카드뉴스/API 응답 형태로 재가공한다.

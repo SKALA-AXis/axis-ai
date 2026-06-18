@@ -1,3 +1,7 @@
+# 작성일: 2026-06-12
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-12 최종민 — Qdrant 선례 검색 어댑터 구현 및 컨텍스트 빌더 주입
 """Qdrant 선례·유사 카드 검색 어댑터.
 
 AnalysisContextBuilder / ContextPackAssembler 가 생성자 인자 ``qdrant_search`` 로

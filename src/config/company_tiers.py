@@ -1,3 +1,7 @@
+# 작성일: 2026-05-07
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-07 박지원 — 크롤러 출력용 회사 tier 라벨 헬퍼 추가
 """Company tier helpers for crawler output.
 
 `companies.py` owns the existing domestic registry. This module only derives

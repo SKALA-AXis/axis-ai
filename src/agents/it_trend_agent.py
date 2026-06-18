@@ -1,3 +1,9 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인과 글로벌 IT 트렌드 5-phase 에이전트
+#   2026-05-22 심유정 — 에이전트 아키텍처 및 믹서 인사이트 정비
+#   2026-06-02 박지원 — IT 트렌드 confidence 조정과 글로벌 트렌드 합성·근거 링크 정비
 """IT trend context agent — 5-phase global IT trend extractor + peer alignment.
 
 design: ``axis-ai/design/30-analysis/global-trends.md``.
