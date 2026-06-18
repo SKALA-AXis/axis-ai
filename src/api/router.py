@@ -1909,8 +1909,8 @@ async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsRespons
     contract: ``axis-infra/api/openapi.yaml`` ``/global/trends/run`` (operationId
     ``runGlobalTrends``).
 
-    Phase 1 (Snapshot) + Phase 2 (Trend Detection) 결정적 산식,
-    Phase 3 (Peer Alignment) + Phase 4 (Impact Mapping) + Phase 5 (Synthesis) LLM 3 호출.
+    Phase 1 (Snapshot) + Phase 2 (Trend Detection) + Phase 3 (Peer Alignment)
+    + Phase 4 (Impact Mapping) 결정적 산식, Phase 5 (Synthesis) LLM 1 호출.
 
     ``previous_trend_context`` 는 ITTrendAgent.generate() 가 ``global_industry_trends`` 직전
     batch 를 self-read 해 delta 를 계산한다 (design §16).
@@ -1944,7 +1944,7 @@ async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsRespons
             "max_trend_count": request.max_trend_count,
         },
     )
-    # ITTrendAgent.generate 는 sync (5-phase 합산 ~70s, LLM 3 calls + DB 호출) —
+    # ITTrendAgent.generate 는 sync (5-phase 합산, LLM 1 call + DB 호출) —
     # event loop 를 막으면 liveness probe /healthz 도 응답 못해 SIGKILL.
     result = await asyncio.to_thread(ITTrendAgent().generate, trend_input)
     _raise_if_agent_failure("GLOBAL_TRENDS", result)
