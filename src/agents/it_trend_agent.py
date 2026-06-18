@@ -1,3 +1,9 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인과 글로벌 IT 트렌드 5-phase 에이전트
+#   2026-05-22 심유정 — 에이전트 아키텍처 및 믹서 인사이트 정비
+#   2026-06-02 박지원 — IT 트렌드 confidence 조정과 글로벌 트렌드 합성·근거 링크 정비
 """IT trend context agent — 5-phase global IT trend extractor + peer alignment.
 
 design: ``axis-ai/design/30-analysis/global-trends.md``.
@@ -15,11 +21,11 @@ Pipeline (design §6):
 
     Phase 1 (Snapshot,     deterministic) — 글로벌 6 사별 카드 카운트 + top themes
     Phase 2 (Trend Detect, deterministic) — keyword mention / frequency_delta / intensity
-    Phase 3 (Peer Align,   deterministic + LLM batch) — keyword × peer alignment
-    Phase 4 (Impact Map,   LLM)           — trend × SK AX business line 매트릭스
+    Phase 3 (Peer Align,   deterministic) — keyword × peer alignment
+    Phase 4 (Impact Map,   deterministic) — trend × SK AX business line 매트릭스
     Phase 5 (Forecast/Synth, LLM)         — 1Q/6M/1Y narrative + final_one_liner + sk_ax_implication
 
-LLM 호출 총 3 회 (P3 batch strategic_notes / P4 impact / P5 synthesis).
+LLM 호출 총 1 회 (P5 synthesis).
 
 결과는 ``global_industry_trends`` 에 keyword 별 row 직접 upsert (design §7).
 ``analysis_ledger`` 는 V30 line 694 에서 DROP 되어 더는 사용하지 않는다.
@@ -265,7 +271,7 @@ class ITTrendAgent:
     def generate(self, trend_input: ITTrendInput) -> dict[str, Any]:
         """5-phase pipeline — design §6.
 
-        Phase 1/2 deterministic, Phase 3/4/5 deterministic + LLM (3 호출).
+        Phase 1~4 deterministic, Phase 5 synthesis 만 LLM (1 호출).
         결과는 ``global_industry_trends`` 에 keyword 별 row 로 upsert.
         """
         generated_at = datetime.now(UTC)
@@ -372,7 +378,7 @@ class ITTrendAgent:
                 warning=warning,
             )
 
-        # 4) Phase 3 — Peer Alignment (deterministic 점수 + LLM batch strategic_note).
+        # 4) Phase 3 — Peer Alignment (deterministic 점수 + note).
         if include_peer_alignment and not global_only:
             alignment = _phase3_peer_alignment(
                 detections=detections,
@@ -400,7 +406,7 @@ class ITTrendAgent:
             }
         )
 
-        # 5) Phase 4 — Impact Mapping (LLM).
+        # 5) Phase 4 — Impact Mapping (deterministic).
         if global_only:
             impact_matrix = []
         else:
@@ -710,7 +716,7 @@ def _leading_companies_for_keyword(snapshots: list[dict[str, Any]], keyword: str
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Phase 3 — Peer Alignment (deterministic + LLM batch).
+# Phase 3 — Peer Alignment (deterministic).
 # ──────────────────────────────────────────────────────────────────────────
 
 
@@ -754,8 +760,6 @@ def _phase3_peer_alignment(
                 peer_age = (today - latest_peer).days
                 recency_gap_days = peer_age - global_recency
 
-            # strategic_note LLM 입력용 근거 — peer 가 실제로 뭘 했는지 (제목 + event_type).
-            # API 응답에 나가기 전, 아래에서 strip (전송 페이로드엔 남기지 않음).
             evidence = [
                 {
                     "title": str(c.get("title") or "").strip(),
@@ -775,23 +779,15 @@ def _phase3_peer_alignment(
                     "global_mention_count": global_mention_count,
                     "recency_gap_days": recency_gap_days,
                     "evidence_card_ids": [str(c.get("id")) for c in cards[:5] if c.get("id")],
-                    "_evidence": evidence,
-                    "strategic_note": "",
+                    "strategic_note": _deterministic_strategic_note(
+                        peer_id=peer_id,
+                        keyword=keyword,
+                        alignment_type=alignment_type,
+                        evidence=evidence,
+                    ),
                 }
             )
         result[keyword] = per_peer
-
-    # LLM batch — 모든 (theme × peer) strategic_note 한 번에 채움.
-    if any(p for plist in result.values() for p in plist):
-        try:
-            result = _llm_fill_strategic_notes(result, detections)
-        except Exception:
-            log.exception("ITTrendAgent | strategic_note LLM 실패 — 빈 문자열 유지")
-
-    # 근거는 LLM 입력 전용 — API 페이로드에서 제거.
-    for plist in result.values():
-        for p in plist:
-            p.pop("_evidence", None)
     return result
 
 
@@ -831,96 +827,43 @@ def _gate_diverging_on_evidence(alignment_type: str, evidence: list[Any]) -> str
     return alignment_type
 
 
-def _llm_fill_strategic_notes(
-    result: dict[str, list[dict[str, Any]]],
-    detections: list[dict[str, Any]],
-) -> dict[str, list[dict[str, Any]]]:
-    """LLM 1 회 호출로 모든 (theme × peer) strategic_note 한 줄씩 채움."""
-    payload = []
-    for det in detections:
-        keyword = det["theme"]
-        peers = result.get(keyword, [])
-        payload.append(
-            {
-                "theme": keyword,
-                "intensity": det.get("intensity"),
-                "leading_companies": det.get("leading_companies", []),
-                "peers": [
-                    {
-                        "peer_id": p["peer_id"],
-                        "alignment_type": p["alignment_type"],
-                        "peer_mention_count": p["peer_mention_count"],
-                        "global_mention_count": p["global_mention_count"],
-                        # peer 실제 동향(title+event_type) — note 근거 (비면 미확인).
-                        "evidence": p.get("_evidence", []),
-                    }
-                    for p in peers
-                ],
-            }
-        )
-    if not payload:
-        return result
+def _deterministic_strategic_note(
+    *,
+    peer_id: str,
+    keyword: str,
+    alignment_type: str,
+    evidence: list[dict[str, Any]],
+) -> str:
+    if not evidence:
+        return "관련 공개 동향 미확인"
+    title = str(evidence[0].get("title") or "").strip()
+    event_type = str(evidence[0].get("event_type") or "").strip()
+    action = _event_type_action_label(event_type)
+    if alignment_type == "aligned":
+        return f"{peer_id}는 '{title}' {action} 신호로 {keyword} 흐름에 대응 중"[:200]
+    if alignment_type == "lagging":
+        return f"{peer_id}는 '{title}' {action} 신호가 있으나 {keyword} 공개 신호는 제한적"[:200]
+    if alignment_type == "diverging":
+        return f"{peer_id}는 '{title}' {action} 신호를 중심으로 별도 사업 축을 노출"[:200]
+    return "관련 공개 동향 미확인"
 
-    prompt = (
-        "당신은 SK AX 사업전략팀의 글로벌 IT 트렌드 분석가입니다.\n"
-        "각 (theme, peer) 조합에 대해 한 줄짜리 strategic_note 를 작성하세요.\n\n"
-        "## 필수 규칙\n"
-        "1. **반드시 한국어로** 작성합니다. 회사명·제품명·고유명사 외 영어 문장 금지.\n"
-        "2. **evidence 의 실제 동향(title·event_type)만 근거로** 사용합니다. "
-        "evidence 에 없는 사업·파트너십·수치를 지어내지 마세요.\n"
-        "3. **무엇을 했는지 구체적 행위로** 서술합니다 — 수주/계약/출시/개관/인수/합병/"
-        "파트너십 체결/투자 등 동사를 쓰고, title 의 사업·제품·고객명을 그대로 인용합니다. "
-        "event_type 은 행위 종류 힌트입니다(ma=인수·합병, partnership=파트너십, "
-        "contract=수주·계약, new_biz=신사업, tech=기술·제품).\n"
-        "4. **금지(모호한 표현)**: '독자적인 방향을 추구', '글로벌 흐름을 따라가고 있음', "
-        "'선도 기업과 정렬돼 있다' 처럼 무엇을 하는지 안 드러나는 서술.\n"
-        "5. evidence 가 비어 있으면 추측하지 말고 정확히 "
-        '"관련 공개 동향 미확인" 이라고만 적습니다.\n'
-        "6. alignment_type 별 관점(모두 evidence 의 구체 동향으로 뒷받침):\n"
-        "   - aligned: 어떤 사업/제품으로 이 트렌드에 대응 중인지\n"
-        "   - lagging: 대응은 있으나 무엇이 부족·제한적인지\n"
-        "   - diverging: 이 트렌드 대신 어떤 다른 사업/제품에 집중하는지(다른 방향의 실체)\n"
-        "   - missing: 관련 공개 동향이 없어 미대응인지\n\n"
-        "## 예시\n"
-        "- 좋음: \"포스코DX는 'P-GPT 2.1 출시'로 자체 산업용 LLM 제품을 키우는 중\"\n"
-        "- 좋음: \"LG CNS는 '팔란티어 파트너십 체결'로 데이터분석 사업을 확대\"\n"
-        '- 나쁨: "삼성SDS는 LLM 분야에서 독자적인 방향을 추구하고 있음" '
-        "(무엇을 하는지 없음 — 금지)\n"
-        '- 나쁨: "SK AX is aligned with leading cloud companies" (영어·근거 없음 — 금지)\n\n'
-        "응답은 반드시 다음 JSON object:\n"
-        '{"notes": [{"theme":"...", "peer_id":"...", "strategic_note":"..."}, ...]}\n\n'
-        "입력:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
-    )
-    response = _get_llm().invoke(
-        prompt,
-        config=tracing_config(
-            agent="ITTrendAgent",
-            phase="peer_alignment_notes",
-            prompt_version=_PROMPT_VERSION,
-        ),
-    )
-    content = response.content if isinstance(response.content, str) else str(response.content)
-    notes = _safe_json_object(content).get("notes") or []
-    by_pair: dict[tuple[str, str], str] = {}
-    for item in notes:
-        if not isinstance(item, dict):
-            continue
-        theme = str(item.get("theme") or "").lower()
-        peer = str(item.get("peer_id") or "").strip()
-        note = str(item.get("strategic_note") or "").strip()
-        if theme and peer and note:
-            by_pair[(theme, peer)] = note[:200]
 
-    for keyword, peers in result.items():
-        for p in peers:
-            key = (keyword.lower(), p["peer_id"])
-            if key in by_pair:
-                p["strategic_note"] = by_pair[key]
-    return result
+def _event_type_action_label(event_type: str) -> str:
+    labels = {
+        "ma": "인수·합병",
+        "m&a": "인수·합병",
+        "partnership": "파트너십",
+        "contract": "수주·계약",
+        "new_biz": "신사업",
+        "tech": "기술·제품 공개",
+        "investment": "투자",
+        "launch": "출시",
+    }
+    return labels.get((event_type or "").strip().lower(), "공개 동향")
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Phase 4 — Impact Mapping (LLM).
+# Phase 4 — Impact Mapping (deterministic).
 # ──────────────────────────────────────────────────────────────────────────
 
 
@@ -931,64 +874,56 @@ def _phase4_impact(
 ) -> list[dict[str, Any]]:
     if not detections or not sk_ax_business_lines:
         return []
-    trend_payload = [
-        {
-            "theme": d["theme"],
-            "intensity": d.get("intensity"),
-            "leading_companies": d.get("leading_companies", []),
-            "mention_count": d.get("mention_count"),
-        }
-        for d in detections
-    ]
-    prompt = (
-        "당신은 SK AX 의 사업 전략 분석가입니다. "
-        "다음 글로벌 IT 트렌드들이 SK AX 사업라인에 미치는 영향을 매트릭스로 도출하세요.\n\n"
-        f"SK AX 사업라인: {', '.join(sk_ax_business_lines)}\n\n"
-        "각 (trend, sk_ax_line) 조합에 대해 direction (positive/neutral/negative), "
-        "magnitude (low/medium/high), channel (한 줄), quant_hint (옵션) 을 결정.\n\n"
-        "응답은 반드시 다음 JSON object:\n"
-        '{"impact_matrix": [{"trend_theme":"...", "sk_ax_line":"...", '
-        '"direction":"...", "magnitude":"...", "channel":"...", "quant_hint":"..."}]}\n\n'
-        "각 trend 마다 최소 1 개 (가장 관련 깊은) sk_ax_line 매칭. 너무 많이 만들지 말 것.\n\n"
-        "입력 trends:\n" + json.dumps(trend_payload, ensure_ascii=False, indent=2)
-    )
-    try:
-        response = _get_llm().invoke(
-            prompt,
-            config=tracing_config(
-                agent="ITTrendAgent",
-                phase="impact_map",
-                prompt_version=_PROMPT_VERSION,
-            ),
-        )
-        content = response.content if isinstance(response.content, str) else str(response.content)
-        cells = _safe_json_object(content).get("impact_matrix") or []
-    except Exception:
-        log.exception("ITTrendAgent | _phase4_impact LLM 실패")
-        return []
-
     result: list[dict[str, Any]] = []
-    valid_themes = {d["theme"] for d in detections}
-    for cell in cells:
-        if not isinstance(cell, dict):
+    for detection in detections:
+        theme = str(detection.get("theme") or "").strip().lower()
+        if not theme:
             continue
-        theme = str(cell.get("trend_theme") or "").strip().lower()
-        if theme not in valid_themes:
-            continue
+        line = _match_sk_ax_business_line(theme, sk_ax_business_lines)
+        magnitude = _impact_magnitude(detection)
         result.append(
             {
                 "trend_theme": theme,
-                "sk_ax_line": str(cell.get("sk_ax_line") or "").strip(),
-                "direction": _clip_enum(
-                    cell.get("direction"), {"positive", "neutral", "negative"}, "neutral"
+                "sk_ax_line": line,
+                "direction": "positive",
+                "magnitude": magnitude,
+                "channel": (
+                    f"{theme} 확산은 {line}의 고객 적용, 운영 자동화, 기술 검증 수요와 연결"
                 ),
-                "magnitude": _clip_enum(cell.get("magnitude"), {"low", "medium", "high"}, "low"),
-                "channel": str(cell.get("channel") or "")[:200],
-                "quant_hint": str(cell.get("quant_hint") or "")[:200] or None,
-                "source_marker": "llm_phase4_impact",
+                "quant_hint": f"mention_count={int(detection.get('mention_count') or 0)}",
+                "source_marker": "deterministic_phase4_impact",
             }
         )
     return result
+
+
+def _match_sk_ax_business_line(theme: str, sk_ax_business_lines: list[str]) -> str:
+    normalized_theme = theme.lower()
+    best_line = sk_ax_business_lines[0]
+    best_score = -1
+    for line in sk_ax_business_lines:
+        normalized_line = str(line or "").lower()
+        score = 0
+        for token in alignment_match_terms(normalized_theme):
+            if token and token in normalized_line:
+                score += 2
+        for token in re.findall(r"[0-9a-z가-힣]+", normalized_theme):
+            if len(token) >= 2 and token in normalized_line:
+                score += 1
+        if score > best_score:
+            best_line = line
+            best_score = score
+    return str(best_line)
+
+
+def _impact_magnitude(detection: dict[str, Any]) -> str:
+    mention_count = int(detection.get("mention_count") or 0)
+    intensity = str(detection.get("intensity") or "").lower()
+    if intensity == "strong" or mention_count >= 15:
+        return "high"
+    if intensity == "moderate" or mention_count >= 5:
+        return "medium"
+    return "low"
 
 
 # ──────────────────────────────────────────────────────────────────────────

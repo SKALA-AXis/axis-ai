@@ -1,3 +1,8 @@
+# 작성일: 2026-06-09
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-09 최종민 — weekly digest 에이전트 테스트 신규 작성(ContextPackAssembler
+#   2026-06-12 박진 — 브리핑 백필 지원 추가(#169)
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch

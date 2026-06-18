@@ -1,3 +1,9 @@
+# 작성일: 2026-06-05
+# 작성자: 박진
+# 변경이력:
+#   2026-06-05 박진 — 투데이 인사이트 에이전트 및 60일 카드뉴스 입력 신규 추가
+#   2026-06-09 최종민 — dual-lane 비교
+#   2026-06-14 안가은 — 키워드 트렌드 파이프라인 갱신, 신호를 출처일에 고정
 """TodayInsightAgent — home dashboard executive daily signal synthesis.
 
 The agent compares today's integrated issues against accumulated JSON context

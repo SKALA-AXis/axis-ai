@@ -1,3 +1,7 @@
+# 작성일: 2026-06-10
+# 작성자: 박진
+# 변경이력:
+#   2026-06-10 박진 — 어시스턴트 PDF 내보내기·믹서 자격증명 수정 과정에서 추가
 """LLM credential loading helpers.
 
 Runtime pods should receive credentials through environment variables. Local

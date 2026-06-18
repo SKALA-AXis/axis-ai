@@ -1,3 +1,9 @@
+# 작성일: 2026-05-13
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-13 최종민 — Langfuse CallbackHandler 통합 신설, 2.x→4.x 마이그레이션
+#   2026-05-18 심유정 — 카드뉴스 에이전트 플로우 개선 반영
+#   2026-06-02 박지원 — 분석 파이프라인 에이전트 재구성 및 뉴스 통합 흐름 개선 반영
 """Langfuse Cloud (v4) 통합 — LangChain CallbackHandler factory + helpers.
 
 설계: axis-infra/docs/OBSERVABILITY_LANGFUSE.md §6

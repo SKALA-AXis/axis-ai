@@ -1,3 +1,7 @@
+# 작성일: 2026-04-22
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-22 최종민 — Track A/B 크롤러 v4 구축 및 PostgreSQL 저장 연동
 """Playwright 공유 브라우저 세션 — 스텔스 모드 + Markdown 추출."""
 
 import logging

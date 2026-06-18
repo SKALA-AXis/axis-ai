@@ -1,3 +1,8 @@
+# 작성일: 2026-06-09
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-09 최종민 — ContextPackAssembler·weekly digest 에이전트·백필 스크립트 추가
+#   2026-06-09 박지원 — 뉴스 전처리/클러스터링 품질 개선 및 하드코딩 룰 제거
 """K2 CronJob entrypoint — peer 별 weekly digest 갱신 (card_news 7일).
 
 결과: peer_companies.peer_plus_payload['weekly_digest'] JSONB.

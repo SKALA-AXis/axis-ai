@@ -1,3 +1,7 @@
+# 작성일: 2026-06-17
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-17 박지원 — AI 에이전트 동기화 과정에서 deprecated 챗봇 에이전트 추가
 """Deprecated Chatbot agent structure.
 
 ChatbotAgent belongs to the 2단계 data-usage pipeline. It answers user questions

@@ -1,3 +1,8 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인 작업의 일부로 추가
+#   2026-05-29 박지원 — peer profile snapshot 갱신 에이전트/파이프라인 작성
 """W2-2 CronJob entrypoint — peer 별 profile_snapshot 분기 1회 갱신.
 
 분기 첫날 03:00 KST 에 `axis-cron-profile-refresh` 가 실행. 4 peer + SK AX 의

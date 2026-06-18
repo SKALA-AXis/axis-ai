@@ -1,3 +1,7 @@
+# 작성일: 2026-06-02
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-02 박지원 — 분석 파이프라인 에이전트 재구성 및 뉴스 통합 플로우 개선
 """Evaluator — W5-1 rule-based 4 metric (+regression_drift Phase 2).
 
 `validate` 노드 안에서 호출. LLM 사용 X. latency 추가 <50ms 목표.

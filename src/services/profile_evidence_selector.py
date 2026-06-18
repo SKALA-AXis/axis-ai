@@ -1,3 +1,7 @@
+# 작성일: 2026-05-29
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-29 박지원 — peer 프로필 스냅샷 파이프라인의 evidence 선별 모듈 추가
 """ProfileEvidenceSelector — trim and normalize profile evidence packs."""
 
 from __future__ import annotations

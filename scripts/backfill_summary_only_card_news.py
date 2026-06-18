@@ -1,3 +1,7 @@
+# 작성일: 2026-06-16
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-16 박지원 — 카드뉴스 통합/요약/시사점 생성 품질 개선 작업의 일부로 작성
 """Backfill industry trend cards up to integration + summary only.
 
 This intentionally does not run StrategicInsightAgent / ImplicationAgent.

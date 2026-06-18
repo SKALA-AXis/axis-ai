@@ -1,3 +1,8 @@
+# 작성일: 2026-05-19
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-19 박지원 — parser·agent 수정 작업
+#   2026-05-21 최종민 — Layer B 분석 파이프라인 도입에 맞춘 서비스 패키지 구성
 """Shared application services."""
 
 from src.services.agent_output_validation import (

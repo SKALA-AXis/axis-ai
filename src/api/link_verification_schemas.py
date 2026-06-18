@@ -1,3 +1,7 @@
+# 작성일: 2026-05-15
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-15 최종민 — LinkVerification prototype 스키마 신설 (HTTP HEAD + GET hash diff)
 """LinkVerification endpoint 의 request / response Pydantic 모델.
 
 design: ``axis-ai/design/30-analysis/link-verification.md`` §4 입력 / §5 출력.

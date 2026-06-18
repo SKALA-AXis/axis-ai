@@ -1,3 +1,8 @@
+# 작성일: 2026-05-20
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-20 박지원 — relevance rule/fallback 정책 설정 추가 및 전처리·클러스터링 흐름에 맞춰 수정
+#   2026-06-08 최종민 — Gate 2.5 relevance rule 거부 완화(LLM 위임) 및 키워드 확장 (#103)
 """Relevance 평가 전 rule/fallback 정책 설정."""
 
 from __future__ import annotations

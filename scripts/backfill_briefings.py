@@ -1,3 +1,8 @@
+# 작성일: 2026-06-12
+# 작성자: 박진
+# 변경이력:
+#   2026-06-12 박진 — 브리핑 리포트 백필 기능 추가
+#   2026-06-14 안가은 — 브리핑 생성 문구 및 기간 처리 개선
 """Backfill weekly/monthly briefing_reports from card news article dates.
 
 The period range is based on raw article ``published_at`` linked to card_news,

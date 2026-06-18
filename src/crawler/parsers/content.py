@@ -1,3 +1,7 @@
+# 작성일: 2026-04-22
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-22 최종민 — Track A/B 크롤러 v4 구축 시 HTML 본문 추출기 추가
 """HTML 기사 본문 추출 — BeautifulSoup 기반."""
 
 import logging

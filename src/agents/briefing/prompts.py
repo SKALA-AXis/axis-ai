@@ -1,3 +1,8 @@
+# 작성일: 2026-06-12
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-12 최종민 — briefing_generation_agent 분해 1단계로 prompts 분리
+#   2026-06-14 안가은 — 브리핑 생성 카피와 기간 표기 개선 (#187)
 """prompts — strategic_insight_agent 에서 분리 (이동만, 동작 불변).
 
 분리 근거: axis-infra docs/structure-tasks/agent-split-design.md (Phase 2 1단계)

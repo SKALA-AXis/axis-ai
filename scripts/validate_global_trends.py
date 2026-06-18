@@ -1,3 +1,8 @@
+# 작성일: 2026-05-26
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-26 최종민 — 글로벌 IT 트렌드 5-phase ITTrendAgent e2e 검증 스크립트 작성
+#   2026-06-01 박지원 — peer profile 스냅샷 파이프라인 추가에 따른 반영
 """Validation simulation for ITTrendAgent end-to-end pipeline.
 
 axis-ai pod 안에서 실행:
@@ -7,7 +12,7 @@ axis-ai pod 안에서 실행:
 
 실행 흐름:
 1. fetch_global_trend_inputs(30) — raw fetch 결과 카운트
-2. ITTrendAgent.generate() — 5-phase 풀 호출 (LLM 3 회, 실제 upsert)
+2. ITTrendAgent.generate() — 5-phase 풀 호출 (LLM 1 회, 실제 upsert)
 3. global_industry_trends 의 새 row 확인
 4. fetch_latest_trend_context(7) — TrendContext shape + cache 동작 확인
 """
@@ -55,7 +60,7 @@ def main() -> int:
         print("  ❌ fetch result empty — abort.")
         return 1
 
-    section("Step 2 — ITTrendAgent.generate() (full 5-phase, LLM 3 calls, real upsert)")
+    section("Step 2 — ITTrendAgent.generate() (full 5-phase, LLM 1 call, real upsert)")
     print(f"  started_at_utc = {started_at.isoformat()}")
     trend_input = ITTrendInput(
         trend_items=[],

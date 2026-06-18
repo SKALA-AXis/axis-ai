@@ -1,3 +1,8 @@
+# 작성일: 2026-06-08
+# 작성자: 박진
+# 변경이력:
+#   2026-06-08 박진 — 챗봇 에이전트 및 어시스턴트 RAG 추가에 따른 지식 인덱스 테스트 작성
+#   2026-06-11 박지원 — ruff 포매팅 정리 적용
 from __future__ import annotations
 
 from types import SimpleNamespace

@@ -1,3 +1,9 @@
+# 작성일: 2026-06-04
+# 작성자: 박진
+# 변경이력:
+#   2026-06-04 박진 — 통합 이슈 기반 mixer·briefing 플로우 도입 및 브리핑 백필 지원 추가
+#   2026-06-14 최종민 — JSON 헬퍼 단일 출처화 리팩터링 반영
+#   2026-06-17 심유정 — 사용자 전략 액션 projection 지원 추가 및 타입 보정
 """Canonical analysis units for downstream data-usage agents.
 
 Mixer and Briefing should reason over Integration/Analysis/Implication outputs,

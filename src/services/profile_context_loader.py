@@ -1,3 +1,9 @@
+# 작성일: 2026-05-26
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-26 박지원 — PeerProfile Agent 최초 구현 및 수정
+#   2026-06-02 심유정 — 전략 시사점 에이전트 구현, 사용자 전략 오버레이 추가 및 안정화
+#   2026-06-16 최종민 — 백필 시 snapshot 시점-민감 필드 strip(룩어헤드 누수 차단)
 """ProfileContextLoader — cluster-time profile context enrichment.
 
 Tier A (`peer_companies.profile_snapshot` JSONB, 분기 1회 CronJob) 가 build 한 정적

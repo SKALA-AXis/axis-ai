@@ -1,3 +1,7 @@
+# 작성일: 2026-06-14
+# 작성자: 안가은
+# 변경이력:
+#   2026-06-14 안가은 — 브리핑 생성 문구·마침표 개선 작업의 일부로 작성
 """Generate and save daily/weekly/monthly briefing reports for one anchor date.
 
 Usage:
