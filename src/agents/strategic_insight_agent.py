@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Sequence
@@ -26,6 +25,45 @@ from sqlalchemy import text
 
 from src.agents.implication_agent import ImplicationAgent
 from src.agents.strategic_analyzer import StrategicAnalyzer
+from src.agents.strategic_insight.constants import (  # noqa: F401
+    _DOMAIN_ALIASES,
+    _EVIDENCE_LABELS,
+    _FRONTEND_READY_CLAIM_STRENGTHS,
+    _FRONTEND_READY_CLAIM_TYPES,
+    _FRONTEND_READY_DISPLAY_SOURCES,
+    _FRONTEND_READY_EVIDENCE_MODES,
+    _FRONTEND_READY_GENERIC_ROLE_TERMS,
+    _FRONTEND_READY_SOURCES,
+    _FRONTEND_READY_STRONG_CLAIM_TYPES,
+    _IMPACT_LEVELS,
+    _INTERNAL_CHECKPOINT_GROUPS,
+    _NUMERIC_TOKEN_PATTERN,
+    _RELATIONSHIP_ACTIVITY_TYPES,
+    _RELATIONSHIP_PATTERN,
+    _RISK_OR_OPPORTUNITY,
+    _SKAX_ACTION_VERB_GROUPS,
+    _SUPPLIER_CAPABILITY_PATTERN,
+    _UNCERTAINTY_PATTERN,
+    _UNSUPPORTED_CLAIM_PATTERNS,
+    OVERCLAIM_PATTERNS,
+)
+from src.agents.strategic_insight.models_config import (  # noqa: F401
+    _DEFAULT_FRONTEND_READY_MODEL,
+    _DEFAULT_LLM_MODEL,
+    _FRONTEND_READY_MODEL,
+    _FRONTEND_READY_REPAIR_MODEL,
+    _LLM_MAX_COMPLETION_TOKENS,
+    _LLM_MODEL,
+    _LLM_REQUEST_TIMEOUT_SECONDS,
+    _LLM_TEMPERATURE,
+    _PROMPT_VERSION,
+    _SELF_REVIEW_DISABLED,
+    _SELF_REVIEW_DISABLED_VALUES,
+    _SELF_REVIEW_MODEL,
+    _SELF_REVIEW_MODEL_RAW,
+    _llm_model_config_diagnostics,
+    _llm_model_for_phase,
+)
 from src.agents.strategic_insight.profile_linkage import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
     _SUPPLY_CONTRACT_PATTERN,
     GENERIC_BUSINESS_CATEGORIES,
@@ -120,6 +158,24 @@ from src.agents.strategic_insight.prompts import (  # noqa: F401  — 분리 모
     SYSTEM_PROMPT,
     USER_PROMPT_TEMPLATE,
 )
+from src.agents.strategic_insight.text_predicates import (  # noqa: F401
+    _anchor_norm,
+    _anchor_tokens,
+    _clamp_float,
+    _dedupe_keep_order,
+    _ensure_sentence,
+    _has_korean_final_consonant,
+    _matches_any_pattern,
+    _natural_join,
+    _numeric_token_key,
+    _optional_str,
+    _sentence_count,
+    _short_fact_clause,
+    _split_sentences,
+    _strip_article_style_lead,
+    _text_has_anchor_term,
+    _with_korean_object_particle,
+)
 from src.agents.strategic_insight.utils import (  # noqa: F401  — 분리 모듈 re-export (호환 유지)
     _choice,
     _has_final_consonant,
@@ -141,106 +197,9 @@ from src.services.profile_context_loader import ProfileContextLoader
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_LLM_MODEL = "gpt-4o"
-_DEFAULT_FRONTEND_READY_MODEL = "gpt-5.5"
-_LLM_MODEL = os.getenv("STRATEGIC_INSIGHT_MODEL", _DEFAULT_LLM_MODEL)
-_FRONTEND_READY_MODEL = os.getenv(
-    "FRONTEND_READY_MODEL",
-    _DEFAULT_FRONTEND_READY_MODEL,
-)
-_FRONTEND_READY_REPAIR_MODEL = os.getenv(
-    "FRONTEND_READY_REPAIR_MODEL",
-    _FRONTEND_READY_MODEL,
-)
-_SELF_REVIEW_MODEL_RAW = os.getenv("SELF_REVIEW_MODEL", _LLM_MODEL)
-_SELF_REVIEW_DISABLED_VALUES = {"", "0", "false", "off", "none", "disabled"}
-_SELF_REVIEW_DISABLED = (
-    str(_SELF_REVIEW_MODEL_RAW or "").strip().casefold() in _SELF_REVIEW_DISABLED_VALUES
-)
-_SELF_REVIEW_MODEL = "" if _SELF_REVIEW_DISABLED else _SELF_REVIEW_MODEL_RAW
-_PROMPT_VERSION = "strategic-insight-v1.61-llm-structured-reasoning"
-_LLM_TEMPERATURE = 0.0
-_LLM_MAX_COMPLETION_TOKENS = 5000
-_LLM_REQUEST_TIMEOUT_SECONDS = float(os.getenv("STRATEGIC_INSIGHT_LLM_TIMEOUT_SECONDS", "120"))
 
-_IMPACT_LEVELS = {"high", "medium", "low"}
-_RISK_OR_OPPORTUNITY = {"risk", "opportunity", "neutral"}
-_EVIDENCE_LABELS = {"sufficient", "moderate", "insufficient"}
 # 근거 없이 쓰면 사실 왜곡이 큰 고위험 주장만 최소 차단한다.
 # 표현 품질은 아래 구조 게이트와 프롬프트가 담당하고, 문구 blacklist 를 늘리지 않는다.
-_UNSUPPORTED_CLAIM_PATTERNS = (
-    r"시장\s*점유율\s*확대",
-    r"시장\s*점유율[을를\s]*(확보|높|늘)",
-    r"점유율[이을가\s]*(확대|상승|증가)",
-    r"시장\s*선점",
-    r"선점",
-    r"기술적\s*우위",
-    r"기술적\s*역량[을를\s]*입증",
-    r"역량[을를\s]*입증",
-    r"성과[가를은\s]*입증",
-    r"검증된\s*역량",
-    r"격차[가를은\s]*(확대|벌어|커|발생|나타)",
-    r"리더십\s*확보",
-    r"매출\s*기여",
-    r"시장\s*점유율\s*감소",
-    r"점유율[이을가\s]*(감소|하락|축소)",
-)
-_RELATIONSHIP_PATTERN = re.compile(
-    r"협업|협력|파트너십|제휴|MOU|얼라이언스|컨소시엄|"
-    r"공동\s*(추진|개발|연구|사업|운영|구축|참여|투자|검증)",
-    re.IGNORECASE,
-)
-_RELATIONSHIP_ACTIVITY_TYPES = {"partnership", "collaboration", "alliance", "joint", "mou"}
-_UNCERTAINTY_PATTERN = re.compile(r"검토|가능성|구상|계획|예정|모색|논의|추진\s*(중|예정|계획)")
-_SUPPLIER_CAPABILITY_PATTERN = re.compile(
-    r"(공급|납품)\s*역량|공급\s*계약.{0,30}(제공|수행)\s*역량"
-)
-_NUMERIC_TOKEN_PATTERN = re.compile(
-    r"\d+(?:[.,]\d+)*\s*(?:%|원|조|억|만|천만|백만|달러|usd|krw)?",
-    re.IGNORECASE,
-)
-
-_INTERNAL_CHECKPOINT_GROUPS: dict[str, str] = {}
-_SKAX_ACTION_VERB_GROUPS: dict[str, str] = {}
-_DOMAIN_ALIASES: dict[str, set[str]] = {}
-OVERCLAIM_PATTERNS: dict[str, tuple[str, ...]] = {
-    "counterparty": (
-        r"신규\s*사업",
-        r"사업\s*확장",
-        r"영역\s*확장",
-        r"입지\s*강화",
-        r"역량\s*강화",
-    ),
-    "new_signal": (
-        r"성과[가를은\s]*입증",
-        r"역량[을를\s]*(강화|입증|검증)",
-        r"검증된\s*역량",
-        r"경쟁력[을를\s]*강화",
-        r"입지\s*강화",
-        r"사업\s*확장",
-    ),
-}
-
-
-def _llm_model_for_phase(phase: str) -> str:
-    phase_name = str(phase or "").strip()
-    if phase_name.startswith(("frontend_ready_repair", "quality_repair")):
-        return _FRONTEND_READY_REPAIR_MODEL
-    if phase_name.startswith("frontend_ready_generate"):
-        return _FRONTEND_READY_MODEL
-    if phase_name == "self_review" and _SELF_REVIEW_MODEL:
-        return _SELF_REVIEW_MODEL
-    return _LLM_MODEL
-
-
-def _llm_model_config_diagnostics() -> dict[str, Any]:
-    return {
-        "strategic_insight_model": _LLM_MODEL,
-        "frontend_ready_model": _FRONTEND_READY_MODEL,
-        "frontend_ready_repair_model": _FRONTEND_READY_REPAIR_MODEL,
-        "self_review_model": _SELF_REVIEW_MODEL or None,
-        "self_review_disabled": _SELF_REVIEW_DISABLED,
-    }
 
 
 class StrategicInsightAgent:
@@ -2965,46 +2924,6 @@ def _normalize_implication_block(
     return implication_out
 
 
-_FRONTEND_READY_SOURCES = {
-    "llm_direct",
-    "repair_direct",
-    "frontend_repair_direct",
-    "schema_repair_direct",
-    "report_copy_repair_direct",
-    "counterparty_repair_direct",
-    "action_repair_direct",
-    "derived_from_implication",
-    "composer_editorial",
-    "legacy_fallback",
-}
-_FRONTEND_READY_DISPLAY_SOURCES = {"llm_direct", "frontend_repair_direct"}
-_FRONTEND_READY_CLAIM_TYPES = {
-    "event_based_signal",
-    "profile_based_signal",
-    "financial_structure_signal",
-    "governance_exposure_signal",
-    "self_or_market_signal",
-    "market_adoption_signal",
-    "market_leadership",
-    "capability_improvement",
-    "performance_improvement",
-    "operational_shift",
-    "workflow_execution_signal",
-    "internal_strategy_check",
-}
-_FRONTEND_READY_CLAIM_STRENGTHS = {"strong", "moderate", "cautious"}
-_FRONTEND_READY_EVIDENCE_MODES = {
-    "profile_based",
-    "event_based",
-    "generic_monitoring",
-}
-_FRONTEND_READY_STRONG_CLAIM_TYPES = {
-    "market_leadership",
-    "capability_improvement",
-    "performance_improvement",
-}
-
-
 def _normalize_frontend_ready(value: Any, *, default_source: str = "llm_direct") -> dict[str, Any]:
     data = _json_dict(value)
     source = _normalize_frontend_ready_source(data.get("source"), default_source)
@@ -4952,43 +4871,6 @@ def _industry_evidence_reading_phrase(criteria: Sequence[str]) -> str:
     return _natural_join(_dedupe_keep_order(parts)[:2])
 
 
-def _natural_join(values: Sequence[str]) -> str:
-    items = [str(item or "").strip() for item in values if str(item or "").strip()]
-    if len(items) <= 1:
-        return items[0] if items else ""
-    return " 및 ".join(items)
-
-
-def _short_fact_clause(value: Any, *, max_chars: int = 92) -> str:
-    text = _strip_article_style_lead(str(value or ""))
-    text = re.sub(r"\s+", " ", text).strip()
-    if not text:
-        return ""
-    text = re.sub(r"(?:다|요)\.\s*$", "", text)
-    if len(text) <= max_chars:
-        return text + "는 점에서,"
-    shortened = text[:max_chars].rstrip(" ,.;:·ㆍ")
-    return shortened + " 등이 제시되며,"
-
-
-def _strip_article_style_lead(value: Any) -> str:
-    text = re.sub(r"\s+", " ", str(value or "")).strip()
-    if not text:
-        return ""
-    text = re.sub(
-        r"^(?:\d{1,2}일\s*)?(?:업계|회사|관계자|외신|언론|공시|발표|보도)에\s*따르면\s*,?\s*",
-        "",
-        text,
-    )
-    text = re.sub(
-        r"^(?:[가-힣A-Za-z0-9&._ -]+은|[가-힣A-Za-z0-9&._ -]+는)\s*"
-        r"(?:\d{1,2}일\s*)?(?:밝혔다|전했다|설명했다|발표했다)[,.]?\s*",
-        "",
-        text,
-    )
-    return text.strip()
-
-
 def _polish_frontend_ready_screen_copy(
     result: dict[str, Any],
     *,
@@ -5155,23 +5037,6 @@ def _industry_anchor_market_reading(
     return ""
 
 
-def _with_korean_object_particle(phrase: Any) -> str:
-    value = str(phrase or "").strip()
-    if not value:
-        return ""
-    return f"{value}{'을' if _has_korean_final_consonant(value) else '를'}"
-
-
-def _has_korean_final_consonant(value: str) -> bool:
-    for char in reversed(str(value or "").strip()):
-        code = ord(char)
-        if 0xAC00 <= code <= 0xD7A3:
-            return (code - 0xAC00) % 28 != 0
-        if char.isalnum():
-            return True
-    return False
-
-
 def _industry_action_result_phrase(criteria: Sequence[str]) -> str:
     normalized = {_anchor_norm(item) for item in criteria}
     result: list[str] = []
@@ -5219,19 +5084,6 @@ def _anchor_phrase(anchors: Sequence[str], *, max_items: int = 3) -> str:
     if len(cleaned) == 1:
         return cleaned[0]
     return "·".join(cleaned[:max_items])
-
-
-def _dedupe_keep_order(values: Sequence[Any]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        text = re.sub(r"\s+", " ", str(value or "")).strip()
-        norm = _anchor_norm(text)
-        if not text or not norm or norm in seen:
-            continue
-        result.append(text)
-        seen.add(norm)
-    return result
 
 
 def _integrated_issue_for_prompt(integrated_issue: dict[str, Any]) -> dict[str, Any]:
@@ -7226,45 +7078,6 @@ def _has_action_execution_perspective(text: str) -> bool:
     return bool(re.search(perspective_groups, value, flags=re.IGNORECASE))
 
 
-_FRONTEND_READY_GENERIC_ROLE_TERMS = {
-    "이번",
-    "해당",
-    "현재",
-    "사건",
-    "신호",
-    "시장",
-    "피어",
-    "피어사",
-    "기업",
-    "사업",
-    "서비스",
-    "기반",
-    "관련",
-    "흐름",
-    "관점",
-    "의미",
-    "결론",
-    "근거",
-    "설명",
-    "필요",
-    "해야",
-    "합니다",
-    "한다",
-    "보여",
-    "가능",
-    "점검",
-    "검토",
-    "확인",
-    "모니터링",
-    "강화",
-    "경쟁력",
-    "신호입니다",
-    "sk",
-    "ax",
-    "skax",
-}
-
-
 def _frontend_ready_role_separation_violation(frontend_ready: dict[str, Any]) -> str:
     key_block = frontend_ready.get("key_implication") or {}
     action_block = frontend_ready.get("suggested_action") or {}
@@ -8028,41 +7841,6 @@ def _frontend_ready_unsupported_effect_violation(
     return ""
 
 
-def _text_has_anchor_term(text: str, terms: Sequence[str]) -> bool:
-    text_norm = _anchor_norm(text)
-    if not text_norm:
-        return False
-    for term in terms:
-        term_norm = _anchor_norm(term)
-        if len(term_norm) < 2:
-            continue
-        if term_norm in text_norm:
-            return True
-        tokens = _anchor_tokens(term)
-        if not tokens:
-            continue
-        matched = [token for token in tokens if _anchor_norm(token) in text_norm]
-        if len(tokens) == 1 and matched:
-            return True
-        if any(len(_anchor_norm(token)) >= 4 for token in matched):
-            return True
-        if len(matched) >= 2:
-            return True
-    return False
-
-
-def _anchor_norm(value: Any) -> str:
-    return re.sub(r"\s+", "", str(value or "").casefold())
-
-
-def _anchor_tokens(value: Any) -> list[str]:
-    return [
-        token
-        for token in re.findall(r"[0-9A-Za-z가-힣]+", str(value or ""))
-        if len(_anchor_norm(token)) >= 2
-    ]
-
-
 def _evidence_sentence_has_dynamic_grounding(
     text: str,
     *,
@@ -8185,10 +7963,6 @@ def _business_novelty_overclaim_violation(
                     "단정했습니다. 관찰 신호/후속 확인 수준으로 낮춰야 합니다."
                 )
     return ""
-
-
-def _matches_any_pattern(text: str, patterns: Sequence[str]) -> bool:
-    return any(re.search(pattern, text) for pattern in patterns)
 
 
 def _action_artifact_plan_violation(
@@ -9381,38 +9155,6 @@ def _grounded_numeric_keys_for_issue(integrated_issue: dict[str, Any]) -> set[st
         for match in _NUMERIC_TOKEN_PATTERN.finditer(grounded)
         if (key := _numeric_token_key(match.group(0)))
     }
-
-
-def _numeric_token_key(token: str) -> str:
-    text = re.sub(r"\s+", "", str(token or "").strip().lower())
-    if not text:
-        return ""
-    unit = ""
-    for candidate in ("억원", "억", "조원", "조", "만원", "만", "천만", "백만", "%", "원"):
-        if text.endswith(candidate):
-            unit = candidate
-            text = text[: -len(candidate)]
-            break
-    if unit == "억원":
-        unit = "억"
-    elif unit == "조원":
-        unit = "조"
-    number_text = text.replace(",", "")
-    try:
-        number = float(number_text)
-    except ValueError:
-        normalized_number = number_text
-    else:
-        normalized_number = str(int(number)) if number.is_integer() else f"{number:.6f}".rstrip("0")
-    return f"{normalized_number}{unit}"
-
-
-def _sentence_count(text: str) -> int:
-    return len(_split_sentences(text))
-
-
-def _split_sentences(text: str) -> list[str]:
-    return [item for item in re.split(r"[.!?。]\s*", str(text or "").strip()) if item.strip()]
 
 
 def _mark_quality_gate_failed(
@@ -10945,13 +10687,6 @@ def _primary_issue_fact(integrated_issue: dict[str, Any]) -> str:
     return "현재 사건에서 확인된 사실이 있습니다."
 
 
-def _ensure_sentence(text: str) -> str:
-    sentence = re.sub(r"\s+", " ", str(text or "").strip())
-    if not sentence:
-        return ""
-    return sentence if sentence.endswith((".", "다.", "요.", "임.")) else f"{sentence}."
-
-
 def _hard_quality_violation_for_text(
     text: str,
     *,
@@ -11833,21 +11568,6 @@ def _evidence_label(value: Any, confidence: float) -> str:
     if confidence < 0.8:
         return "moderate"
     return "sufficient"
-
-
-def _clamp_float(value: Any, default: float) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return default
-    return round(min(max(number, 0.0), 1.0), 3)
-
-
-def _optional_str(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
 
 
 __all__ = ["StrategicInsightAgent"]
