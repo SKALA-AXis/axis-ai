@@ -1,3 +1,8 @@
+# 작성일: 2026-06-02
+# 작성자: 심유정
+# 변경이력:
+#   2026-06-02 심유정 — StrategicInsightAgent 구현과 함께 단위 테스트 작성, 이후 카드뉴스 인사이트 grounding 개선 반영
+#   2026-06-09 박지원 — 기사 근거 주입·전략 인사이트 출력 섹션 제약 및 카드뉴스 표시 데이터 sync 반영
 """StrategicInsightAgent unit tests with mock LLM response."""
 
 from __future__ import annotations

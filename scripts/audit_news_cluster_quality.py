@@ -1,3 +1,7 @@
+# 작성일: 2026-06-09
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-09 박지원 — 뉴스 클러스터링 품질 점검 스크립트 추가 (전처리/클러스터링 품질 개선 작업)
 """Audit recent news clustering quality without mutating data.
 
 This script inspects recent processed news clusters and reports risk signals:

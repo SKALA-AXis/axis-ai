@@ -1,3 +1,7 @@
+# 작성일: 2026-05-08
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-08 박지원 — 크롤러 전처리 구현, 이후 article store 및 peer profile snapshot 파이프라인 반영
 """PDF 텍스트/블록/표 후보 메타데이터 추출 유틸."""
 
 from __future__ import annotations

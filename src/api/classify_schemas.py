@@ -1,3 +1,7 @@
+# 작성일: 2026-06-15
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-15 최종민 — 단일 기사 텍스트 분류 엔드포인트의 request/response 스키마 추가 (운영 분류기 재사용)
 """Classify endpoint 의 request / response Pydantic 모델.
 
 ``POST /classify`` — 단일 기사 텍스트를 운영 수집 파이프라인과 동일한 로직

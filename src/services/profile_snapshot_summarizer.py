@@ -1,3 +1,9 @@
+# 작성일: 2026-05-29
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-29 박지원 — peer 프로필 스냅샷 요약 파이프라인 추가 및 mypy 대응
+#   2026-06-15 최종민 — 누락된 LLM 호출에 Langfuse tracing_config 부착
+#   2026-06-16 심유정 — 사용자 전략 오버레이 지원 및 토큰 한도 수정
 """ProfileSnapshotSummarizer — LLM-ready profile snapshot synthesis."""
 
 from __future__ import annotations

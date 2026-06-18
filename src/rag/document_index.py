@@ -1,3 +1,8 @@
+# 작성일: 2026-05-26
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-26 박지원 — DART 문서 청크 인덱스 초기 작성 및 링크 체크·포맷 보완
+#   2026-06-08 박진 — 챗봇 에이전트·어시스턴트 RAG 연동 추가
 """DART document chunks for agent retrieval in Qdrant."""
 
 from __future__ import annotations

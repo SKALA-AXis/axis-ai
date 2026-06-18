@@ -1,3 +1,9 @@
+# 작성일: 2026-04-22
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-22 최종민 — Track A/B 크롤러 v4 구축, Evidence Chain·Peer 4사 확장 및 Supabase·Qdrant Cloud 전환
+#   2026-04-30 박지원 — 크롤러 v1 이후 스케줄러·전처리·백필·카드뉴스 클러스터링·KST 날짜 처리 등 다수 수정
+#   2026-06-11 안가은 — peer 키워드 및 SWOT preview 파이프라인 추가
 """APScheduler 기반 소스별 크롤 스케줄러."""
 
 from __future__ import annotations

@@ -1,3 +1,8 @@
+# 작성일: 2026-04-28
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-28 최종민 — run 스크립트 --env local|cloud 플래그용 config 패키지 초기화
+#   2026-05-06 박지원 — 크롤러 구현·전처리 agent 수정에 따른 config export 추가 및 갱신
 from src.config.companies import (
     COMPANIES,
     COMPANY_ALIASES,

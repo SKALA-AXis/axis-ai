@@ -1,3 +1,7 @@
+# 작성일: 2026-06-14
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-14 최종민 — LLM 클라이언트 팩토리 신설 후 timeout/retries/옵셔널 reasoning 확장 및 호출처 이행
 """ChatOpenAI 생성 단일 출처.
 
 각 호출처가 제각각 반복하던 구성(temperature·max_completion_tokens·json_object

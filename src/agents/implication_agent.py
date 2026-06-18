@@ -1,3 +1,8 @@
+# 작성일: 2026-04-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-21 최종민 — 시사점 Agent 베이스라인, 분석 파이프라인·Evidence Chain·ChatOpenAI 지연 임포트·LLM 팩토리·JSON 헬퍼 정리
+#   2026-05-28 박지원 — Profile Agent 수정 및 분석 러너 에이전트 리네임
 """SK AX 관점 시사점 Agent — v4.0 LLM 기반.
 
 W1-1: deprecated 코드 부활 없이 새 입력 계약 + 출력 schema.

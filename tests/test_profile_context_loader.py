@@ -1,3 +1,7 @@
+# 작성일: 2026-06-16
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-16 최종민 — 백필 시 snapshot 시점-민감 필드 strip(Tier-A 룩어헤드) 동작 테스트 추가
 """profile_context_loader 단위 테스트 — 백필 point-in-time snapshot strip.
 
 DB/LLM 미사용 (순수 헬퍼). load() 의 as_of 클램프(쿼리)는 live-DB smoke 로 별도 검증.

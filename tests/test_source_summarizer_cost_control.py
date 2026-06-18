@@ -1,3 +1,7 @@
+# 작성일: 2026-06-02
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-02 박지원 — 분석 파이프라인 에이전트 재편과 함께 요약기 비용 제어 테스트 작성, 이후 카드뉴스 요약 품질·근거 보존 개선 반영
 from __future__ import annotations
 
 from src.analysis import summarizer

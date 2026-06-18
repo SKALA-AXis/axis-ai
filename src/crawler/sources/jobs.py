@@ -1,3 +1,8 @@
+# 작성일: 2026-04-22
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-22 최종민 — Track A/B 크롤러 v4 구축 및 PostgreSQL 저장 연동, v3 Evidence Chain·Peer 4사 확장 및 mypy 정리, crawler 4종 ruff format/lint 정리
+#   2026-04-30 박지원 — 크롤러 v1 이후 파이프라인·전처리 agent 구현 및 백필 크롤러 보완
 """채용공고 크롤러"""
 
 import csv

@@ -1,3 +1,7 @@
+# 작성일: 2026-06-01
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-01 박지원 — peer 프로필 스냅샷 파이프라인 추가 시 함께 작성
 """PDF 원문을 다시 받아 OCR 포함 content/pdf_page_blocks를 갱신한다.
 
 기존 reprocess_*_analysis.py는 DB에 저장된 raw_articles.content를 재파싱한다.

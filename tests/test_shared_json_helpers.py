@@ -1,3 +1,8 @@
+# 작성일: 2026-06-14
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-14 최종민 — JSON 헬퍼 단일 출처화(_json_dict·_json_dumps 통합) 동작 잠금 테스트 작성(2-A6 R2)
+#   2026-06-14 심유정 — 공용 JSON 헬퍼 테스트 포맷 정리
 """공용 JSON 헬퍼 동작 잠금 (refactoring-architecture R2).
 
 통합된 json_dict/json_dumps 가 기존 _json_dict/_json_dumps 와 동일 동작인지 검증.

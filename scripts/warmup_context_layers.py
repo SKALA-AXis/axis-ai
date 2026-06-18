@@ -1,3 +1,8 @@
+# 작성일: 2026-06-09
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-09 최종민 — 통합 컨텍스트 레이어(ContextPackAssembler·주간 다이제스트) 워밍업/백필 스크립트 작성
+#   2026-06-09 박지원 — develop 머지 및 capability 워밍업 제거·기술 키워드 그룹 추가
 """Warm up unified context layers (today insight, weekly digest, optional cards).
 
 Usage:

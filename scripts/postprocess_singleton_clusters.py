@@ -1,3 +1,7 @@
+# 작성일: 2026-06-09
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-09 박지원 — 싱글톤/소규모 뉴스 클러스터 후처리 스크립트 작성 및 다수 클러스터링 품질 개선
 """Conservative post-processing for singleton/small news clusters.
 
 The script merges singleton/small clusters into nearby larger clusters, and can
@@ -961,10 +965,7 @@ def _cluster_relation(
 
 
 def _is_verified_event_key(event_key: str) -> bool:
-    return (
-        event_key.startswith("title_event:")
-        or event_key.startswith("title_anchor:")
-    )
+    return event_key.startswith("title_event:") or event_key.startswith("title_anchor:")
 
 
 def _strong_anchor_overlap_relation(

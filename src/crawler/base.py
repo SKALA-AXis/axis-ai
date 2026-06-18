@@ -1,3 +1,8 @@
+# 작성일: 2026-04-22
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-22 최종민 — Track A/B 크롤러 v4 구축 및 PostgreSQL 저장 연동, Evidence Chain + Peer 4사 확장
+#   2026-04-30 박지원 — 크롤러 구현/전처리 agent 수정, 글로벌 peer사 및 SK AX 크롤러 추가, 타입체크 수정, 소스 메타데이터 분리 저장, catch 크롤러 추가
 """크롤러 공통 기반 — RawArticle, DailyLimitGuard, RetryPolicy."""
 
 import hashlib

@@ -1,3 +1,7 @@
+# 작성일: 2026-06-09
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-09 최종민 — ContextPackAssembler·주간 다이제스트 agent·백필 스크립트 도입 시 작성, 이후 Qdrant 선례 검색 어댑터를 컨텍스트 빌더에 주입
 """Historical context assembly for BriefingGenerationAgent."""
 
 from __future__ import annotations

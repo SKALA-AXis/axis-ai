@@ -1,3 +1,8 @@
+# 작성일: 2026-06-12
+# 작성자: 안가은
+# 변경이력:
+#   2026-06-12 안가은 — 대시보드 키워드 트렌드 파이프라인 갱신
+#   2026-06-17 박지원 — AI 에이전트 업데이트 동기화
 from src.services.peer_overview_keywords import normalize_result, validate_result
 
 

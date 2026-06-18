@@ -1,3 +1,7 @@
+# 작성일: 2026-05-11
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-11 박지원 — 백필 크롤러 및 DART 파서 추가, 소스 메타데이터/크롤 결과 링크 분리 저장, json 및 스케줄러 수정
 """crawl_runs / crawl_cursors 저장소."""
 
 from __future__ import annotations

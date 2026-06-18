@@ -1,3 +1,9 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인(컨텍스트 엔지니어링·LLM 추론·평가) 도입, 이후 CI/ledger/mypy 정비
+#   2026-05-22 심유정 — 에이전트 아키텍처·mixer 인사이트 정제, strategic insight 에이전트 및 카드 뉴스 인사이트 grounding 추가
+#   2026-05-28 박지원 — Profile 에이전트 수정, 분석 파이프라인 에이전트 재구성 및 legacy shim 제거
 """Analysis pipeline internal DTOs.
 
 이 모델들은 DB schema나 API schema가 아니다.

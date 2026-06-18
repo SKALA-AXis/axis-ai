@@ -1,3 +1,7 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인 작업의 일부로 옛 모듈명 호환 shim 추가
 """Backward-compat shim — 옛 모듈명 ``src.pipeline.supervisor_graph``.
 
 실제 구현은 ``src.pipeline.analysis_flow_graph`` 로 이동 (외부 리뷰 2026-05-21

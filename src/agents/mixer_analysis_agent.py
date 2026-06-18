@@ -1,3 +1,11 @@
+# 작성일: 2026-05-15
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-15 최종민 — 믹서 분석 프로토타입 도입, v2 프롬프트·6축 레이더·SSE 스트리밍, 공용 LLM 팩토리·JSON 헬퍼 이행
+#   2026-05-22 박지원 — 믹서 분석 mypy 오류 수정
+#   2026-05-22 심유정 — 에이전트 구조·믹서 인사이트 개선, 사용자 전략 액션 투영 및 레이더 LLM 해석 보강
+#   2026-06-04 박진 — 통합 이슈 기반 믹서·브리핑 플로우 추가, PDF 내보내기·믹서 자격증명 수정
+#   2026-06-12 안가은 — 믹서 결과 문구·문장 정규화 및 키워드 트렌드 파이프라인 갱신
 """MixerAnalysisAgent — linked integrated/analysis/implication result mixer.
 
 design: ``axis-ai/design/30-analysis/mixer-analysis.md``.

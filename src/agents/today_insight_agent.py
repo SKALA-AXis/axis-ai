@@ -1,3 +1,9 @@
+# 작성일: 2026-06-05
+# 작성자: 박진
+# 변경이력:
+#   2026-06-05 박진 — 투데이 인사이트 에이전트 및 60일 카드뉴스 입력 신규 추가, mixer chat 플로우 개선
+#   2026-06-09 최종민 — dual-lane 비교·gpt-5.5 프롬프트 도입, 공용 LLM 팩토리/스키마 이행, 홈 3상태 지원·출처 링크 오매칭 수정
+#   2026-06-14 안가은 — 키워드 트렌드 파이프라인 갱신, 신호를 출처일에 고정
 """TodayInsightAgent — home dashboard executive daily signal synthesis.
 
 The agent compares today's integrated issues against accumulated JSON context

@@ -1,3 +1,7 @@
+# 작성일: 2026-05-18
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-18 박지원 — DART/IR 파서 신설 및 파서·에이전트·스케줄러 수정, IR/DART 시그널 회귀 수정, ruff 린트 정리
 """DART parser_result를 분석용 metric/signal 레코드로 변환한다."""
 
 from __future__ import annotations

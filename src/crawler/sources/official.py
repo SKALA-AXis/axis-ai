@@ -1,3 +1,8 @@
+# 작성일: 2026-04-22
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-22 최종민 — Track A/B 크롤러 v4 구축·PostgreSQL 저장 연동, Peer 4사 확장 및 mypy 타입 오류 수정
+#   2026-04-30 박지원 — 크롤러 v1 반영
 """공식 뉴스룸 크롤러 (Tier 1) — 4 peer.
 
 - samsung_sds:      Playwright HTML 파싱 (URL 슬러그 패턴)

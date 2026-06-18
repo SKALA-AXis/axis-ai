@@ -1,3 +1,8 @@
+# 작성일: 2026-06-15
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-15 최종민 — 단일 기사 텍스트 분류 엔드포인트 추가, 합성 article 에 source_name 보정
+#   2026-06-18 박지원 — 전처리 LLM 폴백 제거
 """classify_article_text — 단일 기사 텍스트 분류 (운영 로직 재사용) 단위 테스트."""
 
 from __future__ import annotations

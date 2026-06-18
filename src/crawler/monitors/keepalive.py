@@ -1,3 +1,7 @@
+# 작성일: 2026-04-28
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-28 최종민 — Supabase·Qdrant Cloud 전환 시 keepalive ping 추가
 """Supabase·Qdrant Cloud 자동 일시정지 방지용 keepalive ping.
 
 무료 티어는 일정 시간 무사용 시 인스턴스를 일시정지한다.

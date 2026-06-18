@@ -1,3 +1,9 @@
+# 작성일: 2026-05-19
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-19 박지원 — 파서·에이전트 수정으로 시작, 카드 뉴스 품질·근거(provenance)·요약 통합 다수 개선
+#   2026-06-05 심유정 — strategic insight grounding 및 카드 dry run 개선
+#   2026-06-11 최종민 — ChatOpenAI lazy-import 적용, LLM gen-search 이행 및 summarizer 예외 명문화
 """소스 사실 요약 컴포넌트.
 
 클러스터에 묶인 기사들을 바탕으로 분석 가능한 사실 요약을 생성한다.

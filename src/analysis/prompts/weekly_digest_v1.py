@@ -1,3 +1,7 @@
+# 작성일: 2026-06-09
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-09 최종민 — ContextPackAssembler·주간 다이제스트 에이전트·백필 스크립트와 함께 weekly digest 프롬프트 작성
 """WeeklyDigestAgent prompt — K2 weekly-v1.0."""
 
 from __future__ import annotations

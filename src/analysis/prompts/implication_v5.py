@@ -1,3 +1,8 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인 도입과 함께 implication v5 프롬프트 작성
+#   2026-05-28 박지원 — Profile 에이전트 수정 반영
 """ImplicationAgent v5.0 — v4.0 + AnalysisContext block (W4-5).
 
 W4 의 AnalysisContext 가 제공되면 prompt 가 자연스럽게 종방향 (시계열) /

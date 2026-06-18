@@ -1,3 +1,7 @@
+# 작성일: 2026-06-17
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-17 박지원 — 글로벌 동향 표시 문구 정리 스크립트 추가 (글로벌 기업 동향 기능 작업, 포매팅 적용)
 """Clean display copy in existing global_industry_trends rows.
 
 This is a low-cost repair for rows generated before display-safe fallbacks were

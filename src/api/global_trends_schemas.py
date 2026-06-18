@@ -1,3 +1,8 @@
+# 작성일: 2026-05-15
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-15 최종민 — GlobalTrends prototype 스키마 신설 및 output validation helper 추가, 이후 5-phase agent·peer alignment·Layer B 파이프라인 반영
+#   2026-06-12 박지원 — 글로벌 트렌드 종합 요약 및 글로벌 기업 동향 필드 추가
 """GlobalTrends endpoint 의 request / response Pydantic 모델 (정본).
 
 design: ``axis-ai/design/30-analysis/global-trends.md`` §4 입력 / §5 출력.
