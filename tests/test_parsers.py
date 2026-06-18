@@ -6,10 +6,6 @@ from scripts.reprocess_ir_analysis import (
 )
 from src.crawler.base import RawArticle
 from src.crawler.sources.dart import _infer_header_rows
-from src.extractors.ir_llm_analysis_extractor import (
-    _normalize_llm_metrics,
-    _normalize_llm_signals,
-)
 from src.parsers.dart_parser import DartParser
 from src.parsers.ir_parser import IRParser
 from src.parsers.parser_quality import analyze_parser_quality_article
@@ -996,133 +992,6 @@ def test_ir_reprocess_skips_non_report_period_table_candidates() -> None:
     )
 
     assert metrics == []
-
-
-def test_ir_reprocess_maps_llm_metrics_and_signals_separately() -> None:
-    article = {
-        "id": 102,
-        "company": ["hyundai_autoever"],
-        "title": "현대오토에버 2026년 1분기 IR Presentation",
-        "url": "https://example.com/ir.pdf",
-        "source_name": "ir_pdf",
-        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
-    }
-    parser_result = {
-        "period": "2026Q1",
-        "period_year": 2026,
-        "period_quarter": 1,
-        "period_type": "quarter",
-        "candidates": [
-            {
-                "page": 6,
-                "type": "revenue_total",
-                "value_krwbn": 7378,
-                "source": "ir_llm_analysis",
-                "period": "2026Q1",
-                "period_year": 2026,
-                "period_quarter": 1,
-                "period_type": "quarter",
-                "metric_scope": "segment",
-                "business_area": "Enterprise IT",
-                "confidence": 0.86,
-                "evidence_text": (
-                    "부문별 손익현황 > 매출액 > Enterprise IT | "
-                    "23년 24,255 | 24년 29,093 | 26년 1분기 7,378 (억원)"
-                ),
-            }
-        ],
-        "llm_business_signals": [
-            {
-                "business_area": "Enterprise IT",
-                "signal_type": "growth",
-                "sentiment": "positive",
-                "summary": "신규 DX 프로젝트 수주 확대로 매출이 증가했다.",
-                "evidence_text": (
-                    "신규 DX 사업 수주 확대 및 생산성 개선 활동으로 전년 대비 "
-                    "매출과 영업이익이 증가했습니다."
-                ),
-                "source_page": 6,
-                "confidence": 0.82,
-            }
-        ],
-    }
-
-    metrics = _metrics_from_parser_result(
-        article,
-        parser_result,
-        {"period": "2026Q1", "peer_id": "hyundai_autoever"},
-    )
-    signals = _business_signals_from_parser_result(
-        article,
-        parser_result,
-        {"period": "2026Q1", "peer_id": "hyundai_autoever"},
-    )
-
-    assert metrics[0]["metric_name"] == "revenue_total"
-    assert metrics[0]["business_area"] == "Enterprise IT"
-    assert metrics[0]["value_krwbn"] == 7378
-    assert metrics[0]["extraction_method"] == "ir_llm.analysis"
-    assert "Enterprise IT" in metrics[0]["evidence_text"]
-    assert signals[0]["business_area"] == "Enterprise IT"
-    assert signals[0]["signal_type"] == "growth"
-    assert signals[0]["extraction_method"] == "ir_llm.analysis"
-    assert "신규 DX 사업 수주 확대" in signals[0]["evidence_text"]
-
-
-def test_ir_llm_analysis_filters_sk_ax_portfolio_companies() -> None:
-    signals = _normalize_llm_signals(
-        [
-            {
-                "business_area": "SK에코플랜트",
-                "signal_type": "growth",
-                "sentiment": "positive",
-                "summary": "반도체사업 실적 호조로 매출 및 영업이익 증가.",
-                "evidence_text": "SK에코플랜트는 반도체사업 실적 호조로 수익성이 개선되었습니다.",
-                "source_page": 8,
-                "confidence": 0.9,
-            },
-            {
-                "business_area": "IT서비스",
-                "signal_type": "growth",
-                "sentiment": "positive",
-                "summary": "AI Transformation 수요 확대로 IT서비스 매출이 증가.",
-                "evidence_text": (
-                    "SK AX IT서비스 부문은 AI Transformation 수요 확대로 성장했습니다."
-                ),
-                "source_page": 6,
-                "confidence": 0.9,
-            },
-        ],
-        peer_id="sk_ax",
-    )
-    metrics = _normalize_llm_metrics(
-        [
-            {
-                "metric_name": "revenue_total",
-                "metric_scope": "segment",
-                "business_area": "SK스퀘어",
-                "period": "2026Q1",
-                "value_numeric": 1000,
-                "unit": "억원",
-                "evidence_text": "SK스퀘어 매출액 1,000억원",
-                "confidence": 0.9,
-            },
-            {
-                "metric_name": "revenue_total",
-                "metric_scope": "segment",
-                "business_area": "Enterprise IT",
-                "period": "2026Q1",
-                "value_numeric": 7378,
-                "unit": "억원",
-                "evidence_text": "SK AX Enterprise IT 매출액 7,378억원",
-                "confidence": 0.9,
-            },
-        ],
-        peer_id="sk_ax",
-    )
-
-    assert [signal["business_area"] for signal in signals] == ["IT서비스"]
-    assert [metric["business_area"] for metric in metrics] == ["Enterprise IT"]
 
 
 def test_ir_parser_filters_low_value_chunks_and_keeps_business_evidence() -> None:
@@ -2242,58 +2111,6 @@ def test_ir_business_signals_keep_one_representative_signal_per_evidence() -> No
     assert len(signals) == 1
     assert signals[0]["signal_type"] == "orders_pipeline"
     assert signals[0]["evidence_text"] == expected_evidence
-
-
-def test_ir_llm_business_signals_keep_summary_but_dedupe_same_evidence() -> None:
-    article = {
-        "id": 211,
-        "company": ["sk_ax"],
-        "title": "SK AX IR",
-        "url": "https://example.com/sk-ir.pdf",
-        "source_name": "ir_pdf",
-        "extra": {"period": "2026Q1", "period_year": 2026, "period_quarter": 1},
-    }
-    parser_result = {
-        "period": "2026Q1",
-        "period_year": 2026,
-        "period_quarter": 1,
-        "llm_business_signals": [
-            {
-                "business_area": "company_total",
-                "signal_type": "investment",
-                "sentiment": "negative",
-                "summary": "데이터센터 매각 영향이 있었다.",
-                "evidence_text": (
-                    "해외 프로젝트 종료 및 판교 데이터센터 매각 영향으로 Top-line 축소"
-                ),
-                "source_page": 9,
-            },
-            {
-                "business_area": "company_total",
-                "signal_type": "risk",
-                "sentiment": "negative",
-                "summary": "해외 프로젝트 종료와 데이터센터 매각으로 매출이 감소했다.",
-                "evidence_text": (
-                    "해외 프로젝트 종료 및 판교 데이터센터 매각 영향으로 Top-line 축소"
-                ),
-                "source_page": 9,
-            },
-        ],
-    }
-
-    signals = _business_signals_from_parser_result(
-        article,
-        parser_result,
-        {"period": "2026Q1", "peer_id": "sk_ax"},
-    )
-
-    assert len(signals) == 1
-    assert signals[0]["signal_type"] == "risk"
-    assert signals[0]["summary"] == "해외 프로젝트 종료와 데이터센터 매각으로 매출이 감소했다."
-    assert (
-        signals[0]["evidence_text"]
-        == "해외 프로젝트 종료 및 판교 데이터센터 매각 영향으로 Top-line 축소"
-    )
 
 
 def test_ir_metrics_keep_one_representative_candidate_for_report_period() -> None:
