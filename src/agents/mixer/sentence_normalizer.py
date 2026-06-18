@@ -173,7 +173,7 @@ def _model_for_mode(analysis_mode: object = "quick") -> str:
 if TYPE_CHECKING:
     from langchain_openai import ChatOpenAI
 
-_llms: dict[str, "ChatOpenAI"] = {}
+_llms: dict[str, ChatOpenAI] = {}
 
 
 def _llm_max_completion_tokens(model: str) -> int:
