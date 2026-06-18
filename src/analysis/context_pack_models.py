@@ -1,7 +1,7 @@
 # 작성일: 2026-06-09
 # 작성자: 최종민
 # 변경이력:
-#   2026-06-09 최종민 — ContextPackAssembler 읽기 모델·주간 다이제스트 에이전트 신규 추가, ruff/mypy 정리
+#   2026-06-09 최종민 — ContextPackAssembler 읽기 모델
 """Unified peer context pack — P0 ContextPackAssembler read model.
 
 Writers (CronJobs / agents) remain separate by cadence. Consumers assemble a

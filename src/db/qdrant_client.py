@@ -1,7 +1,7 @@
 # 작성일: 2026-04-21
 # 작성자: 최종민
 # 변경이력:
-#   2026-04-21 최종민 — axis-ai 베이스라인 작성, Supabase·Qdrant Cloud 전환 및 vector_index 노드 추가, 비-URL 호스트 api_key 미전달 처리, 재분류 시 qdrant_vector_id 유실 방지 및 문서 동기화
+#   2026-04-21 최종민 — axis-ai 베이스라인 작성, Supabase
 #   2026-05-26 박지원 — allaround 수정
 #   2026-06-08 박진 — 챗봇 에이전트 및 assistant RAG 추가
 import os

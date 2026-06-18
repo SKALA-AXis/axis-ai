@@ -1,8 +1,8 @@
 # 작성일: 2026-06-11
 # 작성자: 박지원
 # 변경이력:
-#   2026-06-11 박지원 — 카드뉴스 백필 스크립트 추가 및 품질/provenance 동기화, 통합·요약·시사점 생성 개선
-#   2026-06-16 최종민 — 카드뉴스 백필을 point-in-time(시간순) 방식으로 변경 (as_of + created_at 기준)
+#   2026-06-11 박지원 — 카드뉴스 백필 스크립트 추가 및 품질/provenance 동기화, 통합·요약
+#   2026-06-16 최종민 — 카드뉴스 백필을 point-in-time(시간순) 방식으로 변경 (as_of + created_at
 """Backfill card_news for historical raw_article clusters.
 
 This runs the current analysis/card-news agent stack for existing processed

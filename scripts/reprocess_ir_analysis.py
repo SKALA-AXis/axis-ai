@@ -1,7 +1,7 @@
 # 작성일: 2026-05-18
 # 작성자: 박지원
 # 변경이력:
-#   2026-05-18 박지원 — DART/IR 문서 재파싱 및 IR fact/signal 테이블 갱신 스크립트 작성, 이후 IR 지표 기간·시그널 보정
+#   2026-05-18 박지원 — DART/IR 문서 재파싱 및 IR fact/signal 테이블 갱신 스크립트 작성
 """DB에 저장된 IR 문서를 재파싱하고 분석용 fact/signal 테이블을 갱신한다.
 
 크롤링/API 호출 없이 raw_articles + raw_article_metadata_ir 안의 기존 원문/PDF 텍스트만

@@ -2,8 +2,8 @@
 # 작성자: 심유정
 # 변경이력:
 #   2026-06-02 심유정 — 전략 인사이트 에이전트 신규 구현 및 카드뉴스 grounding·한국어 출력 개선
-#   2026-06-02 박지원 — 분석 파이프라인 에이전트 재구성·뉴스 통합, 카드뉴스 시사점 grounding·재생성 품질 게이트 강화
-#   2026-06-11 최종민 — lazy-import 적용, RAG 선례 검색 주입, LLM 팩토리 이행 및 모듈 분해(프롬프트/utils/profile_linkage)
+#   2026-06-02 박지원 — 분석 파이프라인 에이전트 재구성·뉴스 통합, 카드뉴스 시사점 grounding
+#   2026-06-11 최종민 — lazy-import 적용, RAG 선례 검색 주입
 """StrategicInsightAgent — analysis + implication in one LLM call.
 
 기존 ``StrategicAnalyzer`` 와 ``ImplicationAgent`` 를 하나의 LLM agent 로 통합하되,

@@ -1,8 +1,8 @@
 # 작성일: 2026-04-22
 # 작성자: 최종민
 # 변경이력:
-#   2026-04-22 최종민 — Track A/B 크롤러 v4 구축 및 PostgreSQL 저장 연동, Evidence Chain·Peer 4사 확장 반영
-#   2026-04-30 박지원 — 크롤러 구현·전처리 및 네이버 리서치 테이블 파싱 수정, peer profile snapshot 파이프라인 추가
+#   2026-04-22 최종민 — Track A/B 크롤러 v4 구축 및 PostgreSQL 저장 연동, Evidence Chain
+#   2026-04-30 박지원 — 크롤러 구현·전처리 및 네이버 리서치 테이블 파싱 수정
 """네이버 증권 리서치/PDF 크롤러."""
 
 from __future__ import annotations

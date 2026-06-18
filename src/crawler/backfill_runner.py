@@ -1,7 +1,7 @@
 # 작성일: 2026-05-11
 # 작성자: 박지원
 # 변경이력:
-#   2026-05-11 박지원 — backfill 크롤러/DART 파서 추가, backfill runner 작성, 소스 메타데이터 분리 저장 및 전처리/스케줄러 크롤러 수정
+#   2026-05-11 박지원 — backfill 크롤러/DART 파서 추가, backfill runner 작성
 #   2026-05-12 최종민 — issue_cards → card_news 데이터 레이어 리네임
 #   2026-05-18 심유정 — 카드뉴스 에이전트 플로우 개선 및 feature 브랜치 병합
 """Cursor 기반 backfill 실행기."""

@@ -1,7 +1,7 @@
 # 작성일: 2026-06-09
 # 작성자: 최종민
 # 변경이력:
-#   2026-06-09 최종민 — 컨텍스트 레이어 백필 스크립트 추가 (ContextPackAssembler·주간 digest 에이전트 작업)
+#   2026-06-09 최종민 — 컨텍스트 레이어 백필 스크립트 추가 (ContextPackAssembler
 #   2026-06-09 박지원 — 뉴스 전처리/클러스터링 품질 개선에 따른 반영
 """Backfill context layers from existing DB history (card_news, integrated_issues).
 

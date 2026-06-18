@@ -1,7 +1,7 @@
 # 작성일: 2026-05-29
 # 작성자: 박지원
 # 변경이력:
-#   2026-05-29 박지원 — peer 프로필 에이전트 도입과 함께 입력 빌더 테스트 작성, 이후 프로필 스냅샷 파이프라인 반영
+#   2026-05-29 박지원 — peer 프로필 에이전트 도입과 함께 입력 빌더 테스트 작성
 from __future__ import annotations
 
 from datetime import datetime, timezone

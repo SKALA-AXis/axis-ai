@@ -1,7 +1,7 @@
 # 작성일: 2026-05-11
 # 작성자: 박지원
 # 변경이력:
-#   2026-05-11 박지원 — backfill 크롤러 및 SK AX 크롤러 추가, backfill 윈도우/길이 조정, 뉴스 전처리 및 카드뉴스 품질 개선
+#   2026-05-11 박지원 — backfill 크롤러 및 SK AX 크롤러 추가, backfill 윈도우/길이 조정
 """Source별 backfill 기본 정책."""
 
 from __future__ import annotations

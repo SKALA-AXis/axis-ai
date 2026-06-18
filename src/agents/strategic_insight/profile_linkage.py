@@ -2,7 +2,7 @@
 # 작성자: 최종민
 # 변경이력:
 #   2026-06-12 최종민 — strategic_insight 분해 2단계로 profile_linkage 분리, JSON 헬퍼 단일 출처화
-#   2026-06-14 심유정 — profile_linkage mypy narrowing·포맷 수정 및 카드뉴스 frontend-ready 근거·전략 오버레이 보강
+#   2026-06-14 심유정 — profile_linkage mypy narrowing·포맷 수정 및 카드뉴스 frontend-ready 근거
 """profile_linkage — strategic_insight_agent 에서 분리 (이동만, 동작 불변).
 
 분리 근거: axis-infra docs/structure-tasks/agent-split-design.md

@@ -1,7 +1,7 @@
 # 작성일: 2026-05-15
 # 작성자: 최종민
 # 변경이력:
-#   2026-05-15 최종민 — MixerAnalysis prototype 스키마 신설, output validation helper 및 v2 프롬프트(radar 입력·new findings 필드) 반영
+#   2026-05-15 최종민 — MixerAnalysis prototype 스키마 신설
 #   2026-05-22 심유정 — 에이전트 아키텍처·mixer 인사이트 개선 및 사용자 전략 액션 투영 필드 추가
 #   2026-06-04 박진 — 통합 이슈 기반 mixer/브리핑 플로우와 챗봇 today insight 플로우 반영
 """Mixer endpoint 의 request / response Pydantic 모델.

@@ -1,7 +1,7 @@
 # 작성일: 2026-05-15
 # 작성자: 최종민
 # 변경이력:
-#   2026-05-15 최종민 — InsightCascade 프로토타입(4-phase CoT) 작성, 출력 검증 헬퍼·ChatOpenAI 지연 임포트·LLM 팩토리 이행
+#   2026-05-15 최종민 — InsightCascade 프로토타입(4-phase CoT) 작성, 출력 검증 헬퍼
 """InsightCascadeAgent — 4-phase Cause→Change→Impact→Response + Synthesis CoT.
 
 design: ``axis-ai/design/30-analysis/insight-cascade.md``.

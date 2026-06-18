@@ -1,7 +1,7 @@
 # 작성일: 2026-05-19
 # 작성자: 박지원
 # 변경이력:
-#   2026-05-19 박지원 — 시사점 생성 모듈 추가(parser·agent 수정), confidence 타이핑 수정, 이후 분석 파이프라인 재구성
+#   2026-05-19 박지원 — 시사점 생성 모듈 추가(parser·agent 수정), confidence 타이핑 수정
 #   2026-05-21 최종민 — Layer B 분석 파이프라인(컨텍스트 엔지니어링·LLM 추론·평가) 추가
 """Strategic implication generation — legacy heuristic fallback only.
 

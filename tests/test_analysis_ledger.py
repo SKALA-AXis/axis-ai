@@ -1,7 +1,7 @@
 # 작성일: 2026-06-09
 # 작성자: 최종민
 # 변경이력:
-#   2026-06-09 최종민 — ContextPackAssembler·주간 다이제스트 도입과 함께 ledger 테스트 추가 및 ledger 읽기 경로 정리
+#   2026-06-09 최종민 — ContextPackAssembler
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
