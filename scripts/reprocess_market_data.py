@@ -1,3 +1,7 @@
+# 작성일: 2026-05-19
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-19 박지원 — 주가 payload를 OHLCV 테이블로 백필하는 시장 데이터 재처리 스크립트 작성
 """raw_article_metadata_market_data 안의 주가 payload를 OHLCV 테이블로 백필한다.
 
 사용 예:

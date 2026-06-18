@@ -1,3 +1,7 @@
+# 작성일: 2026-06-09
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-09 최종민 — ContextPackAssembler·주간 다이제스트 에이전트
 from __future__ import annotations
 
 from src.services.briefing_context_pack import merge_historical_context_into_basis

@@ -1,3 +1,9 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인 구축(컨텍스트/LLM 추론/평가)
+#   2026-06-11 최종민 — ChatOpenAI lazy-import 로 transformers/torch import 체인 분리
+#   2026-06-14 최종민 — env-model 사이트의 LLM 팩토리 이행 및 tracing 누락 패치
 """SK AX profile context loading service.
 
 SK AX 공식 프로필, 섹터별 관점, 공식 문서/newsroom 문서를 로드해

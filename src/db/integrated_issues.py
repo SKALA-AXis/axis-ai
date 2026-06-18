@@ -1,3 +1,7 @@
+# 작성일: 2026-06-04
+# 작성자: 박진
+# 변경이력:
+#   2026-06-04 박진 — 통합 이슈 기반 mixer·briefing 플로우 추가 및 mixer briefing 소스 포맷 정리
 """Persistence helpers for IntegrationAgent canonical output.
 
 The backend V40 schema owns ``integrated_issues``.  axis-ai can run against older

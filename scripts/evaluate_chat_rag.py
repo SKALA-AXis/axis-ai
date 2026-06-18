@@ -1,3 +1,7 @@
+# 작성일: 2026-06-08
+# 작성자: 박진
+# 변경이력:
+#   2026-06-08 박진 — 챗봇 에이전트·어시스턴트 RAG 추가 시 함께 작성
 from __future__ import annotations
 
 import argparse

@@ -1,3 +1,7 @@
+# 작성일: 2026-06-12
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-12 최종민 — prompts/utils 를 별도 패키지로 분리한 뒤 JSON 헬퍼(_json_dict
 """utils — strategic_insight_agent 에서 분리 (이동만, 동작 불변).
 
 분리 근거: axis-infra docs/structure-tasks/agent-split-design.md (Phase 2 1단계)

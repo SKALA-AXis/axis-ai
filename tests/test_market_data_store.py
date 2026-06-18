@@ -1,3 +1,7 @@
+# 작성일: 2026-05-19
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-19 박지원 — 파서·에이전트 수정 작업의 일부로 추가
 from datetime import datetime
 
 from src.crawler.base import RawArticle

@@ -1,3 +1,8 @@
+# 작성일: 2026-06-11
+# 작성자: 안가은
+# 변경이력:
+#   2026-06-11 안가은 — peer 키워드·SWOT 프리뷰 파이프라인 추가 시 함께 작성
+#   2026-06-14 심유정 — 카드뉴스 frontend-ready grounding 개선 반영
 """CLI entrypoint for Peer+ overview keyword snapshot generation."""
 
 # ruff: noqa: E402,I001

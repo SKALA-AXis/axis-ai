@@ -1,3 +1,7 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인 도입과 함께 KeywordGraphAgent 골격 작성
 """Keyword graph agent structure.
 
 KeywordGraphAgent belongs to the 2단계 data-usage pipeline. It will generate

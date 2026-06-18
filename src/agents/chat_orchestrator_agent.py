@@ -1,3 +1,9 @@
+# 작성일: 2026-05-15
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-15 최종민 — ChatOrchestrator 프로토타입(intent·routing·compose), Supervisor 패턴
+#   2026-05-19 박지원 — parser·agent 수정, 이후 카드뉴스 백필과 소스 카운트 추가
+#   2026-06-08 박진 — 챗봇 에이전트·assistant RAG 추가, 포맷 정리, mixer chat·assistant 라우팅
 """Grounded chat orchestrator for the AXIS floating assistant.
 
 The orchestrator is intentionally conservative:

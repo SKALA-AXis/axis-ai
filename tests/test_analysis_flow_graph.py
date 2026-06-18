@@ -1,3 +1,10 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인 도입과 함께 Supervisor 그래프 테스트 추가
+#   2026-05-26 박지원 — 분석 파이프라인 에이전트 재구성
+#   2026-06-02 심유정 — strategic insight 에이전트 구현 반영
+#   2026-06-04 박진 — 통합 이슈 기반 mixer·브리핑 흐름 추가
 """W2-1 — Supervisor LangGraph 통합 테스트 (mock LLM + DB)."""
 
 from __future__ import annotations

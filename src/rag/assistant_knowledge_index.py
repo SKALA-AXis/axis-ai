@@ -1,3 +1,7 @@
+# 작성일: 2026-06-08
+# 작성자: 박진
+# 변경이력:
+#   2026-06-08 박진 — 챗봇 어시스턴트 RAG용 지식 인덱스 신규 작성 및 포맷 정리
 """Assistant knowledge indexing for grounded chat retrieval.
 
 This index complements ``axis_main`` card vectors. It stores compact, user-safe

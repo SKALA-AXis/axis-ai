@@ -1,3 +1,7 @@
+# 작성일: 2026-05-13
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-13 박지원 — 증권사 리포트 파서 작성 및 네이버 리포트 파싱 개선
 """Naver research securities report parser."""
 
 from __future__ import annotations

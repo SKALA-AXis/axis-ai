@@ -1,3 +1,7 @@
+# 작성일: 2026-06-09
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-09 최종민 — ContextPackAssembler 읽기 모델
 """Unified peer context pack — P0 ContextPackAssembler read model.
 
 Writers (CronJobs / agents) remain separate by cadence. Consumers assemble a

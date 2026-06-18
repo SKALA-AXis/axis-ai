@@ -1,3 +1,7 @@
+# 작성일: 2026-06-08
+# 작성자: 박진
+# 변경이력:
+#   2026-06-08 박진 — 챗봇 에이전트·어시스턴트 RAG 추가 시 Qdrant 구버전 호환 헬퍼 작성
 """Compatibility helpers for Qdrant servers that predate query_points.
 
 The cluster currently runs Qdrant 1.9.x while local dependencies may install a

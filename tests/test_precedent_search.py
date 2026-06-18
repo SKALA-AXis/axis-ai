@@ -1,3 +1,7 @@
+# 작성일: 2026-06-12
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-12 최종민 — Qdrant 선례 검색 어댑터 구현 및 point-in-time 컨텍스트 빌더 추가
 """QdrantPrecedentSearch 어댑터 단위 테스트 — hybrid_search 는 monkeypatch."""
 
 import time

@@ -1,3 +1,8 @@
+# 작성일: 2026-06-02
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-02 박지원 — 분석 러너 에이전트 명칭 변경 및 레거시 분석 에이전트 shim 제거
+#   2026-06-02 심유정 — 전략 인사이트 에이전트 구현
 """AnalysisGraphRunner — Analysis Flow LangGraph 의 얇은 wrapper.
 
 W2-1 이후 본 클래스는 직접 child agent 를 조율하지 않고 LangGraph 상에서 정의된

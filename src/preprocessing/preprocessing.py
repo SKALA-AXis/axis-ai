@@ -1,3 +1,7 @@
+# 작성일: 2026-05-19
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-19 박지원 — 전처리 파이프라인 신규 작성 후 리팩터링·클러스터링·죽은 링크 스킵
 """DB 전처리 서비스.
 
 RAW 처리 대상 조회부터 source_type별 전처리 라우팅, 문서 분석,
@@ -150,9 +154,9 @@ class PreprocessingService:
         verify_news_links: bool | None = None,
         link_checker: Callable[[str], LinkCheckResult] | None = None,
     ) -> None:
-        self.relevance_evaluator = relevance_evaluator or RelevanceEvaluator(enable_llm=False)
+        self.relevance_evaluator = relevance_evaluator or RelevanceEvaluator()
         self.deduplicator = deduplicator or ArticleDeduplicator()
-        self.classifier = classifier or ClusterClassifier(enable_llm=False)
+        self.classifier = classifier or ClusterClassifier()
         self.max_workers = max_workers
         self.verify_news_links = (
             verify_news_links

@@ -1,3 +1,7 @@
+# 작성일: 2026-06-08
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-08 박지원 — RAW 기사 전처리 catch-up 스크립트 작성 및 수정(LLM fallback 제거 포함)
 """Catch up RAW articles that were collected but missed preprocessing.
 
 Scheduled ingestion triggers run preprocessing in an axis-ai background task.
@@ -108,10 +112,9 @@ def main() -> int:
     total_analysis_signals = 0
 
     for group_name, source_types in _source_type_groups(args.track):
-        enable_llm = "news" in source_types
         service = PreprocessingService(
-            relevance_evaluator=RelevanceEvaluator(enable_llm=enable_llm),
-            classifier=ClusterClassifier(enable_llm=enable_llm),
+            relevance_evaluator=RelevanceEvaluator(),
+            classifier=ClusterClassifier(),
         )
         batch = 0
 

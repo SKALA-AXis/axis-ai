@@ -1,3 +1,7 @@
+# 작성일: 2026-05-20
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-20 박지원 — processing_status 마이그레이션 스크립트 작성 및 전처리 관련 수정
 """processing_status를 coarse status 모델로 마이그레이션한다.
 
 기본은 dry-run이며, 실제 반영은 --apply를 붙인다.

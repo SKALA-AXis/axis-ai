@@ -1,3 +1,8 @@
+# 작성일: 2026-06-11
+# 작성자: 안가은
+# 변경이력:
+#   2026-06-11 안가은 — Peer 키워드·SWOT 프리뷰 파이프라인 추가 및 ruff/lint/mypy 정리
+#   2026-06-14 최종민 — env-model 사이트 팩토리 이행
 """Generate Peer+ quarterly overview keywords with an LLM.
 
 The output is stored in ``peer_llm_analysis_snapshots`` with

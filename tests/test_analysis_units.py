@@ -1,3 +1,8 @@
+# 작성일: 2026-06-04
+# 작성자: 박진
+# 변경이력:
+#   2026-06-04 박진 — 통합 이슈 기반 mixer·브리핑 흐름 추가와 함께 analysis_units 테스트 작성
+#   2026-06-11 박지원 — ruff 포매팅 정리
 from __future__ import annotations
 
 from src.services.analysis_units import (
