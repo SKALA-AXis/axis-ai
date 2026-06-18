@@ -662,7 +662,9 @@ async def regenerate_card_news_strategy_context(
     if not request.analysis_package:
         raise HTTPException(status_code=400, detail="analysis_package is required")
 
-    from src.agents.strategic_insight_agent import StrategicInsightAgent
+    from src.services.strategy_context_action_regenerator import (
+        regenerate_strategy_context_action,
+    )
 
     package = copy.deepcopy(request.analysis_package)
     started_at = time.perf_counter()
@@ -672,8 +674,9 @@ async def regenerate_card_news_strategy_context(
         request.user_id,
     )
     strategic_result = await asyncio.to_thread(
-        StrategicInsightAgent().generate_from_analysis_package,
+        regenerate_strategy_context_action,
         package,
+        card_news_id=request.card_news_id,
         user_id=request.user_id,
     )
 
