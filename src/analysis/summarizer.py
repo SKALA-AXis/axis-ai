@@ -881,16 +881,26 @@ def _article_prompt_snippets(
         ]
     )
     sentences = [sentence for sentence in sentences if not _is_article_ui_boilerplate(sentence)]
-    sentences = [
-        sentence
-        for sentence in sentences
-        if _is_article_relevant_snippet(
+    relevant_sentences: list[str] = []
+    previous_was_relevant = False
+    for sentence in sentences:
+        is_relevant = _is_article_relevant_snippet(
             sentence,
             article=article,
             target_companies=target_companies,
             title=title,
         )
-    ]
+        if is_relevant or (
+            previous_was_relevant
+            and _is_article_context_detail_snippet(
+                sentence,
+                article=article,
+                target_companies=target_companies,
+            )
+        ):
+            relevant_sentences.append(sentence)
+        previous_was_relevant = is_relevant
+    sentences = relevant_sentences
     scored = sorted(
         (
             (_snippet_score(sentence, article=article, target_companies=target_companies), sentence)
@@ -977,6 +987,38 @@ def _is_article_relevant_snippet(
     ):
         return True
     return False
+
+
+def _is_article_context_detail_snippet(
+    sentence: str,
+    *,
+    article: dict[str, Any],
+    target_companies: list[str],
+) -> bool:
+    text = normalize_korean_spacing(sentence)
+    if not text:
+        return False
+    is_off_topic = _fact_is_off_topic_for_article(
+        text,
+        article=article,
+        target_companies=target_companies,
+    )
+    if is_off_topic and not _is_company_neutral_context_detail(text):
+        return False
+    if _rule_based_event_type([text]) != "general_update":
+        return True
+    if re.search(r"기능|업무|자동화|고객|산업|서비스|플랫폼|제품|기술|적용|도입|활용", text):
+        return True
+    if _has_business_scope_terms(text) or _has_detail_preservation_terms(text):
+        return True
+    return bool(_number_tokens(text) or _date_tokens(text) or _rule_based_entities([text]))
+
+
+def _is_company_neutral_context_detail(text: str) -> bool:
+    value = normalize_korean_spacing(text)
+    if re.search(r"업계|시장|경쟁사|타사|제3자|다른\s*회사|별도\s*사례", value):
+        return False
+    return bool(re.search(r"기능|업무|자동화|고객|서비스|플랫폼|제품|기술|적용|도입|활용", value))
 
 
 def _is_near_duplicate_snippet(text: str, selected_texts: list[str]) -> bool:
@@ -1798,9 +1840,10 @@ def _build_extracted_facts(
     article_fact_notes: list[dict[str, Any]],
     articles: list[dict[str, Any]],
     cluster_event_type: str,
-    target_companies: list[str],
+    target_companies: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """기사 fact note에 안정적인 fact_id를 붙여 요약 가능한 fact 목록으로 변환한다."""
+    target_companies = target_companies or _candidate_peer_companies(articles)
     facts: list[dict[str, Any]] = []
     counters: dict[int, int] = {}
     article_by_id = {
