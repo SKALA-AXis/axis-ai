@@ -211,7 +211,7 @@ def _zero_exposure() -> dict[str, Any]:
 class ClusterClassifier:
     """클러스터를 섹터, 노출도, 이벤트 타입 기준으로 분류한다."""
 
-    def __init__(self, *, enable_llm: bool = True) -> None:
+    def __init__(self, *, enable_llm: bool = False) -> None:
         self.enable_llm = enable_llm
 
     def classify(
@@ -359,7 +359,7 @@ def classify_article_text(
     company: str = "",
     *,
     source_type: str = "",
-    enable_llm: bool = True,
+    enable_llm: bool = False,
 ) -> dict[str, Any]:
     """단일 기사 텍스트를 운영과 동일한 로직으로 분류한다 (DB 미접근).
 

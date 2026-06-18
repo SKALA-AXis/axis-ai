@@ -194,7 +194,7 @@ peer_context: {peer_context}
 class RelevanceEvaluator:
     """company/sector 관점의 내용 기반 관련성을 판단한다."""
 
-    def __init__(self, *, enable_llm: bool = True, llm_batch_size: int = _LLM_BATCH_SIZE) -> None:
+    def __init__(self, *, enable_llm: bool = False, llm_batch_size: int = _LLM_BATCH_SIZE) -> None:
         self.enable_llm = enable_llm
         self.llm_batch_size = max(1, llm_batch_size)
         self.review_ids: list[int] = []

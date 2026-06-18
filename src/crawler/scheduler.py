@@ -419,22 +419,15 @@ def _run_realtime_pipeline_for_run(crawl_run_id: str, *, trigger_type: str) -> N
     from src.preprocessing.preprocessing import PreprocessingService
     from src.preprocessing.relevance import RelevanceEvaluator
 
-    source_label = trigger_type.removeprefix("scheduler:")
-    track_a_sources = {"news_naver", "global_newsroom"}
-    use_news_llm = source_label in track_a_sources
-
     result = PreprocessingService(
-        relevance_evaluator=RelevanceEvaluator(enable_llm=use_news_llm),
-        classifier=ClusterClassifier(enable_llm=use_news_llm),
+        relevance_evaluator=RelevanceEvaluator(enable_llm=False),
+        classifier=ClusterClassifier(enable_llm=False),
     ).run(
         company=[],
         trigger_type=trigger_type,
         collected_since=None,
         crawl_run_id=crawl_run_id,
     )
-    postprocess_summary = None
-    if source_label == "news_naver":
-        postprocess_summary = _run_recent_news_cluster_postprocess()
     delivery = run_analysis_delivery(result)
     log.info(
         (
@@ -448,43 +441,11 @@ def _run_realtime_pipeline_for_run(crawl_run_id: str, *, trigger_type: str) -> N
         result.get("analysis_metric_count", 0),
         result.get("analysis_signal_count", 0),
         len(result.get("classified_clusters", [])),
-        postprocess_summary,
+        "cron_only",
         len(delivery.get("card_news", [])),
         len(delivery.get("indexed_vector_ids", [])),
         len(delivery.get("errors", [])),
     )
-
-
-def _run_recent_news_cluster_postprocess() -> dict[str, int]:
-    from scripts.postprocess_singleton_clusters import run_postprocess
-    from src.db.postgres import SessionLocal
-
-    with SessionLocal() as db:
-        result = run_postprocess(
-            db=db,
-            source_type="news",
-            lookback_hours=24,
-            time_field="published_at",
-            max_source_size=0,
-            min_target_size=2,
-            min_new_cluster_size=2,
-            max_time_gap_hours=72,
-            min_score=0.45,
-            apply=True,
-            skip_noise=True,
-        )
-        db.commit()
-    return {
-        "clusters": result["cluster_count"],
-        "sources": result["source_count"],
-        "targets": result["target_count"],
-        "merge_candidates": len(result["candidates"]),
-        "group_merge_candidates": len(result["group_candidates"]),
-        "noise_candidates": len(result["noise_ids"]),
-        "updated": result["updated"],
-        "group_updated": result["group_updated"],
-        "noise_updated": result["noise_updated"],
-    }
 
 
 async def _normalize_articles(items: list[Any]) -> list[RawArticle]:
