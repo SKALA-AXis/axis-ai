@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from langchain_openai import ChatOpenAI
@@ -43,6 +43,18 @@ from src.agents.strategic_insight.constants import (  # noqa: F401
     _UNCERTAINTY_PATTERN,
     _UNSUPPORTED_CLAIM_PATTERNS,
     OVERCLAIM_PATTERNS,
+)
+from src.agents.strategic_insight.diagnostics import (  # noqa: F401
+    _attach_frontend_ready_diagnostics,
+    _attach_generation_phase_diagnostics,
+    _attach_strategy_skip_diagnostics,
+    _build_analysis_context_for_issue,
+    _can_attempt_frontend_ready_repair,
+    _cluster_metadata_from_bundle,
+    _domain_supported_by_evidence,
+    _frontend_ready_diagnostics_snapshot,
+    _mark_frontend_ready_source,
+    _merge_frontend_ready_payload,
 )
 from src.agents.strategic_insight.fallback0 import (  # noqa: F401
     _action_text_has_grounding_axis_signal,
@@ -539,8 +551,6 @@ from src.agents.strategic_insight.utils import (  # noqa: F401  — 분리 모�
 )
 from src.analysis.models import AnalysisContext, AnalysisInputBundle, ProfileContext
 from src.llm import LLMSpec, build_chat_llm
-from src.rag.precedent_search import QdrantPrecedentSearch
-from src.services.analysis_context_builder import AnalysisContextBuilder
 
 log = logging.getLogger(__name__)
 
@@ -2349,267 +2359,6 @@ class StrategicInsightAgent:
             integrated_issue=integrated_issue,
             profile_context=profile_dict,
         )
-
-
-def _build_analysis_context_for_issue(
-    *,
-    input_bundle: AnalysisInputBundle,
-    profile_context: ProfileContext | dict[str, Any],
-    integrated_issue: dict[str, Any],
-) -> dict[str, Any]:
-    try:
-        return (
-            AnalysisContextBuilder(qdrant_search=QdrantPrecedentSearch())
-            .build(
-                input_bundle=input_bundle,
-                profile_context=profile_context,
-                integrated_issue=integrated_issue,
-            )
-            .to_dict()
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.warning("StrategicInsightAgent analysis_context load failed | error=%s", exc)
-        return {}
-
-
-def _mark_frontend_ready_source(result: dict[str, Any], source: str) -> dict[str, Any]:
-    out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
-    implication = out.get("implication") or {}
-    if not isinstance(implication, dict):
-        return out
-    frontend_ready = _normalize_frontend_ready(
-        implication.get("frontend_ready"),
-        default_source=source,
-    )
-    if not frontend_ready:
-        implication.pop("frontend_ready", None)
-        out["implication"] = implication
-        return out
-    frontend_ready["source"] = source
-    for block_key in ("key_implication", "suggested_action"):
-        block = frontend_ready.get(block_key)
-        if isinstance(block, dict):
-            block["source"] = source
-    implication["frontend_ready"] = frontend_ready
-    out["implication"] = implication
-    return out
-
-
-def _merge_frontend_ready_payload(
-    result: dict[str, Any],
-    *,
-    frontend_ready: dict[str, Any],
-    source: str,
-    integrated_issue: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
-    implication = out.get("implication") or {}
-    if not isinstance(implication, dict):
-        implication = {}
-    normalized = _normalize_frontend_ready(frontend_ready, default_source=source)
-    if normalized and integrated_issue:
-        normalized = _frontend_ready_with_issue_evidence_anchors(
-            normalized,
-            integrated_issue=integrated_issue,
-        )
-    if normalized:
-        normalized["source"] = source
-        for basis_key in ("insight_basis", "action_basis"):
-            basis = normalized.get(basis_key)
-            if isinstance(basis, dict):
-                normalized[basis_key] = basis
-        for block_key in ("key_implication", "suggested_action"):
-            block = normalized.get(block_key)
-            if isinstance(block, dict):
-                block["source"] = source
-        implication["frontend_ready"] = normalized
-    else:
-        implication.pop("frontend_ready", None)
-    out["implication"] = implication
-    return out
-
-
-def _attach_strategy_skip_diagnostics(
-    result: dict[str, Any],
-    *,
-    skip_decision: dict[str, Any],
-    integrated_issue: dict[str, Any],
-    profile_linkage_evaluation: dict[str, Any],
-    action_artifact_plan: dict[str, Any],
-) -> dict[str, Any]:
-    out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
-    implication = out.get("implication") or {}
-    implication["frontend_ready_diagnostics"] = {
-        "watch_only": True,
-        "decision_type": skip_decision.get("decision_type"),
-        "signal_scope": skip_decision.get("signal_scope"),
-        "direct_peer_action": skip_decision.get("direct_peer_action"),
-        "peer_mention_only": skip_decision.get("peer_mention_only"),
-        "primary_actor_type": skip_decision.get("primary_actor_type"),
-        "reason": skip_decision.get("reason"),
-        "evidence": skip_decision.get("evidence") or {},
-        "model_config": _llm_model_config_diagnostics(),
-        "issue_execution_slots": _issue_execution_slot_diagnostics(integrated_issue),
-        "actionable_signal_level": _frontend_ready_actionable_signal_level(integrated_issue),
-        "profile_based_downgrade": _profile_based_downgrade_diagnostics(
-            {},
-            profile_linkage_evaluation=profile_linkage_evaluation,
-        ),
-        "action_mode": action_artifact_plan.get("action_mode"),
-        "displayable": False,
-    }
-    if skip_decision.get("decision_type") == "watch_only_industry_signal":
-        implication["industry_signal"] = {
-            "signal_scope": skip_decision.get("signal_scope"),
-            "primary_actor_type": skip_decision.get("primary_actor_type"),
-            "direct_peer_action": False,
-            "peer_mention_only": skip_decision.get("peer_mention_only"),
-            "reason": skip_decision.get("reason"),
-            "evidence": skip_decision.get("evidence") or {},
-        }
-        industry_ready = _industry_frontend_ready_from_decision(
-            integrated_issue=integrated_issue,
-            skip_decision=skip_decision,
-        )
-        if industry_ready:
-            implication["industry_frontend_ready"] = industry_ready
-            implication["frontend_ready_diagnostics"]["display_policy"] = "industry_only"
-            implication["frontend_ready_diagnostics"]["displayable"] = True
-        else:
-            implication["frontend_ready_diagnostics"]["display_policy"] = "needs_review_only"
-            implication["frontend_ready_diagnostics"]["removed_reason"] = (
-                "watch-only 산업 신호에서 화면용 시사점/대응방향을 만들 근거 축을 찾지 못했습니다."
-            )
-    out["implication"] = implication
-    return out
-
-
-def _cluster_metadata_from_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "bundle_id": bundle.get("bundle_id", ""),
-        "cluster_id": bundle.get("cluster_id"),
-        "source_type": bundle.get("source_type", ""),
-        "companies": bundle.get("companies", []),
-        "sectors": bundle.get("sectors", []),
-        "event_type": bundle.get("event_type"),
-        "cluster_size": len(bundle.get("items") or []),
-        "source_count": len(bundle.get("sources") or []),
-    }
-
-
-def _frontend_ready_diagnostics_snapshot(
-    result: dict[str, Any],
-    *,
-    integrated_issue: dict[str, Any],
-    profile_context: dict[str, Any],
-    profile_linkage_evaluation: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    implication = result.get("implication") or {}
-    frontend_ready = implication.get("frontend_ready") or {}
-    if not isinstance(frontend_ready, dict):
-        frontend_ready = {}
-    required_violations = _frontend_ready_required_violations(
-        result,
-        integrated_issue=integrated_issue,
-        profile_context=profile_context,
-        profile_linkage_evaluation=profile_linkage_evaluation,
-    )
-    claim_violations = _frontend_ready_claim_violations(
-        result,
-        integrated_issue=integrated_issue,
-        profile_linkage_evaluation=profile_linkage_evaluation or {},
-    )
-    key_block = frontend_ready.get("key_implication") or {}
-    action_block = frontend_ready.get("suggested_action") or {}
-    if not isinstance(key_block, dict):
-        key_block = {}
-    if not isinstance(action_block, dict):
-        action_block = {}
-    execution_slots = _issue_execution_slot_diagnostics(integrated_issue)
-    return {
-        "has_frontend_ready": bool(frontend_ready),
-        "source": str(frontend_ready.get("source") or "").strip() or None,
-        "key_implication_source": str(key_block.get("source") or "").strip() or None,
-        "suggested_action_source": str(action_block.get("source") or "").strip() or None,
-        "required_violations": required_violations,
-        "claim_violations": claim_violations,
-        "model_config": _llm_model_config_diagnostics(),
-        "issue_execution_slots": execution_slots,
-        "actionable_signal_level": _frontend_ready_actionable_signal_level(integrated_issue),
-        "integrated_issue_candidate_anchors": _specific_event_anchors_for_frontend(
-            integrated_issue
-        )[:12],
-        "has_integrated_issue_candidate_anchor_signal": (
-            _has_integrated_issue_candidate_anchor_signal(integrated_issue)
-        ),
-        "weak_surface_signal": _is_weak_surface_integrated_issue(integrated_issue),
-        "profile_based_downgrade": _profile_based_downgrade_diagnostics(
-            frontend_ready,
-            profile_linkage_evaluation=profile_linkage_evaluation or {},
-        ),
-        "displayable": not required_violations and not claim_violations,
-    }
-
-
-def _attach_frontend_ready_diagnostics(
-    result: dict[str, Any],
-    *,
-    before: dict[str, Any],
-    after: dict[str, Any],
-    removed_reason: str = "",
-) -> dict[str, Any]:
-    out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
-    implication = out.get("implication") or {}
-    after_required = _string_list(after.get("required_violations"), max_items=20)
-    after_claim = _string_list(after.get("claim_violations"), max_items=20)
-    reason = str(removed_reason or "").strip()
-    if not reason and (after_required or after_claim):
-        reason = " / ".join([*after_required[:3], *after_claim[:3]])
-    implication["frontend_ready_diagnostics"] = {
-        "frontend_ready_before_repair": before,
-        "frontend_ready_after_repair": after,
-        "required_violations": after_required,
-        "claim_violations": after_claim,
-        "displayable": bool(after.get("displayable")),
-        "removed_reason": reason,
-    }
-    out["implication"] = implication
-    return out
-
-
-def _attach_generation_phase_diagnostics(
-    result: dict[str, Any],
-    *,
-    decisions: Sequence[str],
-) -> dict[str, Any]:
-    out = json.loads(json.dumps(result, ensure_ascii=False, default=str))
-    implication = out.get("implication") or {}
-    diagnostics = implication.get("frontend_ready_diagnostics")
-    if not isinstance(diagnostics, dict):
-        diagnostics = {}
-    diagnostics["phase_decisions"] = _string_list(decisions, max_items=12)
-    diagnostics["model_config"] = _llm_model_config_diagnostics()
-    implication["frontend_ready_diagnostics"] = diagnostics
-    out["implication"] = implication
-    return out
-
-
-def _can_attempt_frontend_ready_repair(result: dict[str, Any]) -> bool:
-    return _can_attempt_frontend_ready_repair_for_issue(result, integrated_issue={})
-
-
-def _domain_supported_by_evidence(
-    domain: str,
-    *,
-    evidence_tokens: set[str],
-    evidence_text: str,
-) -> bool:
-    aliases = _DOMAIN_ALIASES.get(domain, {domain})
-    evidence_lower = str(evidence_text or "").casefold()
-    return any(
-        alias.casefold() in evidence_lower or alias.casefold() in evidence_tokens
-        for alias in aliases
-    )
 
 
 __all__ = ["StrategicInsightAgent"]
