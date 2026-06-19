@@ -360,7 +360,7 @@ def _fetch_card_rows(card_ids: list[str], *, user_id: str | None = None) -> list
         return []
     normalized_rows = [_normalize_row(dict(row)) for row in rows]
     _apply_user_strategy_projections(normalized_rows, user_id=user_id)
-    return normalized_rows
+    return _attach_vdb_contexts(normalized_rows)
 
 
 def _fetch_integrated_issue_rows(
@@ -437,7 +437,7 @@ def _fetch_integrated_issue_rows(
         return []
     normalized_rows = [_normalize_row(dict(row)) for row in rows]
     _apply_user_strategy_projections(normalized_rows, user_id=user_id)
-    return normalized_rows
+    return _attach_vdb_contexts(normalized_rows)
 
 
 def _apply_user_strategy_projections(rows: list[dict[str, Any]], *, user_id: str | None) -> None:
@@ -558,6 +558,18 @@ def _normalize_row(row: dict[str, Any]) -> dict[str, Any]:
     row["summary_lines"] = _json_list(row.get("summary_lines"))
     row["integrated_issue_id"] = _first_text(row.get("integrated_issue_id"), row.get("ii_id"))
     return row
+
+
+def _attach_vdb_contexts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return rows
+    try:
+        from src.rag.content_index import attach_vdb_contexts_to_rows
+
+        return attach_vdb_contexts_to_rows(rows)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("analysis unit content VDB hydration skipped | error=%s", exc)
+        return rows
 
 
 def _integrated_issue_row(card: dict[str, Any]) -> dict[str, Any]:

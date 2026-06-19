@@ -9,6 +9,7 @@
 
 import json
 import logging
+import os
 import threading
 from typing import Any, Optional
 
@@ -193,6 +194,7 @@ def save_articles(
         return 0
 
     inserted = 0
+    content_index_article_ids: list[int] = []
     with SessionLocal() as db:
         for article in articles:
             storage_company = _company_for_storage(article)
@@ -279,10 +281,16 @@ def save_articles(
                         action=action,
                         source_metadata=source_metadata,
                     )
+                    try:
+                        content_index_article_ids.append(int(article_id))
+                    except (TypeError, ValueError):
+                        pass
             except Exception as e:
                 log.error("raw_articles 저장 실패 | url=%s error=%s", article.url, e)
                 db.rollback()
         db.commit()
+
+    _index_raw_articles_to_vdb_best_effort(content_index_article_ids)
 
     log.info(
         "raw_articles 저장 완료 | total=%d inserted=%d skipped=%d",
@@ -291,6 +299,35 @@ def save_articles(
         len(articles) - inserted,
     )
     return inserted
+
+
+def _index_raw_articles_to_vdb_best_effort(article_ids: list[int]) -> None:
+    if os.getenv("CONTENT_VDB_INDEX_ON_WRITE", "1").strip().lower() in {"0", "false", "no"}:
+        return
+    clean_ids: list[int] = []
+    seen: set[int] = set()
+    for article_id in article_ids:
+        if article_id in seen:
+            continue
+        seen.add(article_id)
+        clean_ids.append(article_id)
+    if not clean_ids:
+        return
+    try:
+        from src.rag.content_index import index_raw_articles_from_rdb
+
+        result = index_raw_articles_from_rdb(
+            article_ids=clean_ids,
+            limit=len(clean_ids),
+            replace_existing=True,
+        )
+        log.info(
+            "raw_articles content VDB index 완료 | rows=%s indexed=%s",
+            result.get("rows"),
+            result.get("indexed"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("raw_articles content VDB index 실패 | ids=%s error=%s", clean_ids[:10], exc)
 
 
 # ──────────────────────────────────────────────────────────────

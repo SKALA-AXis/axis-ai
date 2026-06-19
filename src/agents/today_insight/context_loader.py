@@ -166,7 +166,10 @@ def _fetch_integrated_issues(
     except Exception as exc:  # noqa: BLE001
         log.warning("today insight integrated_issues lookup failed | error=%s", exc)
         return []
-    return [_json_ready(dict(row)) for row in rows]
+    return _attach_today_vdb_contexts(
+        [_json_ready(dict(row)) for row in rows],
+        row_kind="integrated_issue",
+    )
 
 
 def _fetch_cards_for_issues(
@@ -255,7 +258,7 @@ def _fetch_cards_for_issues(
     except Exception as exc:  # noqa: BLE001
         log.warning("today insight card lookup failed | error=%s", exc)
         return []
-    return [_json_ready(dict(row)) for row in rows]
+    return _attach_today_vdb_contexts([_json_ready(dict(row)) for row in rows], row_kind="card")
 
 
 def _fetch_anchor_date_cards(
@@ -350,7 +353,7 @@ def _fetch_anchor_date_cards(
     except Exception as exc:  # noqa: BLE001
         log.warning("today insight anchor-date card lookup failed | error=%s", exc)
         return []
-    return [_json_ready(dict(row)) for row in rows]
+    return _attach_today_vdb_contexts([_json_ready(dict(row)) for row in rows], row_kind="card")
 
 
 def _fetch_recent_cards(
@@ -440,7 +443,28 @@ def _fetch_recent_cards(
     except Exception as exc:  # noqa: BLE001
         log.warning("today insight recent card lookup failed | error=%s", exc)
         return []
-    return [_json_ready(dict(row)) for row in rows]
+    return _attach_today_vdb_contexts([_json_ready(dict(row)) for row in rows], row_kind="card")
+
+
+def _attach_today_vdb_contexts(
+    rows: list[dict[str, Any]],
+    *,
+    row_kind: str,
+) -> list[dict[str, Any]]:
+    if not rows:
+        return rows
+    prepared = [dict(row) for row in rows]
+    if row_kind == "integrated_issue":
+        for row in prepared:
+            if row.get("id") and not row.get("integrated_issue_id"):
+                row["integrated_issue_id"] = str(row["id"])
+    try:
+        from src.rag.content_index import attach_vdb_contexts_to_rows
+
+        return attach_vdb_contexts_to_rows(prepared, max_chars=1800)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("today insight content VDB hydration skipped | error=%s", exc)
+        return prepared
 
 
 def _fetch_prior_today_reports(*, anchor_date: date, limit: int) -> list[dict[str, Any]]:

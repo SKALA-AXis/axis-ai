@@ -32,9 +32,9 @@ class LLMSpec:
     """LLM 한 개의 생성 사양.
 
     Attributes:
-        model: 모델 이름 (예: "gpt-4o", "gpt-5.5", "gpt-4o-mini").
+        model: 모델 이름.
         temperature: 샘플링 온도.
-        max_tokens: 비추론 모델(gpt-4o 등)의 출력 토큰 캡.
+        max_tokens: 비추론 모델의 출력 토큰 캡.
         max_tokens_reasoning: gpt-5 계열 캡. None 이면 max_tokens 사용.
             (추론 토큰 headroom 때문에 보통 더 크게 잡는다.)
         json_object: True 면 response_format=json_object 강제.

@@ -5,10 +5,10 @@ from __future__ import annotations
 import os
 from typing import Callable
 
-_QUICK_LLM_MODEL = os.getenv("MIXER_QUICK_LLM_MODEL", "gpt-4o")
+_QUICK_LLM_MODEL = os.getenv("MIXER_QUICK_LLM_MODEL", "gpt-4o-mini")
 
 
-_DEEP_LLM_MODEL = os.getenv("MIXER_DEEP_LLM_MODEL", "gpt-5.5")
+_DEEP_LLM_MODEL = os.getenv("MIXER_DEEP_LLM_MODEL", "gpt-4o-mini")
 
 
 _LLM_MODEL = _QUICK_LLM_MODEL  # legacy fallback for older callers/tests.

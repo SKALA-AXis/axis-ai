@@ -17,17 +17,19 @@ import json
 import logging
 import re
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import text
 
-from src.agents.analysis_graph_runner import AnalysisGraphRunner
 from src.agents.strategic_insight_agent import _is_valid_integrated_issue
 from src.analysis.models import AnalysisInputBundle
 from src.composers.card_news_composer import CardNewsComposer
 from src.db.article_store import get_articles_by_ids, save_card_news
 from src.db.postgres import SessionLocal
 from src.pipeline.analysis_flow_graph import run_supervisor
+
+if TYPE_CHECKING:
+    from src.agents.analysis_graph_runner import AnalysisGraphRunner
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +44,8 @@ class AnalysisPipelineRunner:
         analysis_supervisor: AnalysisGraphRunner | None = None,
         card_news_composer: CardNewsComposer | None = None,
     ) -> None:
+        from src.agents.analysis_graph_runner import AnalysisGraphRunner  # lazy: 순환 import 차단
+
         self.analysis_runner = analysis_runner or analysis_supervisor or AnalysisGraphRunner()
         self.analysis_supervisor = self.analysis_runner
         self.card_news_composer = card_news_composer or CardNewsComposer()
