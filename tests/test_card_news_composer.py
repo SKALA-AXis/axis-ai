@@ -3,6 +3,7 @@
 # 변경이력:
 #   2026-06-08 심유정 — 근거 기반 카드뉴스 생성·요약 사실 선택·frontend-ready 인사이트 그라운딩 개선
 #   2026-06-11 박지원 — 카드뉴스 클러스터링·요약 표시 정리, 발행일 기반 카드 id, KST 날짜 적용
+#   2026-06-18 최종민 — 코드 변경
 from __future__ import annotations
 
 from src.composers.card_news_composer import (

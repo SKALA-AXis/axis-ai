@@ -3,6 +3,7 @@
 # 변경이력:
 #   2026-05-26 최종민 — ITTrendAgent 단위 테스트 추가 및 global-trends reference id 우선순위
 #   2026-06-02 박지원 — it-trend confidence 편집, 카드뉴스 클러스터 범위 유지, 글로벌 기업 동향 추가
+#   2026-06-18 최종민 — 코드 변경
 """ITTrendAgent (PR #68, 5-phase pipeline) deterministic helper 단위 테스트.
 
 외부 LLM 리뷰의 R-2 (reference id 우선순위) 및 R-5 (테스트 없음) 항목 보강.
