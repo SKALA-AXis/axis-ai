@@ -88,7 +88,6 @@
 | `sources/stock.py` | `market_data` | 주가/시장 데이터 수집. |
 | `sources/spri.py` | `trend_report` | SPRi 산업 동향 PDF/시각자료 수집. |
 | `sources/bcg.py` | `trend_report` | BCG 산업 리포트 수집. |
-| `sources/official.py` | `official` | 레거시/보조 공식 뉴스룸 구현. 새 흐름에서는 주로 `company_news.py`와 `global_newsroom.py`를 사용한다. |
 
 ## local/ 파일
 
@@ -114,7 +113,6 @@
 | 파일 | 역할 |
 |---|---|
 | `parsers/article_content.py` | HTML 본문 텍스트와 이미지 URL 추출 |
-| `parsers/content.py` | readability 기반 본문 추출 |
 | `parsers/dedup.py` | URL 기준 중복 제거 |
 | `parsers/link_check.py` | 저장 전 URL 접근성 검사. DART/IR/search_trend 등은 검사 skip 대상 |
 | `parsers/pdf_payload.py` | PDF 텍스트, 페이지별 블록, 표 후보, 이미지 후보, bbox metadata 추출 |

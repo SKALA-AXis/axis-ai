@@ -13,6 +13,7 @@ import json
 from datetime import UTC, date, datetime
 from typing import Any
 
+import src.agents.today_insight.output_schema as today_output
 import src.agents.today_insight_agent as today_module
 import src.services.today_insight_comparison_engine as comparison_engine
 from src.agents.today_insight_agent import TodayInsightAgent
@@ -812,7 +813,7 @@ def test_match_trace_matches_card_and_raw_article_ids() -> None:
 def test_apply_insight_state_today_signal_above_bar(monkeypatch) -> None:
     """오늘 신호 + lead salience ≥ 0.70 → today_signal, signal_date=오늘, 페이로드 보존."""
     monkeypatch.setattr(
-        today_module, "_build_coverage_stats", lambda **kw: {"reviewed_last_7d": 12}
+        today_output, "_build_coverage_stats", lambda **kw: {"reviewed_last_7d": 12}
     )
     base: dict[str, Any] = {
         "report_date": "2026-06-17",
@@ -831,7 +832,7 @@ def test_apply_insight_state_today_signal_above_bar(monkeypatch) -> None:
 
 def test_apply_insight_state_today_signal_even_below_prior_salience_bar(monkeypatch) -> None:
     """오늘 신호가 있으면 내부 salience 점수로 숨기지 않고 today_signal 로 노출."""
-    monkeypatch.setattr(today_module, "_build_coverage_stats", lambda **kw: {"reviewed_last_7d": 9})
+    monkeypatch.setattr(today_output, "_build_coverage_stats", lambda **kw: {"reviewed_last_7d": 9})
     base: dict[str, Any] = {
         "report_date": "2026-06-17",
         "comparison_facts": {
@@ -850,7 +851,7 @@ def test_apply_insight_state_today_signal_even_below_prior_salience_bar(monkeypa
 
 def test_apply_insight_state_quiet_when_no_current_signal(monkeypatch) -> None:
     """오늘 신호 없음(placeholder) → quiet + week_synthesis (빈 화면 대신 종합)."""
-    monkeypatch.setattr(today_module, "_build_coverage_stats", lambda **kw: {"reviewed_last_7d": 0})
+    monkeypatch.setattr(today_output, "_build_coverage_stats", lambda **kw: {"reviewed_last_7d": 0})
     base: dict[str, Any] = {
         "report_date": "2026-06-17",
         "comparison_facts": {},
