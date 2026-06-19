@@ -130,10 +130,10 @@ from src.agents.strategic_insight.utils import (  # noqa: F401  — 분리 모�
     _with_particle,
 )
 
-_DEFAULT_LLM_MODEL = "gpt-4o"
+_DEFAULT_LLM_MODEL = "gpt-4o-mini"
 
 
-_DEFAULT_FRONTEND_READY_MODEL = "gpt-5.5"
+_DEFAULT_FRONTEND_READY_MODEL = "gpt-4o-mini"
 
 
 _LLM_MODEL = os.getenv("STRATEGIC_INSIGHT_MODEL", _DEFAULT_LLM_MODEL)

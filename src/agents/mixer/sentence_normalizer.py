@@ -177,7 +177,7 @@ _llms: dict[str, ChatOpenAI] = {}
 
 
 def _llm_max_completion_tokens(model: str) -> int:
-    default = "9000" if str(model).startswith("gpt-5") else "3000"
+    default = "9000" if str(model).startswith("gpt-4o-mini") else "3000"
     return int(os.getenv("MIXER_MAX_COMPLETION_TOKENS", default))
 
 
@@ -185,7 +185,7 @@ def _get_llm(analysis_mode: object = "quick") -> ChatOpenAI:
     model = _model_for_mode(analysis_mode)
     if model not in _llms:
         ensure_llm_env_loaded()
-        # gpt-5 reasoning_effort 분기·json_object 래핑은 공용 팩토리가 처리.
+        # 모델별 reasoning_effort 분기·json_object 래핑은 공용 팩토리가 처리.
         # 모델별 _llms 캐시는 그대로 유지(quick/deep 분리).
         _llms[model] = build_chat_llm(
             LLMSpec(
@@ -387,6 +387,9 @@ def _format_analysis_units(cards: list[dict]) -> str:
         integrated_issue = _component(linked_results, "integrated_issue")
         analysis_result = _component(linked_results, "analysis")
         implication_result = _component(linked_results, "implication") or impl
+        vdb_context = _json_dict(evidence.get("vdb_context"))
+        vdb_integrated_issue = _vdb_context_text(vdb_context.get("integrated_issue"))
+        vdb_card_analysis = _vdb_context_text(vdb_context.get("card_analysis"))
         peer_impl = (
             implication_result.get("peer_implication")
             if isinstance(implication_result.get("peer_implication"), dict)
@@ -418,6 +421,8 @@ def _format_analysis_units(cards: list[dict]) -> str:
                 f"- Exposure: {exposure_band} ({_card_score(c):.2f})",
                 f"- Source raw article ids: {raw_ids}",
                 f"- Quality flags: {_compact_json(quality_flags) or '*없음*'}",
+                f"- VDB 통합 이슈 원문: {vdb_integrated_issue or '*없음*'}",
+                f"- VDB 분석/시사점/대응 원문: {vdb_card_analysis or '*없음*'}",
                 f"- 통합 이슈: {_compact_json(_compact_integrated_issue(integrated_issue))}",
                 f"- 전략 분석: {_compact_json(_compact_analysis_result(analysis_result))}",
                 f"- Peer 분석: {_compact_json(peer_impl)}",
@@ -436,6 +441,17 @@ def _format_analysis_units(cards: list[dict]) -> str:
 def _format_cards(cards: list[dict]) -> str:
     """Backward-compatible alias for older tests/imports."""
     return _format_analysis_units(cards)
+
+
+def _vdb_context_text(value: object, *, limit: int = 1400) -> str:
+    context = _json_dict(value)
+    text_value = str(context.get("text") or "").strip()
+    if not text_value:
+        return ""
+    source = str(context.get("source") or "")
+    chunk_count = context.get("chunk_count")
+    prefix = f"{source}/{chunk_count} chunks: " if source or chunk_count else ""
+    return f"{prefix}{text_value}"[:limit]
 
 
 def _json_list(value: object) -> list:

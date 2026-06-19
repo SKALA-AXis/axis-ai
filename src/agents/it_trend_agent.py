@@ -66,7 +66,7 @@ log = logging.getLogger(__name__)
 _TREND_SOURCE_NAMES = {"spri", "bcg"}
 _GLOBAL_NEWSROOM_SOURCE_TYPES = {"global_newsroom", "company_newsroom"}
 
-_LLM_MODEL = "gpt-4o"
+_LLM_MODEL = "gpt-4o-mini"
 _PROMPT_VERSION = "global-trends-v1.1-evidence-grounded-ko"
 
 _DEFAULT_SK_AX_BUSINESS_LINES: tuple[str, ...] = (

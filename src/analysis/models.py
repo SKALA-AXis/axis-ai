@@ -762,7 +762,7 @@ class SkaxImplication:
 class ImplicationProvenance:
     generator: str = "ImplicationAgent"
     prompt_version: str = "implication-v4.0"
-    model: str = "gpt-4o"
+    model: str = "gpt-4o-mini"
     bundle_id: str = ""
     used_peer_profile_keys: list[str] = field(default_factory=list)
     used_skax_profile_keys: list[str] = field(default_factory=list)
