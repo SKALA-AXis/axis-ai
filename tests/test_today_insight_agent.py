@@ -5,6 +5,7 @@
 #   2026-06-09 최종민 — gpt-5.5·우선순위 컨텍스트·dual-lane 비교 및 홈 3상태/출처 링크 보정 반영
 #   2026-06-14 안가은 — 투데이 인사이트 출처 날짜 필터링 커버 테스트 추가
 #   2026-06-17 박지원 — 카드 클러스터링·요약 표시 정리 반영
+#   2026-06-19 최종민 — 코드 변경
 from __future__ import annotations
 
 import asyncio
@@ -514,6 +515,9 @@ def test_today_insight_agent_returns_cached_payload_without_regeneration(monkeyp
 
     assert result["headline"] == "캐시된 Today's Insight"
     assert preload_calls == [True]
+    # 캐시 반환도 현재 스키마로 정규화된다 — 누락 필드는 기본값으로 채워진다.
+    assert result["state"] == "today_signal"
+    assert "confidence" in result and "provenance" in result
 
 
 def test_today_insight_agent_cache_only_does_not_generate_when_cache_missing(monkeypatch) -> None:
@@ -538,6 +542,11 @@ def test_today_insight_agent_cache_only_does_not_generate_when_cache_missing(mon
 
     assert result["headline"] == "Today's Insight 08:10 업데이트 대기"
     assert result["provenance"]["mode"] == "cache_only"
+    # 캐시 대기(placeholder)는 state=quiet 로 나가야 한다 (today_signal 기본값 회귀 방지).
+    assert result["provenance"]["is_status_placeholder"] is True
+    assert result["state"] == "quiet"
+    assert result["signal_date"] is None
+    assert result["week_synthesis"] is None
     assert not fake_llm.prompts
     assert not saved
 

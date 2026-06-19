@@ -4,6 +4,7 @@
 #   2026-06-05 박진 — 투데이 인사이트 에이전트 및 60일 카드뉴스 입력 신규 추가
 #   2026-06-09 최종민 — dual-lane 비교
 #   2026-06-14 안가은 — 키워드 트렌드 파이프라인 갱신, 신호를 출처일에 고정
+#   2026-06-19 최종민 — 코드 변경
 """TodayInsightAgent — home dashboard executive daily signal synthesis.
 
 The agent compares today's integrated issues against accumulated JSON context
@@ -268,7 +269,7 @@ class TodayInsightAgent:
         if req.use_cached and not req.force_refresh:
             cached_record = _load_latest_report_record(anchor_date)
             if cached_record:
-                return cached_record["payload"]
+                return _normalize_cached_payload(cached_record["payload"])
 
         if req.cache_only:
             return _scheduled_cache_pending_result(anchor_date)
@@ -454,6 +455,22 @@ def _preload_llm_client() -> None:
         log.debug("TodayInsight LLM client preload skipped | error=%s", exc)
 
 
+def _normalize_cached_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """저장된 캐시 payload 를 현재 응답 스키마로 재검증해 구조 일관성을 맞춘다.
+
+    누락된 신규 필드(state/signal_date/week_synthesis 등)는 기본값으로 채워지고,
+    레거시/비정형 캐시가 검증에 실패하면 원본을 그대로 반환한다(하위 호환).
+    """
+    try:
+        return TodayInsightGenerateResponse.model_validate(payload).model_dump()
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "cached today-insight payload re-validation failed; returning raw payload",
+            exc_info=True,
+        )
+        return payload
+
+
 def _scheduled_cache_pending_result(anchor_date: date) -> dict[str, Any]:
     now_iso = datetime.now(UTC).isoformat()
     prior_reports = _fetch_prior_today_reports(anchor_date=anchor_date, limit=1)
@@ -564,6 +581,9 @@ def _scheduled_cache_pending_result(anchor_date: date) -> dict[str, Any]:
             "peer_ids": [],
             "sectors": [],
             "confidence": 0.0,
+            "state": "quiet",
+            "signal_date": None,
+            "week_synthesis": None,
             "provenance": {
                 "mode": "cache_only",
                 "result_kind": "scheduled_pending",
