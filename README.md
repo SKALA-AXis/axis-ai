@@ -6,7 +6,7 @@ AXIS 서비스의 Python AI 서버. **뉴스·공시·채용공고 크롤링 →
 
 ---
 
-## ⚡ 로컬/평가자 빠른 시작 (클러스터 불필요)
+## 로컬/평가자 빠른 시작 (클러스터 불필요)
 
 - **전체 스택을 한 번에 (가장 쉬움)**: `axis-infra` 에서 `docker compose --profile local up -d --build` — backend·ai·frontend·DB 가 모두 뜹니다(ai 이미지 포함 빌드). → [axis-infra/README](https://github.com/SKALA-AXis/axis-infra)
 - **ai 서버만 호스트에서** (아래 [Mode 2](#mode-2--local-docker-compose-오프라인--격리) 의 요약):
@@ -21,17 +21,17 @@ AXIS 서비스의 Python AI 서버. **뉴스·공시·채용공고 크롤링 →
   ```
 - **사전 요구사항**: Python **3.11** + [uv](https://docs.astral.sh/uv/), `OPENAI_API_KEY`(LLM). 크롤러까지 쓰려면 NAVER/DART 등. **최초 실행 시 BGE-M3 임베딩 모델(~2GB)을 자동 다운로드**하므로 수 분 소요.
 
-> ℹ️ axis-ai 는 backend(:8080)에서만 호출하는 **내부 서버**입니다(:8001 외부 노출 금지). 단독 기동은 헬스체크·디버깅·파이프라인 트리거용.
+> axis-ai 는 backend(:8080)에서만 호출하는 **내부 서버**입니다(:8001 외부 노출 금지). 단독 기동은 헬스체크·디버깅·파이프라인 트리거용.
 
 ---
 
-## 🚀 실행 방법 (3가지 모드)
+## 실행 방법 (3가지 모드)
 
 axis-ai 는 **DB 는 클러스터에서, 코드는 로컬에서** 가 일상 권장 패턴입니다. 매번 docker build·push 안 해도 빠른 iteration 가능 (Vite HMR 수준).
 
 | 모드 | DB / Qdrant | 코드 실행 | 언제 쓰나 |
 |---|---|---|---|
-| **1. Cluster DB + Local code** ⭐ 권장 | SKALA EKS 클러스터 (port-forward) | 본인 Mac 의 `uv run python` | **일상 개발** — 크롤러 / 파이프라인 / 새 기능 작성·검증 |
+| **1. Cluster DB + Local code** 권장 | SKALA EKS 클러스터 (port-forward) | 본인 Mac 의 `uv run python` | **일상 개발** — 크롤러 / 파이프라인 / 새 기능 작성·검증 |
 | **2. Local docker compose** | 본인 PC 의 docker postgres·qdrant | 본인 Mac | 오프라인 작업, 스키마 실험, 격리 환경 |
 | **3. Pod 안에서 실행** | 클러스터 내부 (port-forward 없음) | `kubectl exec` 로 pod 안 | 운영 / 디버깅 / scheduled CronJob 트리거 |
 
@@ -39,11 +39,11 @@ axis-ai 는 **DB 는 클러스터에서, 코드는 로컬에서** 가 일상 권
 
 ---
 
-### Mode 1 — Cluster DB + Local code ⭐ 일상 개발
+### Mode 1 — Cluster DB + Local code 일상 개발
 
 DB / 임베딩 데이터는 클러스터에 항상 떠 있고, 본인은 로컬에서 코드 iterating. 다른 팀원과 같은 DB 를 보면서 개발 — 데이터 일관성·격리 둘 다.
 
-> 💡 **빠른 시작**: axis-ai 만 host 에서 돌리고 싶지 않고 backend / frontend 도 함께 한 번에 띄우려면 [`axis-infra` 의 `make up-cluster`](../axis-infra/README.md#mode-a--cluster-db--docker-compose--권장) — port-forward 자동 + docker compose 한 줄로 풀 스택 (cluster DB 연결). 본 Mode 1 은 *axis-ai 만 host 에서 직접 iterate* 하는 경우 (HMR / debugger / 빠른 빌드 사이클).
+> **빠른 시작**: axis-ai 만 host 에서 돌리고 싶지 않고 backend / frontend 도 함께 한 번에 띄우려면 [`axis-infra` 의 `make up-cluster`](../axis-infra/README.md#mode-a--cluster-db--docker-compose--권장) — port-forward 자동 + docker compose 한 줄로 풀 스택 (cluster DB 연결). 본 Mode 1 은 *axis-ai 만 host 에서 직접 iterate* 하는 경우 (HMR / debugger / 빠른 빌드 사이클).
 
 #### 0. (1회) kubectl 클러스터 접속
 
@@ -278,10 +278,10 @@ axis-ai/
 
 | ID | 회사명 | 경쟁 강도 | 비고 |
 |---|---|---|---|
-| `samsung_sds` | 삼성SDS | 🔴 매우 높음 | AX 풀스택, OpenAI 리셀러 1호 |
-| `lg_cns` | LG CNS | 🔴 매우 높음 | 팔란티어 파트너십, 에이전트웍스 |
-| `hyundai_autoever` | 현대오토에버 | 🟡 높음 | 모빌리티 SI |
-| `posco_dx` | 포스코DX | 🟡 높음 | 산업 DX |
+| `samsung_sds` | 삼성SDS | 매우 높음 | AX 풀스택, OpenAI 리셀러 1호 |
+| `lg_cns` | LG CNS | 매우 높음 | 팔란티어 파트너십, 에이전트웍스 |
+| `hyundai_autoever` | 현대오토에버 | 높음 | 모빌리티 SI |
+| `posco_dx` | 포스코DX | 높음 | 산업 DX |
 
 비교 기준 — `sk_ax`: SK주식회사 지주(`corp_code 00181712`). **현재 SK 그룹 전체 매출**이라 매출 절대값 비교 시 스코프 차이 큼 (`_scope_warning` 마킹). 정확한 SK AX 부문 매출은 사업전략팀 내부 자료로 교체 필요.
 
@@ -306,8 +306,8 @@ RSS/Google News RSS는 현재 크롤러 흐름에서 제거되었습니다. 해�
 |---|---|---|---|
 | **공식 뉴스룸** SDS | 0.90 | Playwright + URL 슬러그 패턴 | samsung_sds 전용 |
 | **공식 뉴스룸** LG CNS | 0.90 | 내부 fingerprint REST | lg_cns 전용 |
-| **공식 뉴스룸** 현대오토에버 | 0.90 | Playwright generic ★ 신규 | best-effort 셀렉터 |
-| **공식 뉴스룸** 포스코DX | 0.90 | Playwright generic ★ 신규 | 〃 |
+| **공식 뉴스룸** 현대오토에버 | 0.90 | Playwright generic 신규 | best-effort 셀렉터 |
+| **공식 뉴스룸** 포스코DX | 0.90 | Playwright generic 신규 | 〃 |
 | **글로벌 공식 뉴스룸** | 0.90 | NVIDIA/MS/Google 등 공식 뉴스룸 HTML | overseas peer |
 | 네이버 금융 리서치 | 0.80 | PDF 링크 수집 + PDF payload 파싱 | 국내 peer |
 | 채용공고 | 0.60 | Work24/채용 API·페이지 | 국내 peer |
@@ -345,7 +345,7 @@ issue_integrate → profile_context → build_analysis_context → strategic_ins
 LLM 노드만 retry (1s 시작, 2배 backoff, 최대 2회)
 ```
 
-> ⚠️ 과거 문서의 "ingestion_graph.py 5노드"는 v3 설계안 — 해당 파일은 존재하지 않음.
+> 과거 문서의 "ingestion_graph.py 5노드"는 v3 설계안 — 해당 파일은 존재하지 않음.
 
 ### 결정적 노출도 산식 — 확정 (2026-06-12 팀 결정: 코드가 정본)
 
@@ -478,10 +478,10 @@ DART OpenAPI 실수치 (총매출·영업이익 5분기) + segment/AI비중/head
 
 | 필드 | 신뢰도 | 비고 |
 |---|---|---|
-| `revenue_total_krwbn` / `operating_profit_krwbn` | ✅ DART 검증 | 사업보고서 분기보고서 thstrm_amount 기반 |
-| `segment_revenue_krwbn` | ❌ stub null | DART 정형 데이터에 없음 → W5에서 IR PDF 파싱 |
-| `ai_revenue_share_pct` | ❌ stub null | 공식 공시 미존재 → IR 자료 입력 필요 |
-| `headcount` | 🟡 추정치 | W7 잡공고 약한신호로 보완 |
+| `revenue_total_krwbn` / `operating_profit_krwbn` | DART 검증 | 사업보고서 분기보고서 thstrm_amount 기반 |
+| `segment_revenue_krwbn` | stub null | DART 정형 데이터에 없음 → W5에서 IR PDF 파싱 |
+| `ai_revenue_share_pct` | stub null | 공식 공시 미존재 → IR 자료 입력 필요 |
+| `headcount` | 추정치 | W7 잡공고 약한신호로 보완 |
 
 ### `data/sk_ax_financials.json` — 비교 기준
 
@@ -550,13 +550,13 @@ SpringBoot에서만 호출. 8001 포트 외부 노출 금지.
 | `POST` | `/today-insight/generate` · `/insight/generate` | 인사이트 |
 | `POST` | `/mixer/analyze` (+`/stream` SSE) | 믹서 |
 | `POST` | `/global/trends/run` | 글로벌 트렌드 (5-phase) |
-| `POST` | `/search` · `/gen-search` | ⚠️ TODO 스텁 (실검색은 /chat 경로) |
+| `POST` | `/search` · `/gen-search` | TODO 스텁 (실검색은 /chat 경로) |
 | `POST` | `/link/verify` | 링크 검증 |
 | `POST` | `/weak-signal/run` | 501 (운영 경로 미연결) |
 
 ## 로컬 개발 세팅
 
-> Cloud / Local 모드 분기는 위 [🚀 실행 방법](#-실행-방법-cloud--local-두-가지-모드) 섹션 참조. 아래는 신규 팀원이 처음부터 환경을 세팅할 때 따라가는 절차입니다.
+> Cloud / Local 모드 분기는 위 [실행 방법](#-실행-방법-cloud--local-두-가지-모드) 섹션 참조. 아래는 신규 팀원이 처음부터 환경을 세팅할 때 따라가는 절차입니다.
 
 ```bash
 # 1. 레포 클론
@@ -799,7 +799,7 @@ MLFLOW_TRACKING_URI=http://localhost:5000
 ## 개발 명령어
 
 ```bash
-make ci                       # ★ push/PR 전 — CI 와 동일 검사 (format check + lint + mypy + pytest)
+make ci                       # push/PR 전 — CI 와 동일 검사 (format check + lint + mypy + pytest)
 make format                   # ruff format src/ (CI format 실패 시 먼저 실행)
 uv run pre-commit install     # 커밋 시 ruff format/check 자동 (권장)
 uv add 패키지명               # 의존성 추가 (pip install 금지)
