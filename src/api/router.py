@@ -2124,20 +2124,12 @@ def _content_vdb_debug_status(
         )
         return int(getattr(result, "count", 0) or 0)
 
-    raw_result = (
-        get_raw_article_body(raw_id, fallback_to_rdb=False)
-        if raw_id is not None
-        else None
-    )
+    raw_result = get_raw_article_body(raw_id, fallback_to_rdb=False) if raw_id is not None else None
     issue_result = (
-        get_integrated_issue_context(str(issue_id), fallback_to_rdb=False)
-        if issue_id
-        else None
+        get_integrated_issue_context(str(issue_id), fallback_to_rdb=False) if issue_id else None
     )
     card_result = (
-        get_card_analysis_context(str(card_id), fallback_to_rdb=False)
-        if card_id
-        else None
+        get_card_analysis_context(str(card_id), fallback_to_rdb=False) if card_id else None
     )
 
     analysis_unit_payload: dict[str, Any] = {"card_news_id": card_id, "available": False}
@@ -2305,10 +2297,9 @@ def _resolve_content_vdb_debug_ids(
                 source_ids = _int_values(card_row.get("source_raw_article_ids"))
                 resolved["source_raw_article_ids"] = source_ids
                 if raw_article_id is None and source_ids:
-                    linked_raw_id = (
-                        db.execute(
-                            text(
-                                """
+                    linked_raw_id = db.execute(
+                        text(
+                            """
                                 SELECT id
                                   FROM raw_articles
                                  WHERE id = ANY(:source_ids)
@@ -2321,11 +2312,9 @@ def _resolve_content_vdb_debug_ids(
                                  ORDER BY id
                                  LIMIT 1
                                 """
-                            ),
-                            {"source_ids": source_ids},
-                        )
-                        .scalar()
-                    )
+                        ),
+                        {"source_ids": source_ids},
+                    ).scalar()
                     if linked_raw_id is not None:
                         resolved["raw_article_id"] = int(linked_raw_id)
             if not resolved.get("integrated_issue_id"):
