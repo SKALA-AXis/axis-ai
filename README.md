@@ -6,6 +6,25 @@ AXIS 서비스의 Python AI 서버. **뉴스·공시·채용공고 크롤링 →
 
 ---
 
+## ⚡ 로컬/평가자 빠른 시작 (클러스터 불필요)
+
+- **전체 스택을 한 번에 (가장 쉬움)**: `axis-infra` 에서 `docker compose --profile local up -d --build` — backend·ai·frontend·DB 가 모두 뜹니다(ai 이미지 포함 빌드). → [axis-infra/README](https://github.com/SKALA-AXis/axis-infra)
+- **ai 서버만 호스트에서** (아래 [Mode 2](#mode-2--local-docker-compose-오프라인--격리) 의 요약):
+  ```bash
+  # 1) DB·Qdrant 만 컨테이너로 (axis-infra)
+  cd ../axis-infra && (cp .env.local.example .env 2>/dev/null || true)
+  docker compose --profile local up -d postgres qdrant
+  # 2) ai 호스트 실행 (axis-ai) — Python 3.11 + uv
+  cd ../axis-ai && uv sync
+  cp .env.example .env          # DATABASE_URL·QDRANT_HOST 를 localhost 로, OPENAI_API_KEY 채움
+  uv run uvicorn src.api.main:app --reload --port 8001
+  ```
+- **사전 요구사항**: Python **3.11** + [uv](https://docs.astral.sh/uv/), `OPENAI_API_KEY`(LLM). 크롤러까지 쓰려면 NAVER/DART 등. **최초 실행 시 BGE-M3 임베딩 모델(~2GB)을 자동 다운로드**하므로 수 분 소요.
+
+> ℹ️ axis-ai 는 backend(:8080)에서만 호출하는 **내부 서버**입니다(:8001 외부 노출 금지). 단독 기동은 헬스체크·디버깅·파이프라인 트리거용.
+
+---
+
 ## 🚀 실행 방법 (3가지 모드)
 
 axis-ai 는 **DB 는 클러스터에서, 코드는 로컬에서** 가 일상 권장 패턴입니다. 매번 docker build·push 안 해도 빠른 iteration 가능 (Vite HMR 수준).
