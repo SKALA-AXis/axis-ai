@@ -461,24 +461,15 @@ def card_analysis_chunks(
         or evidence_payload.get("integrated_issue_id")
         or package.get("integrated_issue_id")
     )
-    common = {
-        "source_table": TABLE_CARD_NEWS,
-        "source_id": card_id,
-        "title": _clean_text(card.get("title")),
-        "card_news_id": card_id,
-        "integrated_issue_id": integrated_issue_id or None,
-        "peer_id": _clean_text(
-            card.get("peer_id") or card.get("peer_company_id") or card.get("company")
-        ),
-        "source_type": "card_news",
-        "event_type": _clean_text(card.get("event_type")),
-        "created_at": card.get("created_at"),
-        "updated_at": card.get("updated_at"),
-        "metadata": {
-            "source_raw_article_ids": _int_list(card.get("source_raw_article_ids")),
-            "importance": card.get("importance"),
-            "importance_score": card.get("importance_score"),
-        },
+    title = _clean_text(card.get("title"))
+    peer_id = _clean_text(card.get("peer_id") or card.get("peer_company_id") or card.get("company"))
+    event_type = _clean_text(card.get("event_type"))
+    created_at = card.get("created_at")
+    updated_at = card.get("updated_at")
+    metadata: dict[str, Any] = {
+        "source_raw_article_ids": _int_list(card.get("source_raw_article_ids")),
+        "importance": card.get("importance"),
+        "importance_score": card.get("importance_score"),
     }
     chunks: list[ContentChunk] = []
     sections = [
@@ -500,9 +491,19 @@ def card_analysis_chunks(
             continue
         chunks.extend(
             _chunks_for_text(
+                source_table=TABLE_CARD_NEWS,
+                source_id=card_id,
                 content_kind=content_kind,
                 text_value=text_value,
-                **common,
+                title=title,
+                card_news_id=card_id,
+                integrated_issue_id=integrated_issue_id or None,
+                peer_id=peer_id,
+                source_type="card_news",
+                event_type=event_type,
+                created_at=created_at,
+                updated_at=updated_at,
+                metadata=metadata,
             )
         )
     return chunks
