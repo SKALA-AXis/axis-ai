@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import operator
+import os
 import re
 import time
 import uuid
@@ -61,6 +62,63 @@ from src.services.analysis_context_builder import AnalysisContextBuilder
 from src.services.profile_context_loader import ProfileContextLoader
 
 log = logging.getLogger(__name__)
+
+
+def _content_vdb_index_on_write() -> bool:
+    return os.getenv("CONTENT_VDB_INDEX_ON_WRITE", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+
+
+def _index_integrated_issue_to_vdb_best_effort(
+    *,
+    integrated_issue_id: str | None,
+    integrated_issue: dict[str, Any],
+    input_bundle: AnalysisInputBundle,
+) -> None:
+    if not integrated_issue_id or not _content_vdb_index_on_write():
+        return
+    try:
+        from src.rag.content_index import index_integrated_issue_payload
+
+        result = index_integrated_issue_payload(
+            integrated_issue_id=integrated_issue_id,
+            integrated_issue=integrated_issue,
+            input_bundle=input_bundle,
+        )
+        log.info(
+            "integrated issue content VDB index 완료 | issue_id=%s indexed=%s",
+            integrated_issue_id,
+            result.get("indexed"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "integrated issue content VDB index 실패 | issue_id=%s error=%s",
+            integrated_issue_id,
+            exc,
+        )
+
+
+def _index_card_analysis_to_vdb_best_effort(
+    *,
+    card_news_id: str | None,
+    card: dict[str, Any],
+) -> None:
+    if not card_news_id or not _content_vdb_index_on_write():
+        return
+    try:
+        from src.rag.content_index import index_card_analysis_payload
+
+        result = index_card_analysis_payload(card_news_id=card_news_id, card=card)
+        log.info(
+            "card_news content VDB index 완료 | card_id=%s indexed=%s",
+            card_news_id,
+            result.get("indexed"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("card_news content VDB index 실패 | card_id=%s error=%s", card_news_id, exc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -380,6 +438,11 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
             evidence_payload["integrated_issue_storage"] = "available"
             evidence_payload["analysis_package"]["integrated_issue_id"] = integrated_issue_id
             evidence_payload["analysis_package"]["integrated_issue"] = integrated_issue
+            _index_integrated_issue_to_vdb_best_effort(
+                integrated_issue_id=integrated_issue_id,
+                integrated_issue=integrated_issue,
+                input_bundle=bundle,
+            )
         else:
             evidence_payload["integrated_issue_storage"] = "unavailable"
             provenance = evidence_payload.setdefault("provenance", {})
@@ -493,6 +556,7 @@ def _make_nodes(deps: SupervisorDeps) -> dict[str, Callable[[SupervisorState], S
             card["created_at"] = as_of.isoformat()
 
         card_id = save_card_news(card)
+        _index_card_analysis_to_vdb_best_effort(card_news_id=card_id, card=card)
         return cast(
             SupervisorState,
             {**state, "card_news_id": card_id, "card_news_payload": card},

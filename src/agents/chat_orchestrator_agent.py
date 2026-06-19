@@ -853,7 +853,6 @@ class ChatOrchestratorAgent:
                                peer_id,
                                source_name,
                                title,
-                               content,
                                url,
                                COALESCE(published_at, created_at) AS published_at,
                                created_at
@@ -1036,6 +1035,44 @@ class ChatOrchestratorAgent:
                         "peer_id": hit.get("peer_id"),
                         "event_type": hit.get("event_type"),
                         "retrieval": "qdrant_assistant_knowledge_rrf",
+                    },
+                )
+            )
+        try:
+            from src.rag.content_index import (
+                KIND_RAW_ARTICLE_BODY,
+                TABLE_RAW_ARTICLES,
+                search_content_chunks,
+            )
+
+            content_hits = search_content_chunks(
+                query,
+                top_k=top_k,
+                source_table=TABLE_RAW_ARTICLES,
+                content_kind=KIND_RAW_ARTICLE_BODY,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("content VDB vector search skipped | error=%s", exc)
+            content_hits = []
+        for hit in content_hits:
+            raw_article_id = str(hit.get("raw_article_id") or hit.get("source_id") or "")
+            if not raw_article_id:
+                continue
+            candidates.append(
+                RetrievalCandidate(
+                    source_type="raw_article",
+                    source_id=raw_article_id,
+                    title=str(hit.get("title") or ""),
+                    snippet=str(hit.get("text") or "")[:700],
+                    score=float(hit.get("score") or 0.52),
+                    metadata={
+                        "peer_id": hit.get("peer_id"),
+                        "source_name": hit.get("source_name"),
+                        "url": hit.get("url"),
+                        "published_at": hit.get("published_at"),
+                        "retrieval": "qdrant_content_vdb_rrf",
+                        "chunk_index": hit.get("chunk_index"),
+                        "chunk_count": hit.get("chunk_count"),
                     },
                 )
             )
@@ -1578,10 +1615,23 @@ def _peer_row_to_candidate(row: Any, *, score: float) -> RetrievalCandidate:
 
 
 def _raw_article_row_to_candidate(row: Any, *, score: float) -> RetrievalCandidate:
-    snippet = str(row.get("content") or "")[:600]
+    article_id = str(row.get("id") or "")
+    snippet = ""
+    retrieval_source = "rdb_row"
+    if article_id:
+        try:
+            from src.rag.content_index import get_raw_article_body
+
+            body = get_raw_article_body(article_id)
+            snippet = body.text[:600]
+            retrieval_source = f"content_{body.source}"
+        except Exception as exc:  # noqa: BLE001
+            log.debug("raw article VDB body lookup skipped | id=%s error=%s", article_id, exc)
+    if not snippet:
+        snippet = str(row.get("content") or "")[:600]
     return RetrievalCandidate(
         source_type="raw_article",
-        source_id=str(row.get("id") or ""),
+        source_id=article_id,
         title=str(row.get("title") or ""),
         snippet=snippet,
         score=score,
@@ -1591,6 +1641,7 @@ def _raw_article_row_to_candidate(row: Any, *, score: float) -> RetrievalCandida
             "url": row.get("url"),
             "published_at": str(row.get("published_at") or ""),
             "created_at": str(row.get("created_at") or ""),
+            "retrieval": retrieval_source,
         },
     )
 

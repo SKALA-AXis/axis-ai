@@ -477,6 +477,25 @@ async def health():
     )
 
 
+@app.get("/debug/content-vdb/status")
+async def debug_content_vdb_status(
+    card_news_id: str | None = None,
+    integrated_issue_id: str | None = None,
+    raw_article_id: int | None = None,
+    home_window_days: int = 365,
+):
+    """VDB 전환 상태를 Swagger에서 확인하는 진단용 endpoint.
+
+    LLM은 호출하지 않는다. Qdrant exact lookup과 agent 입력 hydration 경로만 점검한다.
+    """
+    return _content_vdb_debug_status(
+        card_news_id=card_news_id,
+        integrated_issue_id=integrated_issue_id,
+        raw_article_id=raw_article_id,
+        home_window_days=home_window_days,
+    )
+
+
 @app.post("/pipeline/run", response_model=PipelineRunResponse, status_code=202)
 async def run_pipeline(request: PipelineRunRequest, background_tasks: BackgroundTasks):
     """수집 파이프라인 비동기 실행 (SpringBoot 스케줄러가 매시간 호출)"""
@@ -2064,6 +2083,380 @@ def _check_qdrant() -> bool:
     except Exception as e:
         log.warning("Qdrant 연결 확인 실패: %s", e)
         return False
+
+
+def _content_vdb_debug_status(
+    *,
+    card_news_id: str | None,
+    integrated_issue_id: str | None,
+    raw_article_id: int | None,
+    home_window_days: int,
+) -> dict[str, Any]:
+    from importlib import metadata
+
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+    from src.db.qdrant_client import COLLECTION_DOCUMENTS, get_qdrant_client, get_qdrant_url
+    from src.rag.content_index import (
+        CARD_CONTENT_KINDS,
+        CONTENT_INDEX_VERSION,
+        KIND_INTEGRATED_ISSUE,
+        KIND_RAW_ARTICLE_BODY,
+        TABLE_CARD_NEWS,
+        TABLE_INTEGRATED_ISSUES,
+        TABLE_RAW_ARTICLES,
+        get_card_analysis_context,
+        get_integrated_issue_context,
+        get_raw_article_body,
+    )
+    from src.services.analysis_units import load_analysis_units_by_card_ids
+
+    resolved = _resolve_content_vdb_debug_ids(
+        card_news_id=card_news_id,
+        integrated_issue_id=integrated_issue_id,
+        raw_article_id=raw_article_id,
+    )
+    card_id = resolved.get("card_news_id")
+    issue_id = resolved.get("integrated_issue_id")
+    raw_id = resolved.get("raw_article_id")
+
+    client = get_qdrant_client()
+    count_filter_base = [
+        FieldCondition(
+            key="content_index_version",
+            match=MatchValue(value=CONTENT_INDEX_VERSION),
+        )
+    ]
+
+    def count_source(source_table: str) -> int:
+        result = client.count(
+            collection_name=COLLECTION_DOCUMENTS,
+            count_filter=Filter(
+                must=[
+                    *count_filter_base,
+                    FieldCondition(key="source_table", match=MatchValue(value=source_table)),
+                ]
+            ),
+            exact=True,
+        )
+        return int(getattr(result, "count", 0) or 0)
+
+    raw_result = (
+        get_raw_article_body(raw_id, fallback_to_rdb=False)
+        if raw_id is not None
+        else None
+    )
+    issue_result = (
+        get_integrated_issue_context(str(issue_id), fallback_to_rdb=False)
+        if issue_id
+        else None
+    )
+    card_result = (
+        get_card_analysis_context(str(card_id), fallback_to_rdb=False)
+        if card_id
+        else None
+    )
+
+    analysis_unit_payload: dict[str, Any] = {"card_news_id": card_id, "available": False}
+    mixer_payload: dict[str, Any] = {"card_news_id": card_id, "vdb_in_prompt": False}
+    if card_id:
+        units = load_analysis_units_by_card_ids([str(card_id)])
+        if units:
+            card_like = units[0].to_card_like()
+            evidence_payload = _json_dict(card_like.get("evidence_payload"))
+            vdb_context = _json_dict(evidence_payload.get("vdb_context"))
+            analysis_unit_payload = {
+                "card_news_id": card_id,
+                "available": True,
+                "vdb_context_keys": sorted(vdb_context.keys()),
+                "has_integrated_issue_context": bool(
+                    _json_dict(vdb_context.get("integrated_issue")).get("text")
+                ),
+                "has_card_analysis_context": bool(
+                    _json_dict(vdb_context.get("card_analysis")).get("text")
+                ),
+                "quality_flags": list(card_like.get("quality_flags") or []),
+            }
+            try:
+                from src.agents.mixer_analysis_agent import _format_analysis_units
+
+                prompt_context = _format_analysis_units([card_like])
+                mixer_payload = {
+                    "card_news_id": card_id,
+                    "vdb_in_prompt": (
+                        "VDB 통합 이슈 원문: *없음*" not in prompt_context
+                        or "VDB 분석/시사점/대응 원문: *없음*" not in prompt_context
+                    ),
+                    "has_integrated_issue_context": (
+                        "VDB 통합 이슈 원문: *없음*" not in prompt_context
+                    ),
+                    "has_card_analysis_context": (
+                        "VDB 분석/시사점/대응 원문: *없음*" not in prompt_context
+                    ),
+                    "prompt_preview": _compact_text(prompt_context, limit=900),
+                }
+            except Exception as exc:  # noqa: BLE001
+                mixer_payload = {
+                    "card_news_id": card_id,
+                    "vdb_in_prompt": False,
+                    "error": str(exc),
+                }
+
+    home_payload = _content_vdb_home_debug(home_window_days=max(1, int(home_window_days)))
+
+    return {
+        "content_index_version": CONTENT_INDEX_VERSION,
+        "qdrant": {
+            "url": get_qdrant_url(),
+            "server": _qdrant_server_info(),
+            "client_version": metadata.version("qdrant-client"),
+        },
+        "counts": {
+            TABLE_RAW_ARTICLES: count_source(TABLE_RAW_ARTICLES),
+            TABLE_INTEGRATED_ISSUES: count_source(TABLE_INTEGRATED_ISSUES),
+            TABLE_CARD_NEWS: count_source(TABLE_CARD_NEWS),
+        },
+        "resolved_ids": resolved,
+        "exact_lookup": {
+            "raw_article_body": _fetch_result_summary(
+                raw_result,
+                expected_kinds=[KIND_RAW_ARTICLE_BODY],
+                source_id=raw_id,
+            ),
+            "integrated_issue": _fetch_result_summary(
+                issue_result,
+                expected_kinds=[KIND_INTEGRATED_ISSUE],
+                source_id=issue_id,
+            ),
+            "card_analysis": _fetch_result_summary(
+                card_result,
+                expected_kinds=list(CARD_CONTENT_KINDS),
+                source_id=card_id,
+            ),
+        },
+        "agent_hydration": {
+            "card_news_analysis_units": analysis_unit_payload,
+            "mixer_agent_prompt": mixer_payload,
+            "home_today_insight": home_payload,
+        },
+    }
+
+
+def _qdrant_server_info() -> dict[str, Any]:
+    try:
+        import httpx
+
+        from src.db.qdrant_client import get_qdrant_url
+
+        response = httpx.get(f"{get_qdrant_url().rstrip('/')}/", timeout=5)
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {"raw": payload}
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)}
+
+
+def _resolve_content_vdb_debug_ids(
+    *,
+    card_news_id: str | None,
+    integrated_issue_id: str | None,
+    raw_article_id: int | None,
+) -> dict[str, Any]:
+    from sqlalchemy import text
+
+    from src.db.postgres import SessionLocal
+
+    resolved: dict[str, Any] = {
+        "card_news_id": card_news_id,
+        "integrated_issue_id": integrated_issue_id,
+        "raw_article_id": raw_article_id,
+        "source_raw_article_ids": [],
+    }
+    try:
+        with SessionLocal() as db:
+            card_row = None
+            if card_news_id:
+                card_row = (
+                    db.execute(
+                        text(
+                            """
+                            SELECT id,
+                                   integrated_issue_id::text AS integrated_issue_id,
+                                   source_raw_article_ids
+                              FROM card_news
+                             WHERE id = :card_news_id
+                             LIMIT 1
+                            """
+                        ),
+                        {"card_news_id": card_news_id},
+                    )
+                    .mappings()
+                    .first()
+                )
+            if card_row is None:
+                card_row = (
+                    db.execute(
+                        text(
+                            """
+                            SELECT id,
+                                   integrated_issue_id::text AS integrated_issue_id,
+                                   source_raw_article_ids
+                              FROM card_news
+                             WHERE COALESCE(status, 'ACTIVE') = 'ACTIVE'
+                               AND integrated_issue_id IS NOT NULL
+                             ORDER BY created_at DESC, id DESC
+                             LIMIT 1
+                            """
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+            if card_row:
+                resolved["card_news_id"] = str(card_row.get("id") or "")
+                resolved["integrated_issue_id"] = (
+                    integrated_issue_id
+                    or str(card_row.get("integrated_issue_id") or "").strip()
+                    or None
+                )
+                source_ids = _int_values(card_row.get("source_raw_article_ids"))
+                resolved["source_raw_article_ids"] = source_ids
+                if raw_article_id is None and source_ids:
+                    linked_raw_id = (
+                        db.execute(
+                            text(
+                                """
+                                SELECT id
+                                  FROM raw_articles
+                                 WHERE id = ANY(:source_ids)
+                                   AND content IS NOT NULL
+                                   AND length(content) > 0
+                                   AND COALESCE(UPPER(processing_status), '')
+                                       NOT IN ('SKIPPED', 'FILTERED', 'FAILED')
+                                   AND COALESCE(LOWER(crawl_status), '') <> 'failed'
+                                   AND COALESCE(LOWER(relevance_label), '') <> 'irrelevant'
+                                 ORDER BY id
+                                 LIMIT 1
+                                """
+                            ),
+                            {"source_ids": source_ids},
+                        )
+                        .scalar()
+                    )
+                    if linked_raw_id is not None:
+                        resolved["raw_article_id"] = int(linked_raw_id)
+            if not resolved.get("integrated_issue_id"):
+                issue_id = db.execute(
+                    text("SELECT id::text FROM integrated_issues ORDER BY created_at DESC LIMIT 1")
+                ).scalar()
+                if issue_id:
+                    resolved["integrated_issue_id"] = str(issue_id)
+            if resolved.get("raw_article_id") is None:
+                raw_id = db.execute(
+                    text(
+                        """
+                        SELECT id
+                          FROM raw_articles
+                         WHERE content IS NOT NULL
+                           AND length(content) > 0
+                           AND COALESCE(UPPER(processing_status), '')
+                               NOT IN ('SKIPPED', 'FILTERED', 'FAILED')
+                           AND COALESCE(LOWER(crawl_status), '') <> 'failed'
+                           AND COALESCE(LOWER(relevance_label), '') <> 'irrelevant'
+                         ORDER BY id DESC
+                         LIMIT 1
+                        """
+                    )
+                ).scalar()
+                if raw_id is not None:
+                    resolved["raw_article_id"] = int(raw_id)
+    except Exception as exc:  # noqa: BLE001
+        resolved["error"] = str(exc)
+    return resolved
+
+
+def _content_vdb_home_debug(*, home_window_days: int) -> dict[str, Any]:
+    try:
+        from src.agents.today_insight_agent import _card_for_prompt, _fetch_recent_cards
+
+        cards = _fetch_recent_cards(
+            anchor_date=datetime.now(KST).date(),
+            window_days=home_window_days,
+            limit=1,
+        )
+        if not cards:
+            return {
+                "path": "_fetch_recent_cards -> _attach_today_vdb_contexts -> _card_for_prompt",
+                "available": False,
+                "card_count": 0,
+            }
+        prompt_card = _card_for_prompt(cards[0])
+        return {
+            "path": "_fetch_recent_cards -> _attach_today_vdb_contexts -> _card_for_prompt",
+            "available": True,
+            "card_id": cards[0].get("id"),
+            "vdb_analysis_context_present": bool(prompt_card.get("vdb_analysis_context")),
+            "prompt_card_preview": {
+                "id": prompt_card.get("id"),
+                "integrated_issue_id": prompt_card.get("integrated_issue_id"),
+                "vdb_analysis_context": _compact_text(
+                    str(prompt_card.get("vdb_analysis_context") or ""),
+                    limit=500,
+                ),
+            },
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "path": "_fetch_recent_cards -> _attach_today_vdb_contexts -> _card_for_prompt",
+            "available": False,
+            "error": str(exc),
+        }
+
+
+def _fetch_result_summary(
+    result: Any,
+    *,
+    expected_kinds: list[str],
+    source_id: Any,
+) -> dict[str, Any]:
+    if result is None:
+        return {
+            "source_id": source_id,
+            "source": "missing",
+            "expected_kinds": expected_kinds,
+            "present": False,
+        }
+    text_value = str(getattr(result, "text", "") or "")
+    return {
+        "source_id": source_id,
+        "source": getattr(result, "source", ""),
+        "expected_kinds": expected_kinds,
+        "content_kinds": list(getattr(result, "content_kinds", []) or []),
+        "present": bool(text_value),
+        "chunk_count": len(getattr(result, "chunks", []) or []),
+        "chars": len(text_value),
+        "preview": _compact_text(text_value, limit=500),
+    }
+
+
+def _int_values(value: Any) -> list[int]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        out: list[int] = []
+        for item in value:
+            try:
+                out.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return out
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = [part.strip() for part in value.split(",")]
+        return _int_values(parsed)
+    return []
 
 
 def _build_card_news_items(limit: int, today_only: bool) -> list[dict]:
