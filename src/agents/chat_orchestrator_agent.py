@@ -745,7 +745,6 @@ class ChatOrchestratorAgent:
                                peer_id,
                                source_name,
                                title,
-                               content,
                                url,
                                COALESCE(published_at, created_at) AS published_at,
                                created_at
@@ -928,6 +927,44 @@ class ChatOrchestratorAgent:
                         "peer_id": hit.get("peer_id"),
                         "event_type": hit.get("event_type"),
                         "retrieval": "qdrant_assistant_knowledge_rrf",
+                    },
+                )
+            )
+        try:
+            from src.rag.content_index import (
+                KIND_RAW_ARTICLE_BODY,
+                TABLE_RAW_ARTICLES,
+                search_content_chunks,
+            )
+
+            content_hits = search_content_chunks(
+                query,
+                top_k=top_k,
+                source_table=TABLE_RAW_ARTICLES,
+                content_kind=KIND_RAW_ARTICLE_BODY,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("content VDB vector search skipped | error=%s", exc)
+            content_hits = []
+        for hit in content_hits:
+            raw_article_id = str(hit.get("raw_article_id") or hit.get("source_id") or "")
+            if not raw_article_id:
+                continue
+            candidates.append(
+                RetrievalCandidate(
+                    source_type="raw_article",
+                    source_id=raw_article_id,
+                    title=str(hit.get("title") or ""),
+                    snippet=str(hit.get("text") or "")[:700],
+                    score=float(hit.get("score") or 0.52),
+                    metadata={
+                        "peer_id": hit.get("peer_id"),
+                        "source_name": hit.get("source_name"),
+                        "url": hit.get("url"),
+                        "published_at": hit.get("published_at"),
+                        "retrieval": "qdrant_content_vdb_rrf",
+                        "chunk_index": hit.get("chunk_index"),
+                        "chunk_count": hit.get("chunk_count"),
                     },
                 )
             )

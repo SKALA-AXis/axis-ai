@@ -137,7 +137,7 @@ _llm: ChatOpenAI | None = None
 
 
 def _llm_max_completion_tokens() -> int:
-    default = "12000" if str(_LLM_MODEL).startswith("gpt-5") else "3200"
+    default = "12000" if str(_LLM_MODEL).startswith("gpt-4o-mini") else "3200"
     return int(os.getenv("TODAY_INSIGHT_MAX_COMPLETION_TOKENS", default))
 
 
@@ -696,6 +696,10 @@ def _issue_for_prompt(row: dict[str, Any]) -> dict[str, Any]:
         "confidence": row.get("confidence"),
         "headline": _clip(str(row.get("headline") or ""), 240),
         "one_line_summary": _clip(str(row.get("one_line_summary") or ""), 300),
+        "vdb_integrated_issue_context": _clip(
+            _vdb_context_text(row, "integrated_issue"),
+            900,
+        ),
         "content_summary": _clip(str(row.get("content_summary") or ""), 700),
         "issue_frame": _json_ready(row.get("issue_frame") or {}),
         "evidence": _compact_evidence(row.get("evidence")),
@@ -720,6 +724,7 @@ def _card_for_prompt(card: dict[str, Any]) -> dict[str, Any]:
         "importance": card.get("importance"),
         "importance_score": card.get("importance_score"),
         "exposure_score": implication.get("exposure_score"),
+        "vdb_analysis_context": _clip(_vdb_context_text(card, "card_analysis"), 900),
         "skax_implication": _clip(
             str(
                 implication.get("potential_impact")
@@ -731,6 +736,25 @@ def _card_for_prompt(card: dict[str, Any]) -> dict[str, Any]:
         ),
         "sources": _compact_sources(card.get("sources"), limit=3),
     }
+
+
+def _vdb_context_text(row: dict[str, Any], key: str) -> str:
+    evidence_payload = row.get("evidence_payload")
+    if not isinstance(evidence_payload, dict):
+        return ""
+    vdb_context = evidence_payload.get("vdb_context")
+    if not isinstance(vdb_context, dict):
+        return ""
+    context = vdb_context.get(key)
+    if not isinstance(context, dict):
+        return ""
+    text_value = str(context.get("text") or "").strip()
+    if not text_value:
+        return ""
+    source = str(context.get("source") or "")
+    chunk_count = context.get("chunk_count")
+    prefix = f"{source}/{chunk_count} chunks: " if source or chunk_count else ""
+    return f"{prefix}{text_value}"
 
 
 def _collect_sources(

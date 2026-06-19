@@ -14,7 +14,7 @@ dependencies = [
     # torch 는 FlagEmbedding 전이 의존성이지만 CPU 인덱스 핀([tool.uv.sources]) 적용을
     # 위해 직접 의존성으로 선언 (uv sources 는 직접 의존성에만 적용됨).
     "torch>=2.0",
-    "qdrant-client>=1.9",
+    "qdrant-client==1.17.1",
     "sqlalchemy>=2.0",
     "psycopg2-binary>=2.9",
     "openai>=1.30",

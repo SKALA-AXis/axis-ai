@@ -191,10 +191,23 @@ def _peer_row_to_candidate(row: Any, *, score: float) -> RetrievalCandidate:
 
 
 def _raw_article_row_to_candidate(row: Any, *, score: float) -> RetrievalCandidate:
-    snippet = str(row.get("content") or "")[:600]
+    article_id = str(row.get("id") or "")
+    snippet = ""
+    retrieval_source = "rdb_row"
+    if article_id:
+        try:
+            from src.rag.content_index import get_raw_article_body
+
+            body = get_raw_article_body(article_id)
+            snippet = body.text[:600]
+            retrieval_source = f"content_{body.source}"
+        except Exception as exc:  # noqa: BLE001
+            log.debug("raw article VDB body lookup skipped | id=%s error=%s", article_id, exc)
+    if not snippet:
+        snippet = str(row.get("content") or "")[:600]
     return RetrievalCandidate(
         source_type="raw_article",
-        source_id=str(row.get("id") or ""),
+        source_id=article_id,
         title=str(row.get("title") or ""),
         snippet=snippet,
         score=score,
@@ -204,6 +217,7 @@ def _raw_article_row_to_candidate(row: Any, *, score: float) -> RetrievalCandida
             "url": row.get("url"),
             "published_at": str(row.get("published_at") or ""),
             "created_at": str(row.get("created_at") or ""),
+            "retrieval": retrieval_source,
         },
     )
 

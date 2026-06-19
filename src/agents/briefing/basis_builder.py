@@ -99,16 +99,14 @@ _PROMPT_VERSION = "briefing-generation-v0.3-period-briefing"
 _BRIEFING_SYNTHESIS_PROMPT_VERSION = "briefing-synthesis-v0.4-integrated-issue-frontend-contract"
 
 
-_LLM_MODEL = os.getenv("BRIEFING_LLM_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o"
+_LLM_MODEL = os.getenv("BRIEFING_LLM_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o-mini"
 
 
 _llm: ChatOpenAI | None = None
 
 
 def _llm_max_completion_tokens() -> int:
-    # gpt-5 계열은 reasoning 토큰이 max_completion_tokens 안에서 소비되므로 캡 상향.
     # mixer(9000)/today_insight(12000) 패턴과 동일. 브리핑 본문 출력은 ~2.4K 라
-    # 8000 이면 reasoning headroom + 출력 모두 충분. gpt-4o 계열도 주간/월간
     # 계약 JSON 출력이 2400 토큰을 넘을 수 있어 같은 기본값을 쓴다.
     default = "8000"
     return int(os.getenv("BRIEFING_MAX_COMPLETION_TOKENS", default))
@@ -117,7 +115,6 @@ def _llm_max_completion_tokens() -> int:
 def _get_llm() -> ChatOpenAI:
     global _llm
     if _llm is None:
-        # gpt-5 reasoning_effort 분기·json_object 래핑은 공용 팩토리가 처리.
         _llm = build_chat_llm(
             LLMSpec(
                 model=_LLM_MODEL,
