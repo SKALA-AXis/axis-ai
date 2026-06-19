@@ -5,6 +5,7 @@
 #   2026-06-12 최종민 — briefing_generation_agent 분해 1단계(support/prompts/data_layer 분리) 반영
 #   2026-06-14 안가은 — 브리핑 생성 문구 및 마침표 개선(#187)
 #   2026-06-15 심유정 — 브리핑 테스트 임포트 순서 수정
+#   2026-06-18 최종민 — 코드 변경
 from __future__ import annotations
 
 import asyncio
