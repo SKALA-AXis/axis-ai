@@ -12,6 +12,7 @@ import json
 from typing import Any
 
 from src.agents import mixer_analysis_agent as mixer_module
+from src.agents.mixer import radar
 from src.agents.mixer_analysis_agent import MixerAnalysisAgent
 from src.api.mixer_schemas import MixerAnalysisRequest, MixerAnalysisResponse
 from src.services.analysis_units import (
@@ -464,7 +465,7 @@ def test_radar_interpretation_accepts_korean_axis_label():
 
 def test_missing_radar_interpretation_is_filled_by_llm(monkeypatch):
     fake_llm = _RadarFillLLM()
-    monkeypatch.setattr(mixer_module, "_get_llm", lambda *args, **kwargs: fake_llm)
+    monkeypatch.setattr(radar, "_get_llm", lambda *args, **kwargs: fake_llm)
     radar_axis = {
         "axis": "market_position",
         "score": 1.0,
