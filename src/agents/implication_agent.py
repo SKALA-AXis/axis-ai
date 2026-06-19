@@ -50,7 +50,7 @@ from src.shared.json_helpers import json_dumps as _json_dumps
 
 log = logging.getLogger(__name__)
 
-_LLM_MODEL = "gpt-4o"
+_LLM_MODEL = "gpt-4o-mini"
 _LLM_TEMPERATURE = 0.2
 _LLM_MAX_COMPLETION_TOKENS = 2200
 

@@ -18,7 +18,7 @@ from src.llm import LLMSpec, build_chat_llm
 
 log = logging.getLogger(__name__)
 
-_LLM_MODEL = "gpt-4o"
+_LLM_MODEL = "gpt-4o-mini"
 _PROMPT_VERSION = "analysis-v3.0"
 _llm: ChatOpenAI | None = None
 

@@ -135,8 +135,8 @@ from src.services.profile_context_loader import ProfileContextLoader
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_LLM_MODEL = "gpt-4o"
-_DEFAULT_FRONTEND_READY_MODEL = "gpt-5.5"
+_DEFAULT_LLM_MODEL = "gpt-4o-mini"
+_DEFAULT_FRONTEND_READY_MODEL = "gpt-4o-mini"
 _LLM_MODEL = os.getenv("STRATEGIC_INSIGHT_MODEL", _DEFAULT_LLM_MODEL)
 _FRONTEND_READY_MODEL = os.getenv(
     "FRONTEND_READY_MODEL",

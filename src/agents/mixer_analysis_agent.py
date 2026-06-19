@@ -57,8 +57,8 @@ from src.shared.json_helpers import json_dict as _json_dict
 
 log = logging.getLogger(__name__)
 
-_QUICK_LLM_MODEL = os.getenv("MIXER_QUICK_LLM_MODEL", "gpt-4o")
-_DEEP_LLM_MODEL = os.getenv("MIXER_DEEP_LLM_MODEL", "gpt-5.5")
+_QUICK_LLM_MODEL = os.getenv("MIXER_QUICK_LLM_MODEL", "gpt-4o-mini")
+_DEEP_LLM_MODEL = os.getenv("MIXER_DEEP_LLM_MODEL", "gpt-4o-mini")
 _LLM_MODEL = _QUICK_LLM_MODEL  # legacy fallback for older callers/tests.
 _PROMPT_VERSION = "mixer-v3.1-linked-results-insight"
 _MAX_CARDS = int(os.getenv("MIXER_MAX_CARDS", "20"))
@@ -306,7 +306,7 @@ def _model_for_mode(analysis_mode: object = "quick") -> str:
 
 
 def _llm_max_completion_tokens(model: str) -> int:
-    default = "9000" if str(model).startswith("gpt-5") else "3000"
+    default = "9000" if str(model).startswith("gpt-4o-mini") else "3000"
     return int(os.getenv("MIXER_MAX_COMPLETION_TOKENS", default))
 
 
@@ -314,7 +314,7 @@ def _get_llm(analysis_mode: object = "quick") -> ChatOpenAI:
     model = _model_for_mode(analysis_mode)
     if model not in _llms:
         ensure_llm_env_loaded()
-        # gpt-5 reasoning_effort 분기·json_object 래핑은 공용 팩토리가 처리.
+        # gpt-4o-mini reasoning_effort 분기·json_object 래핑은 공용 팩토리가 처리.
         # 모델별 _llms 캐시는 그대로 유지(quick/deep 분리).
         _llms[model] = build_chat_llm(
             LLMSpec(

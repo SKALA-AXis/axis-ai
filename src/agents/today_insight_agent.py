@@ -46,7 +46,7 @@ from src.services.today_insight_comparison_engine import (
 log = logging.getLogger(__name__)
 
 KST = ZoneInfo("Asia/Seoul")
-_LLM_MODEL = os.getenv("TODAY_INSIGHT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5.5"
+_LLM_MODEL = os.getenv("TODAY_INSIGHT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o-mini"
 _PROMPT_VERSION = "today-insight-v1.4-qualitative-signals"
 _LLM_CONTEXT_MAX_CHARS = 48_000
 _LLM_CONTEXT_DROP_ORDER = (
@@ -109,7 +109,7 @@ _llm: ChatOpenAI | None = None
 
 
 def _llm_max_completion_tokens() -> int:
-    default = "12000" if str(_LLM_MODEL).startswith("gpt-5") else "3200"
+    default = "12000" if str(_LLM_MODEL).startswith("gpt-4o-mini") else "3200"
     return int(os.getenv("TODAY_INSIGHT_MAX_COMPLETION_TOKENS", default))
 
 

@@ -8,7 +8,7 @@ from langchain_openai import ChatOpenAI
 
 log = logging.getLogger(__name__)
 
-_llm = ChatOpenAI(model="gpt-4o", temperature=0.7, max_tokens=1500)
+_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7, max_tokens=1500)
 
 _IMPLICATION_PROMPT = """\
 당신은 SK AX 전략기획팀의 AI 어시스턴트입니다.
@@ -52,7 +52,7 @@ confidence < 0.6이면 '근거 불충분'을 명시하세요.
 
 
 class ImplicationAgent:
-    """이슈 카드 → GPT-4o → SK AX 시사점 초안 생성."""
+    """이슈 카드 → gpt-4o-mini → SK AX 시사점 초안 생성."""
 
     def generate(self, issue_card: dict[str, Any]) -> dict[str, Any]:
         """SK AX 관점의 시사점 초안을 생성한다.

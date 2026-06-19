@@ -151,7 +151,6 @@ def _get_llm() -> ChatOpenAI:
     global _llm
     if _llm is None:
         model_name = os.getenv("CARD_NEWS_COMPOSER_MODEL", "gpt-4o")
-        # env 로 모델 지정 가능 → gpt-5 라도 reasoning_effort 미전달(기존 동작) 위해 None.
         _llm = build_chat_llm(
             LLMSpec(model=model_name, temperature=0.3, max_tokens=1024, reasoning_effort=None)
         )

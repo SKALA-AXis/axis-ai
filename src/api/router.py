@@ -236,7 +236,7 @@ def _normalize_error_code(value: str) -> str:
 def _build_user_skax_overlay_llm():
     model = os.getenv(
         "USER_SKAX_OVERLAY_MODEL",
-        os.getenv("FRONTEND_READY_MODEL", "gpt-5.5"),
+        os.getenv("FRONTEND_READY_MODEL", "gpt-4o-mini"),
     )
     return build_chat_llm(
         LLMSpec(
@@ -255,7 +255,7 @@ def _build_user_skax_overlay_llm():
 def _user_strategy_ocr_model_name() -> str:
     return os.getenv(
         "USER_STRATEGY_OCR_MODEL",
-        os.getenv("FRONTEND_READY_MODEL", "gpt-5.5"),
+        os.getenv("FRONTEND_READY_MODEL", "gpt-4o-mini"),
     )
 
 
@@ -412,12 +412,13 @@ async def lifespan(app: FastAPI):
     # BGE-M3 모델을 startup 시 preload — lazy load 로 인한 첫 cycle 의 메모리 spike
     # (Python heap 확장 + colbert/sparse linear init) 를 제거. 실패해도 첫 호출 시
     # 재시도되므로 서버 startup 자체를 막진 않는다.
-    try:
-        from src.rag.embedder import preload_embedder
+    if os.getenv("AXIS_PRELOAD_EMBEDDER", "1").lower() not in {"0", "false", "no"}:
+        try:
+            from src.rag.embedder import preload_embedder
 
-        preload_embedder()
-    except Exception as e:
-        log.warning("startup preload skipped: %s", e)
+            preload_embedder()
+        except Exception as e:
+            log.warning("startup preload skipped: %s", e)
     # langchain 경로 선로딩 — 에이전트들은 ChatOpenAI 를 지연 임포트하는데(transformers
     # 체인 회피), 상주 서버에서는 첫 LLM 요청이 import 비용까지 떠안아 이벤트 루프를
     # 막고 readiness 플랩을 유발했음 (2026-06-11 배포 순단 실측). startup 에서 1회 선로딩.
@@ -1171,7 +1172,6 @@ AXIS Generative Search 답변을 작성합니다.
 {{"answer":"근거 기반 답변"}}
 """
         model = os.getenv("GEN_SEARCH_LLM_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o-mini"
-        # env 로 모델 지정 가능 → gpt-5 라도 reasoning_effort 미전달(기존 동작) 위해 None.
         llm = build_chat_llm(
             LLMSpec(
                 model=model,

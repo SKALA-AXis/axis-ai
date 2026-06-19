@@ -84,7 +84,7 @@ def test_gpt5_falls_back_to_base_cap_when_no_reasoning_cap(capture_chat_openai):
 
 def test_gpt4o_ignores_reasoning_cap(capture_chat_openai):
     # 비추론 모델은 max_tokens_reasoning 가 있어도 base 캡 사용
-    build_chat_llm(LLMSpec(model="gpt-4o", max_tokens=2400, max_tokens_reasoning=8000))
+    build_chat_llm(LLMSpec(model="gpt-4o-mini", max_tokens=2400, max_tokens_reasoning=8000))
     assert capture_chat_openai["max_completion_tokens"] == 2400
 
 
@@ -92,10 +92,10 @@ def test_gpt4o_ignores_reasoning_cap(capture_chat_openai):
 
 
 def test_briefing_site_equivalence(capture_chat_openai):
-    """briefing/basis_builder 의 기존 kwargs 와 동일한지 (gpt-5.5 경로)."""
+    """briefing/basis_builder 의 기존 kwargs 와 동일한지 (gpt-4o-mini 경로)."""
     build_chat_llm(
         LLMSpec(
-            model="gpt-5.5",
+            model="gpt-4o-mini",
             temperature=0.1,
             max_tokens=8000,
             json_object=True,
@@ -103,11 +103,10 @@ def test_briefing_site_equivalence(capture_chat_openai):
         )
     )
     assert capture_chat_openai == {
-        "model": "gpt-5.5",
+        "model": "gpt-4o-mini",
         "temperature": 0.1,
         "max_completion_tokens": 8000,
         "model_kwargs": {"response_format": {"type": "json_object"}},
-        "reasoning_effort": "low",
     }
 
 
@@ -121,23 +120,23 @@ def test_reasoning_effort_none_omits_even_for_gpt5(capture_chat_openai):
 
 
 def test_timeout_and_max_retries_passed_when_set(capture_chat_openai):
-    build_chat_llm(LLMSpec(model="gpt-4o", timeout=120.0, max_retries=1))
+    build_chat_llm(LLMSpec(model="gpt-4o-mini", timeout=120.0, max_retries=1))
     assert capture_chat_openai["timeout"] == 120.0
     assert capture_chat_openai["max_retries"] == 1
 
 
 def test_timeout_and_max_retries_omitted_when_none(capture_chat_openai):
-    build_chat_llm(LLMSpec(model="gpt-4o"))
+    build_chat_llm(LLMSpec(model="gpt-4o-mini"))
     assert "timeout" not in capture_chat_openai
     assert "max_retries" not in capture_chat_openai
 
 
 def test_strategic_insight_site_equivalence(capture_chat_openai):
     """strategic_insight 의 기존 kwargs 와 동일: json_object 없음·reasoning 없음·
-    timeout·max_retries 포함 (gpt-5.5 로 떠도 reasoning_effort 미전달)."""
+    timeout·max_retries 포함 (gpt-4o-mini 로 떠도 reasoning_effort 미전달)."""
     build_chat_llm(
         LLMSpec(
-            model="gpt-5.5",
+            model="gpt-4o-mini",
             temperature=0.0,
             max_tokens=5000,
             json_object=False,
@@ -147,7 +146,7 @@ def test_strategic_insight_site_equivalence(capture_chat_openai):
         )
     )
     assert capture_chat_openai == {
-        "model": "gpt-5.5",
+        "model": "gpt-4o-mini",
         "temperature": 0.0,
         "max_completion_tokens": 5000,
         "timeout": 120.0,
@@ -159,7 +158,7 @@ def test_today_insight_site_equivalence_gpt4o(capture_chat_openai):
     """today_insight 가 gpt-4o 로 떨어졌을 때 reasoning_effort 미전달 확인."""
     build_chat_llm(
         LLMSpec(
-            model="gpt-4o",
+            model="gpt-4o-mini",
             temperature=0.18,
             max_tokens=3200,
             json_object=True,
@@ -167,7 +166,7 @@ def test_today_insight_site_equivalence_gpt4o(capture_chat_openai):
         )
     )
     assert capture_chat_openai == {
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
         "temperature": 0.18,
         "max_completion_tokens": 3200,
         "model_kwargs": {"response_format": {"type": "json_object"}},

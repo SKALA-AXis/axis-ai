@@ -44,7 +44,7 @@ from src.services.agent_output_validation import (
 
 log = logging.getLogger(__name__)
 
-_LLM_MODEL = "gpt-4o"
+_LLM_MODEL = "gpt-4o-mini"
 _PROMPT_VERSION = "insight-v1.0"
 _MAX_CARDS = int(os.getenv("INSIGHT_MAX_CARDS", "10"))
 _MIN_CARDS = 2

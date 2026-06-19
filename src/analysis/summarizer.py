@@ -44,7 +44,7 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-_LLM_MODEL = os.getenv("OPENAI_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o"
+_LLM_MODEL = os.getenv("OPENAI_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
 _PROMPT_VERSION = "summary-v4.0"
 _FACT_EXTRACTION_BATCH_SIZE = 10
 _FACT_EXTRACTION_MAX_TOKENS = _env_int("FACT_EXTRACTION_MAX_TOKENS", 3000)

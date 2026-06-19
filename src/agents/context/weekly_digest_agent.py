@@ -30,7 +30,7 @@ from src.services.peer_id_aliases import expand_peer_aliases
 log = logging.getLogger(__name__)
 
 KST = ZoneInfo("Asia/Seoul")
-_LLM_MODEL = "gpt-4o"
+_LLM_MODEL = "gpt-4o-mini"
 _LLM_TEMPERATURE = 0.2
 _LLM_MAX_COMPLETION_TOKENS = 2500
 _MIN_CARDS = 1
