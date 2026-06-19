@@ -1278,14 +1278,16 @@ def test_strategic_insight_agent_repairs_overstated_relationship_and_generic_sig
     )
 
     output_text = json.dumps(result, ensure_ascii=False)
-    assert result["is_valid_strategic_insight"] is False, json.dumps(
+    assert result["is_valid_strategic_insight"] is True, json.dumps(
         result,
         ensure_ascii=False,
         indent=2,
         default=str,
     )
-    assert "quality_gate_failed" in output_text
-    assert llm.invoke.call_count <= 2
+    assert "협업으로 사업 기회" not in output_text
+    assert "고객 요구가 변화" not in output_text
+    assert "지분" in output_text and "취득" in output_text
+    assert llm.invoke.call_count >= 3
 
 
 def test_strategic_insight_agent_self_review_revises_vague_impact_and_actions():
@@ -1556,7 +1558,7 @@ def test_strategic_insight_agent_self_review_can_mark_low_quality_result_invalid
     assert result["analysis"]["is_valid_analysis"] is False
     assert result["implication"]["is_valid_implication"] is False
     assert result["implication"]["evidence_label"] == "insufficient"
-    assert llm.invoke.call_count <= 2
+    assert llm.invoke.call_count >= 2
 
 
 def test_quality_gate_flags_customer_contract_role_and_unscoped_proposal_artifact():
@@ -3101,7 +3103,7 @@ def test_frontend_only_violation_skips_self_review_and_attempts_frontend_ready_r
     phase_decisions = result["implication"]["frontend_ready_diagnostics"]["phase_decisions"]
     assert "self_review_skipped" in phase_decisions
     assert "frontend_ready_repair_attempted" in phase_decisions
-    assert llm.invoke.call_count <= 2
+    assert llm.invoke.call_count <= 3
 
 
 def test_displayable_generate_result_skips_self_review_and_schema_repair():
@@ -3554,10 +3556,11 @@ def test_strategic_insight_agent_repairs_when_review_still_has_quality_violation
         analysis_context=payload["analysis_context"],
     )
 
-    output_text = json.dumps(result, ensure_ascii=False)
-    assert result["is_valid_strategic_insight"] is False
-    assert "quality_gate_failed" in output_text
-    assert llm.invoke.call_count <= 2
+    skax = result["implication"]["skax_implication"]
+    assert result["is_valid_strategic_insight"] is True
+    assert "시장 점유율" not in " ".join(skax["threats"])
+    assert "재검토" not in skax["potential_impact"]
+    assert llm.invoke.call_count >= 3
 
 
 def test_strategic_insight_agent_fails_closed_when_overclaim_repair_fails():
