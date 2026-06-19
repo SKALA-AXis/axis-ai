@@ -1,3 +1,7 @@
+# 작성일: 2026-06-14
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-14 최종민 — 공용 LLM 클라이언트 팩토리 신설 및 timeout/retries/reasoning 옵션 확장
 """공용 LLM 팩토리 동작 잠금 (refactoring-architecture R1).
 
 ChatOpenAI 를 직접 만들지 않고 kwargs 구성만 검증하기 위해 생성자를 가로채

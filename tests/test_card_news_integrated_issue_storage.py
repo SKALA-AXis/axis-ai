@@ -1,3 +1,8 @@
+# 작성일: 2026-06-04
+# 작성자: 박진
+# 변경이력:
+#   2026-06-04 박진 — 통합 이슈 기반 믹서·브리핑 플로우 추가
+#   2026-06-15 박지원 — 카드뉴스 표시 데이터 동기화, 산업 카드 시사점 표시 유지
 from __future__ import annotations
 
 import json
@@ -36,7 +41,7 @@ def test_card_news_insert_params_preserve_integrated_issue_id():
 
 def test_card_news_insert_params_canonicalizes_id_and_date_from_source_articles(monkeypatch):
     monkeypatch.setattr(
-        "src.db.article_store.get_articles_by_ids",
+        "src.db.article_store_parts.helpers.get_articles_by_ids",
         lambda ids: [
             {
                 "id": 44755,

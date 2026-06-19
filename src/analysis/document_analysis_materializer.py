@@ -1,3 +1,7 @@
+# 작성일: 2026-05-20
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-20 박지원 — 스케줄러/크롤러 수정과 함께 파서 결과를 분석 테이블로 적재하는 모듈 추가
 """Materialize parsed document facts/signals into analysis tables.
 
 The crawler stores raw documents first.  Preprocessing then parses DART, IR,

@@ -1,3 +1,9 @@
+# 작성일: 2026-05-26
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-26 박지원 — PeerProfile Agent 최초 구현 및 수정
+#   2026-06-02 심유정 — 전략 시사점 에이전트 구현, 사용자 전략 오버레이 추가 및 안정화
+#   2026-06-16 최종민 — 백필 시 snapshot 시점-민감 필드 strip(룩어헤드 누수 차단)
 """ProfileContextLoader — cluster-time profile context enrichment.
 
 Tier A (`peer_companies.profile_snapshot` JSONB, 분기 1회 CronJob) 가 build 한 정적
@@ -47,12 +53,6 @@ def _strip_snapshot_time_sensitive(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in snapshot.items() if k not in _SNAPSHOT_TIME_SENSITIVE_KEYS}
 
 
-_TEMP_CLO_ISSUE_MARKER_GROUPS = (
-    ("클로",),
-    ("에이엑스씽크", "에이엑스싱크", "AXThink", "AX Think", "AX씽크", "AX싱크"),
-)
-
-
 def _user_strategy_overlay_limit() -> int:
     try:
         return max(1, int(os.getenv("USER_STRATEGY_OVERLAY_LIMIT", "20")))
@@ -100,7 +100,6 @@ class ProfileContextLoader:
             user_id=user_id,
             user_profile_overlay=user_profile_overlay,
             user_profile_overlays=user_profile_overlays,
-            issue_scope=issue_scope,
         )
         if overlays:
             skax_profile = dict(skax_profile)
@@ -238,7 +237,6 @@ def _user_strategy_overlays(
     user_id: str | None,
     user_profile_overlay: dict[str, Any] | None,
     user_profile_overlays: list[dict[str, Any]] | None,
-    issue_scope: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     overlays: list[dict[str, Any]] = []
     limit = _user_strategy_overlay_limit()
@@ -246,7 +244,6 @@ def _user_strategy_overlays(
         _load_user_strategy_overlays(
             user_id=user_id,
             limit=limit,
-            issue_scope=issue_scope,
         )
     )
     if isinstance(user_profile_overlay, dict) and user_profile_overlay:
@@ -254,14 +251,13 @@ def _user_strategy_overlays(
     for overlay in user_profile_overlays or []:
         if isinstance(overlay, dict) and overlay:
             overlays.append(overlay)
-    return _filter_user_strategy_overlays_for_issue(overlays, issue_scope=issue_scope)[:limit]
+    return overlays[:limit]
 
 
 def _load_user_strategy_overlays(
     *,
     user_id: str | None,
     limit: int,
-    issue_scope: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     if not user_id:
         return []
@@ -300,42 +296,6 @@ def _load_user_strategy_overlays(
                 item["_strategy_context_metadata"] = metadata
             overlays.append(item)
     return overlays
-
-
-def _filter_user_strategy_overlays_for_issue(
-    overlays: list[dict[str, Any]],
-    *,
-    issue_scope: dict[str, Any] | None,
-) -> list[dict[str, Any]]:
-    """TEMP: 사용자 맞춤 전략자료는 클로 카드에만 강제 적용.
-
-    제거할 때는 이 함수의 TEMP 분기와 상단 _TEMP_CLO_* 상수, 그리고
-    _is_temp_clo_issue helper만 삭제하면 된다.
-    """
-    return overlays if _is_temp_clo_issue(issue_scope) else []
-
-
-def _is_temp_clo_issue(issue_scope: dict[str, Any] | None) -> bool:
-    if not isinstance(issue_scope, dict):
-        return False
-    text = _scope_text(issue_scope).casefold()
-    return all(
-        any(marker.casefold() in text for marker in marker_group)
-        for marker_group in _TEMP_CLO_ISSUE_MARKER_GROUPS
-    )
-
-
-def _scope_text(value: Any) -> str:
-    if isinstance(value, dict):
-        parts: list[str] = []
-        for key, item in value.items():
-            if str(key).startswith("_") and key not in {"_strategy_context_id"}:
-                continue
-            parts.append(_scope_text(item))
-        return " ".join(part for part in parts if part)
-    if isinstance(value, list):
-        return " ".join(_scope_text(item) for item in value)
-    return "" if value is None else str(value)
 
 
 def _safe_error(exc: Exception) -> str:

@@ -1,3 +1,9 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인 구축(컨텍스트/LLM 추론/평가)
+#   2026-06-11 최종민 — ChatOpenAI lazy-import 로 transformers/torch import 체인 분리
+#   2026-06-14 최종민 — env-model 사이트의 LLM 팩토리 이행 및 tracing 누락 패치
 """SK AX profile context loading service.
 
 SK AX 공식 프로필, 섹터별 관점, 공식 문서/newsroom 문서를 로드해
@@ -5,8 +11,6 @@ SK AX 공식 프로필, 섹터별 관점, 공식 문서/newsroom 문서를 로�
 
 주의:
 - 이 파일은 Agent 폴더에서 분리된 service 진입점이다.
-- ``SKAXPerspectiveAgent``는 기존 호환을 위해 함께 이동되어 있지만,
-  현재 1단계 supervisor의 표준 시사점 생성 경로는 ``ImplicationAgent``다.
 - DB schema나 저장 구조를 만들지 않는다.
 
 섹터 기준은 src.config.sectors를 단일 출처로 사용한다.
@@ -487,199 +491,6 @@ def _get_viewpoint_llm() -> ChatOpenAI:
         )
 
     return _viewpoint_llm
-
-
-class SKAXPerspectiveAgent:
-    """피어사 카드/요약/분석을 SK AX 공식 관점으로 해석한다."""
-
-    def build_viewpoint(
-        self,
-        sector_ids: list[str] | None = None,
-    ) -> dict[str, Any]:
-        """카드 없이 SK AX 공식 자료만으로 관점 플레이북을 생성한다."""
-        context = SKAXProfileLoader().load(sector_ids)
-        prompt = _SKAX_VIEWPOINT_PROMPT.replace(
-            "{skax_profile_json}",
-            json.dumps(context["skax_profile"], ensure_ascii=False, indent=2),
-        )
-        prompt = prompt.replace(
-            "{sector_config_json}",
-            json.dumps(context["sector_config"], ensure_ascii=False, indent=2),
-        )
-        prompt = prompt.replace(
-            "{skax_documents_json}",
-            json.dumps(
-                _documents_for_prompt(
-                    context["skax_documents"],
-                    content_limit=_VIEWPOINT_PROFILE_DOC_CONTENT_LIMIT,
-                ),
-                ensure_ascii=False,
-                indent=2,
-            ),
-        )
-        prompt = prompt.replace(
-            "{skax_newsroom_documents_json}",
-            json.dumps(
-                _documents_for_prompt(
-                    context["skax_newsroom_documents"],
-                    content_limit=_VIEWPOINT_NEWSROOM_DOC_CONTENT_LIMIT,
-                ),
-                ensure_ascii=False,
-                indent=2,
-            ),
-        )
-        prompt = prompt.replace(
-            "{source_intelligence_json}",
-            json.dumps(
-                _source_intelligence_for_prompt(context),
-                ensure_ascii=False,
-                indent=2,
-            ),
-        )
-        prompt = prompt.replace(
-            "{skax_context_json}",
-            json.dumps(context["skax_contexts"], ensure_ascii=False, indent=2),
-        )
-
-        try:
-            from src.observability import tracing_config
-
-            vp_config = tracing_config(
-                agent="SKAXPerspectiveAgent",
-                phase="viewpoint_playbook",
-            )
-        except Exception:
-            vp_config = None
-
-        try:
-            response = _get_viewpoint_llm().invoke(prompt, config=vp_config)
-            content = (
-                response.content if isinstance(response.content, str) else str(response.content)
-            )
-            return _normalize_viewpoint(_parse_json(content), context)
-        except Exception as exc:
-            log.error("SK AX 관점 플레이북 생성 실패 | error=%s", exc)
-            return _fallback_viewpoint(
-                context,
-                f"LLM 관점 플레이북 생성 실패: {type(exc).__name__}",
-            )
-
-    def analyze(
-        self,
-        issue_card: dict[str, Any],
-        summary: dict[str, Any] | None = None,
-        analysis: dict[str, Any] | None = None,
-        classification: dict[str, Any] | None = None,
-    ) -> SKAXPerspectiveResult:
-        """SK AX 관점 분석을 생성한다."""
-        summary = summary or {}
-        analysis = analysis or {}
-        classification = classification or {}
-
-        if not issue_card and not summary:
-            return _empty_perspective("분석할 카드 또는 요약 입력이 없습니다.")
-
-        sector_ids = _sector_ids_from_inputs(
-            issue_card=issue_card,
-            summary=summary,
-            analysis=analysis,
-            classification=classification,
-        )
-        context = SKAXProfileLoader().load(sector_ids)
-        prompt = _SKAX_PERSPECTIVE_PROMPT.replace(
-            "{skax_profile_json}",
-            json.dumps(context["skax_profile"], ensure_ascii=False, indent=2),
-        )
-        prompt = prompt.replace(
-            "{sector_config_json}",
-            json.dumps(context["sector_config"], ensure_ascii=False, indent=2),
-        )
-        prompt = prompt.replace(
-            "{skax_documents_json}",
-            json.dumps(
-                _documents_for_prompt(
-                    context["skax_documents"],
-                    content_limit=_CARD_PROFILE_DOC_CONTENT_LIMIT,
-                ),
-                ensure_ascii=False,
-                indent=2,
-            ),
-        )
-        prompt = prompt.replace(
-            "{skax_newsroom_documents_json}",
-            json.dumps(
-                _documents_for_prompt(
-                    context["skax_newsroom_documents"],
-                    content_limit=_CARD_NEWSROOM_DOC_CONTENT_LIMIT,
-                ),
-                ensure_ascii=False,
-                indent=2,
-            ),
-        )
-        prompt = prompt.replace(
-            "{source_intelligence_json}",
-            json.dumps(
-                _source_intelligence_for_prompt(context),
-                ensure_ascii=False,
-                indent=2,
-            ),
-        )
-        prompt = prompt.replace(
-            "{skax_context_json}",
-            json.dumps(context["skax_contexts"], ensure_ascii=False, indent=2),
-        )
-        prompt = prompt.replace(
-            "{issue_card_json}",
-            json.dumps(_issue_card_for_prompt(issue_card), ensure_ascii=False, indent=2),
-        )
-        prompt = prompt.replace(
-            "{summary_json}",
-            json.dumps(_summary_for_prompt(summary), ensure_ascii=False, indent=2),
-        )
-        prompt = prompt.replace(
-            "{analysis_json}",
-            json.dumps(_analysis_for_prompt(analysis), ensure_ascii=False, indent=2),
-        )
-        prompt = prompt.replace(
-            "{classification_json}",
-            json.dumps(_classification_for_prompt(classification), ensure_ascii=False, indent=2),
-        )
-
-        try:
-            from src.observability import tracing_config
-
-            persp_config = tracing_config(
-                agent="SKAXPerspectiveAgent",
-                phase="analyze",
-                card_id=issue_card.get("id"),
-                cluster_id=issue_card.get("cluster_id") or summary.get("cluster_id"),
-            )
-        except Exception:
-            persp_config = None
-
-        try:
-            response = _get_llm().invoke(prompt, config=persp_config)
-            content = (
-                response.content if isinstance(response.content, str) else str(response.content)
-            )
-            result = _normalize_perspective(_parse_json(content), context)
-        except Exception as exc:
-            log.error(
-                "SK AX 관점 분석 실패 | card=%s cluster=%s error=%s",
-                issue_card.get("id"),
-                issue_card.get("cluster_id") or summary.get("cluster_id"),
-                exc,
-            )
-            return _empty_perspective(f"LLM 관점 분석 실패: {type(exc).__name__}")
-
-        log.info(
-            "SK AX 관점 분석 완료 | card=%s relevant=%s domains=%s confidence=%.2f",
-            issue_card.get("id"),
-            result["is_relevant_to_skax"],
-            ",".join(result["matched_skax_domains"]),
-            result["confidence"],
-        )
-        return result
 
 
 class SKAXProfileLoader:
@@ -1604,7 +1415,6 @@ def _clamp_float(value: Any, default: float) -> float:
 
 
 __all__ = [
-    "SKAXPerspectiveAgent",
     "SKAXProfileLoader",
     "build_skax_context",
     "load_skax_newsroom_documents",

@@ -1,9 +1,16 @@
+# 작성일: 2026-06-12
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-12 최종민 — briefing_generation_agent 분해 1단계로 support 분리
+#   2026-06-14 안가은 — 브리핑 생성 카피와 기간 표기 개선 (#187)
+#   2026-06-18 최종민 — 코드 변경
 """support — strategic_insight_agent 에서 분리 (이동만, 동작 불변).
 
 분리 근거: axis-infra docs/structure-tasks/agent-split-design.md (Phase 2 1단계)
 """
 
 import json
+import re
 from datetime import UTC, date, datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -43,6 +50,46 @@ def _compact_analysis_unit_for_display(card: dict[str, Any]) -> dict[str, Any]:
         "quality_flags": _json_list(card.get("quality_flags")),
         "analysis_package": _compact_analysis_package(package),
     }
+
+
+def _dedupe_cards_for_prompt(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove near-identical card signals before building LLM prompt context."""
+
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for card in cards:
+        key = _prompt_card_dedupe_key(card)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        result.append(card)
+    return result
+
+
+def _prompt_card_dedupe_key(card: dict[str, Any]) -> str:
+    package = _analysis_package(card)
+    integrated = _json_dict(package.get("integrated_issue"))
+    analysis = _json_dict(package.get("analysis"))
+    text_value = _first_text(
+        integrated.get("main_issue"),
+        integrated.get("headline"),
+        integrated.get("one_line_summary"),
+        integrated.get("content_summary"),
+        analysis.get("market_signal"),
+        analysis.get("analysis_summary"),
+        card.get("title"),
+    )
+    normalized = _normalize_prompt_dedupe_text(text_value)
+    if not normalized:
+        return ""
+    return f"{_company_label(card)}:{normalized[:140]}"
+
+
+def _normalize_prompt_dedupe_text(value: object) -> str:
+    text = " ".join(str(value or "").split()).lower()
+    text = re.sub(r"[\W_]+", "", text)
+    return text
 
 
 def _compact_analysis_package(package: dict[str, Any]) -> dict[str, Any]:
@@ -181,6 +228,7 @@ def _company_label(card: dict[str, Any]) -> str:
         "lg_cns": "LG CNS",
         "samsung_sds": "삼성SDS",
         "posco_dx": "포스코DX",
+        "industry_trend": "산업 동향",
     }
     return labels.get(value, value)
 

@@ -1,3 +1,9 @@
+# 작성일: 2026-06-12
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-12 최종민 — 공용 스키마를 src/contracts 로 이동해 agents→api 의존 절단 (2-A1)
+#   2026-06-17 최종민 — 홈 3상태 지원(state/signal_date/week_synthesis/coverage_stats) 추가
+#   2026-06-19 최종민 — 코드 변경
 """Today's Insight endpoint Pydantic models.
 
 Home dashboard 전용 요약이지만, 단순 UI fixture 가 아니라 매일의 통합 이슈와
@@ -204,7 +210,8 @@ class TodayInsightGenerateResponse(BaseModel):
     peer_ids: list[str] = Field(default_factory=list)
     sectors: list[str] = Field(default_factory=list)
     confidence: float = 0.0
-    # 홈 3상태 렌더(today_signal | recent_signal | quiet) 지원 필드.
+    # 홈 상태 렌더(today_signal | quiet) 지원 필드.
+    # (recent_signal 은 후속 단계 예정 — 현재 구현은 today_signal | quiet 만 반환)
     state: str = "today_signal"
     signal_date: Optional[str] = None
     week_synthesis: Optional[str] = None

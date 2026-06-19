@@ -1,3 +1,9 @@
+# 작성일: 2026-04-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-21 최종민 — axis-ai 베이스라인 구축, issue_cards→card_news 리네임
+#   2026-04-28 박지원 — 크롤러 구현 및 전처리·클러스터링 파이프라인 개선
+#   2026-06-18 최종민 — 코드 변경
 """파이프라인 단위 테스트"""
 
 import numpy as np
@@ -11,7 +17,6 @@ from src.preprocessing.dedup import (
     _event_bucket,
     _event_signature,
     _existing_cluster_candidate_window,
-    _reset_cluster_llm_run_state,
     _rule_prefilter_key,
     _same_issue,
     _should_merge_articles,
@@ -277,24 +282,9 @@ def test_same_contract_domain_uses_general_signature_without_event_hardcoding(mo
         "published_at": "2026-06-09T10:51:00+09:00",
     }
 
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
-
     assert _event_signature(left).startswith("contract_deal:")
     assert _event_signature(right).startswith("contract_deal:")
     assert _should_merge_articles(left, right, similarity=0.82, threshold=0.8) is True
-
-
-def test_cluster_llm_state_resets_per_dedup_run():
-    dedup._cluster_llm_calls = 30
-    dedup._cluster_llm_cache = {("left", "right", "reason"): None}
-    dedup._cluster_llm_approved_pairs = {frozenset({1, 2})}
-
-    _reset_cluster_llm_run_state()
-
-    assert dedup._cluster_llm_calls == 0
-    assert dedup._cluster_llm_cache == {}
-    assert dedup._cluster_llm_approved_pairs == set()
 
 
 def test_same_company_security_action_articles_merge_across_bucket_noise():
@@ -765,9 +755,6 @@ def test_cluster_merge_allows_same_business_issue_with_different_titles(monkeypa
         "published_at": "2026-06-03T23:06:00+00:00",
     }
 
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
-
     assert _should_merge_articles(left, right, 0.83, 0.80) is True
 
 
@@ -812,9 +799,6 @@ def test_event_driven_contract_market_article_uses_llm_to_merge_with_contract_cl
         "published_at": "2026-06-02T06:34:00+00:00",
     }
 
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
-
     assert _event_bucket(contract) == "contract_deal"
     assert _event_bucket(market) == "market_reaction"
     assert _rule_prefilter_key(contract) == _rule_prefilter_key(market)
@@ -839,9 +823,6 @@ def test_contract_key_groups_same_deal_with_amount_or_service_title(monkeypatch)
         "published_at": "2026-06-01T07:34:00+00:00",
     }
 
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
-
     assert _rule_prefilter_key(amount_title) == _rule_prefilter_key(service_title)
     assert _should_merge_articles(amount_title, service_title, 0.82, 0.80) is True
 
@@ -864,14 +845,11 @@ def test_logistics_robotics_partner_articles_can_merge_with_llm(monkeypatch):
         "published_at": "2026-05-18T01:01:00+00:00",
     }
 
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
-
     assert _rule_prefilter_key(first) == _rule_prefilter_key(second)
     assert _should_merge_articles(first, second, 0.80, 0.80) is True
 
 
-def test_title_similarity_llm_can_merge_across_company_and_sector_labels(monkeypatch):
+def test_title_similarity_rule_can_merge_across_company_and_sector_labels(monkeypatch):
     left = {
         "company": ["lg_cns"],
         "matched_companies": ["lg_cns"],
@@ -889,17 +867,7 @@ def test_title_similarity_llm_can_merge_across_company_and_sector_labels(monkeyp
         "published_at": "2026-06-11T01:20:00+00:00",
     }
 
-    calls = []
-
-    def fake_judge(*args, **kwargs):
-        calls.append(args)
-        return True
-
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", fake_judge)
-
     assert _should_merge_articles(left, right, 0.62, 0.80) is True
-    assert calls
 
 
 def test_prefilter_groups_same_day_event_without_company_split(monkeypatch):
@@ -917,9 +885,6 @@ def test_prefilter_groups_same_day_event_without_company_split(monkeypatch):
         "content": "한화오션 선박에 자율용접로봇 AI 두뇌를 공급한다.",
         "published_at": "2026-06-04T01:30:00+00:00",
     }
-
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
 
     assert _rule_prefilter_key(left) == _rule_prefilter_key(right)
     assert _should_merge_articles(left, right, 0.82, 0.80) is True
@@ -941,9 +906,6 @@ def test_prefilter_allows_same_ax_event_across_adjacent_dates(monkeypatch):
         "published_at": "2026-06-01T09:00:00+00:00",
     }
 
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
-
     assert _rule_prefilter_key(may_article) == _rule_prefilter_key(june_article)
     assert _should_merge_articles(may_article, june_article, 0.82, 0.80) is True
 
@@ -963,9 +925,6 @@ def test_prefilter_merges_same_ax_event_with_loose_title_with_llm(monkeypatch):
         "content": "NC AI와 포스코DX가 산업현장용 피지컬AI 기반 로봇 지능화 기술을 공동 개발한다.",
         "published_at": "2026-06-01T09:00:00+00:00",
     }
-
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
 
     assert _rule_prefilter_key(loose_title) == _rule_prefilter_key(foundation_model)
     assert _should_merge_articles(loose_title, foundation_model, 0.82, 0.80) is True
@@ -1040,9 +999,6 @@ def test_prefilter_allows_same_contract_event_across_adjacent_dates(monkeypatch)
         "published_at": "2026-05-05T23:34:00+00:00",
     }
 
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
-
     assert _rule_prefilter_key(sto_award) == _rule_prefilter_key(sto_context)
     assert _should_merge_articles(sto_award, sto_context, 0.82, 0.80) is True
 
@@ -1063,9 +1019,6 @@ def test_prefilter_groups_contract_title_without_company_subject(monkeypatch):
         "published_at": "2026-05-06T01:19:00+00:00",
     }
 
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
-
     assert _rule_prefilter_key(sto_award) == _rule_prefilter_key(no_company_subject)
     assert _should_merge_articles(sto_award, no_company_subject, 0.82, 0.80) is True
 
@@ -1085,9 +1038,6 @@ def test_robot_partnership_uses_ax_bucket_before_contract_bucket(monkeypatch):
         "content": "포스코DX와 NC AI가 로봇 파운데이션 모델을 공동 개발한다.",
         "published_at": "2026-06-01T05:46:00+00:00",
     }
-
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
 
     assert _event_bucket(agreement) == "ax_strategy"
     assert _rule_prefilter_key(agreement) == _rule_prefilter_key(development)
@@ -1120,6 +1070,66 @@ def test_nc_physical_ai_subissues_do_not_collapse_into_one_cluster():
     assert _rule_prefilter_key(posco_robot) == _rule_prefilter_key(hanwha_welding)
     assert _should_merge_articles(posco_robot, hanwha_welding, 0.99, 0.80) is False
     assert _should_merge_articles(posco_robot, jensen_meeting, 0.99, 0.80) is False
+
+
+def test_same_company_ax_event_variants_merge_by_generic_content_features():
+    agent_push = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "matched_sectors": ["ax"],
+        "title": "포스코DX, ‘1인 N에이전트’ 시대 대비…전사 AX 혁신 가속",
+        "content": (
+            "전사 AX 혁신 프로그램의 일환으로 임직원 대상 해커톤을 열고 "
+            "업무별 AI 에이전트 활용 역량을 강화했다."
+        ),
+        "published_at": "2026-06-18T00:38:00+00:00",
+    }
+    event_angle = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "matched_sectors": ["ax"],
+        "title": "포스코DX, ‘AX 해커톤’ 개최해 AI 역량 강화",
+        "content": (
+            "전사 AX 혁신 프로그램에서 임직원이 업무별 AI 에이전트 활용 과제를 "
+            "해커톤 형태로 발표했다."
+        ),
+        "published_at": "2026-06-18T02:06:00+00:00",
+    }
+    broad_title = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "matched_sectors": ["ax"],
+        "title": "포스코DX, '1인 N에이전트 시대' 연다…전사 AI 역량 강화",
+        "content": (
+            "임직원 해커톤과 업무별 AI 에이전트 활용을 통해 전사 AX 혁신을 확대하는 프로그램이다."
+        ),
+        "published_at": "2026-06-18T00:29:00+00:00",
+    }
+
+    assert _should_merge_articles(agent_push, event_angle, 0.74, 0.80) is True
+    assert _should_merge_articles(agent_push, broad_title, 0.74, 0.80) is True
+    assert _should_merge_articles(event_angle, broad_title, 0.74, 0.80) is True
+
+
+def test_same_company_generic_ax_theme_does_not_merge_when_object_features_differ():
+    event_program = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "matched_sectors": ["ax"],
+        "title": "포스코DX, 전사 AX 역량 강화 프로그램 확대",
+        "content": "임직원 대상 업무 자동화 교육과 실습 프로그램을 확대했다.",
+        "published_at": "2026-06-18T00:38:00+00:00",
+    }
+    product_release = {
+        "company": ["posco_dx"],
+        "matched_companies": ["posco_dx"],
+        "matched_sectors": ["ax"],
+        "title": "포스코DX, 제조 현장 데이터 분석 플랫폼 공개",
+        "content": "제조 현장의 품질 데이터를 분석하는 신규 플랫폼을 공개했다.",
+        "published_at": "2026-06-18T02:06:00+00:00",
+    }
+
+    assert _should_merge_articles(event_program, product_release, 0.90, 0.80) is False
 
 
 def test_core_role_rejects_alumni_personnel_article():
@@ -1189,9 +1199,6 @@ def test_dedup_merges_company_manufacturing_ax_market_expansion(monkeypatch):
         "published_at": "2026-05-20T08:06:00+00:00",
     }
 
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
-
     assert _event_bucket(left) == "ax_strategy"
     assert _event_bucket(right) == "ax_strategy"
     assert _should_merge_articles(left, right, 0.82, 0.80) is True
@@ -1246,9 +1253,6 @@ def test_cluster_keeps_manufacturing_ax_market_articles_together_after_split(mon
         dtype=np.float32,
     )
 
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
-
     cluster_map = _cluster(articles, embeddings, threshold=0.80)
 
     assert list(cluster_map.values()) == [[38657, 38664, 38665, 38564]]
@@ -1301,9 +1305,6 @@ def test_openai_enterprise_ai_articles_can_merge_with_llm(monkeypatch):
         "content": "SK AX가 OpenAI와 협력해 기업용 생성형 AI 시장을 공략한다.",
         "published_at": "2026-05-14T00:07:00+00:00",
     }
-
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
 
     assert _should_merge_articles(left, right, 0.84, 0.80) is True
 
@@ -1379,9 +1380,6 @@ def test_same_day_action_prefilter_lets_llm_review_cross_bucket_security_news(mo
     assert _rule_prefilter_key(cloud_title) == _rule_prefilter_key(named_partner_title)
     assert _rule_prefilter_key(capability_title) != _rule_prefilter_key(named_partner_title)
 
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
-
     assert _should_merge_articles(cloud_title, broad_partner_title, 0.82, 0.80) is True
     assert _should_merge_articles(cloud_title, named_partner_title, 0.82, 0.80) is True
     assert _should_merge_articles(named_partner_title, capability_title, 0.82, 0.80) is False
@@ -1430,9 +1428,6 @@ def test_physicalworks_rx_platform_articles_can_merge_with_llm(monkeypatch):
         "published_at": "2026-05-07T10:16:00+00:00",
     }
 
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
-
     assert _should_merge_articles(left, right, 0.83, 0.80) is True
 
 
@@ -1455,9 +1450,6 @@ def test_nc_posco_robot_ai_title_variants_can_merge_with_llm(monkeypatch):
         "포스코DX·NC AI 산업용 로봇 제어 모델 개발 추진",
         "NC AI, 포스코DX와 로봇 지능 개발 나서",
     ]
-
-    monkeypatch.setattr(dedup, "openai_calls_enabled", lambda: True)
-    monkeypatch.setattr(dedup, "_invoke_cluster_llm_judge", lambda *args, **kwargs: True)
 
     for idx, title in enumerate(variants, start=1):
         article = {**base, "id": 44134 + idx, "title": title}

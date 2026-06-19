@@ -1,3 +1,8 @@
+# 작성일: 2026-05-29
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-29 박지원 — peer profile 에이전트 및 스냅샷 파이프라인 추가
+#   2026-06-15 최종민 — _FakeLLM.invoke 가 config 인자 수용하도록 시그니처 정합
 from __future__ import annotations
 
 from typing import Any

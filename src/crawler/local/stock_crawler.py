@@ -1,3 +1,9 @@
+# 작성일: 2026-05-08
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-08 박지원 — 글로벌 peer 기업 크롤링 추가 및 소스 포맷팅
+#   2026-05-11 심유정 — 뉴스 요약 및 주가 크롤러 개선, 주가 크롤러 포맷팅
+#   2026-05-19 박지원 — 파서 및 에이전트 수정
 """KRX stock OHLCV crawler.
 
 Design notes for safe, reproducible collection:

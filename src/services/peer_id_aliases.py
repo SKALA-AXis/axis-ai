@@ -1,3 +1,7 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인(컨텍스트 엔지니어링·LLM 추론·평가)의 일부로 추가
 """Peer ID alias 정규화 — P3-DATA-3 대응.
 
 `raw_articles.matched_companies` 가 string array (객체 X) 이고 한글/영문/축약 ID 가

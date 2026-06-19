@@ -1,13 +1,19 @@
+# 작성일: 2026-06-02
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-02 박지원 — 분석 파이프라인 에이전트 재편과 함께 요약기 비용 제어 테스트 작성
+#   2026-06-18 최종민 — 코드 변경
 from __future__ import annotations
 
 from src.analysis import summarizer
+from src.analysis.summarize import article_selection
 
 
 def test_format_articles_uses_rule_based_snippets_and_dedupes_repeated_content(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(summarizer, "_SNIPPETS_PER_ARTICLE", 3)
-    monkeypatch.setattr(summarizer, "_SNIPPET_DEDUP_SIMILARITY", 0.80)
+    monkeypatch.setattr(article_selection, "_SNIPPETS_PER_ARTICLE", 3)
+    monkeypatch.setattr(article_selection, "_SNIPPET_DEDUP_SIMILARITY", 0.80)
 
     duplicate_content = "삼성SDS가 생성형 AI 플랫폼 A를 출시했다. 주요 기능은 업무 자동화다."
     articles = [
@@ -68,7 +74,7 @@ def test_format_articles_uses_rule_based_snippets_and_dedupes_repeated_content(
 
 
 def test_format_articles_drops_article_ui_boilerplate(monkeypatch) -> None:
-    monkeypatch.setattr(summarizer, "_SNIPPETS_PER_ARTICLE", 4)
+    monkeypatch.setattr(article_selection, "_SNIPPETS_PER_ARTICLE", 4)
 
     text = summarizer._format_articles(
         articles=[
@@ -231,6 +237,82 @@ def test_contract_summary_prefers_business_scope_over_numeric_only_facts() -> No
     assert selected["1"] == ["f2"]
     assert selected["2"] == ["f3"]
     assert selected["3"] == ["f1"]
+
+
+def test_contract_summary_prefers_peer_technology_mechanism_over_customer_site_example() -> None:
+    facts = [
+        {
+            "fact_id": "f1",
+            "article_id": 1,
+            "summary_role": "main_event",
+            "normalized_fact": "LG CNS는 피지컬 AI 통합 솔루션을 물류 RX 사업으로 확장했다.",
+            "evidence_text": "LG CNS는 피지컬 AI 통합 솔루션을 물류 RX 사업으로 확장했다.",
+            "entities": ["피지컬 AI", "RX"],
+            "event_verbs": ["확장"],
+            "confidence": "high",
+            "peer_related": True,
+        },
+        {
+            "fact_id": "f2",
+            "article_id": 1,
+            "summary_role": "application_case",
+            "normalized_fact": "해외 고객 제빵 공장에 모바일 셔틀 기반 물류 자동화 시스템을 구축하는 계약을 체결했다.",
+            "evidence_text": "해외에 건설 중인 고객 제빵 공장에 모바일 셔틀 기반 물류 자동화 시스템을 구축하는 계약을 체결했다.",
+            "entities": ["해외 고객 제빵 공장"],
+            "event_verbs": ["체결"],
+            "confidence": "high",
+            "peer_related": True,
+        },
+        {
+            "fact_id": "f3",
+            "article_id": 1,
+            "summary_role": "service_function",
+            "normalized_fact": "피지컬웍스는 로봇 데이터 수집, 학습, 검증, 현장 적용, 운영, 관제까지 통합 관리한다.",
+            "evidence_text": "피지컬웍스는 로봇 데이터 수집, 학습, 검증, 현장 적용, 운영, 관제까지 로봇 도입 전 주기를 통합 관리하는 플랫폼이다.",
+            "entities": ["피지컬웍스"],
+            "event_verbs": [],
+            "confidence": "high",
+            "peer_related": True,
+        },
+        {
+            "fact_id": "f4",
+            "article_id": 1,
+            "summary_role": "service_function",
+            "normalized_fact": "피지컬웍스는 산업용 로봇의 현장 투입 기간을 수개월에서 1~2개월로 줄이는 효과를 제시했다.",
+            "evidence_text": "LG CNS는 기존에 수개월씩 걸리던 산업용 로봇의 현장 투입 기간을 1~2개월 수준으로 줄일 수 있다는 입장이다.",
+            "entities": ["피지컬웍스"],
+            "numbers": ["1~2개월"],
+            "event_verbs": ["제시"],
+            "confidence": "high",
+            "peer_related": True,
+        },
+    ]
+
+    selected = summarizer._select_fact_ids_for_summary_lines(
+        extracted_facts=facts,
+        cluster_event_type="contract",
+    )
+
+    assert selected["1"] == ["f1"]
+    assert selected["2"] in (["f3"], ["f4"])
+    assert selected["3"] in (["f3"], ["f4"])
+    assert selected["2"] != selected["3"]
+    assert selected["2"] != ["f2"]
+    assert selected["3"] != ["f2"]
+    assert "4" not in selected
+
+
+def test_peer_related_allows_peer_platform_sentence_without_company_name() -> None:
+    article = {
+        "title": "LG CNS, 로봇 운영 플랫폼 피지컬웍스 공개",
+        "matched_companies": ["lg_cns"],
+    }
+
+    assert summarizer._fact_is_peer_related(
+        "피지컬웍스는 로봇 학습, 검증, 운영, 관제까지 통합 관리한다.",
+        article=article,
+        target_companies=["lg_cns"],
+    )
 
 
 def test_non_financial_summary_rejects_numeric_only_lines() -> None:
@@ -448,10 +530,10 @@ def test_contract_summary_drops_embedded_stock_market_fact() -> None:
 
 
 def test_large_cluster_selects_diverse_articles_from_majority_event(monkeypatch) -> None:
-    monkeypatch.setattr(summarizer, "_MIN_ANALYZED_ARTICLES", 8)
-    monkeypatch.setattr(summarizer, "_MAX_ANALYZED_ARTICLES", 20)
-    monkeypatch.setattr(summarizer, "_MAJORITY_THRESHOLD", 0.70)
-    monkeypatch.setattr(summarizer, "_MIXED_THRESHOLD", 0.50)
+    monkeypatch.setattr(article_selection, "_MIN_ANALYZED_ARTICLES", 8)
+    monkeypatch.setattr(article_selection, "_MAX_ANALYZED_ARTICLES", 20)
+    monkeypatch.setattr(article_selection, "_MAJORITY_THRESHOLD", 0.70)
+    monkeypatch.setattr(article_selection, "_MIXED_THRESHOLD", 0.50)
 
     majority_titles = [
         "LG CNS, 클로드 엔터프라이즈 도입 계약 체결",
@@ -496,9 +578,9 @@ def test_large_cluster_selects_diverse_articles_from_majority_event(monkeypatch)
 
 
 def test_large_mixed_cluster_without_majority_is_blocked(monkeypatch) -> None:
-    monkeypatch.setattr(summarizer, "_MIN_ANALYZED_ARTICLES", 8)
-    monkeypatch.setattr(summarizer, "_MAX_ANALYZED_ARTICLES", 20)
-    monkeypatch.setattr(summarizer, "_MIXED_THRESHOLD", 0.50)
+    monkeypatch.setattr(article_selection, "_MIN_ANALYZED_ARTICLES", 8)
+    monkeypatch.setattr(article_selection, "_MAX_ANALYZED_ARTICLES", 20)
+    monkeypatch.setattr(article_selection, "_MIXED_THRESHOLD", 0.50)
 
     groups = [
         ("계약 체결", "계약을 체결했다."),

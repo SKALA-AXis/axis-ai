@@ -1,3 +1,8 @@
+# 작성일: 2026-05-07
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-07 박지원 — 크롤러 파이프라인·주가 크롤러 갱신 및 파서·에이전트 수정
+#   2026-05-11 심유정 — 뉴스 요약 및 주가 크롤러 개선·포맷 정리
 """KRX stock OHLCV crawler.
 
 Design notes for safe, reproducible collection:

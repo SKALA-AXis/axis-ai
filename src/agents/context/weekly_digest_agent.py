@@ -1,3 +1,8 @@
+# 작성일: 2026-06-09
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-09 최종민 — WeeklyDigestAgent 신설, ChatOpenAI 지연 임포트 전환·LLM 팩토리 이행
+#   2026-06-12 박진 — 브리핑 백필 지원 추가
 """WeeklyDigestAgent — K2 weekly peer narrative from card_news (Layer 2-C supplement).
 
 Stores in peer_companies.peer_plus_payload['weekly_digest'] (append-only digests).

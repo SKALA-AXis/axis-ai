@@ -1,3 +1,7 @@
+# 작성일: 2026-05-18
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-18 박지원 — DART/IR 문서 재파싱 및 IR fact/signal 테이블 갱신 스크립트 작성
 """DB에 저장된 IR 문서를 재파싱하고 분석용 fact/signal 테이블을 갱신한다.
 
 크롤링/API 호출 없이 raw_articles + raw_article_metadata_ir 안의 기존 원문/PDF 텍스트만
@@ -37,7 +41,6 @@ from src.db.article_store import (
     upsert_raw_article_financial_metrics,
 )
 from src.db.postgres import SessionLocal
-from src.extractors.ir_llm_analysis_extractor import analyze_ir_with_llm
 from src.parsers.ir_parser import IRParser
 from src.parsers.parser_quality import analyze_parser_quality_article
 
@@ -275,17 +278,6 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="scope가 unknown인 IR 숫자 후보도 저장",
     )
-    parser.add_argument(
-        "--llm-analysis",
-        action="store_true",
-        help="OPENAI_API_KEY를 사용해 IR 표/본문 LLM 보조 분석을 실행",
-    )
-    parser.add_argument(
-        "--llm-max-pages",
-        type=int,
-        default=0,
-        help="LLM 보조 분석에 보낼 최대 페이지 수. 0이면 IR_LLM_MAX_PAGES 환경값 사용",
-    )
     return parser.parse_args()
 
 
@@ -301,21 +293,8 @@ def main() -> None:
     all_signals: list[dict[str, Any]] = []
     for article in articles:
         parser_result = (
-            _reparse_ir_article(
-                article,
-                llm_analysis=args.llm_analysis,
-                llm_max_pages=args.llm_max_pages or None,
-            )
-            if args.reparse
-            else _stored_parser_result(article)
+            _reparse_ir_article(article) if args.reparse else _stored_parser_result(article)
         )
-        if args.llm_analysis and not args.reparse:
-            parser_result = _attach_llm_analysis(
-                article,
-                parser_result,
-                llm_max_pages=args.llm_max_pages or None,
-            )
-            article["extra"] = {**article["extra"], "parser_result": parser_result}
         financial_record = _financial_record(article, parser_result)
 
         if args.upsert_metrics:
@@ -454,22 +433,11 @@ def _table_exists(db: Any, table_name: str) -> bool:
     )
 
 
-def _reparse_ir_article(
-    article: dict[str, Any],
-    *,
-    llm_analysis: bool = False,
-    llm_max_pages: int | None = None,
-) -> dict[str, Any]:
+def _reparse_ir_article(article: dict[str, Any]) -> dict[str, Any]:
     parser = IRParser()
-    parsed = parser.parse_article(article, include_raw_pages=llm_analysis)
+    parsed = parser.parse_article(article)
     item, ok, reason = analyze_parser_quality_article(article)
-    parser_result = parsed if llm_analysis else item.get("parser_result") or parsed
-    if llm_analysis:
-        parser_result = _attach_llm_analysis(
-            article,
-            parser_result,
-            llm_max_pages=llm_max_pages,
-        )
+    parser_result = item.get("parser_result") or parsed
 
     metadata_patch = {
         "parser_result": parser_result,
@@ -485,8 +453,6 @@ def _reparse_ir_article(
         "topic_signals": parser_result.get("topic_signals"),
         "ir_sections": parser_result.get("sections"),
         "ir_document_chunks": parser_result.get("document_chunks"),
-        "ir_llm_financial_metrics": parser_result.get("llm_financial_metrics"),
-        "ir_llm_business_signals": parser_result.get("llm_business_signals"),
     }
 
     update_preprocess_status(
@@ -501,25 +467,6 @@ def _reparse_ir_article(
     )
     article["extra"] = {**article["extra"], **metadata_patch}
     return parser_result
-
-
-def _attach_llm_analysis(
-    article: dict[str, Any],
-    parser_result: dict[str, Any],
-    *,
-    llm_max_pages: int | None = None,
-) -> dict[str, Any]:
-    analysis = analyze_ir_with_llm(article, parser_result, max_pages=llm_max_pages)
-    llm_metrics = analysis.get("llm_financial_metrics") or []
-    llm_signals = analysis.get("llm_business_signals") or []
-    candidates = parser_result.get("candidates")
-    merged_candidates = [*candidates, *llm_metrics] if isinstance(candidates, list) else llm_metrics
-    return {
-        **parser_result,
-        "candidates": merged_candidates,
-        "llm_financial_metrics": llm_metrics,
-        "llm_business_signals": llm_signals,
-    }
 
 
 def _stored_parser_result(article: dict[str, Any]) -> dict[str, Any]:
@@ -707,8 +654,6 @@ def _metrics_from_parser_result(
         extraction_method = (
             "ir_parser.table_matrix"
             if candidate.get("source") == "ir_table_matrix"
-            else "ir_llm.analysis"
-            if candidate.get("source") == "ir_llm_analysis"
             else "ir_parser.candidates"
         )
         metrics.append(
@@ -800,8 +745,6 @@ def _select_ir_metric_candidates(
 
 def _metric_candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, int, int, float, int, int]:
     source_priority = 3 if candidate.get("source") == "ir_table_matrix" else 2
-    if candidate.get("source") == "ir_llm_analysis":
-        source_priority = 4
     report_period_score = 1 if candidate.get("period_matches_report") else 0
     period_score = 0 if candidate.get("period_inferred_from_report") else 1
     has_evidence = 1 if candidate.get("evidence_text") or candidate.get("raw") else 0
@@ -897,19 +840,6 @@ def _business_signals_from_parser_result(
 
     signals: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    signals.extend(
-        _llm_business_signals_from_parser_result(
-            article=article,
-            parser_result=parser_result,
-            article_id=article_id,
-            peer_id=peer_id,
-            period=period,
-            period_year=period_year,
-            period_quarter=period_quarter,
-            period_type=period_type,
-            seen=seen,
-        )
-    )
     if not chunks:
         return signals
     page_contexts = _page_contexts_from_chunks(chunks)
@@ -1002,83 +932,6 @@ def _business_signals_from_parser_result(
             )
 
     return signals
-
-
-def _llm_business_signals_from_parser_result(
-    *,
-    article: dict[str, Any],
-    parser_result: dict[str, Any],
-    article_id: int,
-    peer_id: str | None,
-    period: Any,
-    period_year: Any,
-    period_quarter: Any,
-    period_type: Any,
-    seen: set[tuple[str, str]],
-) -> list[dict[str, Any]]:
-    llm_signals = parser_result.get("llm_business_signals")
-    if not isinstance(llm_signals, list):
-        return []
-
-    rows_by_key: dict[tuple[str, str], dict[str, Any]] = {}
-    for index, signal in enumerate(llm_signals, start=1):
-        if not isinstance(signal, dict):
-            continue
-        business_area = str(signal.get("business_area") or "company_total")
-        _metric_scope, business_area = _normalize_self_business_area(
-            peer_id=peer_id,
-            metric_scope="segment",
-            business_area=business_area,
-        )
-        signal_type = str(signal.get("signal_type") or "")
-        evidence_text = str(signal.get("evidence_text") or "")
-        if not signal_type or not evidence_text:
-            continue
-        business_area = _business_area_from_evidence_override(
-            peer_id=peer_id,
-            business_area=business_area,
-            evidence_text=evidence_text,
-        )
-        dedupe_key = (business_area, evidence_text[:160])
-        if dedupe_key in seen:
-            continue
-        row = {
-            "raw_article_id": article_id,
-            "signal_uid": (
-                f"ir-llm:{business_area}:{signal_type}:p{signal.get('source_page') or 'x'}:{index}"
-            ),
-            "source_type": "ir",
-            "source_name": article.get("source_name"),
-            "peer_id": peer_id,
-            "period": period,
-            "period_year": period_year,
-            "period_quarter": period_quarter,
-            "period_type": period_type,
-            "business_area": business_area,
-            "signal_type": signal_type,
-            "sentiment": signal.get("sentiment") or _sentiment_from_text(evidence_text),
-            "summary": signal.get("summary") or _summary_from_evidence(evidence_text),
-            "evidence_text": evidence_text,
-            "source_page": signal.get("source_page"),
-            "source_chunk_uid": None,
-            "confidence": signal.get("confidence") or 0.78,
-            "extraction_method": "ir_llm.analysis",
-            "payload": {
-                "title": article.get("title"),
-                "url": article.get("url"),
-                "llm_signal": signal,
-            },
-        }
-        existing = rows_by_key.get(dedupe_key)
-        if existing and _signal_type_priority(existing["signal_type"]) <= _signal_type_priority(
-            signal_type
-        ):
-            continue
-        rows_by_key[dedupe_key] = row
-    rows = list(rows_by_key.values())
-    for row in rows:
-        seen.add((row["business_area"], row["evidence_text"][:160]))
-    return rows
 
 
 def _document_chunks(

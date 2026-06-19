@@ -1,3 +1,7 @@
+# 작성일: 2026-06-05
+# 작성자: 심유정
+# 변경이력:
+#   2026-06-05 심유정 — strategic insight grounding 및 카드 dry run 도입·개선
 """Run one cluster through the analysis/card-news pipeline and save JSON.
 
 By default this script patches DB write functions, so it reads DB data and

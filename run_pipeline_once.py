@@ -1,3 +1,9 @@
+# 작성일: 2026-04-27
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-27 최종민 — Evidence Chain + Peer 4사 확장(BigKinds 제거), Supabase
+#   2026-05-06 박지원 — 파이프라인·에이전트 편집, 전처리 수정, 신뢰도 스코어링 및 LLM fallback 제거
+#   2026-05-18 심유정 — 카드뉴스 에이전트 플로우 개선
 """파이프라인 1회 실행 스크립트 — v3 결과를 콘솔에 출력.
 
 사용법:
@@ -107,8 +113,8 @@ def main() -> None:
     log.info("%s 시작 | company=%s labels=%s", mode, company, company_labels)
 
     result = PreprocessingService(
-        relevance_evaluator=RelevanceEvaluator(enable_llm=True),
-        classifier=ClusterClassifier(enable_llm=True),
+        relevance_evaluator=RelevanceEvaluator(),
+        classifier=ClusterClassifier(),
     ).run(
         company=company,
         source_types=_args.source_type,

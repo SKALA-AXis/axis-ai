@@ -1,3 +1,7 @@
+# 작성일: 2026-05-18
+# 작성자: 박지원
+# 변경이력:
+#   2026-05-18 박지원 — DART IR 파서 도입부터 파서·프로필 에이전트·스케줄러 크롤러
 from scripts.reprocess_securities_report_analysis import (
     _metric_dedupe_key,
     _signal_dedupe_key,

@@ -1,3 +1,7 @@
+# 작성일: 2026-05-15
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-15 최종민 — InsightCascade prototype 스키마 신설 및 output validation helper 추가
 """Insight endpoint 의 request / response Pydantic 모델.
 
 ``src/schemas.py`` 는 datamodel-codegen 자동 생성 — 분석 prototype 의 신규 schema

@@ -1,4 +1,8 @@
-import scripts.postprocess_singleton_clusters as postprocess
+# 작성일: 2026-06-09
+# 작성자: 박지원
+# 변경이력:
+#   2026-06-09 박지원 — 싱글톤 클러스터 후처리·병합 및 품질 감사 추가, LLM 폴백 제거
+#   2026-06-18 최종민 — 코드 변경
 from scripts.postprocess_singleton_clusters import (
     Cluster,
     GroupMergeCandidate,
@@ -11,7 +15,6 @@ from scripts.postprocess_singleton_clusters import (
     _has_title_anchor_overlap,
     _is_list_like,
     _is_stock_noise,
-    _should_consult_title_llm,
 )
 
 
@@ -81,8 +84,7 @@ def test_mojibake_content_is_parser_noise() -> None:
     assert _has_mojibake_content(normal) is False
 
 
-def test_small_lg_cns_anthropic_cluster_merges_to_large_cluster_with_llm(monkeypatch) -> None:
-    monkeypatch.setattr(postprocess, "_title_llm_same_event", lambda *args, **kwargs: True)
+def test_small_lg_cns_anthropic_cluster_merges_to_large_cluster() -> None:
     source = SourceCluster(
         cluster_id=46655,
         article_ids=[46655, 46641],
@@ -119,8 +121,7 @@ def test_small_lg_cns_anthropic_cluster_merges_to_large_cluster_with_llm(monkeyp
     assert candidates[0].target.cluster_id == 46656
 
 
-def test_llm_confirmed_merge_survives_high_min_score(monkeypatch) -> None:
-    monkeypatch.setattr(postprocess, "_title_llm_same_event", lambda *args, **kwargs: True)
+def test_anchor_confirmed_merge_survives_high_min_score() -> None:
     source = SourceCluster(
         cluster_id=35605,
         article_ids=[35605],
@@ -150,12 +151,7 @@ def test_llm_confirmed_merge_survives_high_min_score(monkeypatch) -> None:
     assert candidates[0].score >= 0.72
 
 
-def test_same_event_small_clusters_merge_by_shared_anchors_without_llm(monkeypatch) -> None:
-    def fail_llm(*args, **kwargs):
-        raise AssertionError("deterministic anchor relation should run before LLM judge")
-
-    monkeypatch.setattr(postprocess, "_title_llm_same_event", fail_llm)
-
+def test_same_event_small_clusters_merge_by_shared_anchors() -> None:
     relation = _cluster_relation(
         ["LG CNS, 통합 관제 자동화 플랫폼 구축 계약 체결"],
         ["LG CNS, 통합 관제 자동화 플랫폼 구축 계약"],
@@ -173,12 +169,7 @@ def test_same_event_small_clusters_merge_by_shared_anchors_without_llm(monkeypat
     assert relation[2] >= 0.74
 
 
-def test_industry_same_event_merges_by_content_anchors_without_llm(monkeypatch) -> None:
-    def fail_llm(*args, **kwargs):
-        raise AssertionError("industry anchor relation should run before LLM judge")
-
-    monkeypatch.setattr(postprocess, "_title_llm_same_event", fail_llm)
-
+def test_industry_same_event_merges_by_content_anchors() -> None:
     relation = _cluster_relation(
         ["A솔루션, 자율 업무 통제 플랫폼 공개"],
         ["자율 업무 통제 플랫폼 확대로 운영 리스크 관리 부상"],
@@ -197,12 +188,7 @@ def test_industry_same_event_merges_by_content_anchors_without_llm(monkeypatch) 
     assert relation[2] >= 0.74
 
 
-def test_same_company_mou_title_variants_merge_without_llm(monkeypatch) -> None:
-    def fail_llm(*args, **kwargs):
-        raise AssertionError("same-company anchor relation should run before LLM judge")
-
-    monkeypatch.setattr(postprocess, "_title_llm_same_event", fail_llm)
-
+def test_same_company_mou_title_variants_merge() -> None:
     relation = _cluster_relation(
         ["LG CNS와 중기중앙회, 중소기업 AI 확산을 위한 협력 체결"],
         ["LG CNS, 중소기업 AI 확산을 위한 업무협약 체결"],
@@ -220,12 +206,7 @@ def test_same_company_mou_title_variants_merge_without_llm(monkeypatch) -> None:
     assert relation[2] >= 0.74
 
 
-def test_industry_webinar_analysis_variants_merge_without_llm(monkeypatch) -> None:
-    def fail_llm(*args, **kwargs):
-        raise AssertionError("industry anchor relation should run before LLM judge")
-
-    monkeypatch.setattr(postprocess, "_title_llm_same_event", fail_llm)
-
+def test_industry_webinar_analysis_variants_merge() -> None:
     relation = _cluster_relation(
         ["더그래프 엣지앤노드·체인링크·TRM 랩스, 거버넌스 웨비나 개최"],
         ["더그래프 생태계, AI 에이전트 결제 논의 본격화…체인링크·TRM 랩스 참여"],
@@ -246,23 +227,7 @@ def test_industry_webinar_analysis_variants_merge_without_llm(monkeypatch) -> No
     assert relation[2] >= 0.74
 
 
-def test_title_llm_judge_skips_unrelated_event_titles(monkeypatch) -> None:
-    monkeypatch.setattr(postprocess, "openai_calls_enabled", lambda: True)
-
-    assert (
-        _should_consult_title_llm(
-            ["정부, 소프트웨어 보안 정책 공개"],
-            ["C인프라, 신규 데이터센터 구축"],
-            {"ai"},
-            ["정부가 소프트웨어 보안 정책 방향을 공개했다."],
-            ["C인프라가 신규 데이터센터 구축 계획을 설명했다."],
-        )
-        is False
-    )
-
-
-def test_llm_confirmed_merge_does_not_get_dropped_as_ambiguous(monkeypatch) -> None:
-    monkeypatch.setattr(postprocess, "_title_llm_same_event", lambda *args, **kwargs: True)
+def test_rule_confirmed_merge_does_not_get_dropped_as_ambiguous() -> None:
     source = SourceCluster(
         cluster_id=100,
         article_ids=[100],

@@ -1,6 +1,15 @@
+# 작성일: 2026-06-04
+# 작성자: 박진
+# 변경이력:
+#   2026-06-04 박진 — 이슈 기반 믹서·임원 브리핑 플로우 도입 및 액션 강화
+#   2026-06-12 최종민 — briefing_generation_agent 분해 1단계(support/prompts/data_layer 분리) 반영
+#   2026-06-14 안가은 — 브리핑 생성 문구 및 마침표 개선(#187)
+#   2026-06-15 심유정 — 브리핑 테스트 임포트 순서 수정
+#   2026-06-18 최종민 — 코드 변경
 from __future__ import annotations
 
 import asyncio
+import json
 
 from src.agents.briefing import data_layer as briefing_data_layer
 from src.agents.briefing.data_layer import _clip_text
@@ -76,6 +85,22 @@ def _flatten_strings(value: object) -> list[str]:
     if isinstance(value, dict):
         return [text for item in value.values() for text in _flatten_strings(item)]
     return []
+
+
+class _FakeResponse:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+
+class _FakeLLM:
+    def __init__(self, contents: list[str]) -> None:
+        self.contents = contents
+        self.calls: list[object] = []
+
+    def invoke(self, messages: object, **_kwargs: object) -> _FakeResponse:
+        self.calls.append(messages)
+        index = min(len(self.calls) - 1, len(self.contents) - 1)
+        return _FakeResponse(self.contents[index])
 
 
 def test_weekly_period_accumulates_only_through_anchor_date():
@@ -245,6 +270,53 @@ def test_briefing_display_copy_context_uses_analysis_units():
     assert "analysis_packages" not in context
     assert context["analysis_units"][0]["integrated_issue_id"] == issue_id
     assert context["source_integrated_issue_ids"] == [issue_id]
+
+
+def test_briefing_refine_display_copy_uses_two_llm_calls_with_basis_synthesis():
+    issue_id = "11111111-1111-1111-1111-111111111111"
+    llm = _FakeLLM(["{}", "{}"])
+
+    asyncio.run(
+        BriefingGenerationAgent(llm=llm).generate(
+            briefing_type="daily",
+            anchor_date="2026-06-04",
+            integrated_issue_ids=[issue_id],
+            use_mock=True,
+            mock_items=[_mock_item("CN-1", issue_id, created_at="2026-06-04T09:00:00+09:00")],
+            refine_display_copy=True,
+            reuse_saved=False,
+        )
+    )
+
+    assert len(llm.calls) == 2
+
+
+def test_briefing_refine_display_copy_quality_failure_caps_llm_calls_at_two():
+    issue_id = "11111111-1111-1111-1111-111111111111"
+    invalid_display_copy = {
+        "key_summary": "선택된 카드 기준으로 요약합니다.",
+        "interpretation_flow": {"steps": []},
+    }
+    llm = _FakeLLM(
+        [
+            "{}",
+            json.dumps(invalid_display_copy, ensure_ascii=False),
+        ]
+    )
+
+    asyncio.run(
+        BriefingGenerationAgent(llm=llm).generate(
+            briefing_type="daily",
+            anchor_date="2026-06-04",
+            integrated_issue_ids=[issue_id],
+            use_mock=True,
+            mock_items=[_mock_item("CN-1", issue_id, created_at="2026-06-04T09:00:00+09:00")],
+            refine_display_copy=True,
+            reuse_saved=False,
+        )
+    )
+
+    assert len(llm.calls) == 2
 
 
 def test_briefing_result_does_not_persist_visual_ellipsis_or_basis_prefix():

@@ -1,3 +1,9 @@
+# 작성일: 2026-06-09
+# 작성자: 최종민
+# 변경이력:
+#   2026-06-09 최종민 — today-insight 비교 엔진 테스트 신규 작성(dual-lane 비교 사실
+#   2026-06-11 박지원 — ruff 포매팅 수정 적용 및 develop 브랜치 병합
+#   2026-06-11 박진 — 챗봇 분석 워크플로우 개선(#132)
 from __future__ import annotations
 
 from datetime import date

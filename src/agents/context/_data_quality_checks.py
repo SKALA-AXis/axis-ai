@@ -1,3 +1,7 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인의 data hygiene fallback 헬퍼 작성
 """Data hygiene 헬퍼 — W4-2 / W4-3 의 graceful fallback 로직.
 
 cluster DB 의 실측 단점을 다른 모듈이 알 필요 없게 격리한다:

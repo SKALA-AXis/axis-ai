@@ -1,3 +1,11 @@
+# 작성일: 2026-04-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-04-21 최종민 — axis-ai 라우터 베이스라인 구축
+#   2026-04-28 박지원 — 크롤러 로직 개선 및 뉴스 전처리/클러스터링 품질 개선
+#   2026-05-11 심유정 — 카드뉴스 openapi 스키마 정합
+#   2026-06-04 박진 — 통합 이슈 기반 mixer/브리핑 플로우
+#   2026-06-18 최종민 — 코드 변경
 import asyncio
 import base64
 import binascii
@@ -427,6 +435,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.warning("startup langchain preload skipped: %s", e)
     yield
+    # graceful shutdown 시 SDK 버퍼에 남은 Langfuse trace 를 teardown 전에 명시 flush.
+    # (handler 미초기화/비활성이면 no-op, 내부적으로 예외 흡수 — 종료를 막지 않음.)
+    from src.observability import flush as _langfuse_flush
+
+    _langfuse_flush()
     log.info("AXIS AI 서버 종료")
 
 
@@ -682,7 +695,9 @@ async def regenerate_card_news_strategy_context(
     if not request.analysis_package:
         raise HTTPException(status_code=400, detail="analysis_package is required")
 
-    from src.agents.strategic_insight_agent import StrategicInsightAgent
+    from src.services.strategy_context_action_regenerator import (
+        regenerate_strategy_context_action,
+    )
 
     package = copy.deepcopy(request.analysis_package)
     started_at = time.perf_counter()
@@ -692,8 +707,9 @@ async def regenerate_card_news_strategy_context(
         request.user_id,
     )
     strategic_result = await asyncio.to_thread(
-        StrategicInsightAgent().generate_from_analysis_package,
+        regenerate_strategy_context_action,
         package,
+        card_news_id=request.card_news_id,
         user_id=request.user_id,
     )
 
@@ -852,8 +868,8 @@ async def _run_collection_track(
         source_name = record["source_name"]
         source_types = _preprocess_source_types(track, source_name)
         preprocessing_service = PreprocessingService(
-            relevance_evaluator=RelevanceEvaluator(enable_llm="news" in source_types),
-            classifier=ClusterClassifier(enable_llm="news" in source_types),
+            relevance_evaluator=RelevanceEvaluator(),
+            classifier=ClusterClassifier(),
         )
         return await asyncio.to_thread(
             preprocessing_service.run,
@@ -906,8 +922,8 @@ async def _run_collection_track(
         if not results:
             source_types = _preprocess_source_types(track, None)
             preprocessing_service = PreprocessingService(
-                relevance_evaluator=RelevanceEvaluator(enable_llm="news" in source_types),
-                classifier=ClusterClassifier(enable_llm="news" in source_types),
+                relevance_evaluator=RelevanceEvaluator(),
+                classifier=ClusterClassifier(),
             )
             results = [
                 await asyncio.to_thread(
@@ -920,10 +936,6 @@ async def _run_collection_track(
                     limit=SCHEDULED_PREPROCESS_LIMIT,
                 )
             ]
-
-        news_postprocess = None
-        if track in {"a", "all"}:
-            news_postprocess = await asyncio.to_thread(_run_recent_news_cluster_postprocess)
 
         if not delivery_results:
             for result in results:
@@ -941,47 +953,13 @@ async def _run_collection_track(
             _sum_result_ints(results, "analysis_metric_count"),
             _sum_result_ints(results, "analysis_signal_count"),
             _count_result_items(results, "classified_clusters"),
-            news_postprocess,
+            "cron_only",
             _count_result_items(delivery_results, "card_news"),
             _count_result_items(delivery_results, "indexed_vector_ids"),
             _count_result_items(delivery_results, "errors"),
         )
     except Exception:
         log.exception("수집 파이프라인 실패 | task_id=%s track=%s", task_id, track)
-
-
-def _run_recent_news_cluster_postprocess() -> dict:
-    from scripts.postprocess_singleton_clusters import run_postprocess
-    from src.db.postgres import SessionLocal
-
-    with SessionLocal() as db:
-        result = run_postprocess(
-            db=db,
-            source_type="news",
-            lookback_hours=24,
-            time_field="published_at",
-            max_source_size=0,
-            min_target_size=2,
-            min_new_cluster_size=2,
-            max_time_gap_hours=72,
-            min_score=0.45,
-            apply=True,
-            skip_noise=True,
-        )
-        db.commit()
-        summary = {
-            "clusters": result["cluster_count"],
-            "sources": result["source_count"],
-            "targets": result["target_count"],
-            "merge_candidates": len(result["candidates"]),
-            "group_merge_candidates": len(result["group_candidates"]),
-            "noise_candidates": len(result["noise_ids"]),
-            "updated": result["updated"],
-            "group_updated": result["group_updated"],
-            "noise_updated": result["noise_updated"],
-        }
-    log.info("뉴스 클러스터 후처리 완료 | %s", summary)
-    return summary
 
 
 def _preprocess_source_types(track: str, source_name: str | None) -> list[str]:
@@ -1041,7 +1019,12 @@ async def search(request: SearchRequest):
 
 @app.post("/gen-search", response_model=GenSearchResult)
 async def gen_search(request: GenSearchRequest):
-    """Generative Search — RAG + GPT-4o + SC 검증"""
+    """Generative Search — RAG + GPT-4o 답변 생성.
+
+    주의: sc_score/sc_passed 는 실제 Self-Consistency(다회 생성 일치율) 측정값이
+    아니라 답변 경로 기반 휴리스틱 신뢰도다(LLM 답변=0.72 / 결정적 폴백=0.42 /
+    무근거=0.0). 계약 필드명은 보존하되 의미를 여기 명시해 둔다.
+    """
     log.info("Generative Search | query=%s", request.query)
     search_request = SearchRequest(
         query=request.query,
@@ -1064,14 +1047,14 @@ async def gen_search(request: GenSearchRequest):
             answer=llm_answer,
             sources=hits,
             sc_passed=True,
-            sc_score=0.72,
+            sc_score=0.72,  # 휴리스틱 신뢰도(LLM 답변 성공) — 실제 SC 일치율 아님
         )
 
     return GenSearchResult(
         answer=_deterministic_gen_search_answer(request.query, hits),
         sources=hits,
         sc_passed=False,
-        sc_score=0.42,
+        sc_score=0.42,  # 휴리스틱 신뢰도(결정적 폴백) — 실제 SC 일치율 아님
     )
 
 
@@ -1963,8 +1946,8 @@ async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsRespons
     contract: ``axis-infra/api/openapi.yaml`` ``/global/trends/run`` (operationId
     ``runGlobalTrends``).
 
-    Phase 1 (Snapshot) + Phase 2 (Trend Detection) 결정적 산식,
-    Phase 3 (Peer Alignment) + Phase 4 (Impact Mapping) + Phase 5 (Synthesis) LLM 3 호출.
+    Phase 1 (Snapshot) + Phase 2 (Trend Detection) + Phase 3 (Peer Alignment)
+    + Phase 4 (Impact Mapping) 결정적 산식, Phase 5 (Synthesis) LLM 1 호출.
 
     ``previous_trend_context`` 는 ITTrendAgent.generate() 가 ``global_industry_trends`` 직전
     batch 를 self-read 해 delta 를 계산한다 (design §16).
@@ -1998,7 +1981,7 @@ async def run_global_trends(request: GlobalTrendsRequest) -> GlobalTrendsRespons
             "max_trend_count": request.max_trend_count,
         },
     )
-    # ITTrendAgent.generate 는 sync (5-phase 합산 ~70s, LLM 3 calls + DB 호출) —
+    # ITTrendAgent.generate 는 sync (5-phase 합산, LLM 1 call + DB 호출) —
     # event loop 를 막으면 liveness probe /healthz 도 응답 못해 SIGKILL.
     result = await asyncio.to_thread(ITTrendAgent().generate, trend_input)
     _raise_if_agent_failure("GLOBAL_TRENDS", result)

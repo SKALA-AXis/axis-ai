@@ -1,3 +1,8 @@
+# 작성일: 2026-05-21
+# 작성자: 최종민
+# 변경이력:
+#   2026-05-21 최종민 — Layer B 분석 파이프라인의 컨텍스트 빌더 작성
+#   2026-05-28 박지원 — Profile Agent 수정 반영
 """AnalysisContextBuilder — W4-2.
 
 4-Layer Context Model 의 Layer 4 active context 를 cluster-time 에 합성한다.
